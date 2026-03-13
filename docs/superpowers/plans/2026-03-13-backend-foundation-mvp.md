@@ -12,6 +12,14 @@
 
 Use `@superpowers/test-driven-development` while executing every task. Before claiming any task complete, run the listed checks and follow `@superpowers/verification-before-completion`.
 
+## Skill Mapping
+
+- Use `@superpowers/test-driven-development` across the full plan.
+- Use `@superpowers/systematic-debugging` for any failing test, provider integration issue, runtime crash, or unexpected call-path behavior before attempting fixes.
+- Use local `.agents/skills/livekit-agents` for LiveKit-specific implementation work, especially Chunk 2 Task 8 and Chunk 3 Tasks 9-10.
+- Use local `.agents/skills/redis-development` for Redis key design, fanout, buffering, pub/sub, and connection handling, especially Chunk 2 Task 7 and Chunk 3 Task 11.
+- Do not apply the frontend-oriented local skills during this backend execution phase.
+
 ## File Structure
 
 ### Root
