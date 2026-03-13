@@ -58,6 +58,13 @@ class FakePhoneNumberRepository:
             return self.phone_number
         return None
 
+    async def get_by_any_format(self, raw_number: str) -> FakePhoneNumber | None:
+        normalized = "".join(ch for ch in raw_number if ch.isdigit())
+        stored = "".join(ch for ch in self.phone_number.e164 if ch.isdigit())
+        if normalized == stored:
+            return self.phone_number
+        return None
+
 
 class FakeAgentConfigRepository:
     def __init__(self, agent_config: FakeAgentConfig) -> None:
@@ -146,3 +153,49 @@ async def test_dispatch_service_includes_agent_runtime_configuration() -> None:
     assert metadata["minutes_remaining"] == 120
     assert realtime_service.events[0]["room_name"] == "room_123"
     assert session.commits == 1
+
+
+@pytest.mark.anyio
+async def test_dispatch_service_matches_called_number_with_formatting_variation() -> None:
+    user_id = uuid4()
+    phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33392091999")
+    agent_config = FakeAgentConfig(
+        id=uuid4(),
+        agent_name="Ava",
+        owner_context=None,
+        system_prompt="Be helpful and concise.",
+        knowledge_base="",
+        pipeline_mode="stt_llm_tts",
+    )
+    user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
+
+    dispatch_client = FakeDispatchClient()
+    realtime_service = FakeRealtimeService()
+    session = FakeSession()
+    service = LiveKitDispatchService(
+        session,
+        dispatch_client=dispatch_client,
+        realtime_service=realtime_service,
+    )
+    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
+    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
+    service.call_repository = FakeCallRepository(call_id=uuid4())
+    service.user_repository = FakeUserRepository(user)
+    service.usage_repository = FakeUsageRepository()
+
+    await service.handle_participant_joined(
+        {
+            "event": "participant_joined",
+            "room": {"name": "room_123"},
+            "participant": {
+                "attributes": {
+                    "sip.phoneNumber": "+33123456789",
+                    "sip.trunkPhoneNumber": "33 392 091 999",
+                }
+            },
+        }
+    )
+
+    assert dispatch_client.calls
+    metadata = json.loads(dispatch_client.calls[0]["metadata"])
+    assert metadata["called_number"] == "+33392091999"

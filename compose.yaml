@@ -71,6 +71,8 @@ services:
     build:
       context: ./apps/api
     container_name: ai-call-api
+    env_file:
+      - ./apps/api/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -82,28 +84,11 @@ services:
       APP_ENV: development
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call
       REDIS_URL: redis://redis:6379/0
-      AGENT_INTERNAL_API_TOKEN: ${AGENT_INTERNAL_API_TOKEN:-replace-me}
-      CLERK_ISSUER: ${CLERK_ISSUER:-https://your-clerk-instance.clerk.accounts.dev}
-      CLERK_AUDIENCE: ${CLERK_AUDIENCE:-ai-call-assistant}
-      CLERK_JWT_SECRET: ${CLERK_JWT_SECRET:-replace-me}
-      CLERK_WEBHOOK_SECRET: ${CLERK_WEBHOOK_SECRET:-replace-me}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-replace-me}
-      LIVEKIT_URL: ${LIVEKIT_URL:-wss://your-project.livekit.cloud}
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-replace-me}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-replace-me}
-      LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-ai-call-agent}
-      TELNYX_API_KEY: ${TELNYX_API_KEY:-replace-me}
-      TELNYX_ACTIVE_CONNECTION_ID: ${TELNYX_ACTIVE_CONNECTION_ID:-replace-me}
-      TELNYX_DISABLED_CONNECTION_ID: ${TELNYX_DISABLED_CONNECTION_ID:-replace-me}
       STORAGE_BUCKET_NAME: recordings
       S3_ENDPOINT_URL: http://minio:9000
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       S3_REGION: us-east-1
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-replace-me}
-      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-replace-me}
-      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-replace-me}
-      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-ODq5zmih8GrVes37Dizd}
     ports:
       - "8000:8000"
 
@@ -112,24 +97,16 @@ services:
     build:
       context: ./apps/agent
     container_name: ai-call-agent
+    env_file:
+      - ./apps/agent/.env
     depends_on:
       redis:
         condition: service_healthy
       api:
         condition: service_started
     environment:
-      LIVEKIT_URL: ${LIVEKIT_URL:-wss://your-project.livekit.cloud}
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-replace-me}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-replace-me}
-      LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-ai-call-agent}
-      API_BASE_URL: ${API_BASE_URL:-http://api:8000}
-      AGENT_INTERNAL_API_TOKEN: ${AGENT_INTERNAL_API_TOKEN:-replace-me}
+      API_BASE_URL: http://api:8000
       REDIS_URL: redis://redis:6379/0
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-replace-me}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-replace-me}
-      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-replace-me}
-      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-replace-me}
-      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-ODq5zmih8GrVes37Dizd}
 
 volumes:
   postgres_data:

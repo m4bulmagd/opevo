@@ -4,12 +4,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.phone_number import PhoneNumber
 
 
+def normalize_phone_number(raw_number: str) -> str:
+    digits = "".join(ch for ch in raw_number if ch.isdigit())
+    return f"+{digits}" if digits else raw_number
+
+
 class PhoneNumberRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_by_e164(self, e164: str) -> PhoneNumber | None:
         result = await self.session.execute(select(PhoneNumber).where(PhoneNumber.e164 == e164))
+        return result.scalar_one_or_none()
+
+    async def get_by_any_format(self, raw_number: str) -> PhoneNumber | None:
+        normalized = normalize_phone_number(raw_number)
+        if normalized == raw_number:
+            return await self.get_by_e164(normalized)
+
+        result = await self.session.execute(select(PhoneNumber).where(PhoneNumber.e164 == normalized))
         return result.scalar_one_or_none()
 
     async def get_by_user_id(self, user_id) -> PhoneNumber | None:

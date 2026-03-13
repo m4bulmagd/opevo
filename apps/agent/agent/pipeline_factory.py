@@ -30,10 +30,7 @@ def _resolve_openai_llm(plugin_module):
 
 def _resolve_gemini_llm(plugin_module):
     gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    llm_cls = getattr(plugin_module, "LLM", None)
-    if llm_cls is not None:
-        return llm_cls(model="gemini-3-flash-preview", api_key=gemini_api_key)
-    return plugin_module.beta.realtime.LLM(model="gemini-3-flash-preview", api_key=gemini_api_key)
+    return plugin_module.realtime.RealtimeModel(model="gemini-3-flash-preview", api_key=gemini_api_key)
 
 
 def _default_plugin_modules(config: dict) -> dict[str, object]:

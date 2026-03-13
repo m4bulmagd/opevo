@@ -47,10 +47,33 @@ Start the stateful dependencies first:
 docker compose up -d postgres redis minio minio-init
 ```
 
-Optional runtime launch with the app profile:
+Deployment-like runtime launch:
 
 ```bash
 docker compose --profile app up --build api agent
+```
+
+## Local Dev Overlay
+
+For faster iteration without rebuilding containers on every code change, use the dev overlay:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml --profile app up api agent
+```
+
+What it does:
+- `api` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/api/app) and runs `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`
+- `agent` bind-mounts [apps/agent/agent](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/agent/agent) and runs `python dev_runner.py`, which restarts the worker when Python files change
+
+Important limits:
+- Source edits reload automatically, but dependency changes still require rebuilding the image
+- Agent code changes restart the worker process, so any active call in flight will be interrupted
+
+Useful commands:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml --profile app logs -f api agent
+docker compose -f compose.yaml -f compose.dev.yaml --profile app restart api agent
 ```
 
 Local service versions:

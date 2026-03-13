@@ -7,8 +7,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     readme = (REPO_ROOT / "README.md").read_text()
     compose = (REPO_ROOT / "compose.yaml").read_text()
+    compose_dev = (REPO_ROOT / "compose.dev.yaml").read_text()
     api_env = (REPO_ROOT / "apps" / "api" / ".env.example").read_text()
     agent_env = (REPO_ROOT / "apps" / "agent" / ".env.example").read_text()
+    api_dockerfile = (REPO_ROOT / "apps" / "api" / "Dockerfile").read_text()
+    api_entrypoint = (REPO_ROOT / "apps" / "api" / "docker-entrypoint.sh").read_text()
     agent_dockerfile = (REPO_ROOT / "apps" / "agent" / "Dockerfile").read_text()
     backend_context = (REPO_ROOT / "docs" / "architecture" / "backend-context.md").read_text()
 
@@ -20,6 +23,9 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert "- [ ] Stripe webhook resets minutes" in readme
     assert "- [ ] Telnyx number can be provisioned" in readme
     assert "- [ ] LiveKit dispatch reaches the agent" in readme
+    assert "docker compose -f compose.yaml -f compose.dev.yaml --profile app up api agent" in readme
+    assert "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload" in readme
+    assert "python dev_runner.py" in readme
 
     assert 'image: postgres:17.8-bookworm' in compose
     assert 'image: redis:7.4.7-alpine' in compose
@@ -28,9 +34,16 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert 'MINIO_ROOT_USER: minioadmin' in compose
     assert 'MINIO_ROOT_PASSWORD: minioadmin' in compose
     assert 'STORAGE_BUCKET_NAME: recordings' in compose
-    assert 'AGENT_INTERNAL_API_TOKEN: ${AGENT_INTERNAL_API_TOKEN:-replace-me}' in compose
-    assert 'API_BASE_URL: ${API_BASE_URL:-http://api:8000}' in compose
-    assert 'GEMINI_API_KEY: ${GEMINI_API_KEY:-replace-me}' in compose
+    assert 'env_file:' in compose
+    assert '- ./apps/api/.env' in compose
+    assert '- ./apps/agent/.env' in compose
+    assert 'DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call' in compose
+    assert 'REDIS_URL: redis://redis:6379/0' in compose
+    assert 'API_BASE_URL: http://api:8000' in compose
+    assert '${LIVEKIT_API_KEY:-replace-me}' not in compose
+    assert '${LIVEKIT_API_SECRET:-replace-me}' not in compose
+    assert '${TELNYX_API_KEY:-replace-me}' not in compose
+    assert '${AGENT_INTERNAL_API_TOKEN:-replace-me}' not in compose
 
     assert "STORAGE_BUCKET_NAME=recordings" in api_env
     assert "S3_ENDPOINT_URL=http://minio:9000" in api_env
@@ -47,7 +60,20 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert "DEEPGRAM_API_KEY=replace-me" in agent_env
     assert "ELEVENLABS_API_KEY=replace-me" in agent_env
 
+    assert "COPY alembic.ini ./" in api_dockerfile
+    assert "COPY alembic ./alembic" in api_dockerfile
+    assert 'CMD ["./docker-entrypoint.sh"]' in api_dockerfile
+    assert "uv run alembic -c alembic.ini upgrade head" in api_entrypoint
+    assert 'exec uv run uvicorn app.main:app --host 0.0.0.0 --port 8000' in api_entrypoint
+
     assert 'CMD ["uv", "run", "python", "-m", "agent.main", "start"]' in agent_dockerfile
+
+    assert "services:" in compose_dev
+    assert "volumes:" in compose_dev
+    assert "./apps/api/app:/app/app" in compose_dev
+    assert "./apps/agent/agent:/app/agent" in compose_dev
+    assert "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload" in compose_dev
+    assert "dev_runner.py" in compose_dev
 
     assert "## Staging Smoke Status" in backend_context
     assert "Not executed in this session" in backend_context

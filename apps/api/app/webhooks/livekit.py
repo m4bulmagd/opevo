@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,6 +10,7 @@ from app.services.realtime_service import RealtimeService
 
 
 router = APIRouter(prefix="/webhooks", tags=["livekit"])
+logger = logging.getLogger(__name__)
 
 
 class LiveKitDispatchClient:
@@ -74,6 +77,15 @@ async def handle_livekit_webhook(
                 "attributes": dict(getattr(getattr(event, "participant", None), "attributes", {}) or {}),
             },
         }
+
+    logger.info(
+        "livekit webhook received event=%s room=%s identity=%s kind=%s attributes=%s",
+        event_payload.get("event"),
+        event_payload.get("room", {}).get("name"),
+        event_payload.get("participant", {}).get("identity"),
+        event_payload.get("participant", {}).get("kind"),
+        event_payload.get("participant", {}).get("attributes", {}),
+    )
 
     if event_payload["event"] == "participant_joined":
         service = LiveKitDispatchService(
