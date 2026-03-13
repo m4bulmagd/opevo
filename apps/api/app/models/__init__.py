@@ -38,3 +38,14 @@ class UUIDPrimaryKeyMixin:
         primary_key=True,
         default=uuid4,
     )
+
+
+from app.models.agent_config import AgentConfig  # noqa: E402,F401
+from app.models.call import Call  # noqa: E402,F401
+from app.models.call_message import CallMessage  # noqa: E402,F401
+from app.models.notification import Notification  # noqa: E402,F401
+from app.models.phone_number import PhoneNumber  # noqa: E402,F401
+from app.models.subscription import Subscription  # noqa: E402,F401
+from app.models.usage_ledger import UsageLedger  # noqa: E402,F401
+from app.models.user import User  # noqa: E402,F401
+from app.models.webhook_event import WebhookEvent  # noqa: E402,F401

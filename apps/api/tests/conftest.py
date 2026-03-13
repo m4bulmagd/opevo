@@ -22,6 +22,7 @@ def settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLERK_AUDIENCE", "ai-call-assistant")
     monkeypatch.setenv("CLERK_JWT_SECRET", jwt_secret)
     monkeypatch.setenv("CLERK_WEBHOOK_SECRET", "test-webhook-secret")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "test-stripe-secret")
 
 
 @pytest.fixture
@@ -54,6 +55,18 @@ async def db_session() -> AsyncSession:
         await session.rollback()
 
     await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def active_user(db_session: AsyncSession):
+    from app.repositories.user_repository import UserRepository
+
+    user = await UserRepository(db_session).create(
+        clerk_user_id="user_active",
+        email="active@example.com",
+    )
+    await db_session.commit()
+    return user
 
 
 @pytest.fixture
@@ -134,3 +147,69 @@ def valid_clerk_but_missing_local_user_token() -> str:
         "test-jwt-secret-with-at-least-32-bytes",
         algorithm="HS256",
     )
+
+
+@pytest.fixture
+def stripe_subscription_created_payload() -> dict:
+    return {
+        "id": "evt_sub_created_123",
+        "type": "customer.subscription.created",
+        "data": {
+            "object": {
+                "id": "sub_123",
+                "customer": "cus_123",
+                "status": "active",
+                "metadata": {"clerk_user_id": "user_123"},
+                "items": {
+                    "data": [
+                        {
+                            "price": {
+                                "id": "price_starter",
+                                "lookup_key": "starter",
+                            }
+                        }
+                    ]
+                },
+                "current_period_start": 1710000000,
+                "current_period_end": 1712592000,
+            }
+        },
+    }
+
+
+@pytest.fixture
+def stripe_invoice_paid_payload() -> dict:
+    return {
+        "id": "evt_invoice_paid_123",
+        "type": "invoice.paid",
+        "data": {
+            "object": {
+                "id": "in_123",
+                "customer": "cus_123",
+                "subscription": "sub_123",
+                "lines": {
+                    "data": [
+                        {
+                            "price": {
+                                "id": "price_standard",
+                                "lookup_key": "standard",
+                            }
+                        }
+                    ]
+                },
+            }
+        },
+    }
+
+
+@pytest.fixture
+def signed_stripe_headers_factory():
+    def _build(payload: dict) -> dict[str, str]:
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        digest = hmac.new(b"test-stripe-secret", payload_bytes, hashlib.sha256).hexdigest()
+        return {
+            "stripe-signature": f"t=1710000000,v1={digest}",
+            "content-type": "application/json",
+        }
+
+    return _build

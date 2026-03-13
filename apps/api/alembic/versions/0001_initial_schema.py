@@ -79,6 +79,7 @@ def upgrade() -> None:
         sa.Column("stripe_subscription_id", sa.String(length=255), nullable=True),
         sa.Column("plan_tier", sa.String(length=50), nullable=False),
         sa.Column("status", sa.String(length=50), nullable=False),
+        sa.Column("allocated_minutes", sa.Integer(), nullable=False),
         sa.Column("current_period_start", sa.DateTime(timezone=True), nullable=True),
         sa.Column("current_period_end", sa.DateTime(timezone=True), nullable=True),
         sa.Column("id", sa.Uuid(), nullable=False),

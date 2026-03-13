@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     clerk_audience: str | None = None
     clerk_jwt_secret: str | None = None
     clerk_webhook_secret: str | None = None
+    stripe_webhook_secret: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

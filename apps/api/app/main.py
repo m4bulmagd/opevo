@@ -5,7 +5,10 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.routers.auth import router as auth_router
+from app.routers.billing import router as billing_router
+from app.routers.websocket import router as websocket_router
 from app.webhooks.clerk import router as clerk_webhook_router
+from app.webhooks.stripe import router as stripe_webhook_router
 
 
 @asynccontextmanager
@@ -17,7 +20,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(auth_router)
+app.include_router(billing_router)
+app.include_router(websocket_router)
 app.include_router(clerk_webhook_router)
+app.include_router(stripe_webhook_router)
 
 
 @app.get("/healthz")
