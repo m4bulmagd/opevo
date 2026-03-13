@@ -10,6 +10,7 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
+from app.services.telephony_service import TelephonyService
 
 
 PLAN_MINUTES = {
@@ -19,13 +20,14 @@ PLAN_MINUTES = {
 
 
 class BillingService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, telephony_service: TelephonyService | None = None) -> None:
         self.session = session
         self.settings = get_settings()
         self.user_repository = UserRepository(session)
         self.subscription_repository = SubscriptionRepository(session)
         self.usage_repository = UsageRepository(session)
         self.webhook_event_repository = WebhookEventRepository(session)
+        self.telephony_service = telephony_service or TelephonyService(session)
 
     def verify_signature(self, payload: bytes, signature_header: str | None) -> None:
         if not self.settings.stripe_webhook_secret:
@@ -86,6 +88,7 @@ class BillingService:
             current_period_start=datetime.fromtimestamp(event_object["current_period_start"], UTC),
             current_period_end=datetime.fromtimestamp(event_object["current_period_end"], UTC),
         )
+        await self.telephony_service.provision_number(user.id, country_code=user.country_code or "FR")
         await self.usage_repository.create(
             user_id=user.id,
             event_type="subscription_activated",
