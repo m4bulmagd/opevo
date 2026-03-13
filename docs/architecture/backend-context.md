@@ -14,6 +14,7 @@ This document captures implementation notes and staging verification for the bac
 - Agent tests covering prompt building, pipeline config selection, and runtime event emission.
 - API Docker image build.
 - Agent Docker image build.
+- Local infrastructure stack prepared in [compose.yaml](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/compose.yaml) for PostgreSQL 17.8, Redis 7.4.7, and MinIO.
 
 ## Remaining Manual Verification
 
@@ -23,6 +24,18 @@ This document captures implementation notes and staging verification for the bac
 - Real Telnyx provisioning and `app-active` / `app-disabled` switching.
 - Real LiveKit webhook verification and agent dispatch against a cloud project.
 - End-to-end forwarded phone call with transcript, summary, and minute deduction.
+
+## Staging Smoke Status
+
+Not executed in this session.
+
+Ready for manual execution once these external credentials and endpoints are available:
+- Clerk issuer, JWT secret, and webhook secret
+- Stripe webhook secret and live test-mode subscription objects
+- Telnyx API key and active/disabled connection IDs
+- LiveKit URL, API key, and API secret
+- OpenAI, Deepgram, and ElevenLabs credentials
+- Reachable staging Postgres, Redis, and S3-compatible storage if not using the local Compose stack
 
 ## Blockers For Full Staging Smoke Path
 
