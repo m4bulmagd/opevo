@@ -9,4 +9,4 @@ RUN pip install uv && uv sync --frozen --no-dev
 
 COPY agent ./agent
 
-CMD ["uv", "run", "python", "-m", "agent.main"]
+CMD ["uv", "run", "python", "-m", "agent.main", "start"]

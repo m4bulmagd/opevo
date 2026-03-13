@@ -9,6 +9,7 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     compose = (REPO_ROOT / "compose.yaml").read_text()
     api_env = (REPO_ROOT / "apps" / "api" / ".env.example").read_text()
     agent_env = (REPO_ROOT / "apps" / "agent" / ".env.example").read_text()
+    agent_dockerfile = (REPO_ROOT / "apps" / "agent" / "Dockerfile").read_text()
     backend_context = (REPO_ROOT / "docs" / "architecture" / "backend-context.md").read_text()
 
     assert "## Local Infra" in readme
@@ -27,6 +28,9 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert 'MINIO_ROOT_USER: minioadmin' in compose
     assert 'MINIO_ROOT_PASSWORD: minioadmin' in compose
     assert 'STORAGE_BUCKET_NAME: recordings' in compose
+    assert 'AGENT_INTERNAL_API_TOKEN: ${AGENT_INTERNAL_API_TOKEN:-replace-me}' in compose
+    assert 'API_BASE_URL: ${API_BASE_URL:-http://api:8000}' in compose
+    assert 'GEMINI_API_KEY: ${GEMINI_API_KEY:-replace-me}' in compose
 
     assert "STORAGE_BUCKET_NAME=recordings" in api_env
     assert "S3_ENDPOINT_URL=http://minio:9000" in api_env
@@ -36,9 +40,14 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert "OPENAI_API_KEY=replace-me" in api_env
 
     assert "REDIS_URL=redis://redis:6379/0" in agent_env
+    assert "API_BASE_URL=http://api:8000" in agent_env
+    assert "AGENT_INTERNAL_API_TOKEN=replace-me" in agent_env
+    assert "GEMINI_API_KEY=replace-me" in agent_env
     assert "OPENAI_API_KEY=replace-me" in agent_env
     assert "DEEPGRAM_API_KEY=replace-me" in agent_env
     assert "ELEVENLABS_API_KEY=replace-me" in agent_env
+
+    assert 'CMD ["uv", "run", "python", "-m", "agent.main", "start"]' in agent_dockerfile
 
     assert "## Staging Smoke Status" in backend_context
     assert "Not executed in this session" in backend_context

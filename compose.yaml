@@ -82,6 +82,7 @@ services:
       APP_ENV: development
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call
       REDIS_URL: redis://redis:6379/0
+      AGENT_INTERNAL_API_TOKEN: ${AGENT_INTERNAL_API_TOKEN:-replace-me}
       CLERK_ISSUER: ${CLERK_ISSUER:-https://your-clerk-instance.clerk.accounts.dev}
       CLERK_AUDIENCE: ${CLERK_AUDIENCE:-ai-call-assistant}
       CLERK_JWT_SECRET: ${CLERK_JWT_SECRET:-replace-me}
@@ -102,6 +103,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-replace-me}
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-replace-me}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-replace-me}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-ODq5zmih8GrVes37Dizd}
     ports:
       - "8000:8000"
 
@@ -113,15 +115,21 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      api:
+        condition: service_started
     environment:
       LIVEKIT_URL: ${LIVEKIT_URL:-wss://your-project.livekit.cloud}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-replace-me}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-replace-me}
       LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-ai-call-agent}
+      API_BASE_URL: ${API_BASE_URL:-http://api:8000}
+      AGENT_INTERNAL_API_TOKEN: ${AGENT_INTERNAL_API_TOKEN:-replace-me}
       REDIS_URL: redis://redis:6379/0
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-replace-me}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-replace-me}
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-replace-me}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-replace-me}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-ODq5zmih8GrVes37Dizd}
 
 volumes:
   postgres_data:
