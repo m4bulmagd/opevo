@@ -24,3 +24,21 @@ class RealtimeService:
             user_id,
             {"type": "call_started", "room_name": room_name, "call_id": call_id},
         )
+
+    async def publish_call_ended(
+        self,
+        user_id: str,
+        *,
+        call_id: str,
+        minutes_charged: int,
+        summary_text: str | None,
+    ) -> None:
+        await manager.broadcast(
+            user_id,
+            {
+                "type": "call_ended",
+                "call_id": call_id,
+                "minutes_charged": minutes_charged,
+                "summary_text": summary_text,
+            },
+        )

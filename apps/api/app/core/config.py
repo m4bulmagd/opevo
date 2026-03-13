@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     telnyx_api_key: str | None = None
     telnyx_active_connection_id: str | None = None
     telnyx_disabled_connection_id: str | None = None
+    storage_bucket_name: str = "recordings"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
