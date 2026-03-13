@@ -1,7 +1,8 @@
-import os
-
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.models import Base
 
 
 @pytest.fixture(autouse=True)
@@ -24,3 +25,19 @@ def client() -> TestClient:
     from app.main import app
 
     return TestClient(app)
+
+
+@pytest.fixture
+async def db_session() -> AsyncSession:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_factory() as session:
+        yield session
+        await session.rollback()
+
+    await engine.dispose()
