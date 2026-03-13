@@ -1,12 +1,16 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging
-from app.routers.auth import router as auth_router
+from app.routers.agent import router as agent_router
 from app.routers.billing import router as billing_router
+from app.routers.calls import router as calls_router
+from app.routers.health import router as health_router
 from app.routers.websocket import router as websocket_router
+from app.services.realtime_service import RealtimeService
 from app.webhooks.clerk import router as clerk_webhook_router
 from app.webhooks.livekit import router as livekit_webhook_router
 from app.webhooks.stripe import router as stripe_webhook_router
@@ -15,19 +19,31 @@ from app.webhooks.stripe import router as stripe_webhook_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
-    app.state.settings = get_settings()
-    yield
+    get_settings.cache_clear()
+    settings = get_settings()
+    app.state.settings = settings
+    app.state.realtime_service = RealtimeService()
+    relay_task = None
+    if settings.app_env != "test":
+        relay_task = asyncio.create_task(app.state.realtime_service.fanout_forever())
+
+    try:
+        yield
+    finally:
+        if relay_task is not None:
+            relay_task.cancel()
+            try:
+                await relay_task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(lifespan=lifespan)
-app.include_router(auth_router)
+app.include_router(agent_router)
 app.include_router(billing_router)
+app.include_router(calls_router)
+app.include_router(health_router)
 app.include_router(websocket_router)
 app.include_router(clerk_webhook_router)
 app.include_router(livekit_webhook_router)
 app.include_router(stripe_webhook_router)
-
-
-@app.get("/healthz")
-async def healthcheck() -> dict[str, str]:
-    return {"status": "ok"}

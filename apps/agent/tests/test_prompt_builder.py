@@ -5,6 +5,7 @@ def test_prompt_builder_wraps_knowledge_base() -> None:
     prompt = build_system_prompt(
         agent_name="Ava",
         owner_name="Sam",
+        system_prompt="Be helpful.",
         knowledge_base="Hours: 9-5",
     )
 
@@ -15,6 +16,7 @@ def test_prompt_builder_keeps_required_disclosure() -> None:
     prompt = build_system_prompt(
         agent_name="Ava",
         owner_name="Sam",
+        system_prompt="Be helpful.",
         knowledge_base="",
     )
 

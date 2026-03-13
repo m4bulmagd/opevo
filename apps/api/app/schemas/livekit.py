@@ -7,3 +7,9 @@ class LiveKitDispatchMetadata(BaseModel):
     call_id: str
     called_number: str
     caller_number: str | None = None
+    agent_name: str
+    owner_name: str
+    owner_context: str | None = None
+    system_prompt: str
+    knowledge_base: str
+    pipeline_mode: str

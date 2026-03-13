@@ -8,12 +8,29 @@ from app.models.call_message import CallMessage
 from app.models.notification import Notification
 from app.models.phone_number import PhoneNumber
 from app.services.call_lifecycle_service import CallLifecycleService
+from app.services.notification_service import NotificationService
+from app.services.recording_service import RecordingService
 from app.services.telephony_service import TelephonyService
 
 
 class FakeTelephonyProvider:
     async def disable_number(self, *, provider_number_id: str) -> str:
         return "app-disabled"
+
+
+class FakeStorageProvider:
+    async def upload_bytes(self, *, object_key: str, data: bytes, content_type: str):
+        class Stored:
+            def __init__(self, object_key: str) -> None:
+                self.object_key = object_key
+                self.url = f"s3://recordings/{object_key}"
+
+        return Stored(object_key)
+
+
+class FakeNotificationProvider:
+    async def send_notification(self, *, user_id, notification_type: str, payload: dict) -> str:
+        return "sent"
 
 
 @pytest.mark.anyio
@@ -27,7 +44,11 @@ async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, acti
     db_session.add(call)
     await db_session.commit()
 
-    service = CallLifecycleService(db_session)
+    service = CallLifecycleService(
+        db_session,
+        recording_service=RecordingService(provider=FakeStorageProvider()),
+        notification_service=NotificationService(db_session, provider=FakeNotificationProvider()),
+    )
 
     result = await service.finalize_call(
         {
@@ -96,7 +117,12 @@ async def test_minute_exhaustion_disables_number(db_session, active_user) -> Non
     await db_session.commit()
 
     telephony_service = TelephonyService(db_session, provider=FakeTelephonyProvider())
-    service = CallLifecycleService(db_session, telephony_service=telephony_service)
+    service = CallLifecycleService(
+        db_session,
+        telephony_service=telephony_service,
+        recording_service=RecordingService(provider=FakeStorageProvider()),
+        notification_service=NotificationService(db_session, provider=FakeNotificationProvider()),
+    )
 
     result = await service.finalize_call(
         {

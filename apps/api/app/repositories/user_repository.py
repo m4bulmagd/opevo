@@ -8,6 +8,9 @@ class UserRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def get_by_id(self, user_id) -> User | None:
+        return await self.session.get(User, user_id)
+
     async def create(self, clerk_user_id: str, email: str) -> User:
         user = User(clerk_user_id=clerk_user_id, email=email)
         self.session.add(user)

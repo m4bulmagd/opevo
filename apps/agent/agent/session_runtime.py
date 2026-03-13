@@ -9,6 +9,7 @@ class SessionRuntime:
         await self.event_publisher.publish(
             {
                 "type": "transcript",
+                "user_id": dispatch_payload["user_id"],
                 "call_id": dispatch_payload["call_id"],
                 "speaker": "AGENT",
                 "text": text,
@@ -19,6 +20,7 @@ class SessionRuntime:
         await self.event_publisher.publish(
             {
                 "type": "call_ended",
+                "user_id": dispatch_payload["user_id"],
                 "call_id": dispatch_payload["call_id"],
                 "duration_seconds": duration_seconds,
             }

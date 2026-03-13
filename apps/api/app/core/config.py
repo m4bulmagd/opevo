@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     telnyx_active_connection_id: str | None = None
     telnyx_disabled_connection_id: str | None = None
     storage_bucket_name: str = "recordings"
+    s3_endpoint_url: str | None = None
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None
+    s3_region: str = "us-east-1"
+    firebase_credentials_json: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
