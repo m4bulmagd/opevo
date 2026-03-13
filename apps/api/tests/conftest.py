@@ -4,9 +4,9 @@ import hmac
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 import pytest_asyncio
-from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Base
@@ -23,6 +23,7 @@ def settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLERK_JWT_SECRET", jwt_secret)
     monkeypatch.setenv("CLERK_WEBHOOK_SECRET", "test-webhook-secret")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "test-stripe-secret")
+    monkeypatch.setenv("AGENT_INTERNAL_API_TOKEN", "test-agent-token")
 
 
 @pytest.fixture
@@ -33,17 +34,10 @@ def settings():
     return get_settings()
 
 
-@pytest.fixture
-def client() -> TestClient:
-    from app.core.database import get_session
-    from app.main import app
-
-    raise RuntimeError("The client fixture now requires db_session and is provided below.")
-
-
 @pytest_asyncio.fixture
-async def db_session() -> AsyncSession:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+async def db_session(tmp_path: Path) -> AsyncSession:
+    database_path = tmp_path / "unit_test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}", future=True)
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -69,8 +63,8 @@ async def active_user(db_session: AsyncSession):
     return user
 
 
-@pytest.fixture
-def client(tmp_path: Path) -> TestClient:
+@pytest_asyncio.fixture
+async def test_app(tmp_path: Path):
     from app.core.database import get_session
     from app.main import app
 
@@ -83,9 +77,7 @@ def client(tmp_path: Path) -> TestClient:
             await connection.run_sync(Base.metadata.create_all)
         await engine.dispose()
 
-    import asyncio
-
-    asyncio.run(setup_database())
+    await setup_database()
     app.state.test_database_url = database_url
 
     async def override_get_session():
@@ -97,17 +89,22 @@ def client(tmp_path: Path) -> TestClient:
 
     app.dependency_overrides[get_session] = override_get_session
 
-    with TestClient(app) as test_client:
-        yield test_client
+    async with app.router.lifespan_context(app):
+        yield app
 
     app.dependency_overrides.clear()
 
 
-@pytest.fixture
-def client_database_url(client: TestClient) -> str:
-    from app.main import app
+@pytest_asyncio.fixture
+async def async_client(test_app):
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client
 
-    return app.state.test_database_url
+
+@pytest.fixture
+def client_database_url(test_app) -> str:
+    return test_app.state.test_database_url
 
 
 @pytest.fixture

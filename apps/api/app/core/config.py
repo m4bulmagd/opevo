@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str
     redis_url: str
+    agent_internal_api_token: str | None = None
     clerk_issuer: str = ""
     clerk_audience: str | None = None
     clerk_jwt_secret: str | None = None

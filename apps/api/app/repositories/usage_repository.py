@@ -1,3 +1,4 @@
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.usage_ledger import UsageLedger
@@ -26,3 +27,15 @@ class UsageRepository:
         self.session.add(ledger)
         await self.session.flush()
         return ledger
+
+    async def get_current_balance(self, *, user_id) -> int:
+        statement = (
+            select(UsageLedger.balance_after)
+            .where(UsageLedger.user_id == user_id)
+            .where(UsageLedger.balance_after.is_not(None))
+            .order_by(UsageLedger.created_at.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(statement)
+        balance = result.scalar_one_or_none()
+        return int(balance or 0)

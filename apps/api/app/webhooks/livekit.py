@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import get_session
 from app.services.livekit_dispatch_service import LiveKitDispatchService
+from app.services.realtime_service import RealtimeService
 
 
 router = APIRouter(prefix="/webhooks", tags=["livekit"])
@@ -38,6 +39,10 @@ def get_dispatch_client() -> LiveKitDispatchClient:
     return LiveKitDispatchClient()
 
 
+def get_realtime_service(request: Request) -> RealtimeService:
+    return request.app.state.realtime_service
+
+
 def get_webhook_receiver():
     from livekit import api
 
@@ -52,6 +57,7 @@ async def handle_livekit_webhook(
     session: AsyncSession = Depends(get_session),
     webhook_receiver=Depends(get_webhook_receiver),
     dispatch_client: LiveKitDispatchClient = Depends(get_dispatch_client),
+    realtime_service: RealtimeService = Depends(get_realtime_service),
 ) -> Response:
     body = (await request.body()).decode("utf-8")
     event = webhook_receiver.receive(body, request.headers.get("authorization"))
@@ -70,7 +76,11 @@ async def handle_livekit_webhook(
         }
 
     if event_payload["event"] == "participant_joined":
-        service = LiveKitDispatchService(session, dispatch_client=dispatch_client)
+        service = LiveKitDispatchService(
+            session,
+            dispatch_client=dispatch_client,
+            realtime_service=realtime_service,
+        )
         await service.handle_participant_joined(event_payload)
     else:
         await session.commit()

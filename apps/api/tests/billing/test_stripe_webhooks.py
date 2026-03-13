@@ -1,6 +1,7 @@
 import json
 import asyncio
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -8,8 +9,9 @@ from app.models.phone_number import PhoneNumber
 from app.models.user import User
 
 
-def test_subscription_activation_provisions_usage_ledger(
-    client,
+@pytest.mark.anyio
+async def test_subscription_activation_provisions_usage_ledger(
+    async_client,
     client_database_url,
     signed_stripe_headers_factory,
     stripe_subscription_created_payload,
@@ -45,13 +47,13 @@ def test_subscription_activation_provisions_usage_ledger(
         await engine.dispose()
         return rows
 
-    asyncio.run(seed_user())
+    await seed_user()
 
     from app.main import app
     from app.webhooks.stripe import get_telephony_provider
 
     app.dependency_overrides[get_telephony_provider] = lambda: FakeTelephonyProvider()
-    response = client.post(
+    response = await async_client.post(
         "/webhooks/stripe",
         content=json.dumps(stripe_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
         headers=signed_stripe_headers_factory(stripe_subscription_created_payload),
@@ -59,15 +61,16 @@ def test_subscription_activation_provisions_usage_ledger(
     app.dependency_overrides.pop(get_telephony_provider, None)
 
     assert response.status_code == 202
-    assert asyncio.run(fetch_numbers())[0].e164 == "+33123456789"
+    assert (await fetch_numbers())[0].e164 == "+33123456789"
 
 
-def test_invoice_paid_resets_minutes(
-    client,
+@pytest.mark.anyio
+async def test_invoice_paid_resets_minutes(
+    async_client,
     signed_stripe_headers_factory,
     stripe_invoice_paid_payload,
 ) -> None:
-    response = client.post(
+    response = await async_client.post(
         "/webhooks/stripe",
         content=json.dumps(stripe_invoice_paid_payload, separators=(",", ":")).encode("utf-8"),
         headers=signed_stripe_headers_factory(stripe_invoice_paid_payload),

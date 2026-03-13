@@ -4,6 +4,28 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
+class TranscriptLineRequest(BaseModel):
+    speaker: str
+    text: str
+
+
+class AgentCallCompletionRequest(BaseModel):
+    user_id: UUID
+    duration_seconds: int
+    minutes_remaining: int
+    transcript: list[TranscriptLineRequest] = []
+    caller_number: str | None = None
+    recording_bytes_base64: str | None = None
+
+
+class AgentCallCompletionResponse(BaseModel):
+    status: str
+    minutes_charged: int
+    summary_text: str | None
+    recording_key: str | None
+    number_disabled: bool
+
+
 class CallResponse(BaseModel):
     id: UUID
     status: str

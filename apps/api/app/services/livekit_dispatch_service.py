@@ -6,6 +6,7 @@ from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.usage_repository import UsageRepository
 from app.schemas.livekit import LiveKitDispatchMetadata
 from app.services.realtime_service import RealtimeService
 
@@ -18,6 +19,7 @@ class LiveKitDispatchService:
         self.agent_config_repository = AgentConfigRepository(session)
         self.call_repository = CallRepository(session)
         self.user_repository = UserRepository(session)
+        self.usage_repository = UsageRepository(session)
         self.realtime_service = realtime_service or RealtimeService()
 
     async def handle_participant_joined(self, event: dict) -> None:
@@ -46,6 +48,7 @@ class LiveKitDispatchService:
             return
 
         room_name = event["room"]["name"]
+        minutes_remaining = await self.usage_repository.get_current_balance(user_id=phone_number.user_id)
         call = await self.call_repository.create_pending(
             user_id=phone_number.user_id,
             phone_number_id=phone_number.id,
@@ -57,6 +60,7 @@ class LiveKitDispatchService:
             user_id=str(phone_number.user_id),
             agent_config_id=str(agent_config.id),
             call_id=str(call.id),
+            minutes_remaining=minutes_remaining,
             called_number=called_number,
             caller_number=caller_number,
             agent_name=agent_config.agent_name,

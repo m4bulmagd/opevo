@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.agent_config import AgentConfig
@@ -32,8 +33,19 @@ class FakeDispatchClient:
         self.calls.append({"room_name": room_name, "metadata": metadata})
 
 
-def test_participant_joined_dispatches_agent_and_creates_pending_call(
-    client,
+class FakeRealtimeService:
+    def __init__(self) -> None:
+        self.call_started_events: list[dict] = []
+
+    async def publish_call_started(self, user_id: str, *, room_name: str, call_id: str) -> None:
+        self.call_started_events.append(
+            {"user_id": user_id, "room_name": room_name, "call_id": call_id}
+        )
+
+
+@pytest.mark.anyio
+async def test_participant_joined_dispatches_agent_and_creates_pending_call(
+    async_client,
     client_database_url,
 ) -> None:
     async def seed() -> None:
@@ -67,17 +79,23 @@ def test_participant_joined_dispatches_agent_and_creates_pending_call(
             await session.commit()
         await engine.dispose()
 
-    asyncio.run(seed())
+    await seed()
 
     from app.main import app
-    from app.webhooks.livekit import get_dispatch_client, get_webhook_receiver
+    from app.webhooks.livekit import (
+        get_dispatch_client,
+        get_realtime_service,
+        get_webhook_receiver,
+    )
 
     dispatch_client = FakeDispatchClient()
+    realtime_service = FakeRealtimeService()
     app.dependency_overrides[get_webhook_receiver] = lambda: FakeLiveKitReceiver()
     app.dependency_overrides[get_dispatch_client] = lambda: dispatch_client
+    app.dependency_overrides[get_realtime_service] = lambda: realtime_service
 
     try:
-        response = client.post(
+        response = await async_client.post(
             "/webhooks/livekit",
             content=json.dumps({"ignored": True}).encode("utf-8"),
             headers={"authorization": "Bearer test"},
@@ -85,6 +103,11 @@ def test_participant_joined_dispatches_agent_and_creates_pending_call(
     finally:
         app.dependency_overrides.pop(get_webhook_receiver, None)
         app.dependency_overrides.pop(get_dispatch_client, None)
+        app.dependency_overrides.pop(get_realtime_service, None)
 
+    metadata = json.loads(dispatch_client.calls[0]["metadata"])
     assert response.status_code == 202
     assert dispatch_client.calls[0]["room_name"] == "room_123"
+    assert realtime_service.call_started_events[0]["user_id"] == metadata["user_id"]
+    assert realtime_service.call_started_events[0]["call_id"] == metadata["call_id"]
+    assert realtime_service.call_started_events[0]["room_name"] == "room_123"
