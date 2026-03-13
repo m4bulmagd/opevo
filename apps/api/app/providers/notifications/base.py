@@ -1,0 +1,2 @@
+class NotificationProvider:
+    pass

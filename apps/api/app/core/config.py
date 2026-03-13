@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     clerk_audience: str | None = None
     clerk_jwt_secret: str | None = None
     clerk_webhook_secret: str | None = None
+    livekit_url: str | None = None
+    livekit_api_key: str | None = None
+    livekit_api_secret: str | None = None
+    livekit_agent_name: str = "ai-call-agent"
     stripe_webhook_secret: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

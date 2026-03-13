@@ -18,3 +18,9 @@ class RealtimeService:
         identity = self.auth_provider.verify_token(message["token"])
         await manager.connect(identity.user_id, websocket)
         return identity.user_id
+
+    async def publish_call_started(self, user_id: str, *, room_name: str, call_id: str) -> None:
+        await manager.broadcast(
+            user_id,
+            {"type": "call_started", "room_name": room_name, "call_id": call_id},
+        )

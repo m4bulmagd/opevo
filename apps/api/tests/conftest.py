@@ -86,6 +86,7 @@ def client(tmp_path: Path) -> TestClient:
     import asyncio
 
     asyncio.run(setup_database())
+    app.state.test_database_url = database_url
 
     async def override_get_session():
         engine = create_async_engine(database_url, future=True)
@@ -100,6 +101,13 @@ def client(tmp_path: Path) -> TestClient:
         yield test_client
 
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_database_url(client: TestClient) -> str:
+    from app.main import app
+
+    return app.state.test_database_url
 
 
 @pytest.fixture
