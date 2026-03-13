@@ -5,6 +5,8 @@ requires-python = ">=3.11"
 dependencies = [
   "httpx>=0.28,<0.29",
   "livekit-agents==1.4.4",
+  "livekit-plugins-elevenlabs==1.4.4",
+  "livekit-plugins-google==1.4.4",
   "redis>=5.0,<6.0",
 ]
 
