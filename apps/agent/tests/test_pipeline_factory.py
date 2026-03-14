@@ -51,6 +51,7 @@ class FakeTurnDetectorModule:
         class MultilingualModel:
             def __init__(self) -> None:
                 self.plugin = "turn_detector"
+                self._executor = None
 
 
 class FakeAgent:
@@ -111,6 +112,32 @@ def test_pipeline_factory_builds_agent_runtime_with_live_providers() -> None:
     assert "api_key" in session.kwargs["tts"].kwargs
     assert session.kwargs["vad"]["plugin"] == "silero"
     assert session.kwargs["turn_detection"].plugin == "turn_detector"
+
+
+def test_pipeline_factory_binds_turn_detector_executor_when_provided() -> None:
+    _agent, session = build_agent_runtime(
+        {
+            "agent_name": "Ava",
+            "owner_name": "Sam",
+            "system_prompt": "Be helpful.",
+            "knowledge_base": "Hours 9-5",
+            "pipeline_mode": "stt_llm_tts",
+            "stt_provider": "speechmatics",
+            "llm_provider": "gemini",
+            "tts_provider": "speechmatics",
+        },
+        plugin_modules={
+            "google": FakeGooglePlugin,
+            "speechmatics": FakeSpeechmaticsPlugin,
+            "silero": FakeSileroPlugin,
+            "turn_detector_multilingual": FakeTurnDetectorModule.multilingual,
+        },
+        inference_executor="executor",
+        agent_cls=FakeAgent,
+        session_cls=FakeSession,
+    )
+
+    assert session.kwargs["turn_detection"]._executor == "executor"
 
 
 def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> None:

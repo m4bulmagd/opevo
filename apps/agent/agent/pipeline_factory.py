@@ -156,12 +156,21 @@ def _build_turn_detection(plugins: dict[str, object]):
     return plugins["turn_detector_multilingual"].MultilingualModel()
 
 
+def _bind_turn_detector_executor(turn_detection, inference_executor):
+    if turn_detection is None or inference_executor is None:
+        return turn_detection
+    if hasattr(turn_detection, "_executor"):
+        turn_detection._executor = inference_executor
+    return turn_detection
+
+
 def build_agent_runtime(
     dispatch_metadata: dict,
     *,
     plugin_modules: dict[str, object] | None = None,
     vad=None,
     turn_detection=None,
+    inference_executor=None,
     agent_cls=Agent,
     session_cls=AgentSession,
 ):
@@ -174,6 +183,9 @@ def build_agent_runtime(
     resolved_vad = vad if vad is not None else _build_vad(plugins)
     resolved_turn_detection = (
         turn_detection if turn_detection is not None else _build_turn_detection(plugins)
+    )
+    resolved_turn_detection = _bind_turn_detector_executor(
+        resolved_turn_detection, inference_executor
     )
 
     session_kwargs = {
