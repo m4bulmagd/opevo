@@ -2,13 +2,18 @@ import json
 import os
 import time
 import asyncio
+import logging
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
 from agent.api_client import AgentApiClient
 from agent.event_publisher import EventPublisher
 from agent.pipeline_factory import build_agent_runtime
+from agent.pipeline_factory import _resolve_speechmatics_turn_detection_mode
 from agent.session_runtime import SessionRuntime
+
+
+logger = logging.getLogger(__name__)
 
 
 async def entrypoint(context: JobContext) -> None:
@@ -45,12 +50,30 @@ async def entrypoint(context: JobContext) -> None:
         )
     )
     await session.start(agent=agent, room=context.room)
-    await session.say("Bonjour, je suis votre assistant IA. Cet appel peut etre enregistre.")
+    await session.say("Hello, this is an AI assistant. I can take a message or answer basic questions.")
+
+
+def prewarm_assets(*_) -> None:
+    try:
+        from livekit.plugins import speechmatics
+        from speechmatics.voice._smart_turn import SmartTurnDetector
+        from speechmatics.voice._vad import SileroVAD
+    except ModuleNotFoundError:
+        logger.info("speechmatics prewarm skipped: optional packages unavailable")
+        return
+
+    try:
+        SileroVAD().setup()
+        if _resolve_speechmatics_turn_detection_mode(speechmatics) == speechmatics.TurnDetectionMode.SMART_TURN:
+            SmartTurnDetector().setup()
+    except Exception:
+        logger.exception("speechmatics prewarm failed")
 
 
 def build_worker_options() -> WorkerOptions:
     return WorkerOptions(
         entrypoint_fnc=entrypoint,
+        prewarm_fnc=prewarm_assets,
         agent_name=os.getenv("LIVEKIT_AGENT_NAME", "ai-call-agent"),
         ws_url=os.getenv("LIVEKIT_URL"),
         api_key=os.getenv("LIVEKIT_API_KEY"),

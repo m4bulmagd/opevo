@@ -11,6 +11,7 @@ class STTProvider(StrEnum):
     OPENAI = "openai"
     ELEVENLABS = "elevenlabs"
     VOXTRAL = "voxtral"
+    SPEECHMATICS = "speechmatics"
 
 
 class LLMProvider(StrEnum):
@@ -21,6 +22,7 @@ class LLMProvider(StrEnum):
 class TTSProvider(StrEnum):
     OPENAI = "openai"
     ELEVENLABS = "elevenlabs"
+    SPEECHMATICS = "speechmatics"
 
 
 class STSProvider(StrEnum):
