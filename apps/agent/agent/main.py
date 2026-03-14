@@ -27,7 +27,6 @@ async def entrypoint(context: JobContext) -> None:
     agent, session = build_agent_runtime(
         metadata,
         vad=prewarmed.get("silero_vad"),
-        turn_detector_kwargs={"inference_executor": context.inference_executor},
     )
     runtime = SessionRuntime(EventPublisher(), api_client=AgentApiClient())
 
