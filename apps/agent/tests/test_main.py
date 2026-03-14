@@ -9,6 +9,16 @@ def test_build_worker_options_sets_prewarm_hook() -> None:
     assert options.prewarm_fnc.__name__ == "prewarm_assets"
 
 
+def test_build_worker_options_registers_inference_runners(monkeypatch) -> None:
+    called = []
+
+    monkeypatch.setattr("agent.main._register_inference_runners", lambda: called.append(True))
+
+    build_worker_options()
+
+    assert called == [True]
+
+
 def test_agent_env_example_documents_debug_stream_flag() -> None:
     env_example = (
         Path(__file__).resolve().parents[1] / ".env.example"

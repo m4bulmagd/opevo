@@ -3,6 +3,7 @@ import os
 import time
 import asyncio
 import logging
+import importlib
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
@@ -15,6 +16,11 @@ from agent.session_runtime import SessionRuntime
 
 
 logger = logging.getLogger(__name__)
+
+
+def _register_inference_runners() -> None:
+    if _env_bool("LIVEKIT_TURN_DETECTOR_ENABLED", True):
+        importlib.import_module("livekit.plugins.turn_detector.multilingual")
 
 
 async def entrypoint(context: JobContext) -> None:
@@ -93,6 +99,7 @@ def prewarm_assets(proc) -> None:
 
 
 def build_worker_options() -> WorkerOptions:
+    _register_inference_runners()
     return WorkerOptions(
         entrypoint_fnc=entrypoint,
         prewarm_fnc=prewarm_assets,
