@@ -151,9 +151,13 @@ def _build_vad(plugins: dict[str, object]):
 
 
 def _build_turn_detection(plugins: dict[str, object]):
+    return _build_turn_detection_with_kwargs(plugins, {})
+
+
+def _build_turn_detection_with_kwargs(plugins: dict[str, object], kwargs: dict[str, object]):
     if not _env_bool("LIVEKIT_TURN_DETECTOR_ENABLED", True):
         return None
-    return plugins["turn_detector_multilingual"].MultilingualModel()
+    return plugins["turn_detector_multilingual"].MultilingualModel(**kwargs)
 
 
 def build_agent_runtime(
@@ -162,6 +166,7 @@ def build_agent_runtime(
     plugin_modules: dict[str, object] | None = None,
     vad=None,
     turn_detection=None,
+    turn_detector_kwargs: dict[str, object] | None = None,
     agent_cls=Agent,
     session_cls=AgentSession,
 ):
@@ -173,7 +178,9 @@ def build_agent_runtime(
     tts = _build_tts(config, plugins)
     resolved_vad = vad if vad is not None else _build_vad(plugins)
     resolved_turn_detection = (
-        turn_detection if turn_detection is not None else _build_turn_detection(plugins)
+        turn_detection
+        if turn_detection is not None
+        else _build_turn_detection_with_kwargs(plugins, turn_detector_kwargs or {})
     )
 
     session_kwargs = {

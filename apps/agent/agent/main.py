@@ -27,7 +27,7 @@ async def entrypoint(context: JobContext) -> None:
     agent, session = build_agent_runtime(
         metadata,
         vad=prewarmed.get("silero_vad"),
-        turn_detection=prewarmed.get("turn_detector"),
+        turn_detector_kwargs={"inference_executor": context.inference_executor},
     )
     runtime = SessionRuntime(EventPublisher(), api_client=AgentApiClient())
 
@@ -76,14 +76,7 @@ def prewarm_assets(proc) -> None:
             logger.exception("silero prewarm failed")
 
     if _env_bool("LIVEKIT_TURN_DETECTOR_ENABLED", True):
-        try:
-            from livekit.plugins.turn_detector import multilingual
-
-            userdata["turn_detector"] = multilingual.MultilingualModel()
-        except ModuleNotFoundError:
-            logger.info("turn detector prewarm skipped: optional package unavailable")
-        except Exception:
-            logger.exception("turn detector prewarm failed")
+        logger.info("turn detector will initialize in job context")
 
     try:
         from livekit.plugins import speechmatics
