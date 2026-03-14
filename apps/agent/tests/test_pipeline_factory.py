@@ -88,10 +88,10 @@ def test_pipeline_factory_builds_agent_runtime_with_live_providers() -> None:
         session_cls=FakeSession,
     )
 
-    assert "Be helpful." in agent.kwargs["instructions"]
-    assert "Hours 9-5" in agent.kwargs["instructions"]
+    assert agent.kwargs["min_endpointing_delay"] == 0.25
+    assert agent.kwargs["max_endpointing_delay"] == 1.5
     assert session.kwargs["stt"].kwargs["turn_detection_mode"] == "adaptive"
-    assert session.kwargs["llm"].kwargs["model"] == "gemini-3-flash-preview"
+    assert session.kwargs["llm"].kwargs["model"] == "gemini-2.5-flash"
     assert "api_key" in session.kwargs["tts"].kwargs
 
 

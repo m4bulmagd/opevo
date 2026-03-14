@@ -9,6 +9,13 @@ from agent.prompt_builder import build_system_prompt
 from agent.providers import LLMProvider, PipelineMode, STSProvider, STTProvider, TTSProvider
 
 
+def _env_float(name: str, default: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    return float(raw_value)
+
+
 def _resolve_speechmatics_turn_detection_mode(plugin_module):
     configured_mode = os.getenv("SPEECHMATICS_TURN_DETECTION_MODE", "adaptive").strip().lower()
 
@@ -46,8 +53,8 @@ def _resolve_gemini_llm(plugin_module):
     gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     llm_cls = getattr(plugin_module, "LLM", None)
     if llm_cls is not None:
-        return llm_cls(model="gemini-3-flash-preview", api_key=gemini_api_key)
-    return plugin_module.LLM(model="gemini-3-flash-preview", api_key=gemini_api_key)
+        return llm_cls(model="gemini-2.5-flash", api_key=gemini_api_key)
+    return plugin_module.LLM(model="gemini-2.5-flash", api_key=gemini_api_key)
 
 
 def _default_plugin_modules(config: dict) -> dict[str, object]:
@@ -149,7 +156,13 @@ def build_agent_runtime(
         agent = InstrumentedAgent(
             debug_logger=StreamDebugLogger.from_dispatch_metadata(dispatch_metadata),
             instructions=instructions,
+            min_endpointing_delay=_env_float("AGENT_MIN_ENDPOINTING_DELAY", 0.25),
+            max_endpointing_delay=_env_float("AGENT_MAX_ENDPOINTING_DELAY", 1.5),
         )
     else:
-        agent = agent_cls(instructions=instructions)
+        agent = agent_cls(
+            instructions=instructions,
+            min_endpointing_delay=_env_float("AGENT_MIN_ENDPOINTING_DELAY", 0.25),
+            max_endpointing_delay=_env_float("AGENT_MAX_ENDPOINTING_DELAY", 1.5),
+        )
     return agent, session

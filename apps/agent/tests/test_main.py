@@ -15,3 +15,5 @@ def test_agent_env_example_documents_debug_stream_flag() -> None:
     ).read_text()
 
     assert "AGENT_DEBUG_STREAMS=false" in env_example
+    assert "AGENT_MIN_ENDPOINTING_DELAY=0.25" in env_example
+    assert "AGENT_MAX_ENDPOINTING_DELAY=1.5" in env_example
