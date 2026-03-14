@@ -76,6 +76,21 @@ docker compose -f compose.yaml -f compose.dev.yaml --profile app logs -f api age
 docker compose -f compose.yaml -f compose.dev.yaml --profile app restart api agent
 ```
 
+Live STT/LLM/TTS debug logs:
+
+```bash
+# set in apps/agent/.env
+AGENT_DEBUG_STREAMS=true
+
+docker compose --profile app up -d --build agent
+docker compose --profile app logs -f agent
+```
+
+When enabled, the agent emits structured `agent.debug` log lines for:
+- `stt.*`
+- `llm.start`, `llm.delta`, `llm.complete`
+- `tts.start`, `tts.first_frame`, `tts.complete`, `tts.error`
+
 Local service versions:
 - PostgreSQL `17.8`
 - Redis `7.4.7`
