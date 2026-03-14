@@ -9,6 +9,13 @@ from agent.prompt_builder import build_system_prompt
 from agent.providers import LLMProvider, PipelineMode, STSProvider, STTProvider, TTSProvider
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _env_float(name: str, default: float) -> float:
     raw_value = os.getenv(name)
     if raw_value is None or not raw_value.strip():
@@ -80,6 +87,16 @@ def _default_plugin_modules(config: dict) -> dict[str, object]:
 
         modules["openai"] = openai
 
+    if _env_bool("LIVEKIT_SILERO_VAD_ENABLED", True):
+        from livekit.plugins import silero
+
+        modules["silero"] = silero
+
+    if _env_bool("LIVEKIT_TURN_DETECTOR_ENABLED", True):
+        from livekit.plugins.turn_detector import multilingual
+
+        modules["turn_detector_multilingual"] = multilingual
+
     return modules
 
 
@@ -127,10 +144,24 @@ def _build_tts(config: dict, plugins: dict[str, object]):
     raise ValueError(f"Unsupported TTS provider: {config['tts_provider']}")
 
 
+def _build_vad(plugins: dict[str, object]):
+    if not _env_bool("LIVEKIT_SILERO_VAD_ENABLED", True):
+        return None
+    return plugins["silero"].VAD.load()
+
+
+def _build_turn_detection(plugins: dict[str, object]):
+    if not _env_bool("LIVEKIT_TURN_DETECTOR_ENABLED", True):
+        return None
+    return plugins["turn_detector_multilingual"].MultilingualModel()
+
+
 def build_agent_runtime(
     dispatch_metadata: dict,
     *,
     plugin_modules: dict[str, object] | None = None,
+    vad=None,
+    turn_detection=None,
     agent_cls=Agent,
     session_cls=AgentSession,
 ):
@@ -140,12 +171,22 @@ def build_agent_runtime(
     stt = _build_stt(config, plugins)
     llm = _build_llm(config, plugins)
     tts = _build_tts(config, plugins)
-
-    session = session_cls(
-        stt=stt,
-        llm=llm,
-        tts=tts,
+    resolved_vad = vad if vad is not None else _build_vad(plugins)
+    resolved_turn_detection = (
+        turn_detection if turn_detection is not None else _build_turn_detection(plugins)
     )
+
+    session_kwargs = {
+        "stt": stt,
+        "llm": llm,
+        "tts": tts,
+    }
+    if resolved_vad is not None:
+        session_kwargs["vad"] = resolved_vad
+    if resolved_turn_detection is not None:
+        session_kwargs["turn_detection"] = resolved_turn_detection
+
+    session = session_cls(**session_kwargs)
     instructions = build_system_prompt(
         agent_name=dispatch_metadata["agent_name"],
         owner_name=dispatch_metadata["owner_name"],

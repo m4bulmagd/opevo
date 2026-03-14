@@ -9,6 +9,7 @@ from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from agent.api_client import AgentApiClient
 from agent.event_publisher import EventPublisher
 from agent.pipeline_factory import build_agent_runtime
+from agent.pipeline_factory import _env_bool
 from agent.pipeline_factory import _resolve_speechmatics_turn_detection_mode
 from agent.session_runtime import SessionRuntime
 
@@ -22,7 +23,12 @@ async def entrypoint(context: JobContext) -> None:
     await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
     await context.wait_for_participant()
 
-    agent, session = build_agent_runtime(metadata)
+    prewarmed = getattr(context.proc, "userdata", {}) or {}
+    agent, session = build_agent_runtime(
+        metadata,
+        vad=prewarmed.get("silero_vad"),
+        turn_detection=prewarmed.get("turn_detector"),
+    )
     runtime = SessionRuntime(EventPublisher(), api_client=AgentApiClient())
 
     def on_user_input_transcribed(event) -> None:
@@ -50,20 +56,43 @@ async def entrypoint(context: JobContext) -> None:
         )
     )
     await session.start(agent=agent, room=context.room)
-    await session.say("Hello, this is an AI assistant. I can take a message or answer basic questions.")
+    await session.say("Hello")
 
 
-def prewarm_assets(*_) -> None:
+def prewarm_assets(proc) -> None:
+    userdata = getattr(proc, "userdata", None)
+    if userdata is None:
+        userdata = {}
+        proc.userdata = userdata
+
+    if _env_bool("LIVEKIT_SILERO_VAD_ENABLED", True):
+        try:
+            from livekit.plugins import silero
+
+            userdata["silero_vad"] = silero.VAD.load()
+        except ModuleNotFoundError:
+            logger.info("silero prewarm skipped: optional package unavailable")
+        except Exception:
+            logger.exception("silero prewarm failed")
+
+    if _env_bool("LIVEKIT_TURN_DETECTOR_ENABLED", True):
+        try:
+            from livekit.plugins.turn_detector import multilingual
+
+            userdata["turn_detector"] = multilingual.MultilingualModel()
+        except ModuleNotFoundError:
+            logger.info("turn detector prewarm skipped: optional package unavailable")
+        except Exception:
+            logger.exception("turn detector prewarm failed")
+
     try:
         from livekit.plugins import speechmatics
         from speechmatics.voice._smart_turn import SmartTurnDetector
-        from speechmatics.voice._vad import SileroVAD
     except ModuleNotFoundError:
         logger.info("speechmatics prewarm skipped: optional packages unavailable")
         return
 
     try:
-        SileroVAD().setup()
         if _resolve_speechmatics_turn_detection_mode(speechmatics) == speechmatics.TurnDetectionMode.SMART_TURN:
             SmartTurnDetector().setup()
     except Exception:

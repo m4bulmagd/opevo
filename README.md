@@ -91,6 +91,11 @@ When enabled, the agent emits structured `agent.debug` log lines for:
 - `llm.start`, `llm.delta`, `llm.complete`
 - `tts.start`, `tts.first_frame`, `tts.complete`, `tts.error`
 
+Voice turn-taking defaults:
+- `LIVEKIT_SILERO_VAD_ENABLED=true` enables LiveKit Silero VAD in the agent session
+- `LIVEKIT_TURN_DETECTOR_ENABLED=true` enables the LiveKit multilingual turn detector in the agent session
+- `SPEECHMATICS_TURN_DETECTION_MODE=adaptive` keeps Speechmatics endpointing in adaptive mode underneath the LiveKit turn-taking layer
+
 Local service versions:
 - PostgreSQL `17.8`
 - Redis `7.4.7`

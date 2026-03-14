@@ -39,6 +39,20 @@ class FakeElevenLabsPlugin:
             self.kwargs = kwargs
 
 
+class FakeSileroPlugin:
+    class VAD:
+        @staticmethod
+        def load(**kwargs):
+            return {"plugin": "silero", "kwargs": kwargs}
+
+
+class FakeTurnDetectorModule:
+    class multilingual:
+        class MultilingualModel:
+            def __init__(self) -> None:
+                self.plugin = "turn_detector"
+
+
 class FakeAgent:
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
@@ -83,6 +97,8 @@ def test_pipeline_factory_builds_agent_runtime_with_live_providers() -> None:
             "deepgram": FakeDeepgramPlugin,
             "google": FakeGooglePlugin,
             "speechmatics": FakeSpeechmaticsPlugin,
+            "silero": FakeSileroPlugin,
+            "turn_detector_multilingual": FakeTurnDetectorModule.multilingual,
         },
         agent_cls=FakeAgent,
         session_cls=FakeSession,
@@ -93,6 +109,8 @@ def test_pipeline_factory_builds_agent_runtime_with_live_providers() -> None:
     assert session.kwargs["stt"].kwargs["turn_detection_mode"] == "adaptive"
     assert session.kwargs["llm"].kwargs["model"] == "gemini-2.5-flash"
     assert "api_key" in session.kwargs["tts"].kwargs
+    assert session.kwargs["vad"]["plugin"] == "silero"
+    assert session.kwargs["turn_detection"].plugin == "turn_detector"
 
 
 def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> None:
@@ -110,6 +128,8 @@ def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> No
         plugin_modules={
             "google": FakeGooglePlugin,
             "speechmatics": FakeSpeechmaticsPlugin,
+            "silero": FakeSileroPlugin,
+            "turn_detector_multilingual": FakeTurnDetectorModule.multilingual,
         },
         session_cls=FakeSession,
     )
