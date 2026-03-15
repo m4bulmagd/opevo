@@ -30,7 +30,8 @@ class LiveKitDispatchService:
         participant = event.get("participant", {})
         attributes = participant.get("attributes", {})
 
-        # UNVERIFIED: LiveKit SIP attribute naming should be rechecked against current docs/dashboard payloads.
+        # LiveKit SIP participant docs map inbound caller ID to sip.phoneNumber and
+        # the dialed trunk number to sip.trunkPhoneNumber.
         raw_called_number = attributes.get("sip.trunkPhoneNumber") or attributes.get("sip.phoneNumber")
         raw_caller_number = attributes.get("sip.phoneNumber")
         if not raw_called_number:

@@ -49,13 +49,6 @@ def build_pipeline_config(agent_config: dict) -> dict:
     }
 
 
-def _resolve_openai_llm(plugin_module):
-    llm_cls = getattr(plugin_module, "LLM", None)
-    if llm_cls is not None:
-        return llm_cls(model="gpt-4.1-mini")
-    return plugin_module.responses.LLM(model="gpt-4.1-mini")
-
-
 def _resolve_gemini_llm(plugin_module):
     gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     llm_cls = getattr(plugin_module, "LLM", None)
@@ -81,11 +74,6 @@ def _default_plugin_modules(config: dict) -> dict[str, object]:
         from livekit.plugins import google
 
         modules["google"] = google
-
-    if config["llm_provider"] == LLMProvider.OPENAI.value:
-        from livekit.plugins import openai
-
-        modules["openai"] = openai
 
     if _env_bool("LIVEKIT_SILERO_VAD_ENABLED", True):
         from livekit.plugins import silero
@@ -121,8 +109,6 @@ def _build_stt(config: dict, plugins: dict[str, object]):
 def _build_llm(config: dict, plugins: dict[str, object]):
     if config["llm_provider"] == LLMProvider.GEMINI.value:
         return _resolve_gemini_llm(plugins["google"])
-    if config["llm_provider"] == LLMProvider.OPENAI.value:
-        return _resolve_openai_llm(plugins["openai"])
     raise ValueError(f"Unsupported LLM provider: {config['llm_provider']}")
 
 

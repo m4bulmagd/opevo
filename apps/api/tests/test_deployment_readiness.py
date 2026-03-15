@@ -50,13 +50,13 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert "S3_ACCESS_KEY=minioadmin" in api_env
     assert "S3_SECRET_KEY=minioadmin" in api_env
     assert "S3_REGION=us-east-1" in api_env
-    assert "OPENAI_API_KEY=replace-me" in api_env
+    assert "OPENAI_API_KEY=replace-me" not in api_env
 
     assert "REDIS_URL=redis://redis:6379/0" in agent_env
     assert "API_BASE_URL=http://api:8000" in agent_env
     assert "AGENT_INTERNAL_API_TOKEN=replace-me" in agent_env
     assert "GEMINI_API_KEY=replace-me" in agent_env
-    assert "OPENAI_API_KEY=replace-me" in agent_env
+    assert "OPENAI_API_KEY=replace-me" not in agent_env
     assert "DEEPGRAM_API_KEY=replace-me" in agent_env
     assert "ELEVENLABS_API_KEY=replace-me" in agent_env
 

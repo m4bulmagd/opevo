@@ -8,23 +8,19 @@ class PipelineMode(StrEnum):
 
 class STTProvider(StrEnum):
     DEEPGRAM = "deepgram"
-    OPENAI = "openai"
     ELEVENLABS = "elevenlabs"
     VOXTRAL = "voxtral"
     SPEECHMATICS = "speechmatics"
 
 
 class LLMProvider(StrEnum):
-    OPENAI = "openai"
     GEMINI = "gemini"
 
 
 class TTSProvider(StrEnum):
-    OPENAI = "openai"
     ELEVENLABS = "elevenlabs"
     SPEECHMATICS = "speechmatics"
 
 
 class STSProvider(StrEnum):
     GEMINI = "gemini"
-    OPENAI = "openai"

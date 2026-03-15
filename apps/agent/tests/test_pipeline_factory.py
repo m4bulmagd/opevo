@@ -82,6 +82,33 @@ def test_pipeline_factory_rejects_sts_when_not_enabled() -> None:
         raise AssertionError("Expected sts mode to raise")
 
 
+def test_pipeline_factory_rejects_removed_openai_provider() -> None:
+    try:
+        build_agent_runtime(
+            {
+                "agent_name": "Ava",
+                "owner_name": "Sam",
+                "system_prompt": "Be helpful.",
+                "knowledge_base": "Hours 9-5",
+                "pipeline_mode": "stt_llm_tts",
+                "stt_provider": "speechmatics",
+                "llm_provider": "openai",
+                "tts_provider": "speechmatics",
+            },
+            plugin_modules={
+                "speechmatics": FakeSpeechmaticsPlugin,
+                "silero": FakeSileroPlugin,
+                "turn_detector_multilingual": FakeTurnDetectorModule.multilingual,
+            },
+            agent_cls=FakeAgent,
+            session_cls=FakeSession,
+        )
+    except ValueError as exc:
+        assert "Unsupported LLM provider: openai" in str(exc)
+    else:
+        raise AssertionError("Expected openai provider to raise")
+
+
 def test_pipeline_factory_builds_agent_runtime_with_live_providers() -> None:
     agent, session = build_agent_runtime(
         {
