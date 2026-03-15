@@ -2,28 +2,64 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from pathlib import Path
 
 import httpx
+import jwt
 import pytest
 import pytest_asyncio
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Base
 
 
+@pytest.fixture
+def clerk_key_material() -> dict[str, str | bytes]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_key_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    webhook_secret_bytes = b"test-webhook-secret"
+    webhook_secret = "whsec_" + base64.b64encode(webhook_secret_bytes).decode("utf-8")
+    return {
+        "private_key_pem": private_key_pem,
+        "public_key_pem": public_key_pem,
+        "webhook_secret": webhook_secret,
+        "webhook_secret_bytes": webhook_secret_bytes,
+    }
+
+
 @pytest.fixture(autouse=True)
-def settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    jwt_secret = "test-jwt-secret-with-at-least-32-bytes"
+def settings_env(monkeypatch: pytest.MonkeyPatch, clerk_key_material: dict[str, str | bytes]):
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/ai_call_test")
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("CLERK_ISSUER", "https://clerk.example.com")
-    monkeypatch.setenv("CLERK_AUDIENCE", "ai-call-assistant")
-    monkeypatch.setenv("CLERK_JWT_SECRET", jwt_secret)
-    monkeypatch.setenv("CLERK_WEBHOOK_SECRET", "test-webhook-secret")
+    monkeypatch.setenv("CLERK_AUDIENCE", "")
+    monkeypatch.setenv("CLERK_JWT_KEY", str(clerk_key_material["public_key_pem"]))
+    monkeypatch.setenv("CLERK_WEBHOOK_SECRET", str(clerk_key_material["webhook_secret"]))
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "test-stripe-secret")
     monkeypatch.setenv("AGENT_INTERNAL_API_TOKEN", "test-agent-token")
+
+    from app.core.config import get_settings
+    from app.core.database import get_engine, get_session_factory
+
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+    get_session_factory.cache_clear()
+    yield
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+    get_session_factory.cache_clear()
 
 
 @pytest.fixture
@@ -126,32 +162,49 @@ def clerk_user_created_payload_bytes(clerk_user_created_payload: dict) -> bytes:
 
 
 @pytest.fixture
-def signed_clerk_headers(clerk_user_created_payload_bytes: bytes) -> dict[str, str]:
-    secret = b"test-webhook-secret"
-    digest = hmac.new(secret, clerk_user_created_payload_bytes, hashlib.sha256).digest()
+def signed_clerk_headers(
+    clerk_user_created_payload_bytes: bytes,
+    clerk_key_material: dict[str, str | bytes],
+) -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    signed_content = b"evt_test_123." + timestamp.encode("utf-8") + b"." + clerk_user_created_payload_bytes
+    digest = hmac.new(
+        clerk_key_material["webhook_secret_bytes"],
+        signed_content,
+        hashlib.sha256,
+    ).digest()
 
     return {
         "svix-id": "evt_test_123",
-        "svix-timestamp": "1710000000",
-        "svix-signature": base64.b64encode(digest).decode("utf-8"),
+        "svix-timestamp": timestamp,
+        "svix-signature": f"v1,{base64.b64encode(digest).decode('utf-8')}",
         "content-type": "application/json",
     }
 
 
 @pytest.fixture
-def valid_clerk_but_missing_local_user_token() -> str:
-    import jwt
+def rs256_clerk_token_for(clerk_key_material: dict[str, str | bytes]):
+    private_key_pem = str(clerk_key_material["private_key_pem"])
 
-    return jwt.encode(
-        {
-            "sub": "user_missing",
-            "iss": "https://clerk.example.com",
-            "aud": "ai-call-assistant",
-            "exp": 4102444800,
-        },
-        "test-jwt-secret-with-at-least-32-bytes",
-        algorithm="HS256",
-    )
+    def _build(clerk_user_id: str) -> str:
+        return jwt.encode(
+            {
+                "sub": clerk_user_id,
+                "iss": "https://clerk.example.com",
+                "exp": 4102444800,
+            },
+            private_key_pem,
+            algorithm="RS256",
+        )
+
+    return _build
+
+
+@pytest.fixture
+def valid_clerk_but_missing_local_user_token(rs256_clerk_token_for) -> str:
+    return rs256_clerk_token_for("user_missing")
+
+
 
 
 @pytest.fixture

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -30,20 +31,27 @@ class AuthProvider(ABC):
 
 
 class ClerkAuthProvider(AuthProvider):
-    def __init__(self) -> None:
+    def __init__(self, *, jwk_client: jwt.PyJWKClient | None = None) -> None:
         self.settings = get_settings()
+        self._jwk_client = jwk_client
 
     def verify_token(self, token: str) -> UserIdentity:
-        if not self.settings.clerk_jwt_secret:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="JWT secret not configured")
+        decode_kwargs: dict[str, Any] = {
+            "algorithms": ["RS256"],
+            "issuer": self.settings.clerk_issuer,
+        }
+        if self.settings.clerk_jwt_key:
+            decode_kwargs["key"] = self.settings.clerk_jwt_key
+        else:
+            jwks_url = self._resolve_jwks_url()
+            signing_key = self._get_jwk_client(jwks_url).get_signing_key_from_jwt(token)
+            decode_kwargs["key"] = signing_key.key
+        if self.settings.clerk_audience:
+            decode_kwargs["audience"] = self.settings.clerk_audience
+        else:
+            decode_kwargs["options"] = {"verify_aud": False}
 
-        payload = jwt.decode(
-            token,
-            self.settings.clerk_jwt_secret,
-            algorithms=["HS256"],
-            issuer=self.settings.clerk_issuer,
-            audience=self.settings.clerk_audience,
-        )
+        payload = jwt.decode(token, **decode_kwargs)
         subject = payload.get("sub")
         if not subject:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing subject")
@@ -56,21 +64,62 @@ class ClerkAuthProvider(AuthProvider):
 
         signature = headers.get("svix-signature")
         event_id = headers.get("svix-id")
+        timestamp = headers.get("svix-timestamp")
         if not signature or not event_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing webhook signature")
+        if not timestamp:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing webhook timestamp")
 
+        try:
+            webhook_timestamp = int(timestamp)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook timestamp") from exc
+
+        # Svix-signed Clerk webhooks should be recent to reduce replay risk.
+        if abs(int(time.time()) - webhook_timestamp) > 300:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook timestamp expired")
+
+        secret = self._decode_svix_secret(self.settings.clerk_webhook_secret)
+        signed_content = event_id.encode("utf-8") + b"." + timestamp.encode("utf-8") + b"." + payload
         expected = base64.b64encode(
             hmac.new(
-                self.settings.clerk_webhook_secret.encode("utf-8"),
-                payload,
+                secret,
+                signed_content,
                 hashlib.sha256,
             ).digest()
         ).decode("utf-8")
 
-        if not hmac.compare_digest(signature, expected):
+        provided_signatures = [
+            part.split(",", 1)[1]
+            for part in signature.split()
+            if part.startswith("v1,") and "," in part
+        ]
+        if not provided_signatures:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing v1 webhook signature")
+
+        if not any(hmac.compare_digest(provided, expected) for provided in provided_signatures):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature")
 
         return event_id
+
+    @staticmethod
+    def _decode_svix_secret(secret: str) -> bytes:
+        if secret.startswith("whsec_"):
+            return base64.b64decode(secret[len("whsec_") :].encode("utf-8"))
+        return secret.encode("utf-8")
+
+    def _resolve_jwks_url(self) -> str:
+        if self.settings.clerk_jwks_url:
+            return self.settings.clerk_jwks_url
+        if self.settings.clerk_issuer:
+            return self.settings.clerk_issuer.rstrip("/") + "/.well-known/jwks.json"
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="JWT key not configured")
+
+    def _get_jwk_client(self, jwks_url: str) -> jwt.PyJWKClient:
+        if self._jwk_client is not None:
+            return self._jwk_client
+        self._jwk_client = jwt.PyJWKClient(jwks_url)
+        return self._jwk_client
 
 
 bearer_scheme = HTTPBearer(auto_error=False)

@@ -10,7 +10,8 @@ class Settings(BaseSettings):
     agent_internal_api_token: str | None = None
     clerk_issuer: str = ""
     clerk_audience: str | None = None
-    clerk_jwt_secret: str | None = None
+    clerk_jwt_key: str | None = None
+    clerk_jwks_url: str | None = None
     clerk_webhook_secret: str | None = None
     livekit_url: str | None = None
     livekit_api_key: str | None = None
