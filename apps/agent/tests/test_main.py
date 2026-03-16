@@ -1,4 +1,7 @@
+import asyncio
 from agent.main import build_worker_options
+from agent.main import _register_legacy_session_handlers
+from agent.main import _register_sts_session_handlers
 from pathlib import Path
 
 
@@ -29,3 +32,79 @@ def test_agent_env_example_documents_debug_stream_flag() -> None:
     assert "AGENT_MAX_ENDPOINTING_DELAY=1.5" in env_example
     assert "LIVEKIT_SILERO_VAD_ENABLED=true" in env_example
     assert "LIVEKIT_TURN_DETECTOR_ENABLED=true" in env_example
+
+
+class FakeSession:
+    def __init__(self) -> None:
+        self.handlers: dict[str, object] = {}
+
+    def on(self, event_name: str, handler) -> None:
+        self.handlers[event_name] = handler
+
+
+class FakeRuntime:
+    def __init__(self) -> None:
+        self.caller_text: list[str] = []
+        self.agent_text: list[str] = []
+
+    async def handle_caller_transcript(self, _metadata: dict, text: str) -> None:
+        self.caller_text.append(text)
+
+    async def handle_agent_utterance(self, _metadata: dict, text: str) -> None:
+        self.agent_text.append(text)
+
+
+class FakeTranscriptEvent:
+    def __init__(self, transcript: str, *, is_final: bool) -> None:
+        self.transcript = transcript
+        self.is_final = is_final
+
+
+class FakeConversationItem:
+    def __init__(self, role: str, text: str) -> None:
+        self.type = "message"
+        self.role = role
+        self.text_content = text
+
+
+class FakeConversationEvent:
+    def __init__(self, role: str, text: str) -> None:
+        self.item = FakeConversationItem(role, text)
+
+
+def _run_scheduled_coroutine(monkeypatch) -> None:
+    def run_now(coro):
+        asyncio.run(coro)
+        return None
+
+    monkeypatch.setattr("agent.main.asyncio.create_task", run_now)
+
+
+def test_register_legacy_session_handlers_forwards_final_caller_and_agent_text(monkeypatch) -> None:
+    _run_scheduled_coroutine(monkeypatch)
+    session = FakeSession()
+    runtime = FakeRuntime()
+    metadata = {"call_id": "call-1", "user_id": "user-1"}
+
+    _register_legacy_session_handlers(session, runtime, metadata)
+
+    session.handlers["user_input_transcribed"](FakeTranscriptEvent("Hello", is_final=True))
+    session.handlers["conversation_item_added"](FakeConversationEvent("assistant", "Hi there"))
+
+    assert runtime.caller_text == ["Hello"]
+    assert runtime.agent_text == ["Hi there"]
+
+
+def test_register_sts_session_handlers_forwards_caller_and_agent_text(monkeypatch) -> None:
+    _run_scheduled_coroutine(monkeypatch)
+    session = FakeSession()
+    runtime = FakeRuntime()
+    metadata = {"call_id": "call-1", "user_id": "user-1"}
+
+    _register_sts_session_handlers(session, runtime, metadata)
+
+    session.handlers["conversation_item_added"](FakeConversationEvent("user", "Need help"))
+    session.handlers["conversation_item_added"](FakeConversationEvent("assistant", "Sure"))
+
+    assert runtime.caller_text == ["Need help"]
+    assert runtime.agent_text == ["Sure"]
