@@ -1,3 +1,5 @@
+import pytest
+
 from agent.pipeline_factory import build_agent_runtime
 from agent.pipeline_factory import build_pipeline_config
 from agent.debug_streams import InstrumentedAgent
@@ -27,6 +29,17 @@ class FakeGooglePlugin:
     class LLM:
         def __init__(self, **kwargs) -> None:
             self.kwargs = kwargs
+
+
+class FakeGoogleRealtimePlugin:
+    class LLM:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class realtime:
+        class RealtimeModel:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
 
 
 class FakeElevenLabsPlugin:
@@ -187,3 +200,63 @@ def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> No
     )
 
     assert isinstance(agent, InstrumentedAgent)
+
+
+def test_pipeline_factory_builds_sts_runtime_with_gemini_realtime(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+
+    agent, session = build_agent_runtime(
+        {
+            "agent_name": "Ava",
+            "owner_name": "Sam",
+            "system_prompt": "Be helpful.",
+            "knowledge_base": "Hours 9-5",
+            "pipeline_mode": "sts",
+            "sts_provider": "gemini",
+        },
+        plugin_modules={"google": FakeGoogleRealtimePlugin},
+        agent_cls=FakeAgent,
+        session_cls=FakeSession,
+    )
+
+    assert agent.kwargs["min_endpointing_delay"] == 0.25
+    assert session.kwargs["llm"].kwargs["api_key"] == "test-key"
+    assert "stt" not in session.kwargs
+    assert "tts" not in session.kwargs
+    assert "vad" not in session.kwargs
+    assert "turn_detection" not in session.kwargs
+
+
+def test_pipeline_factory_rejects_sts_without_google_credentials(monkeypatch) -> None:
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="Gemini credentials"):
+        build_agent_runtime(
+            {
+                "agent_name": "Ava",
+                "owner_name": "Sam",
+                "pipeline_mode": "sts",
+                "sts_provider": "gemini",
+            },
+            plugin_modules={"google": FakeGoogleRealtimePlugin},
+            agent_cls=FakeAgent,
+            session_cls=FakeSession,
+        )
+
+
+def test_pipeline_factory_rejects_unsupported_sts_provider(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+
+    with pytest.raises(ValueError, match="Unsupported STS provider"):
+        build_agent_runtime(
+            {
+                "agent_name": "Ava",
+                "owner_name": "Sam",
+                "pipeline_mode": "sts",
+                "sts_provider": "other",
+            },
+            plugin_modules={"google": FakeGoogleRealtimePlugin},
+            agent_cls=FakeAgent,
+            session_cls=FakeSession,
+        )
