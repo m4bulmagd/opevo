@@ -37,11 +37,11 @@ def _resolve_speechmatics_turn_detection_mode(plugin_module):
 
 def build_pipeline_config(agent_config: dict) -> dict:
     pipeline_mode = agent_config.get("pipeline_mode", PipelineMode.STT_LLM_TTS.value)
-    if pipeline_mode == PipelineMode.STS.value:
-        raise ValueError("sts pipeline mode is not enabled yet")
+    if pipeline_mode not in {PipelineMode.STT_LLM_TTS.value, PipelineMode.STS.value}:
+        raise ValueError(f"Unsupported pipeline mode: {pipeline_mode}")
 
     return {
-        "pipeline_mode": PipelineMode.STT_LLM_TTS.value,
+        "pipeline_mode": pipeline_mode,
         "stt_provider": agent_config.get("stt_provider", STTProvider.SPEECHMATICS.value),
         "llm_provider": agent_config.get("llm_provider", LLMProvider.GEMINI.value),
         "tts_provider": agent_config.get("tts_provider", TTSProvider.SPEECHMATICS.value),

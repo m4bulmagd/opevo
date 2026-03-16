@@ -73,13 +73,11 @@ def test_pipeline_factory_defaults_to_stt_llm_tts() -> None:
     assert config["tts_provider"] == "speechmatics"
 
 
-def test_pipeline_factory_rejects_sts_when_not_enabled() -> None:
-    try:
-        build_pipeline_config({"pipeline_mode": "sts"})
-    except ValueError as exc:
-        assert "not enabled" in str(exc)
-    else:
-        raise AssertionError("Expected sts mode to raise")
+def test_pipeline_factory_accepts_sts_mode() -> None:
+    config = build_pipeline_config({"pipeline_mode": "sts"})
+
+    assert config["pipeline_mode"] == "sts"
+    assert config["sts_provider"] == "gemini"
 
 
 def test_pipeline_factory_rejects_removed_openai_provider() -> None:
