@@ -4,7 +4,7 @@ from app.core.database import get_session_factory
 from app.services.call_lifecycle_service import CallLifecycleService
 
 
-async def call_finalization_job(payload: dict) -> dict:
+async def call_finalization_job(ctx, payload: dict) -> dict:
     session_factory = get_session_factory()
     async with session_factory() as session:
         result = await CallLifecycleService(session).finalize_call(

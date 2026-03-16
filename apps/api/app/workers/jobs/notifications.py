@@ -4,7 +4,7 @@ from app.core.database import get_session_factory
 from app.services.notification_service import NotificationService
 
 
-async def notifications_job(payload: dict) -> dict:
+async def notifications_job(ctx, payload: dict) -> dict:
     session_factory = get_session_factory()
     async with session_factory() as session:
         result = await NotificationService(session).create_call_completed_notification(
