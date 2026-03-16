@@ -1,0 +1,22 @@
+services:
+  api:
+    volumes:
+      - ./apps/api/app:/app/app
+      - ./apps/api/alembic:/app/alembic
+      - ./apps/api/alembic.ini:/app/alembic.ini
+    command: >
+      sh -lc "uv run alembic -c alembic.ini upgrade head &&
+      exec uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app --reload-dir /app/alembic"
+
+  worker:
+    volumes:
+      - ./apps/api/app:/app/app
+      - ./apps/api/alembic:/app/alembic
+      - ./apps/api/alembic.ini:/app/alembic.ini
+    command: ["uv", "run", "arq", "app.workers.arq_worker.WorkerSettings"]
+
+  agent:
+    volumes:
+      - ./apps/agent/agent:/app/agent
+      - ./apps/agent/dev_runner.py:/app/dev_runner.py
+    command: ["uv", "run", "python", "dev_runner.py"]

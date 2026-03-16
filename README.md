@@ -1,0 +1,121 @@
+# AI Call Assistant
+
+Backend and agent monorepo for the AI Call Assistant MVP.
+
+## Apps
+
+- `apps/api`: FastAPI backend for auth, billing, telephony coordination, webhooks, realtime, and persistence.
+- `apps/agent`: LiveKit agent worker for prompt construction, provider selection, and call runtime execution.
+
+## Local Verification
+
+### API
+
+```bash
+cd apps/api
+UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -v
+```
+
+### Agent
+
+```bash
+cd apps/agent
+UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -v
+```
+
+## Docker Builds
+
+### API
+
+```bash
+cd apps/api
+docker build -t ai-call-api .
+```
+
+### Agent
+
+```bash
+cd apps/agent
+docker build -t ai-call-agent .
+```
+
+## Local Infra
+
+Start the stateful dependencies first:
+
+```bash
+docker compose up -d postgres redis minio minio-init
+```
+
+Deployment-like runtime launch:
+
+```bash
+docker compose --profile app up --build api worker agent
+```
+
+## Local Dev Overlay
+
+For faster iteration without rebuilding containers on every code change, use the dev overlay:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker agent
+```
+
+What it does:
+- `api` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/api/app) and runs `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`
+- `worker` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/api/app) and runs `uv run arq app.workers.arq_worker.WorkerSettings`
+- `agent` bind-mounts [apps/agent/agent](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/agent/agent) and runs `python dev_runner.py`, which restarts the worker when Python files change
+
+Important limits:
+- Source edits reload automatically, but dependency changes still require rebuilding the image
+- API worker code changes require restarting the `worker` container in the dev overlay
+- Agent code changes restart the worker process, so any active call in flight will be interrupted
+
+Useful commands:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml --profile app logs -f api worker agent
+docker compose -f compose.yaml -f compose.dev.yaml --profile app restart api worker agent
+```
+
+Live STT/LLM/TTS debug logs:
+
+```bash
+# set in apps/agent/.env
+AGENT_DEBUG_STREAMS=true
+
+docker compose --profile app up -d --build agent
+docker compose --profile app logs -f agent
+```
+
+When enabled, the agent emits structured `agent.debug` log lines for:
+- `stt.*`
+- `llm.start`, `llm.delta`, `llm.complete`
+- `tts.start`, `tts.first_frame`, `tts.complete`, `tts.error`
+
+Voice turn-taking defaults:
+- `LIVEKIT_SILERO_VAD_ENABLED=true` enables LiveKit Silero VAD in the agent session
+- `LIVEKIT_TURN_DETECTOR_ENABLED=true` enables the LiveKit multilingual turn detector in the agent session
+- `SPEECHMATICS_TURN_DETECTION_MODE=adaptive` keeps Speechmatics endpointing in adaptive mode underneath the LiveKit turn-taking layer
+
+Local service versions:
+- PostgreSQL `17.8`
+- Redis `7.4.7`
+- MinIO `RELEASE.2025-07-23T15-54-02Z`
+
+Core local endpoints:
+- PostgreSQL: `postgresql+asyncpg://postgres:postgres@localhost:5432/ai_call`
+- Redis: `redis://localhost:6379/0`
+- MinIO API: `http://localhost:9000`
+- MinIO console: `http://localhost:9001`
+- MinIO bucket: `recordings`
+
+## Staging Checklist
+
+- [ ] API starts with real Postgres and Redis
+- [ ] Agent worker starts with real LiveKit credentials
+- [ ] Clerk webhook reaches `/webhooks/clerk`
+- [ ] Stripe webhook resets minutes
+- [ ] Telnyx number can be provisioned
+- [ ] LiveKit dispatch reaches the agent
+- [ ] Post-call summary, recording metadata, notification persistence, and usage deduction complete successfully

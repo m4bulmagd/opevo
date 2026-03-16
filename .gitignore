@@ -1,1 +1,11 @@
 .worktrees/
+.pytest_cache/
+.venv/
+__pycache__/
+.agents/
+PRD.md
+skills-lock.json
+TechStack_BuildPlan.md
+.pytest_cache/
+.venv/
+__pycache__/
