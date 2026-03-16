@@ -62,7 +62,7 @@ async def entrypoint(context: JobContext) -> None:
         )
     )
     await session.start(agent=agent, room=context.room)
-    await session.say("Hello")
+    await session.say(f"Hello, I'm {metadata['agent_name']}, an AI assistant representing {metadata['owner_name']}. This call may be recorded. How can I help you?")
 
 
 def prewarm_assets(proc) -> None:
