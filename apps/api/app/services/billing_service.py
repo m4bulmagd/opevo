@@ -1,11 +1,14 @@
 import hashlib
 import hmac
+import time
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.providers.telephony.base import TelephonyProvisioningReviewRequired
+from app.repositories.notification_repository import NotificationRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
@@ -26,6 +29,7 @@ class BillingService:
         self.user_repository = UserRepository(session)
         self.subscription_repository = SubscriptionRepository(session)
         self.usage_repository = UsageRepository(session)
+        self.notification_repository = NotificationRepository(session)
         self.webhook_event_repository = WebhookEventRepository(session)
         self.telephony_service = telephony_service or TelephonyService(session)
 
@@ -35,14 +39,35 @@ class BillingService:
         if not signature_header:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Stripe signature")
 
-        parts = dict(part.split("=", 1) for part in signature_header.split(",") if "=" in part)
-        provided = parts.get("v1")
+        timestamp: str | None = None
+        provided_signatures: list[str] = []
+        for part in signature_header.split(","):
+            key, sep, value = part.partition("=")
+            if not sep:
+                continue
+            if key == "t":
+                timestamp = value
+            elif key == "v1":
+                provided_signatures.append(value)
+
+        if not timestamp or not provided_signatures:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Stripe signature")
+
+        try:
+            webhook_timestamp = int(timestamp)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Stripe signature") from exc
+
+        if abs(int(time.time()) - webhook_timestamp) > 300:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Expired Stripe signature")
+
+        signed_payload = timestamp.encode("utf-8") + b"." + payload
         expected = hmac.new(
             self.settings.stripe_webhook_secret.encode("utf-8"),
-            payload,
+            signed_payload,
             hashlib.sha256,
         ).hexdigest()
-        if not provided or not hmac.compare_digest(provided, expected):
+        if not any(hmac.compare_digest(provided, expected) for provided in provided_signatures):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Stripe signature")
 
     async def handle_event(self, envelope: dict) -> None:
@@ -77,6 +102,7 @@ class BillingService:
 
         plan_tier = event_object["items"]["data"][0]["price"].get("lookup_key", "starter")
         allocated_minutes = PLAN_MINUTES.get(plan_tier, 60)
+        current_period_start, current_period_end = self._extract_subscription_period_bounds(event_object)
 
         await self.subscription_repository.upsert_by_stripe_subscription_id(
             user_id=user.id,
@@ -85,10 +111,19 @@ class BillingService:
             plan_tier=plan_tier,
             status=event_object.get("status", "active"),
             allocated_minutes=allocated_minutes,
-            current_period_start=datetime.fromtimestamp(event_object["current_period_start"], UTC),
-            current_period_end=datetime.fromtimestamp(event_object["current_period_end"], UTC),
+            current_period_start=current_period_start,
+            current_period_end=current_period_end,
         )
-        await self.telephony_service.provision_number(user.id, country_code=user.country_code or "FR")
+        try:
+            await self.telephony_service.provision_number(user.id, country_code=user.country_code or "FR")
+        except TelephonyProvisioningReviewRequired as exc:
+            await self.notification_repository.create(
+                user_id=user.id,
+                call_id=None,
+                notification_type="phone_number_provisioning_review_required",
+                status="pending",
+                payload=exc.payload,
+            )
         await self.usage_repository.create(
             user_id=user.id,
             event_type="subscription_activated",
@@ -97,11 +132,15 @@ class BillingService:
         )
 
     async def _handle_invoice_paid(self, event_object: dict) -> None:
-        subscription = await self.subscription_repository.get_by_stripe_subscription_id(event_object["subscription"])
+        subscription_id = self._extract_invoice_subscription_id(event_object)
+        if not subscription_id:
+            return
+
+        subscription = await self.subscription_repository.get_by_stripe_subscription_id(subscription_id)
         if subscription is None:
             return
 
-        plan_tier = event_object["lines"]["data"][0]["price"].get("lookup_key", subscription.plan_tier)
+        plan_tier = self._extract_invoice_plan_tier(event_object) or subscription.plan_tier
         allocated_minutes = PLAN_MINUTES.get(plan_tier, subscription.allocated_minutes)
         subscription.plan_tier = plan_tier
         subscription.allocated_minutes = allocated_minutes
@@ -113,3 +152,56 @@ class BillingService:
             minutes_delta=allocated_minutes,
             balance_after=allocated_minutes,
         )
+
+    @staticmethod
+    def _extract_invoice_subscription_id(event_object: dict) -> str | None:
+        subscription_id = event_object.get("subscription")
+        if subscription_id:
+            return subscription_id
+
+        subscription_details = event_object.get("parent", {}).get("subscription_details", {})
+        subscription_id = subscription_details.get("subscription")
+        if subscription_id:
+            return subscription_id
+
+        for line in event_object.get("lines", {}).get("data", []):
+            subscription_item_details = line.get("parent", {}).get("subscription_item_details", {})
+            subscription_id = subscription_item_details.get("subscription")
+            if subscription_id:
+                return subscription_id
+
+        return None
+
+    @staticmethod
+    def _extract_invoice_plan_tier(event_object: dict) -> str | None:
+        for line in event_object.get("lines", {}).get("data", []):
+            lookup_key = line.get("price", {}).get("lookup_key")
+            if lookup_key:
+                return lookup_key
+        return None
+
+    @staticmethod
+    def _extract_subscription_period_bounds(event_object: dict) -> tuple[datetime | None, datetime | None]:
+        start = event_object.get("current_period_start")
+        end = event_object.get("current_period_end")
+        if start is not None and end is not None:
+            return (
+                datetime.fromtimestamp(start, UTC),
+                datetime.fromtimestamp(end, UTC),
+            )
+
+        for item in event_object.get("items", {}).get("data", []):
+            item_start = item.get("current_period_start")
+            item_end = item.get("current_period_end")
+            if item_start is not None and item_end is not None:
+                return (
+                    datetime.fromtimestamp(item_start, UTC),
+                    datetime.fromtimestamp(item_end, UTC),
+                )
+
+        billing_cycle_anchor = event_object.get("billing_cycle_anchor")
+        if billing_cycle_anchor is not None:
+            anchor = datetime.fromtimestamp(billing_cycle_anchor, UTC)
+            return (anchor, None)
+
+        return (None, None)

@@ -50,6 +50,7 @@ LIVEKIT_AGENT_NAME=ai-call-agent
 TELNYX_API_KEY=<your-telnyx-api-key>
 TELNYX_ACTIVE_CONNECTION_ID=<your-telnyx-livekit-connection-id>
 TELNYX_DISABLED_CONNECTION_ID=<your-telnyx-disabled-connection-id>
+TELNYX_ORDERING_ENABLED=false
 STORAGE_BUCKET_NAME=recordings
 S3_ENDPOINT_URL=http://minio:9000
 S3_ACCESS_KEY=minioadmin
@@ -187,9 +188,18 @@ docker exec ai-call-postgres psql -U postgres -d ai_call -c "select event_type, 
 Expected:
 
 - one `subscriptions` row for the user
-- one `phone_numbers` row provisioned through Telnyx
 - one `usage_ledgers` row with `event_type = subscription_activated`
+- when `TELNYX_ORDERING_ENABLED=false`, one `notifications` row with `notification_type = phone_number_provisioning_review_required`
 - API logs show `202` on `/webhooks/stripe`
+
+Current verified staging result from 2026-03-16:
+
+- Stripe activation persisted the subscription and starter-minute allocation
+- Telnyx selection stayed in non-buying mode and found a valid national candidate:
+  - `+33974065674`
+  - `upfront_cost = 1.00000 USD`
+  - `monthly_cost = 0.50000 USD`
+- no real number order was placed while `TELNYX_ORDERING_ENABLED=false`
 
 ## Step 3: Stripe Invoice Reset Smoke
 
@@ -206,9 +216,20 @@ Expected:
 - a new `usage_ledgers` row with `event_type = invoice_paid_reset`
 - `balance_after` resets to the plan minutes
 
+Important:
+
+- replaying the same Stripe `invoice.paid` event id will be ignored by the webhook idempotency store
+- use a fresh invoice event if you want to verify the reset path in staging
+
 ## Step 4: Telnyx Active / Disabled Switch Smoke
 
-Confirm the provisioned number is connected to the active Telnyx application after subscription activation.
+Only run this after you intentionally enable real purchases:
+
+```dotenv
+TELNYX_ORDERING_ENABLED=true
+```
+
+Then replay the subscription activation event or create a new qualifying subscription, and confirm the provisioned number is connected to the active Telnyx application.
 
 Then force a disable path by driving the user balance to zero via a real completed call or by using the existing call completion path.
 
@@ -230,6 +251,14 @@ Confirm LiveKit is configured to send webhooks to:
 - `POST <PUBLIC_API_URL>/webhooks/livekit`
 
 Then place one real inbound call through the forwarded Telnyx number.
+
+Existing purchased number available for the manual smoke path:
+
+- `+33392091999`
+
+Current caveat:
+
+- this number belongs to the seeded `staging-local-user`, not the new Stripe-backed user created during the 2026-03-16 Stripe smoke
 
 Watch logs:
 

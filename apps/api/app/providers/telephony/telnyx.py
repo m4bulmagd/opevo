@@ -1,7 +1,14 @@
+from decimal import Decimal, InvalidOperation
+
 import telnyx
 
 from app.core.config import get_settings
-from app.providers.telephony.base import TelephonyProvider
+from app.providers.telephony.base import TelephonyProvider, TelephonyProvisioningReviewRequired
+
+
+MAX_SELECTION_ATTEMPTS = 3
+MAX_TOTAL_COST_USD = Decimal("2.00")
+ALLOWED_NUMBER_TYPES = ("national", "local")
 
 
 class TelephonyTelnyx(TelephonyProvider):
@@ -11,34 +18,81 @@ class TelephonyTelnyx(TelephonyProvider):
         api_key: str | None = None,
         active_connection_id: str | None = None,
         disabled_connection_id: str | None = None,
+        ordering_enabled: bool | None = None,
         available_phone_number_resource=telnyx.AvailablePhoneNumber,
-        phone_number_order_resource=telnyx.PhoneNumberOrder,
+        phone_number_order_resource=telnyx.NumberOrder,
         phone_number_resource=telnyx.PhoneNumber,
     ) -> None:
         settings = get_settings()
         self.api_key = api_key or settings.telnyx_api_key
         self.active_connection_id = active_connection_id or settings.telnyx_active_connection_id
         self.disabled_connection_id = disabled_connection_id or settings.telnyx_disabled_connection_id
+        self.ordering_enabled = settings.telnyx_ordering_enabled if ordering_enabled is None else ordering_enabled
         self.available_phone_number_resource = available_phone_number_resource
         self.phone_number_order_resource = phone_number_order_resource
         self.phone_number_resource = phone_number_resource
 
     async def provision_number(self, *, country_code: str) -> dict:
-        available_numbers = self.available_phone_number_resource.list(
-            api_key=self.api_key,
-            **{
-                "filter[country_code]": country_code,
-                "filter[features]": ["voice"],
-                "page[size]": 1,
-            },
-        )
-        if not getattr(available_numbers, "data", None):
-            raise ValueError(f"No available Telnyx numbers for {country_code}")
+        inspected_candidates: list[dict] = []
+        selected_candidate: dict | None = None
 
-        selected_number = available_numbers.data[0].phone_number
+        for phone_number_type in ALLOWED_NUMBER_TYPES:
+            remaining_attempts = MAX_SELECTION_ATTEMPTS - len(inspected_candidates)
+            if remaining_attempts <= 0:
+                break
+
+            available_numbers = self.available_phone_number_resource.list(
+                api_key=self.api_key,
+                **{
+                    "filter[country_code]": country_code,
+                    "filter[phone_number_type]": phone_number_type,
+                    "filter[features]": ["voice"],
+                    "filter[limit]": remaining_attempts,
+                    "filter[reservable]": True,
+                    "filter[exclude_held_numbers]": True,
+                },
+            )
+
+            for candidate in getattr(available_numbers, "data", [])[:remaining_attempts]:
+                candidate_details = self._extract_candidate_details(candidate, phone_number_type=phone_number_type)
+                inspected_candidates.append(candidate_details)
+                if self._is_candidate_affordable(candidate_details):
+                    selected_candidate = candidate_details
+                    break
+
+            if selected_candidate is not None:
+                break
+
+        if selected_candidate is None:
+            raise TelephonyProvisioningReviewRequired(
+                reason="no_affordable_number",
+                payload={
+                    "event": "phone_number_provisioning_review_required",
+                    "country_code": country_code,
+                    "max_total_cost_usd": str(MAX_TOTAL_COST_USD),
+                    "attempts": len(inspected_candidates),
+                    "candidates": inspected_candidates,
+                    "contact_support": True,
+                },
+            )
+
+        selected_number = selected_candidate["e164"]
+        if not self.ordering_enabled:
+            raise TelephonyProvisioningReviewRequired(
+                reason="ordering_disabled",
+                payload={
+                    "event": "phone_number_provisioning_review_required",
+                    "country_code": country_code,
+                    "selected_candidate": selected_candidate,
+                    "max_total_cost_usd": str(MAX_TOTAL_COST_USD),
+                    "contact_support": False,
+                    "manual_review_required": True,
+                },
+            )
+
         self.phone_number_order_resource.create(
             api_key=self.api_key,
-            phone_numbers=[selected_number],
+            phone_numbers=[{"phone_number": selected_number}],
         )
 
         phone_numbers = self.phone_number_resource.list(
@@ -76,6 +130,28 @@ class TelephonyTelnyx(TelephonyProvider):
             connection_id=self.disabled_connection_id,
         )
         return "app-disabled"
+
+    @staticmethod
+    def _extract_candidate_details(candidate, *, phone_number_type: str) -> dict:
+        cost_information = getattr(candidate, "cost_information", None) or {}
+        return {
+            "e164": getattr(candidate, "phone_number", None),
+            "phone_number_type": phone_number_type,
+            "currency": cost_information.get("currency"),
+            "upfront_cost": cost_information.get("upfront_cost"),
+            "monthly_cost": cost_information.get("monthly_cost"),
+        }
+
+    @staticmethod
+    def _is_candidate_affordable(candidate: dict) -> bool:
+        if candidate.get("currency") != "USD":
+            return False
+        try:
+            upfront_cost = Decimal(str(candidate.get("upfront_cost")))
+            monthly_cost = Decimal(str(candidate.get("monthly_cost")))
+        except (InvalidOperation, TypeError):
+            return False
+        return upfront_cost + monthly_cost <= MAX_TOTAL_COST_USD
 
 
 def get_telephony_provider() -> TelephonyProvider:

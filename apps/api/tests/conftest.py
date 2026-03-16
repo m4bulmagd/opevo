@@ -236,6 +236,35 @@ def stripe_subscription_created_payload() -> dict:
 
 
 @pytest.fixture
+def stripe_current_subscription_created_payload() -> dict:
+    return {
+        "id": "evt_sub_created_current_123",
+        "type": "customer.subscription.created",
+        "data": {
+            "object": {
+                "id": "sub_123",
+                "customer": "cus_123",
+                "status": "active",
+                "metadata": {"clerk_user_id": "user_123"},
+                "items": {
+                    "data": [
+                        {
+                            "current_period_start": 1710000000,
+                            "current_period_end": 1712592000,
+                            "price": {
+                                "id": "price_starter",
+                                "lookup_key": "starter",
+                            },
+                        }
+                    ]
+                },
+                "billing_cycle_anchor": 1710000000,
+            }
+        },
+    }
+
+
+@pytest.fixture
 def stripe_invoice_paid_payload() -> dict:
     return {
         "id": "evt_invoice_paid_123",
@@ -244,13 +273,25 @@ def stripe_invoice_paid_payload() -> dict:
             "object": {
                 "id": "in_123",
                 "customer": "cus_123",
-                "subscription": "sub_123",
+                "parent": {
+                    "subscription_details": {
+                        "subscription": "sub_123",
+                    }
+                },
                 "lines": {
                     "data": [
                         {
-                            "price": {
-                                "id": "price_standard",
-                                "lookup_key": "standard",
+                            "parent": {
+                                "subscription_item_details": {
+                                    "subscription": "sub_123",
+                                    "subscription_item": "si_123",
+                                }
+                            },
+                            "pricing": {
+                                "price_details": {
+                                    "price": "price_standard",
+                                    "product": "prod_123",
+                                }
                             }
                         }
                     ]
@@ -264,9 +305,27 @@ def stripe_invoice_paid_payload() -> dict:
 def signed_stripe_headers_factory():
     def _build(payload: dict) -> dict[str, str]:
         payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        digest = hmac.new(b"test-stripe-secret", payload_bytes, hashlib.sha256).hexdigest()
+        timestamp = str(int(time.time()))
+        signed_payload = timestamp.encode("utf-8") + b"." + payload_bytes
+        digest = hmac.new(b"test-stripe-secret", signed_payload, hashlib.sha256).hexdigest()
         return {
-            "stripe-signature": f"t=1710000000,v1={digest}",
+            "stripe-signature": f"t={timestamp},v1={digest}",
+            "content-type": "application/json",
+        }
+
+    return _build
+
+
+@pytest.fixture
+def stripe_style_headers_factory():
+    def _build(payload: dict, *, timestamp: int | None = None) -> dict[str, str]:
+        if timestamp is None:
+            timestamp = int(time.time())
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        signed_payload = f"{timestamp}.".encode("utf-8") + payload_bytes
+        digest = hmac.new(b"test-stripe-secret", signed_payload, hashlib.sha256).hexdigest()
+        return {
+            "stripe-signature": f"t={timestamp},v1={digest}",
             "content-type": "application/json",
         }
 
