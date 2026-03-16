@@ -20,10 +20,8 @@ class AgentCallCompletionRequest(BaseModel):
 
 class AgentCallCompletionResponse(BaseModel):
     status: str
-    minutes_charged: int
-    summary_text: str | None
-    recording_key: str | None
-    number_disabled: bool
+    queued: bool
+    job_id: str
 
 
 class CallResponse(BaseModel):

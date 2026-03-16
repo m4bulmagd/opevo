@@ -30,11 +30,17 @@ class NotificationService:
             "summary_text": summary_text,
             "minutes_charged": minutes_charged,
         }
-        status = await self.provider.send_notification(
-            user_id=user_id,
-            notification_type="call_completed",
-            payload=payload,
-        )
+        try:
+            status = await self.provider.send_notification(
+                user_id=user_id,
+                notification_type="call_completed",
+                payload=payload,
+            )
+            job_enqueued = True
+        except Exception as exc:
+            status = "failed"
+            payload["notification_error"] = str(exc)
+            job_enqueued = False
         await self.notification_repository.create(
             user_id=user_id,
             call_id=call_id,
@@ -42,4 +48,4 @@ class NotificationService:
             status=status,
             payload=payload,
         )
-        return NotificationResult(status=status, job_enqueued=True)
+        return NotificationResult(status=status, job_enqueued=job_enqueued)

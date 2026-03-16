@@ -50,7 +50,7 @@ docker compose up -d postgres redis minio minio-init
 Deployment-like runtime launch:
 
 ```bash
-docker compose --profile app up --build api agent
+docker compose --profile app up --build api worker agent
 ```
 
 ## Local Dev Overlay
@@ -58,22 +58,24 @@ docker compose --profile app up --build api agent
 For faster iteration without rebuilding containers on every code change, use the dev overlay:
 
 ```bash
-docker compose -f compose.yaml -f compose.dev.yaml --profile app up api agent
+docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker agent
 ```
 
 What it does:
 - `api` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/api/app) and runs `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`
+- `worker` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/api/app) and runs `uv run arq app.workers.arq_worker.WorkerSettings`
 - `agent` bind-mounts [apps/agent/agent](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/agent/agent) and runs `python dev_runner.py`, which restarts the worker when Python files change
 
 Important limits:
 - Source edits reload automatically, but dependency changes still require rebuilding the image
+- API worker code changes require restarting the `worker` container in the dev overlay
 - Agent code changes restart the worker process, so any active call in flight will be interrupted
 
 Useful commands:
 
 ```bash
-docker compose -f compose.yaml -f compose.dev.yaml --profile app logs -f api agent
-docker compose -f compose.yaml -f compose.dev.yaml --profile app restart api agent
+docker compose -f compose.yaml -f compose.dev.yaml --profile app logs -f api worker agent
+docker compose -f compose.yaml -f compose.dev.yaml --profile app restart api worker agent
 ```
 
 Live STT/LLM/TTS debug logs:

@@ -1,6 +1,9 @@
 import json
 from collections.abc import AsyncIterator
 
+from arq import create_pool
+from arq.connections import ArqRedis
+from arq.connections import RedisSettings
 from redis.asyncio import Redis
 
 from app.core.config import get_settings
@@ -9,6 +12,11 @@ from app.core.config import get_settings
 def get_redis_client() -> Redis:
     settings = get_settings()
     return Redis.from_url(settings.redis_url, decode_responses=True)
+
+
+async def create_arq_pool() -> ArqRedis:
+    settings = get_settings()
+    return await create_pool(RedisSettings.from_dsn(settings.redis_url))
 
 
 class RedisEventBus:

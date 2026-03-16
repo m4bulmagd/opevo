@@ -7,6 +7,7 @@ This runbook is the exact manual verification path for `feature/backend-foundati
 Use this to verify:
 
 - API boot with real Postgres and Redis
+- worker boot with real Postgres, Redis, and storage credentials
 - agent boot with real LiveKit credentials
 - Clerk webhook delivery
 - Stripe subscription activation and invoice reset handling
@@ -98,14 +99,15 @@ From the worktree root:
 ```bash
 cd /home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp
 docker compose up -d postgres redis minio minio-init
-docker compose --profile app up --build -d api agent
-docker compose --profile app logs -f api agent
+docker compose --profile app up --build -d api worker agent
+docker compose --profile app logs -f api worker agent
 ```
 
 Expected signals:
 
 - `api` runs Alembic automatically on startup
 - `api` starts `uvicorn` on port `8000`
+- `worker` starts `arq` without import or Redis connection failures
 - `agent` starts without credential or import failures
 
 ## Basic Boot Verification
@@ -258,12 +260,12 @@ Existing purchased number available for the manual smoke path:
 
 Current caveat:
 
-- this number belongs to the seeded `staging-local-user`, not the new Stripe-backed user created during the 2026-03-16 Stripe smoke
+   - this number belongs to the seeded `staging-local-user`, not the new Stripe-backed user created during the 2026-03-16 Stripe smoke
 
 Watch logs:
 
 ```bash
-docker compose --profile app logs -f api agent
+docker compose --profile app logs -f api worker agent
 ```
 
 Expected API log signals:
@@ -292,9 +294,14 @@ Expected:
 
 - one completed `calls` row
 - persisted transcript rows in `call_messages`
-- one notification row for call completion
+- one notification row for call completion, even if Firebase delivery itself fails
 - one usage ledger row for `call_completed`
 - `summary_text` is populated with the current placeholder summary behavior
+
+Expected worker log signals:
+
+- `call_finalization_job` runs after the agent receives `202 Accepted` from `/api/agent/calls/{call_id}/complete`
+- no duplicate finalization occurs if the same completion payload is retried
 
 Optional storage verification:
 
@@ -309,6 +316,7 @@ Then check the `recordings` bucket in MinIO console.
 The staging smoke is successful when all of these are true:
 
 - API stays healthy during provider callbacks
+- worker stays healthy and drains queued call finalization jobs
 - agent starts and handles a real LiveKit dispatch
 - Clerk creates a local `users` row
 - Stripe activation creates subscription, number, and minutes ledger entries

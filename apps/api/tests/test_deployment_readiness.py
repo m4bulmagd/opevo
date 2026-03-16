@@ -23,8 +23,9 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert "- [ ] Stripe webhook resets minutes" in readme
     assert "- [ ] Telnyx number can be provisioned" in readme
     assert "- [ ] LiveKit dispatch reaches the agent" in readme
-    assert "docker compose -f compose.yaml -f compose.dev.yaml --profile app up api agent" in readme
+    assert "docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker agent" in readme
     assert "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload" in readme
+    assert "uv run arq app.workers.arq_worker.WorkerSettings" in readme
     assert "python dev_runner.py" in readme
 
     assert 'image: postgres:17.8-bookworm' in compose
@@ -39,6 +40,8 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert '- ./apps/agent/.env' in compose
     assert 'DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call' in compose
     assert 'REDIS_URL: redis://redis:6379/0' in compose
+    assert 'container_name: ai-call-worker' in compose
+    assert 'command: ["uv", "run", "arq", "app.workers.arq_worker.WorkerSettings"]' in compose
     assert 'API_BASE_URL: http://api:8000' in compose
     assert '${LIVEKIT_API_KEY:-replace-me}' not in compose
     assert '${LIVEKIT_API_SECRET:-replace-me}' not in compose
@@ -76,8 +79,10 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert "./apps/api/app:/app/app" in compose_dev
     assert "./apps/agent/agent:/app/agent" in compose_dev
     assert "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload" in compose_dev
+    assert 'command: ["uv", "run", "arq", "app.workers.arq_worker.WorkerSettings"]' in compose_dev
     assert "dev_runner.py" in compose_dev
 
     assert "## Staging Smoke Status" in backend_context
     assert "Partially executed on 2026-03-16." in backend_context
+    assert "Queue-backed call finalization" in backend_context
     assert "phone_number_provisioning_review_required" in backend_context

@@ -2,6 +2,7 @@ import pytest
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.call import Call
 from app.models.call_message import CallMessage
@@ -31,6 +32,11 @@ class FakeStorageProvider:
 class FakeNotificationProvider:
     async def send_notification(self, *, user_id, notification_type: str, payload: dict) -> str:
         return "sent"
+
+
+class FakeFailingNotificationProvider:
+    async def send_notification(self, *, user_id, notification_type: str, payload: dict) -> str:
+        raise ValueError("messaging misconfigured")
 
 
 @pytest.mark.anyio
@@ -93,6 +99,93 @@ async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, acti
     ).scalars().all()
     assert len(notifications) == 1
     assert notifications[0].notification_type == "call_completed"
+
+
+@pytest.mark.anyio
+async def test_call_completion_records_failed_notification_but_still_completes(
+    db_session, active_user
+) -> None:
+    call = Call(
+        id=uuid4(),
+        user_id=active_user.id,
+        caller_number="+33111111111",
+        status="pending",
+    )
+    db_session.add(call)
+    await db_session.commit()
+
+    service = CallLifecycleService(
+        db_session,
+        recording_service=RecordingService(provider=FakeStorageProvider()),
+        notification_service=NotificationService(db_session, provider=FakeFailingNotificationProvider()),
+    )
+
+    result = await service.finalize_call(
+        {
+            "user_id": active_user.id,
+            "call_id": str(call.id),
+            "duration_seconds": 61,
+            "minutes_remaining": 10,
+            "caller_number": "+33111111111",
+            "transcript": [{"speaker": "CALLER", "text": "Call me back."}],
+        }
+    )
+
+    refreshed_call = await db_session.get(Call, call.id)
+    assert refreshed_call.status == "completed"
+    assert result.notification_job_enqueued is False
+
+    notifications = (
+        await db_session.execute(select(Notification).where(Notification.call_id == call.id))
+    ).scalars().all()
+    assert len(notifications) == 1
+    assert notifications[0].notification_type == "call_completed"
+    assert notifications[0].status == "failed"
+    assert notifications[0].payload["notification_error"] == "messaging misconfigured"
+
+
+@pytest.mark.anyio
+async def test_call_finalization_job_skips_duplicate_completed_call(
+    db_session, active_user, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    call = Call(
+        id=uuid4(),
+        user_id=active_user.id,
+        caller_number="+33111111111",
+        status="pending",
+    )
+    db_session.add(call)
+    await db_session.commit()
+
+    from app.workers.jobs import call_finalization as call_finalization_module
+
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    monkeypatch.setattr(call_finalization_module, "get_session_factory", lambda: session_factory)
+
+    payload = {
+        "user_id": str(active_user.id),
+        "call_id": str(call.id),
+        "duration_seconds": 61,
+        "minutes_remaining": 10,
+        "caller_number": "+33111111111",
+        "transcript": [{"speaker": "CALLER", "text": "Call me back."}],
+    }
+
+    first_result = await call_finalization_module.call_finalization_job(payload)
+    second_result = await call_finalization_module.call_finalization_job(payload)
+
+    assert first_result["status"] == "completed"
+    assert second_result["status"] == "skipped"
+
+    messages = (
+        await db_session.execute(select(CallMessage).where(CallMessage.call_id == call.id))
+    ).scalars().all()
+    assert len(messages) == 1
+
+    notifications = (
+        await db_session.execute(select(Notification).where(Notification.call_id == call.id))
+    ).scalars().all()
+    assert len(notifications) == 1
 
 
 @pytest.mark.anyio

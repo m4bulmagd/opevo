@@ -1,17 +1,14 @@
 import base64
 import hmac
 from uuid import UUID
-from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from app.core.auth import UserIdentity, require_user_identity
 from app.core.config import get_settings
-from app.core.database import get_session
 from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionResponse
 from app.schemas.auth import UserIdentityResponse
-from app.services.call_lifecycle_service import CallLifecycleService
+from app.workers.call_finalization_queue import CallFinalizationQueue
 
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -24,10 +21,14 @@ async def require_agent_internal_token(x_agent_token: str = Header(...)) -> None
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
 
 
-async def get_call_lifecycle_service(
-    session: AsyncSession = Depends(get_session),
-) -> CallLifecycleService:
-    return CallLifecycleService(session)
+def get_call_finalization_queue(request: Request) -> CallFinalizationQueue:
+    queue = getattr(request.app.state, "call_finalization_queue", None)
+    if queue is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Call finalization queue unavailable",
+        )
+    return queue
 
 
 @router.get("/config", response_model=UserIdentityResponse)
@@ -44,17 +45,17 @@ async def complete_call(
     call_id: UUID,
     payload: AgentCallCompletionRequest,
     _: None = Depends(require_agent_internal_token),
-    lifecycle_service: Any = Depends(get_call_lifecycle_service),
+    queue: CallFinalizationQueue = Depends(get_call_finalization_queue),
 ) -> AgentCallCompletionResponse:
     recording_bytes = (
         base64.b64decode(payload.recording_bytes_base64.encode("utf-8"))
         if payload.recording_bytes_base64
         else None
     )
-    result = await lifecycle_service.finalize_call(
+    job_id = await queue.enqueue(
         {
             "call_id": str(call_id),
-            "user_id": payload.user_id,
+            "user_id": str(payload.user_id),
             "duration_seconds": payload.duration_seconds,
             "minutes_remaining": payload.minutes_remaining,
             "caller_number": payload.caller_number,
@@ -64,8 +65,6 @@ async def complete_call(
     )
     return AgentCallCompletionResponse(
         status="accepted",
-        minutes_charged=result.minutes_charged,
-        summary_text=result.summary_text,
-        recording_key=result.recording_key,
-        number_disabled=result.number_disabled,
+        queued=True,
+        job_id=job_id,
     )

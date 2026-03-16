@@ -20,6 +20,7 @@ class CallFinalizationResult:
     number_disabled: bool
     summary_text: str | None
     recording_key: str | None
+    already_completed: bool = False
 
 
 class CallLifecycleService:
@@ -51,6 +52,17 @@ class CallLifecycleService:
         call = await self.call_repository.get_by_id(call_id)
         if call is None:
             raise ValueError("Call not found")
+        if call.status == "completed":
+            return CallFinalizationResult(
+                minutes_charged=call.minutes_charged or 0,
+                summary_job_enqueued=False,
+                recording_job_enqueued=False,
+                notification_job_enqueued=False,
+                number_disabled=False,
+                summary_text=call.summary_text,
+                recording_key=None,
+                already_completed=True,
+            )
 
         summary_result = self.summary_service.create_summary(payload)
         recording_result = await self.recording_service.store_recording(payload)
