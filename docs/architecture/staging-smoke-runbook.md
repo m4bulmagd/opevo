@@ -24,7 +24,8 @@ Use this to verify:
   - one disabled connection id pointing to the unavailable app/message
 - Clerk app with webhook support
 - Stripe test-mode account
-- Credentials for Gemini, Speechmatics, Deepgram, and ElevenLabs as needed by the current agent config
+- Google Gemini API key for `pipeline_mode=sts`
+- Speechmatics, Deepgram, and ElevenLabs credentials as needed for `pipeline_mode=stt_llm_tts`
 
 ## Env Files
 
@@ -85,7 +86,9 @@ LIVEKIT_SILERO_VAD_ENABLED=true
 LIVEKIT_TURN_DETECTOR_ENABLED=true
 SPEECHMATICS_API_KEY=<your-speechmatics-key>
 SPEECHMATICS_TURN_DETECTION_MODE=adaptive
-GEMINI_API_KEY=<your-gemini-key>
+GOOGLE_API_KEY=<your-google-gemini-key>
+# Optional compatibility fallback if your local env already uses it:
+# GEMINI_API_KEY=<your-google-gemini-key>
 MISTRAL_API_KEY=<optional-or-placeholder>
 ELEVENLABS_API_KEY=<your-elevenlabs-key>
 ELEVENLABS_VOICE_ID=<your-elevenlabs-voice-id>
@@ -311,6 +314,34 @@ curl -s http://localhost:9001
 
 Then check the `recordings` bucket in MinIO console.
 
+## Step 7: Gemini STS Smoke
+
+Configure one test user with:
+
+- `agent_config.pipeline_mode = sts`
+- `sts_provider = gemini`
+- a valid `GOOGLE_API_KEY` in `apps/agent/.env`
+
+Then place one real inbound call for that user and watch:
+
+```bash
+docker compose --profile app logs -f api worker agent
+```
+
+Expected evidence:
+
+- API logs still show `livekit dispatch created`
+- agent joins the room without trying to construct external STT, TTS, Silero VAD, or the LiveKit turn detector for that call
+- transcript rows are still persisted in `call_messages`
+- worker still completes `call_finalization_job`
+- `calls.summary_text`, `usage_ledgers`, and `notifications` continue to populate through the existing backend flow
+
+Recommended comparison:
+
+- place one short call on `stt_llm_tts`
+- place one short call on `sts`
+- compare time-to-first-agent-response from logs or subjective call feel before deciding whether to expand STS beyond opt-in use
+
 ## Success Criteria
 
 The staging smoke is successful when all of these are true:
@@ -323,6 +354,7 @@ The staging smoke is successful when all of these are true:
 - Stripe renewal resets minutes
 - Telnyx number activation and disablement match balance state
 - one real call persists call, transcript, notification, and usage rows
+- one real `pipeline_mode=sts` call persists transcript and finalization state without breaking the backend lifecycle
 
 ## Record Results
 

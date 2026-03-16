@@ -11,12 +11,15 @@ This document captures implementation notes and staging verification for the bac
 ## Verified Locally
 
 - API tests covering health, auth, billing, telephony, realtime, LiveKit dispatch, repository flow, and post-call lifecycle.
-- Agent tests covering prompt building, pipeline config selection, and runtime event emission.
+- Agent tests covering prompt building, pipeline config selection, Gemini STS runtime construction, and runtime event emission.
 - API Docker image build.
 - Agent Docker image build.
 - Queue-backed call finalization is now covered locally so call persistence no longer depends on the LiveKit agent surviving shutdown long enough to wait on the full API response.
 - Local infrastructure stack prepared in [compose.yaml](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/compose.yaml) for PostgreSQL 17.8, Redis 7.4.7, and MinIO.
 - LiveKit SIP participant field mapping reviewed against the official docs on 2026-03-15: `sip.phoneNumber` is the caller number for inbound trunks and `sip.trunkPhoneNumber` is the dialed trunk number.
+- Agent runtime selection is now explicit per user via `agent_config.pipeline_mode`:
+  - `stt_llm_tts` remains the default and keeps Speechmatics/Deepgram + Gemini + TTS composition
+  - `sts` uses Gemini Live native audio with Gemini-managed turn detection and no external STT/TTS path
 
 ## Staging Smoke Status
 
@@ -55,7 +58,8 @@ Ready for manual execution once these external credentials and endpoints are ava
 - Stripe webhook secret and live test-mode subscription objects
 - Telnyx API key and active/disabled connection IDs
 - LiveKit URL, API key, and API secret
-- Gemini, Speechmatics, Deepgram, and ElevenLabs credentials as needed
+- Google Gemini API key for `pipeline_mode="sts"`
+- Speechmatics, Deepgram, and ElevenLabs credentials as needed for `pipeline_mode="stt_llm_tts"`
 - Reachable staging Postgres, Redis, and S3-compatible storage if not using the local Compose stack
 
 ## Remaining Manual Verification
@@ -65,6 +69,7 @@ Ready for manual execution once these external credentials and endpoints are ava
 - Real LiveKit webhook verification and agent dispatch against the purchased number `+33392091999`.
 - Queue-backed finalization with the dedicated `worker` service during a real forwarded call.
 - End-to-end forwarded phone call with transcript, summary, and minute deduction for the Stripe-backed user.
+- One real inbound call for a user configured with `pipeline_mode="sts"` to compare latency and verify transcript/finalization behavior on the Gemini native-audio path.
 
 ## Blockers For Full Staging Smoke Path
 
