@@ -1,6 +1,7 @@
 import asyncio
 from agent.main import build_worker_options
-from agent.main import _register_legacy_session_handlers
+from agent.main import _send_initial_greeting
+from agent.main import _register_standard_session_handlers
 from agent.main import _register_sts_session_handlers
 from pathlib import Path
 
@@ -72,6 +73,18 @@ class FakeConversationEvent:
         self.item = FakeConversationItem(role, text)
 
 
+class FakeGreetingSession:
+    def __init__(self) -> None:
+        self.say_calls: list[str] = []
+        self.generate_reply_calls: list[dict] = []
+
+    async def say(self, text: str):
+        self.say_calls.append(text)
+
+    async def generate_reply(self, **kwargs):
+        self.generate_reply_calls.append(kwargs)
+
+
 def _run_scheduled_coroutine(monkeypatch) -> None:
     def run_now(coro):
         asyncio.run(coro)
@@ -80,13 +93,13 @@ def _run_scheduled_coroutine(monkeypatch) -> None:
     monkeypatch.setattr("agent.main.asyncio.create_task", run_now)
 
 
-def test_register_legacy_session_handlers_forwards_final_caller_and_agent_text(monkeypatch) -> None:
+def test_register_standard_session_handlers_forwards_final_caller_and_agent_text(monkeypatch) -> None:
     _run_scheduled_coroutine(monkeypatch)
     session = FakeSession()
     runtime = FakeRuntime()
     metadata = {"call_id": "call-1", "user_id": "user-1"}
 
-    _register_legacy_session_handlers(session, runtime, metadata)
+    _register_standard_session_handlers(session, runtime, metadata)
 
     session.handlers["user_input_transcribed"](FakeTranscriptEvent("Hello", is_final=True))
     session.handlers["conversation_item_added"](FakeConversationEvent("assistant", "Hi there"))
@@ -108,3 +121,42 @@ def test_register_sts_session_handlers_forwards_caller_and_agent_text(monkeypatc
 
     assert runtime.caller_text == ["Need help"]
     assert runtime.agent_text == ["Sure"]
+
+
+def test_send_initial_greeting_uses_say_for_standard_mode() -> None:
+    session = FakeGreetingSession()
+
+    asyncio.run(
+        _send_initial_greeting(
+            session,
+            {
+                "agent_name": "Assistant",
+                "owner_name": "Sam",
+                "pipeline_mode": "stt_llm_tts",
+            },
+        )
+    )
+
+    assert session.say_calls == [
+        "Hello, I'm Assistant, an AI assistant representing Sam. This call may be recorded. How can I help you?"
+    ]
+    assert session.generate_reply_calls == []
+
+
+def test_send_initial_greeting_uses_generate_reply_for_sts_mode() -> None:
+    session = FakeGreetingSession()
+
+    asyncio.run(
+        _send_initial_greeting(
+            session,
+            {
+                "agent_name": "Assistant",
+                "owner_name": "Sam",
+                "pipeline_mode": "sts",
+            },
+        )
+    )
+
+    assert session.say_calls == []
+    assert len(session.generate_reply_calls) == 1
+    assert "Hello, I'm Assistant, an AI assistant representing Sam." in session.generate_reply_calls[0]["instructions"]

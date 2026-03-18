@@ -81,7 +81,7 @@ Runtime selection continues to come from backend dispatch metadata, specifically
 - `stt_llm_tts`: current behavior, default when the field is absent
 - `sts`: Gemini Live native audio runtime
 
-The configuration object should still include provider fields for the legacy path, but the STS path should ignore separate STT and TTS providers and require `sts_provider="gemini"`.
+The configuration object should still include provider fields for the standard `stt_llm_tts` path, but the STS path should ignore separate STT and TTS providers and require `sts_provider="gemini"`.
 
 ### Agent Runtime Structure
 
@@ -139,14 +139,14 @@ The STS branch should fail explicitly rather than silently degrading:
 - If the STS provider value is unsupported, raise a clear configuration error.
 - Do not silently fall back from `sts` to `stt_llm_tts`, because that would hide rollout and latency issues.
 
-The legacy branch should retain its current behavior.
+The standard `stt_llm_tts` branch should retain its current behavior.
 
 ### Testing Strategy
 
 At minimum, tests should cover:
 
 - `build_pipeline_config()` accepts `sts` and still defaults to `stt_llm_tts`.
-- `build_agent_runtime()` builds the legacy branch unchanged.
+- `build_agent_runtime()` builds the standard `stt_llm_tts` branch unchanged.
 - `build_agent_runtime()` builds the STS branch with the Google realtime model and without separate STT/TTS/VAD/turn-detector wiring.
 - selecting `sts` without Gemini credentials fails clearly.
 - selecting an unsupported STS provider fails clearly.

@@ -4,6 +4,7 @@ import time
 import asyncio
 import logging
 import importlib
+import inspect
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
@@ -24,13 +25,13 @@ def _register_inference_runners() -> None:
         importlib.import_module("livekit.plugins.turn_detector.multilingual")
 
 
-async def _handle_legacy_user_input_transcribed(runtime: SessionRuntime, metadata: dict, event) -> None:
+async def _handle_standard_user_input_transcribed(runtime: SessionRuntime, metadata: dict, event) -> None:
     if not getattr(event, "is_final", False) or not getattr(event, "transcript", None):
         return
     await runtime.handle_caller_transcript(metadata, event.transcript)
 
 
-async def _handle_legacy_conversation_item_added(runtime: SessionRuntime, metadata: dict, event) -> None:
+async def _handle_standard_conversation_item_added(runtime: SessionRuntime, metadata: dict, event) -> None:
     item = getattr(event, "item", None)
     if item is None or getattr(item, "type", None) != "message":
         return
@@ -58,12 +59,12 @@ async def _handle_sts_conversation_item_added(runtime: SessionRuntime, metadata:
         await runtime.handle_agent_utterance(metadata, text)
 
 
-def _register_legacy_session_handlers(session, runtime: SessionRuntime, metadata: dict) -> None:
+def _register_standard_session_handlers(session, runtime: SessionRuntime, metadata: dict) -> None:
     def on_user_input_transcribed(event) -> None:
-        asyncio.create_task(_handle_legacy_user_input_transcribed(runtime, metadata, event))
+        asyncio.create_task(_handle_standard_user_input_transcribed(runtime, metadata, event))
 
     def on_conversation_item_added(event) -> None:
-        asyncio.create_task(_handle_legacy_conversation_item_added(runtime, metadata, event))
+        asyncio.create_task(_handle_standard_conversation_item_added(runtime, metadata, event))
 
     session.on("user_input_transcribed", on_user_input_transcribed)
     session.on("conversation_item_added", on_conversation_item_added)
@@ -80,7 +81,23 @@ def _register_session_handlers(session, runtime: SessionRuntime, metadata: dict)
     if metadata.get("pipeline_mode", PipelineMode.STT_LLM_TTS.value) == PipelineMode.STS.value:
         _register_sts_session_handlers(session, runtime, metadata)
         return
-    _register_legacy_session_handlers(session, runtime, metadata)
+    _register_standard_session_handlers(session, runtime, metadata)
+
+async def _send_initial_greeting(session, metadata: dict) -> None:
+    greeting = (
+        f"Hello, I'm {metadata['agent_name']}, an AI assistant representing "
+        f"{metadata['owner_name']}. This call may be recorded. How can I help you?"
+    )
+
+    if metadata.get("pipeline_mode", PipelineMode.STT_LLM_TTS.value) == PipelineMode.STS.value:
+        result = session.generate_reply(
+            instructions=f'Start the conversation by saying exactly: "{greeting}"'
+        )
+    else:
+        result = session.say(greeting)
+
+    if inspect.isawaitable(result):
+        await result
 
 
 async def entrypoint(context: JobContext) -> None:
@@ -104,7 +121,7 @@ async def entrypoint(context: JobContext) -> None:
         )
     )
     await session.start(agent=agent, room=context.room)
-    await session.say(f"Hello, I'm {metadata['agent_name']}, an AI assistant representing {metadata['owner_name']}. This call may be recorded. How can I help you?")
+    await _send_initial_greeting(session, metadata)
 
 
 def prewarm_assets(proc) -> None:

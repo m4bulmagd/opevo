@@ -4,7 +4,7 @@
 
 **Goal:** Add an optional `pipeline_mode="sts"` runtime that uses Gemini Live native audio while preserving `stt_llm_tts` as the default path.
 
-**Architecture:** Keep backend selection unchanged and branch only inside the agent runtime factory. The legacy `stt_llm_tts` path remains intact; the new `sts` path builds a Gemini realtime session, adapts its events into the existing `SessionRuntime`, and keeps queue-backed finalization unchanged.
+**Architecture:** Keep backend selection unchanged and branch only inside the agent runtime factory. The standard `stt_llm_tts` path remains intact; the new `sts` path builds a Gemini realtime session, adapts its events into the existing `SessionRuntime`, and keeps queue-backed finalization unchanged.
 
 **Tech Stack:** Python 3.11+, LiveKit Agents 1.4.4, LiveKit Google plugin 1.4.4, pytest
 
@@ -13,9 +13,9 @@
 ## File Structure
 
 - Modify: `apps/agent/agent/pipeline_factory.py`
-  - Normalize pipeline selection, add Gemini STS runtime construction, keep legacy runtime intact.
+  - Normalize pipeline selection, add Gemini STS runtime construction, keep the standard runtime intact.
 - Modify: `apps/agent/agent/main.py`
-  - Keep one entrypoint, but make event registration work for both legacy and STS runtime shapes.
+  - Keep one entrypoint, but make event registration work for both standard and STS runtime shapes.
 - Modify: `apps/agent/agent/providers.py`
   - Keep enum definitions aligned with supported STS provider values.
 - Modify: `apps/agent/tests/test_pipeline_factory.py`
@@ -177,7 +177,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest \
   tests/test_pipeline_factory.py::test_pipeline_factory_rejects_unsupported_sts_provider -v
 ```
 
-Expected: FAIL because the runtime factory still only knows the legacy STT/LLM/TTS path.
+Expected: FAIL because the runtime factory still only knows the standard STT/LLM/TTS path.
 
 - [ ] **Step 5: Commit the failing-test scaffold**
 
@@ -207,15 +207,15 @@ The STS helpers should:
 - instantiate `google.realtime.RealtimeModel(...)`
 - pass the built prompt as `instructions`
 
-- [ ] **Step 2: Split `build_agent_runtime()` into explicit legacy vs STS branches**
+- [ ] **Step 2: Split `build_agent_runtime()` into explicit standard vs STS branches**
 
 Implementation requirements:
-- keep legacy branch behavior byte-for-byte as close as possible
+- keep the standard branch behavior byte-for-byte as close as possible
 - for `sts`, skip `_build_stt`, `_build_tts`, `_build_vad`, and `_build_turn_detection`
 - create `session = session_cls(llm=realtime_model)` for the STS path
 - keep agent construction using the same prompt and endpointing settings
 
-- [ ] **Step 3: Run targeted STS and legacy tests**
+- [ ] **Step 3: Run targeted STS and standard-path tests**
 
 Run:
 
@@ -224,7 +224,7 @@ cd /home/i933k/code/ai/bmad-opevo/apps/agent
 UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/test_pipeline_factory.py -v
 ```
 
-Expected: PASS for the full file, including the existing legacy tests and the new STS tests.
+Expected: PASS for the full file, including the existing standard-path tests and the new STS tests.
 
 - [ ] **Step 4: Commit the runtime implementation**
 
@@ -245,16 +245,16 @@ git commit -m "feat: add gemini sts runtime branch"
 
 Extend `apps/agent/tests/test_main.py` with local, deterministic tests around extracted registration helpers. Use fake session objects with `.on(...)` that store handlers in a dict and a fake runtime that records received caller and agent text.
 
-Add a concrete legacy test:
+Add a concrete standard-path test:
 
 ```python
 @pytest.mark.asyncio
-async def test_register_legacy_session_handlers_forwards_final_caller_and_agent_text() -> None:
+async def test_register_standard_session_handlers_forwards_final_caller_and_agent_text() -> None:
     session = FakeSession()
     runtime = FakeRuntime()
     metadata = {"call_id": "call-1", "user_id": "user-1"}
 
-    _register_legacy_session_handlers(session, runtime, metadata)
+    _register_standard_session_handlers(session, runtime, metadata)
 
     await session.handlers["user_input_transcribed"](FakeTranscriptEvent("Hello", is_final=True))
     await session.handlers["conversation_item_added"](FakeConversationEvent("assistant", "Hi there"))
@@ -292,12 +292,12 @@ cd /home/i933k/code/ai/bmad-opevo/apps/agent
 UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/test_main.py -v
 ```
 
-Expected: FAIL because `main.py` currently assumes the legacy callback shape only.
+Expected: FAIL because `main.py` currently assumes the standard callback shape only.
 
 - [ ] **Step 3: Refactor `main.py` into small event-registration helpers**
 
 Add focused helpers such as:
-- `_register_legacy_session_handlers(session, runtime, metadata)`
+- `_register_standard_session_handlers(session, runtime, metadata)`
 - `_register_sts_session_handlers(session, runtime, metadata)`
 - `_register_session_handlers(session, runtime, metadata, pipeline_mode)`
 
