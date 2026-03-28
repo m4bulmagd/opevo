@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import UserIdentity, require_user_identity
@@ -37,3 +37,16 @@ async def get_call(
         return await service.get_call_detail(identity.user_id, call_id)
     except CallHistoryNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found") from exc
+
+
+@router.delete("/{call_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_call(
+    call_id: UUID,
+    identity: UserIdentity = Depends(require_user_identity),
+    service: CallHistoryService = Depends(get_call_history_service),
+) -> Response:
+    try:
+        await service.delete_call(identity.user_id, call_id)
+    except CallHistoryNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -8,6 +8,7 @@ class FakeMinioClient:
     def __init__(self) -> None:
         self.created_buckets: list[str] = []
         self.put_calls: list[dict] = []
+        self.presigned_calls: list[dict] = []
 
     def bucket_exists(self, bucket_name: str) -> bool:
         return bucket_name in self.created_buckets
@@ -25,6 +26,15 @@ class FakeMinioClient:
                 "content_type": content_type,
             }
         )
+
+    def presigned_get_object(self, bucket_name: str, object_key: str) -> str:
+        self.presigned_calls.append(
+            {
+                "bucket_name": bucket_name,
+                "object_key": object_key,
+            }
+        )
+        return f"http://minio:9000/{bucket_name}/{object_key}?signed=fresh"
 
 
 class FakeMessagingModule:
@@ -76,6 +86,30 @@ async def test_s3_storage_uploads_recordings_with_env_backed_endpoint() -> None:
         }
     ]
     assert stored.url == "http://minio:9000/recordings/calls/user-123/call-456.mp3"
+
+
+@pytest.mark.anyio
+async def test_s3_storage_mints_fresh_download_url() -> None:
+    client = FakeMinioClient()
+    storage = S3Storage(
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+        access_key="minioadmin",
+        secret_key="minioadmin",
+        region="us-east-1",
+        client=client,
+    )
+
+    signed_url = await storage.get_download_url(object_key="calls/user-123/call-456.mp3")
+
+    assert client.created_buckets == ["recordings"]
+    assert client.presigned_calls == [
+        {
+            "bucket_name": "recordings",
+            "object_key": "calls/user-123/call-456.mp3",
+        }
+    ]
+    assert signed_url == "http://minio:9000/recordings/calls/user-123/call-456.mp3?signed=fresh"
 
 
 @pytest.mark.anyio

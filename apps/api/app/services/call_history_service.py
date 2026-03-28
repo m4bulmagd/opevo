@@ -85,3 +85,12 @@ class CallHistoryService:
                 for message in messages
             ],
         )
+
+    async def delete_call(self, clerk_user_id: str, call_id: UUID) -> None:
+        user_id = await self._get_user_id(clerk_user_id)
+        call = await self.call_repository.get_visible_by_id(call_id, user_id=user_id)
+        if call is None:
+            raise CallHistoryNotFoundError
+
+        await self.call_repository.soft_delete(call)
+        await self.session.commit()

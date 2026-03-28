@@ -42,4 +42,5 @@ class RecordingService:
     ) -> str | None:
         if not stored_url:
             return None
-        return stored_url
+        object_key = f"calls/{user_id}/{call_id}.mp3"
+        return await self.provider.get_download_url(object_key=object_key)

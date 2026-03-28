@@ -65,3 +65,12 @@ class S3Storage(StorageProvider):
             object_key=object_key,
             url=f"{self.endpoint_url.rstrip('/')}/{self.bucket_name}/{object_key}",
         )
+
+    async def get_download_url(self, *, object_key: str) -> str:
+        client = self._get_client()
+        await asyncio.to_thread(self._ensure_bucket_exists, client)
+        return await asyncio.to_thread(
+            client.presigned_get_object,
+            self.bucket_name,
+            object_key,
+        )
