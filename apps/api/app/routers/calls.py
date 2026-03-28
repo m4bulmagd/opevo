@@ -5,21 +5,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import UserIdentity, require_user_identity
 from app.core.database import get_session
-from app.repositories.call_repository import CallRepository
-from app.schemas.calls import CallResponse
+from app.schemas.calls import CallDetailResponse, CallHistoryListResponse
+from app.services.call_history_service import CallHistoryNotFoundError, CallHistoryService
 
 
 router = APIRouter(prefix="/api/calls", tags=["calls"])
 
 
-@router.get("/{call_id}", response_model=CallResponse)
+def get_call_history_service(
+    session: AsyncSession = Depends(get_session),
+) -> CallHistoryService:
+    return CallHistoryService(session)
+
+
+@router.get("", response_model=CallHistoryListResponse)
+async def list_calls(
+    identity: UserIdentity = Depends(require_user_identity),
+    service: CallHistoryService = Depends(get_call_history_service),
+) -> CallHistoryListResponse:
+    calls = await service.list_calls(identity.user_id)
+    return CallHistoryListResponse(calls=calls)
+
+
+@router.get("/{call_id}", response_model=CallDetailResponse)
 async def get_call(
     call_id: UUID,
     identity: UserIdentity = Depends(require_user_identity),
-    session: AsyncSession = Depends(get_session),
-) -> CallResponse:
-    call = await CallRepository(session).get_by_id(call_id)
-    if call is None or str(call.user_id) != identity.user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
-
-    return CallResponse.model_validate(call, from_attributes=True)
+    service: CallHistoryService = Depends(get_call_history_service),
+) -> CallDetailResponse:
+    try:
+        return await service.get_call_detail(identity.user_id, call_id)
+    except CallHistoryNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found") from exc

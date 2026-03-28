@@ -34,3 +34,39 @@ class CallResponse(BaseModel):
     minutes_charged: int | None
     summary_text: str | None
     recording_url: str | None
+
+
+class CallHistoryListItem(BaseModel):
+    id: UUID
+    status: str
+    caller_number: str | None
+    started_at: datetime | None
+    ended_at: datetime | None
+    duration_seconds: int | None
+    minutes_charged: int | None
+    summary_text: str | None
+    has_recording: bool
+
+
+class CallHistoryListResponse(BaseModel):
+    calls: list[CallHistoryListItem]
+
+
+class CallTranscriptLineResponse(BaseModel):
+    speaker: str
+    text: str
+    sequence_number: int
+    created_at: datetime
+
+
+class CallDetailResponse(BaseModel):
+    id: UUID
+    status: str
+    caller_number: str | None
+    started_at: datetime | None
+    ended_at: datetime | None
+    duration_seconds: int | None
+    minutes_charged: int | None
+    summary_text: str | None
+    recording_url: str | None
+    transcript: list[CallTranscriptLineResponse]

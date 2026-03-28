@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import UUID
 
 from app.providers.storage.base import StorageProvider
 from app.providers.storage.s3 import S3Storage
@@ -31,3 +32,14 @@ class RecordingService:
             url=stored_object.url,
             job_enqueued=True,
         )
+
+    async def get_access_url(
+        self,
+        *,
+        call_id: UUID,
+        user_id: UUID,
+        stored_url: str | None,
+    ) -> str | None:
+        if not stored_url:
+            return None
+        return stored_url
