@@ -17,6 +17,7 @@ class Call(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     minutes_charged: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
