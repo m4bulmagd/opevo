@@ -1,4 +1,139 @@
-from fastapi import APIRouter
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.auth import UserIdentity, require_user_identity
+from app.core.database import get_session
+from app.repositories.user_repository import UserRepository
+from app.schemas.billing_api import (
+    CheckoutSessionRequest,
+    HostedSessionResponse,
+    PortalSessionRequest,
+    SubscriptionResponse,
+    UsageLedgerListResponse,
+    UsageSnapshotResponse,
+)
+from app.services.billing_query_service import BillingQueryService
+from app.services.billing_session_service import (
+    BillingSessionProviderError,
+    BillingSessionService,
+    BillingSessionStateError,
+)
 
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
+
+
+def get_billing_query_service(session: AsyncSession = Depends(get_session)) -> BillingQueryService:
+    return BillingQueryService(session)
+
+
+def get_billing_session_service() -> BillingSessionService:
+    return BillingSessionService()
+
+
+async def get_current_user(
+    identity: UserIdentity = Depends(require_user_identity),
+    session: AsyncSession = Depends(get_session),
+):
+    user = await UserRepository(session).get_by_clerk_user_id(identity.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not synced")
+    return user
+
+
+@router.get("/subscription", response_model=SubscriptionResponse | None)
+async def get_subscription(
+    identity: UserIdentity = Depends(require_user_identity),
+    service: BillingQueryService = Depends(get_billing_query_service),
+) -> SubscriptionResponse | None:
+    return await service.get_subscription(identity.user_id)
+
+
+@router.get("/usage", response_model=UsageSnapshotResponse)
+async def get_usage(
+    identity: UserIdentity = Depends(require_user_identity),
+    service: BillingQueryService = Depends(get_billing_query_service),
+) -> UsageSnapshotResponse:
+    return await service.get_usage_snapshot(identity.user_id)
+
+
+@router.get("/usage-ledger", response_model=UsageLedgerListResponse)
+async def get_usage_ledger(
+    identity: UserIdentity = Depends(require_user_identity),
+    service: BillingQueryService = Depends(get_billing_query_service),
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> UsageLedgerListResponse:
+    return await service.get_usage_ledger(identity.user_id, limit=limit)
+
+
+@router.post("/checkout-session", response_model=HostedSessionResponse)
+async def create_checkout_session(
+    payload: CheckoutSessionRequest,
+    identity: UserIdentity = Depends(require_user_identity),
+    service: BillingSessionService = Depends(get_billing_session_service),
+    query_service: BillingQueryService = Depends(get_billing_query_service),
+    user=Depends(get_current_user),
+) -> HostedSessionResponse:
+    existing_subscription = await query_service.get_subscription(identity.user_id)
+    if existing_subscription is not None and existing_subscription.status == "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Subscription already active",
+        )
+
+    try:
+        session = service.create_checkout_session(
+            user_id=identity.user_id,
+            customer_email=user.email,
+            clerk_user_id=identity.user_id,
+            plan_tier=payload.plan_tier,
+        )
+    except BillingSessionStateError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except BillingSessionProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to create Stripe checkout session",
+        ) from exc
+
+    return HostedSessionResponse(url=session.url)
+
+
+@router.post("/portal-session", response_model=HostedSessionResponse)
+async def create_portal_session(
+    payload: PortalSessionRequest,
+    identity: UserIdentity = Depends(require_user_identity),
+    service: BillingSessionService = Depends(get_billing_session_service),
+    query_service: BillingQueryService = Depends(get_billing_query_service),
+) -> HostedSessionResponse:
+    subscription = await query_service.get_subscription(identity.user_id)
+    if subscription is None or not subscription.stripe_customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Stripe customer not found",
+        )
+
+    try:
+        session = service.create_portal_session(
+            customer_id=subscription.stripe_customer_id,
+            return_url=payload.return_url,
+        )
+    except BillingSessionStateError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except BillingSessionProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to create Stripe billing portal session",
+        ) from exc
+
+    return HostedSessionResponse(url=session.url)

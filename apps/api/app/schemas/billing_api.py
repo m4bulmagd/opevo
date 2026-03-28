@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -36,7 +37,7 @@ class UsageLedgerListResponse(BaseModel):
 
 
 class CheckoutSessionRequest(BaseModel):
-    plan_tier: str
+    plan_tier: Literal["starter", "standard"]
 
 
 class HostedSessionResponse(BaseModel):

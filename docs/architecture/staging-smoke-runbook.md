@@ -45,6 +45,11 @@ CLERK_ISSUER=<your-clerk-issuer>
 CLERK_JWKS_URL=<your-clerk-jwks-url>
 CLERK_WEBHOOK_SECRET=<your-clerk-webhook-secret>
 STRIPE_WEBHOOK_SECRET=<your-stripe-webhook-secret>
+STRIPE_SECRET_KEY=<your-stripe-secret-key>
+STRIPE_PRICE_STARTER=<your-starter-price-id>
+STRIPE_PRICE_STANDARD=<your-standard-price-id>
+STRIPE_CHECKOUT_SUCCESS_URL=<your-checkout-success-url>
+STRIPE_CHECKOUT_CANCEL_URL=<your-checkout-cancel-url>
 LIVEKIT_URL=<your-livekit-url>
 LIVEKIT_API_KEY=<your-livekit-api-key>
 LIVEKIT_API_SECRET=<your-livekit-api-secret>
@@ -86,7 +91,7 @@ LIVEKIT_SILERO_VAD_ENABLED=true
 LIVEKIT_TURN_DETECTOR_ENABLED=true
 SPEECHMATICS_API_KEY=<your-speechmatics-key>
 SPEECHMATICS_TURN_DETECTION_MODE=adaptive
-GOOGLE_API_KEY=<your-google-gemini-key>
+GEMINI_API_KEY=<your-google-gemini-key>
 # Optional compatibility fallback if your local env already uses it:
 # GEMINI_API_KEY=<your-google-gemini-key>
 MISTRAL_API_KEY=<optional-or-placeholder>
@@ -226,6 +231,38 @@ Important:
 - replaying the same Stripe `invoice.paid` event id will be ignored by the webhook idempotency store
 - use a fresh invoice event if you want to verify the reset path in staging
 
+## Step 3A: Hosted Billing Session Smoke
+
+Verify the new billing action endpoints with a real authenticated user token.
+
+Checkout session:
+
+```bash
+curl -s http://localhost:8000/api/billing/checkout-session \
+  -H "Authorization: Bearer <clerk-session-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"plan_tier":"starter"}'
+```
+
+Expected:
+
+- response contains a Stripe Checkout URL
+- response is `409` instead when the user already has an active subscription
+
+Portal session:
+
+```bash
+curl -s http://localhost:8000/api/billing/portal-session \
+  -H "Authorization: Bearer <clerk-session-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"return_url":"https://your-app.example.com/settings/billing"}'
+```
+
+Expected:
+
+- response contains a Stripe Billing Portal URL for subscribed users
+- response is `409` when no Stripe customer exists yet
+
 ## Step 4: Telnyx Active / Disabled Switch Smoke
 
 Only run this after you intentionally enable real purchases:
@@ -363,7 +400,7 @@ Configure one test user with:
 
 - `agent_config.pipeline_mode = sts`
 - `sts_provider = gemini`
-- a valid `GOOGLE_API_KEY` in `apps/agent/.env`
+- a valid `GEMINI_API_KEY` in `apps/agent/.env`
 
 Then place one real inbound call for that user and watch:
 

@@ -54,7 +54,12 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert "S3_SECRET_KEY=minioadmin" in api_env
     assert "S3_REGION=us-east-1" in api_env
     assert "CLERK_JWKS_URL=replace-me" in api_env
+    assert "STRIPE_SECRET_KEY=replace-me" in api_env
     assert "TELNYX_ORDERING_ENABLED=false" in api_env
+    assert "STRIPE_PRICE_STARTER=price_replace_me" in api_env
+    assert "STRIPE_PRICE_STANDARD=price_replace_me" in api_env
+    assert "STRIPE_CHECKOUT_SUCCESS_URL=https://your-app.example.com/billing/success" in api_env
+    assert "STRIPE_CHECKOUT_CANCEL_URL=https://your-app.example.com/billing/cancel" in api_env
     assert "CLERK_JWT_SECRET=replace-me" not in api_env
     assert "OPENAI_API_KEY=replace-me" not in api_env
 

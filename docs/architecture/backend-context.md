@@ -15,6 +15,9 @@ This document captures implementation notes and staging verification for the bac
 - Call summaries are now generated through a provider-agnostic summary layer, with Gemini configured as the default provider.
 - Completed calls now persist both `summary_text` and structured `summary_data` on the `calls` row.
 - Summary generation is non-blocking: if the provider fails or returns invalid output, call completion still succeeds and summary fields stay `null`.
+- Billing and usage API now exposes authenticated read endpoints for subscription state, usage balance, and usage ledger history.
+- Billing and usage API now exposes hosted Stripe action endpoints for checkout and billing portal sessions instead of mutating subscriptions directly in the app backend.
+- Contract details and usage examples for that surface are documented in [billing-usage-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/billing-usage-api.md).
 
 ## Verified Locally
 
@@ -22,11 +25,14 @@ This document captures implementation notes and staging verification for the bac
 - Agent config API tests now cover full-config reads, normal field updates, enable toggles, missing-number conflicts, and rollback on telephony failure.
 - Call history API tests now cover visible-call listing, transcript detail, fresh recording URL minting, and soft-delete behavior.
 - Summary service tests now cover structured-summary success, malformed provider output, and non-blocking provider failure.
+- Billing query service tests now cover subscription lookup, usage snapshot assembly, and usage-ledger ordering.
+- Billing session service tests now cover hosted Stripe checkout price mapping and portal precondition validation.
+- Billing router tests now cover read-side contract behavior plus checkout/portal session state handling.
 - Agent tests covering prompt building, pipeline config selection, Gemini STS runtime construction, and runtime event emission.
 - API Docker image build.
 - Agent Docker image build.
 - Queue-backed call finalization is now covered locally so call persistence no longer depends on the LiveKit agent surviving shutdown long enough to wait on the full API response.
-- Local infrastructure stack prepared in [compose.yaml](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/compose.yaml) for PostgreSQL 17.8, Redis 7.4.7, and MinIO.
+- Local infrastructure stack prepared in [compose.yaml](/home/i933k/code/ai/bmad-opevo/compose.yaml) for PostgreSQL 17.8, Redis 7.4.7, and MinIO.
 - LiveKit SIP participant field mapping reviewed against the official docs on 2026-03-15: `sip.phoneNumber` is the caller number for inbound trunks and `sip.trunkPhoneNumber` is the dialed trunk number.
 - Agent runtime selection is now explicit per user via `agent_config.pipeline_mode`:
   - `stt_llm_tts` remains the default and keeps Speechmatics/Deepgram + Gemini + TTS composition
@@ -63,12 +69,14 @@ Not yet fully verified in staging:
 - Real Telnyx purchase and `app-active` / `app-disabled` switching with `TELNYX_ORDERING_ENABLED=true`.
 - The new queue-backed call finalization flow with the dedicated `worker` service in Compose.
 - End-to-end call persistence, transcript capture, summary generation, and actual minute deduction for the Stripe-backed user.
+- Hosted Stripe Checkout and Billing Portal session creation against real API credentials and configured price ids.
 
 Ready for manual execution once these external credentials and endpoints are available:
 - Clerk issuer, JWKS URL, and webhook secret
 - Stripe webhook secret and live test-mode subscription objects
 - Telnyx API key and active/disabled connection IDs
 - LiveKit URL, API key, and API secret
+- Stripe secret key, price ids, and checkout redirect URLs
 - Google Gemini API key for `pipeline_mode="sts"`
 - Speechmatics, Deepgram, and ElevenLabs credentials as needed for `pipeline_mode="stt_llm_tts"`
 - Reachable staging Postgres, Redis, and S3-compatible storage if not using the local Compose stack
@@ -81,6 +89,7 @@ Ready for manual execution once these external credentials and endpoints are ava
 - Queue-backed finalization with the dedicated `worker` service during a real forwarded call.
 - End-to-end forwarded phone call with transcript, summary, and minute deduction for the Stripe-backed user.
 - One real inbound call for a user configured with `pipeline_mode="sts"` to compare latency and verify transcript/finalization behavior on the Gemini native-audio path.
+- Hosted Stripe Checkout and Billing Portal session creation with the configured success/cancel URLs.
 
 ## Blockers For Full Staging Smoke Path
 
