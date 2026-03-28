@@ -55,6 +55,20 @@ class FakeStructuredSummaryService:
         return Result()
 
 
+class FakeFailingSummaryService:
+    async def create_summary(self, payload: dict):
+        class Result:
+            text = None
+            data = None
+            job_enqueued = False
+
+        return Result()
+
+
+def build_structured_summary_service() -> FakeStructuredSummaryService:
+    return FakeStructuredSummaryService()
+
+
 @pytest.mark.anyio
 async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, active_user) -> None:
     call = Call(
@@ -68,6 +82,7 @@ async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, acti
 
     service = CallLifecycleService(
         db_session,
+        summary_service=build_structured_summary_service(),
         recording_service=RecordingService(provider=FakeStorageProvider()),
         notification_service=NotificationService(db_session, provider=FakeNotificationProvider()),
     )
@@ -96,6 +111,7 @@ async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, acti
 
     refreshed_call = await db_session.get(Call, call.id)
     assert refreshed_call.summary_text == result.summary_text
+    assert refreshed_call.summary_data["caller_intent"] == "Ask about opening hours"
     assert refreshed_call.recording_url == f"s3://recordings/{result.recording_key}"
 
     call_messages = (
@@ -171,6 +187,7 @@ async def test_call_completion_records_failed_notification_but_still_completes(
 
     service = CallLifecycleService(
         db_session,
+        summary_service=build_structured_summary_service(),
         recording_service=RecordingService(provider=FakeStorageProvider()),
         notification_service=NotificationService(db_session, provider=FakeFailingNotificationProvider()),
     )
@@ -200,6 +217,46 @@ async def test_call_completion_records_failed_notification_but_still_completes(
 
 
 @pytest.mark.anyio
+async def test_call_completion_continues_when_summary_generation_fails(
+    db_session, active_user
+) -> None:
+    call = Call(
+        id=uuid4(),
+        user_id=active_user.id,
+        caller_number="+33111111111",
+        status="pending",
+    )
+    db_session.add(call)
+    await db_session.commit()
+
+    service = CallLifecycleService(
+        db_session,
+        summary_service=FakeFailingSummaryService(),
+        recording_service=RecordingService(provider=FakeStorageProvider()),
+        notification_service=NotificationService(db_session, provider=FakeNotificationProvider()),
+    )
+
+    result = await service.finalize_call(
+        {
+            "user_id": active_user.id,
+            "call_id": str(call.id),
+            "duration_seconds": 61,
+            "minutes_remaining": 10,
+            "caller_number": "+33111111111",
+            "transcript": [{"speaker": "CALLER", "text": "What are your opening hours?"}],
+        }
+    )
+
+    refreshed_call = await db_session.get(Call, call.id)
+
+    assert result.summary_text is None
+    assert result.summary_job_enqueued is False
+    assert refreshed_call.summary_text is None
+    assert refreshed_call.summary_data is None
+    assert refreshed_call.status == "completed"
+
+
+@pytest.mark.anyio
 async def test_call_finalization_job_skips_duplicate_completed_call(
     db_session, active_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -216,6 +273,14 @@ async def test_call_finalization_job_skips_duplicate_completed_call(
 
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     monkeypatch.setattr(call_finalization_module, "get_session_factory", lambda: session_factory)
+    monkeypatch.setattr(
+        call_finalization_module,
+        "CallLifecycleService",
+        lambda session: CallLifecycleService(
+            session,
+            summary_service=build_structured_summary_service(),
+        ),
+    )
 
     payload = {
         "user_id": str(active_user.id),
@@ -268,6 +333,7 @@ async def test_minute_exhaustion_disables_number(db_session, active_user) -> Non
     service = CallLifecycleService(
         db_session,
         telephony_service=telephony_service,
+        summary_service=build_structured_summary_service(),
         recording_service=RecordingService(provider=FakeStorageProvider()),
         notification_service=NotificationService(db_session, provider=FakeNotificationProvider()),
     )

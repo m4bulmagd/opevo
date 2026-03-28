@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     telnyx_active_connection_id: str | None = None
     telnyx_disabled_connection_id: str | None = None
     telnyx_ordering_enabled: bool = False
+    google_api_key: str | None = None
     summary_provider: str = "gemini"
     summary_model: str = "gemini-2.5-flash"
     storage_bucket_name: str = "recordings"

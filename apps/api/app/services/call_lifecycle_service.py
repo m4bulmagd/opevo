@@ -64,7 +64,7 @@ class CallLifecycleService:
                 already_completed=True,
             )
 
-        summary_result = self.summary_service.create_summary(payload)
+        summary_result = await self.summary_service.create_summary(payload)
         recording_result = await self.recording_service.store_recording(payload)
         await self.message_repository.create_many(
             call_id=call.id,
@@ -76,6 +76,7 @@ class CallLifecycleService:
             duration_seconds=duration_seconds,
             minutes_charged=minutes_charged,
             summary_text=summary_result.text,
+            summary_data=summary_result.data,
             recording_url=recording_result.url,
         )
 
