@@ -314,7 +314,48 @@ curl -s http://localhost:9001
 
 Then check the `recordings` bucket in MinIO console.
 
-## Step 7: Gemini STS Smoke
+## Step 7: Call History API Smoke
+
+After at least one completed call exists for the test user, verify the user-facing history API:
+
+```bash
+curl -s http://localhost:8000/api/calls \
+  -H "Authorization: Bearer <clerk-session-token>"
+```
+
+Expected:
+
+- the completed call appears in the `calls` list
+- deleted calls do not appear
+
+Then verify detail:
+
+```bash
+curl -s http://localhost:8000/api/calls/<CALL_ID> \
+  -H "Authorization: Bearer <clerk-session-token>"
+```
+
+Expected:
+
+- transcript lines are present and ordered
+- `recording_url` is present when a recording exists
+
+Then verify soft delete:
+
+```bash
+curl -i -X DELETE http://localhost:8000/api/calls/<CALL_ID> \
+  -H "Authorization: Bearer <clerk-session-token>"
+curl -i http://localhost:8000/api/calls/<CALL_ID> \
+  -H "Authorization: Bearer <clerk-session-token>"
+```
+
+Expected:
+
+- delete returns `204 No Content`
+- subsequent detail returns `404 Not Found`
+- the call disappears from `GET /api/calls`
+
+## Step 8: Gemini STS Smoke
 
 Configure one test user with:
 
@@ -354,6 +395,7 @@ The staging smoke is successful when all of these are true:
 - Stripe renewal resets minutes
 - Telnyx number activation and disablement match balance state
 - one real call persists call, transcript, notification, and usage rows
+- call history list/detail/delete behave correctly for the authenticated user
 - one real `pipeline_mode=sts` call persists transcript and finalization state without breaking the backend lifecycle
 
 ## Record Results
