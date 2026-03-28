@@ -76,10 +76,37 @@ class FakeAgentConfigRepository:
 
 class FakeCallRepository:
     def __init__(self, call_id: UUID) -> None:
-        self.call = SimpleNamespace(id=call_id)
+        self.call = SimpleNamespace(
+            id=call_id,
+            recording_url=None,
+            recording_object_key=None,
+            recording_egress_id=None,
+        )
+        self.recording_metadata_calls: list[dict] = []
 
     async def create_pending(self, **kwargs):
         return self.call
+
+    async def set_recording_metadata(
+        self,
+        call,
+        *,
+        recording_object_key: str,
+        recording_egress_id: str,
+        recording_url: str | None,
+    ):
+        call.recording_object_key = recording_object_key
+        call.recording_egress_id = recording_egress_id
+        call.recording_url = recording_url
+        self.recording_metadata_calls.append(
+            {
+                "call": call,
+                "recording_object_key": recording_object_key,
+                "recording_egress_id": recording_egress_id,
+                "recording_url": recording_url,
+            }
+        )
+        return call
 
 
 class FakeUserRepository:
@@ -93,6 +120,30 @@ class FakeUserRepository:
 class FakeUsageRepository:
     async def get_current_balance(self, *, user_id) -> int:
         return 120
+
+
+class FakeRecordingService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def start_room_recording(self, *, room_name: str, user_id: UUID, call_id: UUID):
+        self.calls.append(
+            {
+                "room_name": room_name,
+                "user_id": user_id,
+                "call_id": call_id,
+            }
+        )
+        return SimpleNamespace(
+            object_key=f"calls/{user_id}/{call_id}.ogg",
+            egress_id="egress_123",
+            url=f"http://minio:9000/recordings/calls/{user_id}/{call_id}.ogg",
+        )
+
+
+class FakeFailingRecordingService:
+    async def start_room_recording(self, *, room_name: str, user_id: UUID, call_id: UUID):
+        raise RuntimeError("egress unavailable")
 
 
 class FakeSession:
@@ -199,3 +250,111 @@ async def test_dispatch_service_matches_called_number_with_formatting_variation(
     assert dispatch_client.calls
     metadata = json.loads(dispatch_client.calls[0]["metadata"])
     assert metadata["called_number"] == "+33392091999"
+
+
+@pytest.mark.anyio
+async def test_dispatch_service_persists_recording_metadata_when_egress_starts() -> None:
+    user_id = uuid4()
+    phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
+    agent_config = FakeAgentConfig(
+        id=uuid4(),
+        agent_name="Ava",
+        owner_context="Sam at Bakery",
+        system_prompt="Be helpful and concise.",
+        knowledge_base="Hours 9-5",
+        pipeline_mode="stt_llm_tts",
+    )
+    user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
+
+    dispatch_client = FakeDispatchClient()
+    realtime_service = FakeRealtimeService()
+    recording_service = FakeRecordingService()
+    session = FakeSession()
+    call_repository = FakeCallRepository(call_id=uuid4())
+    service = LiveKitDispatchService(
+        session,
+        dispatch_client=dispatch_client,
+        realtime_service=realtime_service,
+        recording_service=recording_service,
+    )
+    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
+    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
+    service.call_repository = call_repository
+    service.user_repository = FakeUserRepository(user)
+    service.usage_repository = FakeUsageRepository()
+
+    await service.handle_participant_joined(
+        {
+            "event": "participant_joined",
+            "room": {"name": "room_123"},
+            "participant": {
+                "attributes": {
+                    "sip.phoneNumber": "+33123456789",
+                    "sip.trunkPhoneNumber": "+33999888777",
+                }
+            },
+        }
+    )
+
+    assert recording_service.calls == [
+        {
+            "room_name": "room_123",
+            "user_id": user_id,
+            "call_id": call_repository.call.id,
+        }
+    ]
+    assert call_repository.recording_metadata_calls == [
+        {
+            "call": call_repository.call,
+            "recording_object_key": f"calls/{user_id}/{call_repository.call.id}.ogg",
+            "recording_egress_id": "egress_123",
+            "recording_url": f"http://minio:9000/recordings/calls/{user_id}/{call_repository.call.id}.ogg",
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_dispatch_service_continues_when_recording_egress_fails() -> None:
+    user_id = uuid4()
+    phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
+    agent_config = FakeAgentConfig(
+        id=uuid4(),
+        agent_name="Ava",
+        owner_context="Sam at Bakery",
+        system_prompt="Be helpful and concise.",
+        knowledge_base="Hours 9-5",
+        pipeline_mode="stt_llm_tts",
+    )
+    user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
+
+    dispatch_client = FakeDispatchClient()
+    realtime_service = FakeRealtimeService()
+    session = FakeSession()
+    call_repository = FakeCallRepository(call_id=uuid4())
+    service = LiveKitDispatchService(
+        session,
+        dispatch_client=dispatch_client,
+        realtime_service=realtime_service,
+        recording_service=FakeFailingRecordingService(),
+    )
+    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
+    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
+    service.call_repository = call_repository
+    service.user_repository = FakeUserRepository(user)
+    service.usage_repository = FakeUsageRepository()
+
+    await service.handle_participant_joined(
+        {
+            "event": "participant_joined",
+            "room": {"name": "room_123"},
+            "participant": {
+                "attributes": {
+                    "sip.phoneNumber": "+33123456789",
+                    "sip.trunkPhoneNumber": "+33999888777",
+                }
+            },
+        }
+    )
+
+    assert dispatch_client.calls
+    assert call_repository.recording_metadata_calls == []

@@ -70,6 +70,7 @@ Behavior:
 - returns `404` when the call belongs to another user
 - returns `404` when the call was soft-deleted
 - mints a fresh recording access URL at read time instead of reusing a long-lived stored URL
+- returns `recording_url = null` when the underlying recording object has expired from bucket lifecycle retention or can no longer be signed
 
 ### `DELETE /api/calls/{call_id}`
 
@@ -90,3 +91,4 @@ Behavior:
 - User-facing call delete is archival, not destructive.
 - Soft-deleted calls stay available in storage/database for admin or recovery workflows later.
 - Recording access is intentionally short-lived and generated on demand.
+- Recording retention is managed by the storage bucket lifecycle, not by an application cleanup job.

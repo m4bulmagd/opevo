@@ -12,6 +12,8 @@ This document captures implementation notes and staging verification for the bac
 - Contract details and usage examples for that surface are documented in [agent-config-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/agent-config-api.md).
 - Call history API now exposes `GET /api/calls`, `GET /api/calls/{call_id}`, and `DELETE /api/calls/{call_id}` for authenticated users.
 - User-facing call delete is now a soft delete: deleted calls disappear from list/detail APIs, while transcript rows and recording objects remain available for admin/manual recovery later.
+- Live call recordings now use LiveKit room composite egress with `audio_only=true`, writing one mixed recording directly to the recordings bucket instead of relaying audio bytes through the agent completion API.
+- Recording retention is bucket-managed: when the recording object expires from storage lifecycle, call detail now degrades to `recording_url = null` while keeping the call and transcript.
 - Contract details and usage examples for call history are documented in [call-history-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/call-history-api.md).
 - Call summaries are now generated through a provider-agnostic summary layer, with Gemini configured as the default provider.
 - Completed calls now persist both `summary_text` and structured `summary_data` on the `calls` row.
@@ -26,6 +28,8 @@ This document captures implementation notes and staging verification for the bac
 - API tests covering health, auth, billing, telephony, realtime, LiveKit dispatch, repository flow, and post-call lifecycle.
 - Agent config API tests now cover full-config reads, normal field updates, enable toggles, missing-number conflicts, and rollback on telephony failure.
 - Call history API tests now cover visible-call listing, transcript detail, fresh recording URL minting, and soft-delete behavior.
+- LiveKit recording provider tests now cover audio-only room composite egress request shaping and provider-failure wrapping.
+- LiveKit dispatch service tests now cover recording metadata persistence and non-blocking recording-start failure behavior.
 - Summary service tests now cover structured-summary success, malformed provider output, and non-blocking provider failure.
 - Billing query service tests now cover subscription lookup, usage snapshot assembly, and usage-ledger ordering.
 - Billing session service tests now cover hosted Stripe checkout price mapping and portal precondition validation.
@@ -70,6 +74,8 @@ Not yet fully verified in staging:
 - A fresh `invoice.paid` event after the persisted subscription exists. Re-sending the same Stripe event id is deduplicated by `webhook_events`, so it does not create a second reset row.
 - Real Telnyx purchase and `app-active` / `app-disabled` switching with `TELNYX_ORDERING_ENABLED=true`.
 - The new queue-backed call finalization flow with the dedicated `worker` service in Compose.
+- LiveKit room composite egress writing one mixed recording directly into the configured bucket.
+- Fresh signed recording access from `GET /api/calls/{call_id}` after a real egress-created recording exists.
 - End-to-end call persistence, transcript capture, summary generation, and actual minute deduction for the Stripe-backed user.
 - Hosted Stripe Checkout and Billing Portal session creation against real API credentials and configured price ids.
 
@@ -89,6 +95,7 @@ Ready for manual execution once these external credentials and endpoints are ava
 - Real Telnyx purchase and active/disabled switching once you deliberately enable ordering.
 - Real LiveKit webhook verification and agent dispatch against the purchased number `+33392091999`.
 - Queue-backed finalization with the dedicated `worker` service during a real forwarded call.
+- One real forwarded call that confirms `recording_object_key` and `recording_egress_id` are persisted and that the bucket contains the mixed audio file.
 - End-to-end forwarded phone call with transcript, summary, and minute deduction for the Stripe-backed user.
 - One real inbound call for a user configured with `pipeline_mode="sts"` to compare latency and verify transcript/finalization behavior on the Gemini native-audio path.
 - Hosted Stripe Checkout and Billing Portal session creation with the configured success/cancel URLs.

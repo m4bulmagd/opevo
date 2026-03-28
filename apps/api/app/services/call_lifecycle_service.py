@@ -77,6 +77,7 @@ class CallLifecycleService:
             minutes_charged=minutes_charged,
             summary_text=summary_result.text,
             summary_data=summary_result.data,
+            recording_object_key=recording_result.object_key,
             recording_url=recording_result.url,
         )
 

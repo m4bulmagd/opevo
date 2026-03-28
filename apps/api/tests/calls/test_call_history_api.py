@@ -4,9 +4,12 @@ from uuid import UUID
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.call_message import CallMessage
+from app.models.phone_number import PhoneNumber
 from app.models.user import User
+from app.services.call_history_service import CallHistoryService
 
 
 async def seed_call_history(
@@ -135,6 +138,7 @@ async def seed_call_with_recording(
     clerk_user_id: str,
     email: str,
     recording_url: str,
+    recording_object_key: str | None = None,
 ) -> UUID:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -153,6 +157,7 @@ async def seed_call_with_recording(
             minutes_charged=1,
             summary_text="Caller request: Opening hours.",
             recording_url=recording_url,
+            recording_object_key=recording_object_key,
         )
         session.add(call)
         await session.commit()
@@ -168,6 +173,57 @@ async def fetch_call(database_url: str, *, call_id: UUID) -> Call:
         call = await session.get(Call, call_id)
         assert call is not None
     await engine.dispose()
+    return call
+
+
+async def seed_call_into_session(
+    session,
+    *,
+    clerk_user_id: str = "user_calls",
+    email: str = "calls@example.com",
+    recording_url: str | None = None,
+    recording_object_key: str | None = None,
+) -> Call:
+    user = User(clerk_user_id=clerk_user_id, email=email)
+    session.add(user)
+    await session.flush()
+
+    session.add(
+        AgentConfig(
+            user_id=user.id,
+            agent_name="Ava",
+            system_prompt="Be helpful",
+            knowledge_base="Hours 9-5",
+            pipeline_mode="stt_llm_tts",
+            is_enabled=True,
+        )
+    )
+    session.add(
+        PhoneNumber(
+            user_id=user.id,
+            e164="+33999888777",
+            country_code="FR",
+            provider="telnyx",
+            provider_number_id="tnx_123",
+            provider_connection_name="app-active",
+            is_active=True,
+        )
+    )
+
+    call = Call(
+        user_id=user.id,
+        caller_number="+33123456789",
+        status="completed",
+        started_at=datetime(2026, 3, 28, 10, 0, tzinfo=UTC),
+        ended_at=datetime(2026, 3, 28, 10, 1, tzinfo=UTC),
+        duration_seconds=60,
+        minutes_charged=1,
+        summary_text="Caller request: Opening hours.",
+        recording_url=recording_url,
+        recording_object_key=recording_object_key,
+    )
+    session.add(call)
+    await session.commit()
     return call
 
 
@@ -233,42 +289,95 @@ async def test_get_call_detail_returns_404_for_soft_deleted_call(
 
 @pytest.mark.anyio
 async def test_get_call_detail_mints_fresh_recording_url(
-    async_client, client_database_url, rs256_clerk_token_for
+    async_client, client_database_url, rs256_clerk_token_for, monkeypatch
 ) -> None:
-    class FakeRecordingService:
-        async def get_access_url(self, *, call_id, user_id, stored_url):
-            assert stored_url == "https://stored.example.com/old"
-            return "https://signed.example.com/fresh"
+    async def fake_get_access_url(self, *, call_id, user_id, recording_object_key):
+        assert recording_object_key == "calls/user_calls/call.mp3"
+        return "https://signed.example.com/fresh"
 
     call_id = await seed_call_with_recording(
         client_database_url,
         clerk_user_id="user_calls",
         email="calls@example.com",
         recording_url="https://stored.example.com/old",
+        recording_object_key="calls/user_calls/call.mp3",
     )
 
-    from app.main import app
-    from app.routers.calls import get_call_history_service
-    from app.services.call_history_service import CallHistoryService
+    from app.services.recording_service import RecordingService
 
-    async def override_service():
-        engine = create_async_engine(client_database_url, future=True)
-        session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        async with session_factory() as session:
-            yield CallHistoryService(session, recording_service=FakeRecordingService())
-        await engine.dispose()
+    monkeypatch.setattr(RecordingService, "get_access_url", fake_get_access_url)
 
-    app.dependency_overrides[get_call_history_service] = override_service
-    try:
-        response = await async_client.get(
-            f"/api/calls/{call_id}",
-            headers={"authorization": f"Bearer {rs256_clerk_token_for('user_calls')}"},
-        )
-    finally:
-        app.dependency_overrides.pop(get_call_history_service, None)
+    response = await async_client.get(
+        f"/api/calls/{call_id}",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for('user_calls')}"},
+    )
 
     assert response.status_code == 200
     assert response.json()["recording_url"] == "https://signed.example.com/fresh"
+
+
+@pytest.mark.anyio
+async def test_get_call_detail_mints_fresh_recording_url_from_object_key(
+    db_session
+) -> None:
+    async def fake_get_access_url(self, *, call_id, user_id, recording_object_key):
+        assert recording_object_key == "calls/user_calls/object-key.mp3"
+        return "https://signed.example.com/fresh"
+
+    call = await seed_call_into_session(
+        db_session,
+        clerk_user_id="user_calls",
+        email="calls@example.com",
+        recording_url="https://stored.example.com/old",
+        recording_object_key="calls/user_calls/object-key.mp3",
+    )
+
+    class FakeRecordingService:
+        async def get_access_url(self, *, call_id, user_id, recording_object_key):
+            return await fake_get_access_url(
+                self,
+                call_id=call_id,
+                user_id=user_id,
+                recording_object_key=recording_object_key,
+            )
+
+    detail = await CallHistoryService(
+        db_session,
+        recording_service=FakeRecordingService(),
+    ).get_call_detail(
+        "user_calls",
+        call.id,
+    )
+
+    assert detail.recording_url == "https://signed.example.com/fresh"
+
+
+@pytest.mark.anyio
+async def test_get_call_detail_returns_null_recording_url_when_object_missing(
+    db_session
+) -> None:
+    class FakeMissingRecordingService:
+        async def get_access_url(self, *, call_id, user_id, recording_object_key):
+            assert recording_object_key == "calls/user_calls/object-key.mp3"
+            raise FileNotFoundError("recording object missing")
+
+    call = await seed_call_into_session(
+        db_session,
+        clerk_user_id="user_calls",
+        email="calls@example.com",
+        recording_url="https://stored.example.com/old",
+        recording_object_key="calls/user_calls/object-key.mp3",
+    )
+
+    detail = await CallHistoryService(
+        db_session,
+        recording_service=FakeMissingRecordingService(),
+    ).get_call_detail(
+        "user_calls",
+        call.id,
+    )
+
+    assert detail.recording_url is None
 
 
 @pytest.mark.anyio

@@ -143,11 +143,14 @@ Behavior:
 
 - verifies the LiveKit webhook authorization
 - on `participant_joined`, attempts inbound dispatch for the matched local phone number
+- when dispatch succeeds, the backend also attempts to start one mixed room recording through LiveKit room composite egress with `audio_only=true`
+- recording-start failures do not block agent dispatch
 - returns `202 Accepted`
 
 ## Notes
 
 - These endpoints are operational/integration surfaces, not frontend product APIs.
+- Live call recordings are started through LiveKit egress and written directly to the recordings bucket; the internal completion endpoint no longer needs recording bytes for the primary live-call recording path.
 - User-facing API docs live separately in:
   - [agent-config-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/agent-config-api.md)
   - [billing-usage-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/billing-usage-api.md)

@@ -38,9 +38,11 @@ class RecordingService:
         *,
         call_id: UUID,
         user_id: UUID,
-        stored_url: str | None,
+        recording_object_key: str | None,
     ) -> str | None:
-        if not stored_url:
+        if not recording_object_key:
             return None
-        object_key = f"calls/{user_id}/{call_id}.mp3"
-        return await self.provider.get_download_url(object_key=object_key)
+        try:
+            return await self.provider.get_download_url(object_key=recording_object_key)
+        except FileNotFoundError:
+            return None

@@ -22,4 +22,6 @@ class Call(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     minutes_charged: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    recording_object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    recording_egress_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     recording_url: Mapped[str | None] = mapped_column(String(512), nullable=True)

@@ -60,11 +60,14 @@ class CallHistoryService:
             raise CallHistoryNotFoundError
 
         messages = await self.message_repository.list_by_call_id(call.id)
-        recording_url = await self.recording_service.get_access_url(
-            call_id=call.id,
-            user_id=user_id,
-            stored_url=call.recording_url,
-        )
+        try:
+            recording_url = await self.recording_service.get_access_url(
+                call_id=call.id,
+                user_id=user_id,
+                recording_object_key=call.recording_object_key,
+            )
+        except FileNotFoundError:
+            recording_url = None
         return CallDetailResponse(
             id=call.id,
             status=call.status,

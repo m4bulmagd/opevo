@@ -9,6 +9,7 @@ from app.repositories.phone_number_repository import PhoneNumberRepository, norm
 from app.repositories.user_repository import UserRepository
 from app.repositories.usage_repository import UsageRepository
 from app.schemas.livekit import LiveKitDispatchMetadata
+from app.services.livekit_recording_service import LiveKitRecordingService
 from app.services.realtime_service import RealtimeService
 
 
@@ -16,7 +17,13 @@ logger = logging.getLogger(__name__)
 
 
 class LiveKitDispatchService:
-    def __init__(self, session: AsyncSession, dispatch_client, realtime_service: RealtimeService | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        dispatch_client,
+        realtime_service: RealtimeService | None = None,
+        recording_service: LiveKitRecordingService | None = None,
+    ) -> None:
         self.session = session
         self.dispatch_client = dispatch_client
         self.phone_number_repository = PhoneNumberRepository(session)
@@ -25,6 +32,7 @@ class LiveKitDispatchService:
         self.user_repository = UserRepository(session)
         self.usage_repository = UsageRepository(session)
         self.realtime_service = realtime_service or RealtimeService()
+        self.recording_service = recording_service or LiveKitRecordingService()
 
     async def handle_participant_joined(self, event: dict) -> None:
         participant = event.get("participant", {})
@@ -85,6 +93,26 @@ class LiveKitDispatchService:
             livekit_room_id=room_name,
             caller_number=caller_number,
         )
+        try:
+            recording = await self.recording_service.start_room_recording(
+                room_name=room_name,
+                user_id=phone_number.user_id,
+                call_id=call.id,
+            )
+        except Exception:
+            logger.exception(
+                "livekit recording start failed room=%s call_id=%s user_id=%s",
+                room_name,
+                str(call.id),
+                str(phone_number.user_id),
+            )
+        else:
+            await self.call_repository.set_recording_metadata(
+                call,
+                recording_object_key=recording.object_key,
+                recording_egress_id=recording.egress_id,
+                recording_url=recording.url,
+            )
 
         metadata = LiveKitDispatchMetadata(
             user_id=str(phone_number.user_id),

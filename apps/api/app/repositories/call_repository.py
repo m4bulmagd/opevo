@@ -59,6 +59,7 @@ class CallRepository:
         minutes_charged: int,
         summary_text: str | None,
         summary_data: dict | None,
+        recording_object_key: str | None,
         recording_url: str | None,
     ) -> Call:
         call.status = "completed"
@@ -67,6 +68,23 @@ class CallRepository:
         call.minutes_charged = minutes_charged
         call.summary_text = summary_text
         call.summary_data = summary_data
+        if recording_object_key is not None:
+            call.recording_object_key = recording_object_key
+        if recording_url is not None:
+            call.recording_url = recording_url
+        await self.session.flush()
+        return call
+
+    async def set_recording_metadata(
+        self,
+        call: Call,
+        *,
+        recording_object_key: str,
+        recording_egress_id: str,
+        recording_url: str | None,
+    ) -> Call:
+        call.recording_object_key = recording_object_key
+        call.recording_egress_id = recording_egress_id
         call.recording_url = recording_url
         await self.session.flush()
         return call
