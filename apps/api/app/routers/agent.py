@@ -3,11 +3,21 @@ import hmac
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import UserIdentity, require_user_identity
 from app.core.config import get_settings
+from app.core.database import get_session
+from app.providers.telephony.telnyx import get_telephony_provider
+from app.schemas.agent import AgentConfigPatchRequest, AgentConfigResponse
 from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionResponse
-from app.schemas.auth import UserIdentityResponse
+from app.services.agent_config_service import (
+    AgentConfigNotFoundError,
+    AgentConfigPhoneNumberNotFoundError,
+    AgentConfigService,
+    AgentConfigTelephonySyncError,
+)
+from app.services.telephony_service import TelephonyService
 from app.workers.call_finalization_queue import CallFinalizationQueue
 
 
@@ -31,9 +41,58 @@ def get_call_finalization_queue(request: Request) -> CallFinalizationQueue:
     return queue
 
 
-@router.get("/config", response_model=UserIdentityResponse)
-async def get_agent_config(identity: UserIdentity = Depends(require_user_identity)) -> UserIdentityResponse:
-    return UserIdentityResponse(user_id=identity.user_id)
+def get_agent_config_service(
+    session: AsyncSession = Depends(get_session),
+    telephony_provider=Depends(get_telephony_provider),
+) -> AgentConfigService:
+    return AgentConfigService(
+        session,
+        telephony_service=TelephonyService(session, provider=telephony_provider),
+    )
+
+
+@router.get("/config", response_model=AgentConfigResponse)
+async def get_agent_config(
+    identity: UserIdentity = Depends(require_user_identity),
+    service: AgentConfigService = Depends(get_agent_config_service),
+) -> AgentConfigResponse:
+    try:
+        config = await service.get_by_clerk_user_id(identity.user_id)
+    except AgentConfigNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent config not found",
+        ) from exc
+    return AgentConfigResponse.model_validate(config, from_attributes=True)
+
+
+@router.patch("/config", response_model=AgentConfigResponse)
+async def patch_agent_config(
+    payload: AgentConfigPatchRequest,
+    identity: UserIdentity = Depends(require_user_identity),
+    service: AgentConfigService = Depends(get_agent_config_service),
+) -> AgentConfigResponse:
+    try:
+        config = await service.update_by_clerk_user_id(
+            identity.user_id,
+            payload.model_dump(exclude_none=True),
+        )
+    except AgentConfigNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent config not found",
+        ) from exc
+    except AgentConfigPhoneNumberNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Phone number not found",
+        ) from exc
+    except AgentConfigTelephonySyncError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to update telephony state",
+        ) from exc
+    return AgentConfigResponse.model_validate(config, from_attributes=True)
 
 
 @router.post(

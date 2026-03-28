@@ -19,3 +19,9 @@ class AgentConfigRepository:
     async def get_by_user_id(self, user_id: UUID) -> AgentConfig | None:
         result = await self.session.execute(select(AgentConfig).where(AgentConfig.user_id == user_id))
         return result.scalar_one_or_none()
+
+    async def update_fields(self, config: AgentConfig, updates: dict[str, object]) -> AgentConfig:
+        for field, value in updates.items():
+            setattr(config, field, value)
+        await self.session.flush()
+        return config

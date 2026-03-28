@@ -7,10 +7,14 @@ This document captures implementation notes and staging verification for the bac
 - Chunk 1 foundation implemented: app scaffold, config, schema, repositories, and Clerk auth sync.
 - Chunk 2 core API paths implemented: Stripe billing webhook, telephony service boundary, authenticated websocket gate, and LiveKit inbound dispatch webhook.
 - Chunk 3 initial agent and post-call layers implemented: provider registry, prompt builder, worker entrypoint scaffold, and post-call lifecycle scaffolding.
+- Agent config API now exposes authenticated read/update of the editable runtime fields through `GET /api/agent/config` and `PATCH /api/agent/config`.
+- `PATCH /api/agent/config` now treats `is_enabled` as a synchronous telephony toggle, switching the assigned Telnyx number between `app-active` and `app-disabled` in the same request and rolling the config change back if the provider update fails.
+- Contract details and usage examples for that surface are documented in [agent-config-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/agent-config-api.md).
 
 ## Verified Locally
 
 - API tests covering health, auth, billing, telephony, realtime, LiveKit dispatch, repository flow, and post-call lifecycle.
+- Agent config API tests now cover full-config reads, normal field updates, enable toggles, missing-number conflicts, and rollback on telephony failure.
 - Agent tests covering prompt building, pipeline config selection, Gemini STS runtime construction, and runtime event emission.
 - API Docker image build.
 - Agent Docker image build.

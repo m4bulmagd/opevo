@@ -171,8 +171,8 @@ async def test_call_finalization_job_skips_duplicate_completed_call(
         "transcript": [{"speaker": "CALLER", "text": "Call me back."}],
     }
 
-    first_result = await call_finalization_module.call_finalization_job(payload)
-    second_result = await call_finalization_module.call_finalization_job(payload)
+    first_result = await call_finalization_module.call_finalization_job({}, payload)
+    second_result = await call_finalization_module.call_finalization_job({}, payload)
 
     assert first_result["status"] == "completed"
     assert second_result["status"] == "skipped"
