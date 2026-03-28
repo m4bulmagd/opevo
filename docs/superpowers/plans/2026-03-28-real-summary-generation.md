@@ -97,7 +97,7 @@ In `apps/api/app/core/config.py`, add:
 ```python
 summary_provider: str = "gemini"
 summary_model: str = "gemini-2.5-flash"
-google_api_key: str | None = None
+gemini_api_key: str | None = None
 ```
 
 - [ ] **Step 7: Run the lifecycle test again**
@@ -211,7 +211,7 @@ class SummaryProvider:
 
 Create `apps/api/app/providers/summaries/gemini.py` with a default `GeminiSummaryProvider` that:
 
-- reads `GOOGLE_API_KEY`
+- reads `GEMINI_API_KEY`
 - uses `SUMMARY_MODEL`
 - sends transcript text to Gemini
 - requests strict JSON output matching the structured shape

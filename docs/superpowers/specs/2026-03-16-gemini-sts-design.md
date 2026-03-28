@@ -114,8 +114,7 @@ That boundary keeps Gemini-specific logic from leaking into the worker lifecycle
 
 The STS runtime uses the existing LiveKit Google plugin dependency family already declared in [pyproject.toml](/home/i933k/code/ai/bmad-opevo/apps/agent/pyproject.toml). For authentication, the STS branch should support the Google Gemini API key path and validate credentials before session startup:
 
-- preferred env: `GOOGLE_API_KEY`
-- acceptable fallback if already used in the repo: `GEMINI_API_KEY`
+- preferred env: `GEMINI_API_KEY`
 
 If `pipeline_mode="sts"` is selected and no Gemini credential is present, the worker should fail fast with a clear configuration error.
 

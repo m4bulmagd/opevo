@@ -23,7 +23,7 @@
 - Create or modify: `apps/agent/tests/test_main.py`
   - Add worker entrypoint tests for mode-specific event wiring if this file already exists; otherwise create it.
 - Modify: `apps/agent/.env.example`
-  - Document `GOOGLE_API_KEY` as the preferred Gemini credential and note `GEMINI_API_KEY` fallback if still supported.
+  - Document `GEMINI_API_KEY` as the preferred Gemini credential and note `GEMINI_API_KEY` fallback if still supported.
 - Modify: `docs/architecture/backend-context.md`
   - Record that `pipeline_mode="sts"` is now an optional runtime path once implemented.
 - Modify: `docs/architecture/staging-smoke-runbook.md`
@@ -100,7 +100,7 @@ class FakeGoogleRealtimePlugin:
 
 
 def test_pipeline_factory_builds_sts_runtime_with_gemini_realtime(monkeypatch) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
 
     agent, session = build_agent_runtime(
         {
@@ -128,7 +128,7 @@ def test_pipeline_factory_builds_sts_runtime_with_gemini_realtime(monkeypatch) -
 
 ```python
 def test_pipeline_factory_rejects_sts_without_google_credentials(monkeypatch) -> None:
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     with pytest.raises(ValueError, match="Gemini credentials"):
@@ -149,7 +149,7 @@ def test_pipeline_factory_rejects_sts_without_google_credentials(monkeypatch) ->
 
 ```python
 def test_pipeline_factory_rejects_unsupported_sts_provider(monkeypatch) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
 
     with pytest.raises(ValueError, match="Unsupported STS provider"):
         build_agent_runtime(
@@ -202,7 +202,7 @@ In `apps/agent/agent/pipeline_factory.py`, add focused helpers rather than a lar
 
 The STS helpers should:
 - accept only `sts_provider="gemini"`
-- prefer `GOOGLE_API_KEY`, then fall back to `GEMINI_API_KEY`
+- prefer `GEMINI_API_KEY`, then fall back to `GEMINI_API_KEY`
 - raise `ValueError` if no credential is present
 - instantiate `google.realtime.RealtimeModel(...)`
 - pass the built prompt as `instructions`
@@ -329,7 +329,7 @@ git commit -m "feat: wire sts events through agent entrypoint"
 - [ ] **Step 1: Document the STS credential contract**
 
 In `apps/agent/.env.example`:
-- add `GOOGLE_API_KEY=replace-me`
+- add `GEMINI_API_KEY=replace-me`
 - keep a short note or comment that `GEMINI_API_KEY` remains a compatibility fallback if the code still supports it
 
 - [ ] **Step 2: Document the runtime-selection behavior**
@@ -418,4 +418,4 @@ git commit -m "chore: finalize gemini sts rollout"
 
 - [ ] **Step 5: Record staging follow-up**
 
-Open a follow-up note in the implementation summary or commit message that the next manual verification is one real inbound STS call using a user configured with `pipeline_mode="sts"` and a valid `GOOGLE_API_KEY`.
+Open a follow-up note in the implementation summary or commit message that the next manual verification is one real inbound STS call using a user configured with `pipeline_mode="sts"` and a valid `GEMINI_API_KEY`.

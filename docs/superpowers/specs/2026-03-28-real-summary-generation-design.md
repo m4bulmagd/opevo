@@ -123,7 +123,7 @@ Add:
 
 Reuse:
 
-- `GOOGLE_API_KEY`
+- `GEMINI_API_KEY`
 
 This creates the right extension point later without overbuilding a full provider registry for MVP.
 

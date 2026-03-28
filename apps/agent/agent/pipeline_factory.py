@@ -50,7 +50,7 @@ def build_pipeline_config(agent_config: dict) -> dict:
 
 
 def _resolve_gemini_llm(plugin_module):
-    gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
     llm_cls = getattr(plugin_module, "LLM", None)
     if llm_cls is not None:
         return llm_cls(model="gemini-2.5-flash", api_key=gemini_api_key)
@@ -58,7 +58,7 @@ def _resolve_gemini_llm(plugin_module):
 
 
 def _resolve_gemini_api_key() -> str:
-    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
     if api_key:
         return api_key
     raise ValueError("Gemini credentials are required for sts pipeline mode")

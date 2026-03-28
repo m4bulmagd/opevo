@@ -203,7 +203,7 @@ def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> No
 
 
 def test_pipeline_factory_builds_sts_runtime_with_gemini_realtime(monkeypatch) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
 
     agent, session = build_agent_runtime(
         {
@@ -228,7 +228,6 @@ def test_pipeline_factory_builds_sts_runtime_with_gemini_realtime(monkeypatch) -
 
 
 def test_pipeline_factory_rejects_sts_without_google_credentials(monkeypatch) -> None:
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     with pytest.raises(ValueError, match="Gemini credentials"):
@@ -246,7 +245,7 @@ def test_pipeline_factory_rejects_sts_without_google_credentials(monkeypatch) ->
 
 
 def test_pipeline_factory_rejects_unsupported_sts_provider(monkeypatch) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
 
     with pytest.raises(ValueError, match="Unsupported STS provider"):
         build_agent_runtime(

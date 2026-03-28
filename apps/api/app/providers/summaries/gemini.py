@@ -15,7 +15,7 @@ class GeminiSummaryProvider(SummaryProvider):
         client=None,
     ) -> None:
         settings = get_settings()
-        self.api_key = api_key or settings.google_api_key
+        self.api_key = api_key or settings.gemini_api_key
         self.model = model or settings.summary_model
         self.client = client
 
@@ -68,4 +68,21 @@ class GeminiSummaryProvider(SummaryProvider):
         text = getattr(response, "text", None)
         if not text:
             raise ValueError("Gemini returned no text")
-        return json.loads(text)
+        content = text.strip()
+        if not content:
+            raise ValueError("Gemini returned no text")
+
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            decoder = json.JSONDecoder()
+            for start in range(len(content)):
+                if content[start] not in "{[":
+                    continue
+                try:
+                    payload, _ = decoder.raw_decode(content[start:])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    return payload
+            raise
