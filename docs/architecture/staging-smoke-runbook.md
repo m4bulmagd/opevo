@@ -288,6 +288,7 @@ Complete one real forwarded call and then verify persistence:
 
 ```bash
 docker exec ai-call-postgres psql -U postgres -d ai_call -c "select livekit_room_id, caller_number, status, duration_seconds, minutes_charged, summary_text from calls order by created_at desc limit 5;"
+docker exec ai-call-postgres psql -U postgres -d ai_call -c "select summary_data from calls order by created_at desc limit 5;"
 docker exec ai-call-postgres psql -U postgres -d ai_call -c "select speaker, text, sequence_number from call_messages order by created_at desc limit 20;"
 docker exec ai-call-postgres psql -U postgres -d ai_call -c "select notification_type, status from notifications order by created_at desc limit 10;"
 docker exec ai-call-postgres psql -U postgres -d ai_call -c "select event_type, minutes_delta, balance_after from usage_ledgers order by created_at desc limit 10;"
@@ -299,7 +300,8 @@ Expected:
 - persisted transcript rows in `call_messages`
 - one notification row for call completion, even if Firebase delivery itself fails
 - one usage ledger row for `call_completed`
-- `summary_text` is populated with the current placeholder summary behavior
+- `summary_text` is populated with the generated summary result
+- `summary_data` is populated when summary generation succeeds
 
 Expected worker log signals:
 

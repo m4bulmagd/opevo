@@ -12,12 +12,16 @@ This document captures implementation notes and staging verification for the bac
 - Contract details and usage examples for that surface are documented in [agent-config-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/agent-config-api.md).
 - Call history API now exposes `GET /api/calls`, `GET /api/calls/{call_id}`, and `DELETE /api/calls/{call_id}` for authenticated users.
 - User-facing call delete is now a soft delete: deleted calls disappear from list/detail APIs, while transcript rows and recording objects remain available for admin/manual recovery later.
+- Call summaries are now generated through a provider-agnostic summary layer, with Gemini configured as the default provider.
+- Completed calls now persist both `summary_text` and structured `summary_data` on the `calls` row.
+- Summary generation is non-blocking: if the provider fails or returns invalid output, call completion still succeeds and summary fields stay `null`.
 
 ## Verified Locally
 
 - API tests covering health, auth, billing, telephony, realtime, LiveKit dispatch, repository flow, and post-call lifecycle.
 - Agent config API tests now cover full-config reads, normal field updates, enable toggles, missing-number conflicts, and rollback on telephony failure.
 - Call history API tests now cover visible-call listing, transcript detail, fresh recording URL minting, and soft-delete behavior.
+- Summary service tests now cover structured-summary success, malformed provider output, and non-blocking provider failure.
 - Agent tests covering prompt building, pipeline config selection, Gemini STS runtime construction, and runtime event emission.
 - API Docker image build.
 - Agent Docker image build.
