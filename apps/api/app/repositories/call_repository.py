@@ -58,6 +58,7 @@ class CallRepository:
         duration_seconds: int,
         minutes_charged: int,
         summary_text: str | None,
+        summary_data: dict | None,
         recording_url: str | None,
     ) -> Call:
         call.status = "completed"
@@ -65,6 +66,7 @@ class CallRepository:
         call.duration_seconds = duration_seconds
         call.minutes_charged = minutes_charged
         call.summary_text = summary_text
+        call.summary_data = summary_data
         call.recording_url = recording_url
         await self.session.flush()
         return call

@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     telnyx_active_connection_id: str | None = None
     telnyx_disabled_connection_id: str | None = None
     telnyx_ordering_enabled: bool = False
+    summary_provider: str = "gemini"
+    summary_model: str = "gemini-2.5-flash"
     storage_bucket_name: str = "recordings"
     s3_endpoint_url: str | None = None
     s3_access_key: str | None = None

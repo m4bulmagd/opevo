@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -21,4 +21,5 @@ class Call(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     minutes_charged: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     recording_url: Mapped[str | None] = mapped_column(String(512), nullable=True)

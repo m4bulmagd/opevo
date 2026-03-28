@@ -39,6 +39,22 @@ class FakeFailingNotificationProvider:
         raise ValueError("messaging misconfigured")
 
 
+class FakeStructuredSummaryService:
+    async def create_summary(self, payload: dict):
+        class Result:
+            text = "Caller asked about opening hours."
+            data = {
+                "summary_text": "Caller asked about opening hours.",
+                "caller_intent": "Ask about opening hours",
+                "action_items": ["Provide opening hours"],
+                "sentiment": "neutral",
+                "follow_up_required": False,
+            }
+            job_enqueued = True
+
+        return Result()
+
+
 @pytest.mark.anyio
 async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, active_user) -> None:
     call = Call(
@@ -99,6 +115,45 @@ async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, acti
     ).scalars().all()
     assert len(notifications) == 1
     assert notifications[0].notification_type == "call_completed"
+
+
+@pytest.mark.anyio
+async def test_call_completion_persists_structured_summary_data(
+    db_session, active_user
+) -> None:
+    call = Call(
+        id=uuid4(),
+        user_id=active_user.id,
+        caller_number="+33111111111",
+        status="pending",
+    )
+    db_session.add(call)
+    await db_session.commit()
+
+    service = CallLifecycleService(
+        db_session,
+        summary_service=FakeStructuredSummaryService(),
+        recording_service=RecordingService(provider=FakeStorageProvider()),
+        notification_service=NotificationService(db_session, provider=FakeNotificationProvider()),
+    )
+
+    result = await service.finalize_call(
+        {
+            "user_id": active_user.id,
+            "call_id": str(call.id),
+            "duration_seconds": 61,
+            "minutes_remaining": 10,
+            "caller_number": "+33111111111",
+            "transcript": [{"speaker": "CALLER", "text": "What are your opening hours?"}],
+        }
+    )
+
+    refreshed_call = await db_session.get(Call, call.id)
+
+    assert result.summary_text == "Caller asked about opening hours."
+    assert refreshed_call.summary_text == "Caller asked about opening hours."
+    assert refreshed_call.summary_data["caller_intent"] == "Ask about opening hours"
+    assert refreshed_call.summary_data["follow_up_required"] is False
 
 
 @pytest.mark.anyio
