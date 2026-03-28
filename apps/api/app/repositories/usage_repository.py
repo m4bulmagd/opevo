@@ -39,3 +39,13 @@ class UsageRepository:
         result = await self.session.execute(statement)
         balance = result.scalar_one_or_none()
         return int(balance or 0)
+
+    async def list_recent_by_user_id(self, *, user_id, limit: int) -> list[UsageLedger]:
+        statement = (
+            select(UsageLedger)
+            .where(UsageLedger.user_id == user_id)
+            .order_by(UsageLedger.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
