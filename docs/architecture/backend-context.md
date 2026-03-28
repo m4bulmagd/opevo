@@ -12,12 +12,14 @@ This document captures implementation notes and staging verification for the bac
 - Contract details and usage examples for that surface are documented in [agent-config-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/agent-config-api.md).
 - Call history API now exposes `GET /api/calls`, `GET /api/calls/{call_id}`, and `DELETE /api/calls/{call_id}` for authenticated users.
 - User-facing call delete is now a soft delete: deleted calls disappear from list/detail APIs, while transcript rows and recording objects remain available for admin/manual recovery later.
+- Contract details and usage examples for call history are documented in [call-history-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/call-history-api.md).
 - Call summaries are now generated through a provider-agnostic summary layer, with Gemini configured as the default provider.
 - Completed calls now persist both `summary_text` and structured `summary_data` on the `calls` row.
 - Summary generation is non-blocking: if the provider fails or returns invalid output, call completion still succeeds and summary fields stay `null`.
 - Billing and usage API now exposes authenticated read endpoints for subscription state, usage balance, and usage ledger history.
 - Billing and usage API now exposes hosted Stripe action endpoints for checkout and billing portal sessions instead of mutating subscriptions directly in the app backend.
 - Contract details and usage examples for that surface are documented in [billing-usage-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/billing-usage-api.md).
+- Internal and integration surfaces are documented in [integration-endpoints.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/integration-endpoints.md).
 
 ## Verified Locally
 
