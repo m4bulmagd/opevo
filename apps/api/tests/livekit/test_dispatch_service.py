@@ -78,13 +78,38 @@ class FakeCallRepository:
     def __init__(self, call_id: UUID) -> None:
         self.call = SimpleNamespace(
             id=call_id,
+            user_id=uuid4(),
+            livekit_room_id="room_123",
+            status="pending",
             recording_url=None,
             recording_object_key=None,
             recording_egress_id=None,
         )
         self.recording_metadata_calls: list[dict] = []
+        self.pending_by_room_calls: list[str] = []
+        self.active_by_room_calls: list[str] = []
 
     async def create_pending(self, **kwargs):
+        self.call.user_id = kwargs["user_id"]
+        self.call.livekit_room_id = kwargs["livekit_room_id"]
+        return self.call
+
+    async def get_pending_by_room_without_recording(self, *, room_name: str):
+        self.pending_by_room_calls.append(room_name)
+        if self.call.livekit_room_id != room_name:
+            return None
+        if self.call.status != "pending":
+            return None
+        if self.call.recording_egress_id is not None:
+            return None
+        return self.call
+
+    async def get_active_by_room_with_recording(self, *, room_name: str):
+        self.active_by_room_calls.append(room_name)
+        if self.call.livekit_room_id != room_name:
+            return None
+        if self.call.recording_egress_id is None:
+            return None
         return self.call
 
     async def set_recording_metadata(
@@ -124,10 +149,11 @@ class FakeUsageRepository:
 
 class FakeRecordingService:
     def __init__(self) -> None:
-        self.calls: list[dict] = []
+        self.start_calls: list[dict] = []
+        self.stop_calls: list[str] = []
 
     async def start_room_recording(self, *, room_name: str, user_id: UUID, call_id: UUID):
-        self.calls.append(
+        self.start_calls.append(
             {
                 "room_name": room_name,
                 "user_id": user_id,
@@ -140,10 +166,18 @@ class FakeRecordingService:
             url=f"http://minio:9000/recordings/calls/{user_id}/{call_id}.ogg",
         )
 
+    async def stop_room_recording(self, *, egress_id: str):
+        self.stop_calls.append(egress_id)
+
 
 class FakeFailingRecordingService:
     async def start_room_recording(self, *, room_name: str, user_id: UUID, call_id: UUID):
         raise RuntimeError("egress unavailable")
+
+
+class FakeFailingStopRecordingService(FakeRecordingService):
+    async def stop_room_recording(self, *, egress_id: str):
+        raise RuntimeError("egress stop unavailable")
 
 
 class FakeSession:
@@ -175,6 +209,7 @@ async def test_dispatch_service_includes_agent_runtime_configuration() -> None:
         session,
         dispatch_client=dispatch_client,
         realtime_service=realtime_service,
+        recording_service=FakeRecordingService(),
     )
     service.phone_number_repository = FakePhoneNumberRepository(phone_number)
     service.agent_config_repository = FakeAgentConfigRepository(agent_config)
@@ -227,6 +262,7 @@ async def test_dispatch_service_matches_called_number_with_formatting_variation(
         session,
         dispatch_client=dispatch_client,
         realtime_service=realtime_service,
+        recording_service=FakeRecordingService(),
     )
     service.phone_number_repository = FakePhoneNumberRepository(phone_number)
     service.agent_config_repository = FakeAgentConfigRepository(agent_config)
@@ -271,6 +307,7 @@ async def test_dispatch_service_persists_recording_metadata_when_egress_starts()
     recording_service = FakeRecordingService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
+    call_repository.call.user_id = user_id
     service = LiveKitDispatchService(
         session,
         dispatch_client=dispatch_client,
@@ -288,21 +325,21 @@ async def test_dispatch_service_persists_recording_metadata_when_egress_starts()
             "event": "participant_joined",
             "room": {"name": "room_123"},
             "participant": {
-                "attributes": {
-                    "sip.phoneNumber": "+33123456789",
-                    "sip.trunkPhoneNumber": "+33999888777",
-                }
+                "identity": "agent_123",
+                "kind": "STANDARD",
+                "attributes": {},
             },
         }
     )
 
-    assert recording_service.calls == [
+    assert recording_service.start_calls == [
         {
             "room_name": "room_123",
             "user_id": user_id,
             "call_id": call_repository.call.id,
         }
     ]
+    assert call_repository.pending_by_room_calls == ["room_123"]
     assert call_repository.recording_metadata_calls == [
         {
             "call": call_repository.call,
@@ -311,6 +348,174 @@ async def test_dispatch_service_persists_recording_metadata_when_egress_starts()
             "recording_url": f"http://minio:9000/recordings/calls/{user_id}/{call_repository.call.id}.ogg",
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_dispatch_service_does_not_start_recording_for_sip_join() -> None:
+    user_id = uuid4()
+    phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
+    agent_config = FakeAgentConfig(
+        id=uuid4(),
+        agent_name="Ava",
+        owner_context="Sam at Bakery",
+        system_prompt="Be helpful and concise.",
+        knowledge_base="Hours 9-5",
+        pipeline_mode="stt_llm_tts",
+    )
+    user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
+
+    dispatch_client = FakeDispatchClient()
+    realtime_service = FakeRealtimeService()
+    recording_service = FakeRecordingService()
+    session = FakeSession()
+    call_repository = FakeCallRepository(call_id=uuid4())
+    service = LiveKitDispatchService(
+        session,
+        dispatch_client=dispatch_client,
+        realtime_service=realtime_service,
+        recording_service=recording_service,
+    )
+    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
+    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
+    service.call_repository = call_repository
+    service.user_repository = FakeUserRepository(user)
+    service.usage_repository = FakeUsageRepository()
+
+    await service.handle_participant_joined(
+        {
+            "event": "participant_joined",
+            "room": {"name": "room_123"},
+            "participant": {
+                "identity": "sip_caller",
+                "kind": "SIP",
+                "attributes": {
+                    "sip.phoneNumber": "+33123456789",
+                    "sip.trunkPhoneNumber": "+33999888777",
+                }
+            },
+        }
+    )
+
+    assert recording_service.start_calls == []
+    assert dispatch_client.calls
+    assert realtime_service.events
+    assert call_repository.recording_metadata_calls == []
+
+
+@pytest.mark.anyio
+async def test_dispatch_service_skips_agent_join_when_recording_already_started() -> None:
+    user_id = uuid4()
+    phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
+    agent_config = FakeAgentConfig(
+        id=uuid4(),
+        agent_name="Ava",
+        owner_context="Sam at Bakery",
+        system_prompt="Be helpful and concise.",
+        knowledge_base="Hours 9-5",
+        pipeline_mode="stt_llm_tts",
+    )
+    user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
+
+    dispatch_client = FakeDispatchClient()
+    realtime_service = FakeRealtimeService()
+    recording_service = FakeRecordingService()
+    session = FakeSession()
+    call_repository = FakeCallRepository(call_id=uuid4())
+    call_repository.call.recording_egress_id = "egress_existing"
+    service = LiveKitDispatchService(
+        session,
+        dispatch_client=dispatch_client,
+        realtime_service=realtime_service,
+        recording_service=recording_service,
+    )
+    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
+    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
+    service.call_repository = call_repository
+    service.user_repository = FakeUserRepository(user)
+    service.usage_repository = FakeUsageRepository()
+
+    await service.handle_participant_joined(
+        {
+            "event": "participant_joined",
+            "room": {"name": "room_123"},
+            "participant": {
+                "identity": "agent_123",
+                "kind": "STANDARD",
+                "attributes": {},
+            },
+        }
+    )
+
+    assert recording_service.start_calls == []
+    assert call_repository.pending_by_room_calls == ["room_123"]
+    assert call_repository.recording_metadata_calls == []
+
+
+@pytest.mark.anyio
+async def test_dispatch_service_stops_recording_when_sip_participant_leaves() -> None:
+    dispatch_client = FakeDispatchClient()
+    realtime_service = FakeRealtimeService()
+    recording_service = FakeRecordingService()
+    session = FakeSession()
+    call_repository = FakeCallRepository(call_id=uuid4())
+    call_repository.call.recording_egress_id = "egress_123"
+    service = LiveKitDispatchService(
+        session,
+        dispatch_client=dispatch_client,
+        realtime_service=realtime_service,
+        recording_service=recording_service,
+    )
+    service.call_repository = call_repository
+
+    await service.handle_participant_left(
+        {
+            "event": "participant_left",
+            "room": {"name": "room_123"},
+            "participant": {
+                "identity": "sip_caller",
+                "kind": "SIP",
+                "attributes": {
+                    "sip.phoneNumber": "+33123456789",
+                },
+            },
+        }
+    )
+
+    assert recording_service.stop_calls == ["egress_123"]
+    assert call_repository.active_by_room_calls == ["room_123"]
+
+
+@pytest.mark.anyio
+async def test_dispatch_service_continues_when_recording_stop_fails() -> None:
+    dispatch_client = FakeDispatchClient()
+    realtime_service = FakeRealtimeService()
+    session = FakeSession()
+    call_repository = FakeCallRepository(call_id=uuid4())
+    call_repository.call.recording_egress_id = "egress_123"
+    service = LiveKitDispatchService(
+        session,
+        dispatch_client=dispatch_client,
+        realtime_service=realtime_service,
+        recording_service=FakeFailingStopRecordingService(),
+    )
+    service.call_repository = call_repository
+
+    await service.handle_participant_left(
+        {
+            "event": "participant_left",
+            "room": {"name": "room_123"},
+            "participant": {
+                "identity": "sip_caller",
+                "kind": "SIP",
+                "attributes": {
+                    "sip.phoneNumber": "+33123456789",
+                },
+            },
+        }
+    )
+
+    assert call_repository.active_by_room_calls == ["room_123"]
+    assert session.commits == 1
 
 
 @pytest.mark.anyio
@@ -331,6 +536,7 @@ async def test_dispatch_service_continues_when_recording_egress_fails() -> None:
     realtime_service = FakeRealtimeService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
+    call_repository.call.user_id = user_id
     service = LiveKitDispatchService(
         session,
         dispatch_client=dispatch_client,
@@ -348,13 +554,13 @@ async def test_dispatch_service_continues_when_recording_egress_fails() -> None:
             "event": "participant_joined",
             "room": {"name": "room_123"},
             "participant": {
-                "attributes": {
-                    "sip.phoneNumber": "+33123456789",
-                    "sip.trunkPhoneNumber": "+33999888777",
-                }
+                "identity": "agent_123",
+                "kind": "STANDARD",
+                "attributes": {},
             },
         }
     )
 
-    assert dispatch_client.calls
+    assert dispatch_client.calls == []
+    assert call_repository.pending_by_room_calls == ["room_123"]
     assert call_repository.recording_metadata_calls == []

@@ -51,6 +51,26 @@ class CallRepository:
         await self.session.flush()
         return call
 
+    async def get_pending_by_room_without_recording(self, *, room_name: str) -> Call | None:
+        result = await self.session.execute(
+            select(Call).where(
+                Call.livekit_room_id == room_name,
+                Call.status == "pending",
+                Call.recording_egress_id.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_active_by_room_with_recording(self, *, room_name: str) -> Call | None:
+        result = await self.session.execute(
+            select(Call).where(
+                Call.livekit_room_id == room_name,
+                Call.recording_egress_id.is_not(None),
+                Call.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def mark_completed(
         self,
         call: Call,

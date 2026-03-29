@@ -94,6 +94,13 @@ async def handle_livekit_webhook(
             realtime_service=realtime_service,
         )
         await service.handle_participant_joined(event_payload)
+    elif event_payload["event"] == "participant_left":
+        service = LiveKitDispatchService(
+            session,
+            dispatch_client=dispatch_client,
+            realtime_service=realtime_service,
+        )
+        await service.handle_participant_left(event_payload)
     else:
         await session.commit()
 

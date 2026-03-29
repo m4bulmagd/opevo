@@ -36,6 +36,48 @@ class LiveKitDispatchService:
 
     async def handle_participant_joined(self, event: dict) -> None:
         participant = event.get("participant", {})
+        if self._is_sip_participant(participant):
+            await self._handle_sip_participant_joined(event)
+            return
+
+        await self._handle_agent_participant_joined(event)
+
+    async def handle_participant_left(self, event: dict) -> None:
+        participant = event.get("participant", {})
+        if not self._is_sip_participant(participant):
+            await self.session.commit()
+            return
+
+        room_name = event.get("room", {}).get("name")
+        if not room_name:
+            await self.session.commit()
+            return
+
+        call = await self.call_repository.get_active_by_room_with_recording(room_name=room_name)
+        if call is None:
+            await self.session.commit()
+            return
+
+        try:
+            await self.recording_service.stop_room_recording(egress_id=call.recording_egress_id)
+        except Exception:
+            logger.exception(
+                "livekit recording stop failed room=%s call_id=%s egress_id=%s",
+                room_name,
+                str(call.id),
+                call.recording_egress_id,
+            )
+
+        await self.session.commit()
+
+    def _is_sip_participant(self, participant: dict) -> bool:
+        if participant.get("kind") == "SIP":
+            return True
+        attributes = participant.get("attributes", {})
+        return any(key.startswith("sip.") for key in attributes)
+
+    async def _handle_sip_participant_joined(self, event: dict) -> None:
+        participant = event.get("participant", {})
         attributes = participant.get("attributes", {})
 
         # LiveKit SIP participant docs map inbound caller ID to sip.phoneNumber and
@@ -93,27 +135,6 @@ class LiveKitDispatchService:
             livekit_room_id=room_name,
             caller_number=caller_number,
         )
-        try:
-            recording = await self.recording_service.start_room_recording(
-                room_name=room_name,
-                user_id=phone_number.user_id,
-                call_id=call.id,
-            )
-        except Exception:
-            logger.exception(
-                "livekit recording start failed room=%s call_id=%s user_id=%s",
-                room_name,
-                str(call.id),
-                str(phone_number.user_id),
-            )
-        else:
-            await self.call_repository.set_recording_metadata(
-                call,
-                recording_object_key=recording.object_key,
-                recording_egress_id=recording.egress_id,
-                recording_url=recording.url,
-            )
-
         metadata = LiveKitDispatchMetadata(
             user_id=str(phone_number.user_id),
             agent_config_id=str(agent_config.id),
@@ -146,3 +167,37 @@ class LiveKitDispatchService:
             room_name=room_name,
             call_id=str(call.id),
         )
+
+    async def _handle_agent_participant_joined(self, event: dict) -> None:
+        room_name = event.get("room", {}).get("name")
+        if not room_name:
+            await self.session.commit()
+            return
+
+        call = await self.call_repository.get_pending_by_room_without_recording(room_name=room_name)
+        if call is None:
+            await self.session.commit()
+            return
+
+        try:
+            recording = await self.recording_service.start_room_recording(
+                room_name=room_name,
+                user_id=call.user_id,
+                call_id=call.id,
+            )
+        except Exception:
+            logger.exception(
+                "livekit recording start failed room=%s call_id=%s user_id=%s",
+                room_name,
+                str(call.id),
+                str(call.user_id),
+            )
+        else:
+            await self.call_repository.set_recording_metadata(
+                call,
+                recording_object_key=recording.object_key,
+                recording_egress_id=recording.egress_id,
+                recording_url=recording.url,
+            )
+
+        await self.session.commit()

@@ -1,4 +1,3 @@
-import asyncio
 import json
 
 import pytest
@@ -7,12 +6,29 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.models.agent_config import AgentConfig
 from app.models.phone_number import PhoneNumber
 from app.models.user import User
+from app.services.livekit_dispatch_service import LiveKitDispatchService
 
 
 class FakeLiveKitReceiver:
     def receive(self, body: bytes, authorization: str | None) -> dict:
         return {
             "event": "participant_joined",
+            "room": {"name": "room_123"},
+            "participant": {
+                "identity": "sip_caller",
+                "kind": "SIP",
+                "attributes": {
+                    "sip.phoneNumber": "+33123456789",
+                    "sip.trunkPhoneNumber": "+33999888777",
+                },
+            },
+        }
+
+
+class FakeParticipantLeftReceiver:
+    def receive(self, body: bytes, authorization: str | None) -> dict:
+        return {
+            "event": "participant_left",
             "room": {"name": "room_123"},
             "participant": {
                 "identity": "sip_caller",
@@ -111,3 +127,62 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
     assert realtime_service.call_started_events[0]["user_id"] == metadata["user_id"]
     assert realtime_service.call_started_events[0]["call_id"] == metadata["call_id"]
     assert realtime_service.call_started_events[0]["room_name"] == "room_123"
+
+
+@pytest.mark.anyio
+async def test_participant_left_routes_to_leave_handler(
+    async_client,
+    monkeypatch,
+) -> None:
+    from app.main import app
+    from app.webhooks.livekit import (
+        get_dispatch_client,
+        get_realtime_service,
+        get_webhook_receiver,
+    )
+
+    dispatch_client = FakeDispatchClient()
+    realtime_service = FakeRealtimeService()
+    observed: list[dict] = []
+
+    async def fake_handle_participant_left(self, event: dict) -> None:
+        observed.append(event)
+        await self.session.commit()
+
+    monkeypatch.setattr(
+        LiveKitDispatchService,
+        "handle_participant_left",
+        fake_handle_participant_left,
+        raising=False,
+    )
+
+    app.dependency_overrides[get_webhook_receiver] = lambda: FakeParticipantLeftReceiver()
+    app.dependency_overrides[get_dispatch_client] = lambda: dispatch_client
+    app.dependency_overrides[get_realtime_service] = lambda: realtime_service
+
+    try:
+        response = await async_client.post(
+            "/webhooks/livekit",
+            content=json.dumps({"ignored": True}).encode("utf-8"),
+            headers={"authorization": "Bearer test"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_webhook_receiver, None)
+        app.dependency_overrides.pop(get_dispatch_client, None)
+        app.dependency_overrides.pop(get_realtime_service, None)
+
+    assert response.status_code == 202
+    assert observed == [
+        {
+            "event": "participant_left",
+            "room": {"name": "room_123"},
+            "participant": {
+                "identity": "sip_caller",
+                "kind": "SIP",
+                "attributes": {
+                    "sip.phoneNumber": "+33123456789",
+                    "sip.trunkPhoneNumber": "+33999888777",
+                },
+            },
+        }
+    ]

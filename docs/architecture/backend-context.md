@@ -13,6 +13,7 @@ This document captures implementation notes and staging verification for the bac
 - Call history API now exposes `GET /api/calls`, `GET /api/calls/{call_id}`, and `DELETE /api/calls/{call_id}` for authenticated users.
 - User-facing call delete is now a soft delete: deleted calls disappear from list/detail APIs, while transcript rows and recording objects remain available for admin/manual recovery later.
 - Live call recordings now use LiveKit room composite egress with `audio_only=true`, writing one mixed recording directly to the recordings bucket instead of relaying audio bytes through the agent completion API.
+- Recording timing is now tightened around the actual conversation window: SIP caller join creates and dispatches the call, agent join starts egress, and SIP caller leave attempts to stop egress early.
 - Recording retention is bucket-managed: when the recording object expires from storage lifecycle, call detail now degrades to `recording_url = null` while keeping the call and transcript.
 - Contract details and usage examples for call history are documented in [call-history-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/call-history-api.md).
 - Call summaries are now generated through a provider-agnostic summary layer, with Gemini configured as the default provider.
@@ -28,8 +29,8 @@ This document captures implementation notes and staging verification for the bac
 - API tests covering health, auth, billing, telephony, realtime, LiveKit dispatch, repository flow, and post-call lifecycle.
 - Agent config API tests now cover full-config reads, normal field updates, enable toggles, missing-number conflicts, and rollback on telephony failure.
 - Call history API tests now cover visible-call listing, transcript detail, fresh recording URL minting, and soft-delete behavior.
-- LiveKit recording provider tests now cover audio-only room composite egress request shaping and provider-failure wrapping.
-- LiveKit dispatch service tests now cover recording metadata persistence and non-blocking recording-start failure behavior.
+- LiveKit recording provider tests now cover audio-only room composite egress request shaping, explicit stop behavior, and provider-failure wrapping.
+- LiveKit dispatch service tests now cover recording metadata persistence, delayed start on agent join, early stop on SIP leave, and non-blocking recording start/stop failure behavior.
 - Summary service tests now cover structured-summary success, malformed provider output, and non-blocking provider failure.
 - Billing query service tests now cover subscription lookup, usage snapshot assembly, and usage-ledger ordering.
 - Billing session service tests now cover hosted Stripe checkout price mapping and portal precondition validation.

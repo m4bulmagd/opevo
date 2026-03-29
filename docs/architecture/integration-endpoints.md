@@ -142,9 +142,10 @@ Consumes LiveKit room and participant events.
 Behavior:
 
 - verifies the LiveKit webhook authorization
-- on `participant_joined`, attempts inbound dispatch for the matched local phone number
-- when dispatch succeeds, the backend also attempts to start one mixed room recording through LiveKit room composite egress with `audio_only=true`
-- recording-start failures do not block agent dispatch
+- on SIP `participant_joined`, attempts inbound dispatch for the matched local phone number
+- on agent `participant_joined`, attempts to start one mixed room recording through LiveKit room composite egress with `audio_only=true`
+- on SIP `participant_left`, attempts to stop the active room recording early so the mixed file better matches the conversation window
+- recording start/stop failures remain non-blocking
 - returns `202 Accepted`
 
 ## Notes
