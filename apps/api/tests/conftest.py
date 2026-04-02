@@ -303,21 +303,6 @@ def stripe_invoice_paid_payload() -> dict:
 
 @pytest.fixture
 def signed_stripe_headers_factory():
-    def _build(payload: dict) -> dict[str, str]:
-        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        timestamp = str(int(time.time()))
-        signed_payload = timestamp.encode("utf-8") + b"." + payload_bytes
-        digest = hmac.new(b"test-stripe-secret", signed_payload, hashlib.sha256).hexdigest()
-        return {
-            "stripe-signature": f"t={timestamp},v1={digest}",
-            "content-type": "application/json",
-        }
-
-    return _build
-
-
-@pytest.fixture
-def stripe_style_headers_factory():
     def _build(payload: dict, *, timestamp: int | None = None) -> dict[str, str]:
         if timestamp is None:
             timestamp = int(time.time())
@@ -330,3 +315,4 @@ def stripe_style_headers_factory():
         }
 
     return _build
+

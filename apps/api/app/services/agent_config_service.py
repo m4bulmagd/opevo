@@ -56,22 +56,19 @@ class AgentConfigService:
         try:
             config = await self.agent_config_repository.update_fields(config, updates)
             if should_toggle:
-                try:
-                    if bool(requested_enabled):
-                        await self.telephony_service.enable_number(user.id, commit=False)
-                    else:
-                        await self.telephony_service.disable_number(user.id, commit=False)
-                except ValueError as exc:
-                    await self.session.rollback()
-                    raise AgentConfigPhoneNumberNotFoundError from exc
-                except Exception as exc:
-                    await self.session.rollback()
-                    raise AgentConfigTelephonySyncError from exc
-
+                if bool(requested_enabled):
+                    await self.telephony_service.enable_number(user.id, commit=False)
+                else:
+                    await self.telephony_service.disable_number(user.id, commit=False)
             await self.session.commit()
-        except Exception:
+        except ValueError as exc:
             await self.session.rollback()
+            raise AgentConfigPhoneNumberNotFoundError from exc
+        except AgentConfigPhoneNumberNotFoundError:
             raise
+        except Exception as exc:
+            await self.session.rollback()
+            raise AgentConfigTelephonySyncError from exc
 
         await self.session.refresh(config)
         return config

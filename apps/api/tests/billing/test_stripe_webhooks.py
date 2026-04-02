@@ -73,7 +73,7 @@ async def test_subscription_activation_provisions_usage_ledger(
 async def test_subscription_activation_accepts_stripe_style_signature(
     async_client,
     client_database_url,
-    stripe_style_headers_factory,
+    signed_stripe_headers_factory,
     stripe_subscription_created_payload,
 ) -> None:
     async def seed_user() -> None:
@@ -107,7 +107,7 @@ async def test_subscription_activation_accepts_stripe_style_signature(
     response = await async_client.post(
         "/webhooks/stripe",
         content=json.dumps(stripe_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
-        headers=stripe_style_headers_factory(stripe_subscription_created_payload),
+        headers=signed_stripe_headers_factory(stripe_subscription_created_payload),
     )
     app.dependency_overrides.pop(get_telephony_provider, None)
 

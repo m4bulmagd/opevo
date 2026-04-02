@@ -1,5 +1,4 @@
 import json
-import os
 import time
 import asyncio
 import logging
@@ -9,9 +8,9 @@ import inspect
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
 from agent.api_client import AgentApiClient
+from agent.config import get_settings
 from agent.event_publisher import EventPublisher
 from agent.pipeline_factory import build_agent_runtime
-from agent.pipeline_factory import _env_bool
 from agent.pipeline_factory import _resolve_speechmatics_turn_detection_mode
 from agent.providers import PipelineMode
 from agent.session_runtime import SessionRuntime
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def _register_inference_runners() -> None:
-    if _env_bool("LIVEKIT_TURN_DETECTOR_ENABLED", True):
+    if get_settings().livekit_turn_detector_enabled:
         importlib.import_module("livekit.plugins.turn_detector.multilingual")
 
 
@@ -125,12 +124,13 @@ async def entrypoint(context: JobContext) -> None:
 
 
 def prewarm_assets(proc) -> None:
+    settings = get_settings()
     userdata = getattr(proc, "userdata", None)
     if userdata is None:
         userdata = {}
         proc.userdata = userdata
 
-    if _env_bool("LIVEKIT_SILERO_VAD_ENABLED", True):
+    if settings.livekit_silero_vad_enabled:
         try:
             from livekit.plugins import silero
 
@@ -140,7 +140,7 @@ def prewarm_assets(proc) -> None:
         except Exception:
             logger.exception("silero prewarm failed")
 
-    if _env_bool("LIVEKIT_TURN_DETECTOR_ENABLED", True):
+    if settings.livekit_turn_detector_enabled:
         logger.info("turn detector will initialize in job context")
 
     try:
@@ -158,14 +158,15 @@ def prewarm_assets(proc) -> None:
 
 
 def build_worker_options() -> WorkerOptions:
+    settings = get_settings()
     _register_inference_runners()
     return WorkerOptions(
         entrypoint_fnc=entrypoint,
         prewarm_fnc=prewarm_assets,
-        agent_name=os.getenv("LIVEKIT_AGENT_NAME", "ai-call-agent"),
-        ws_url=os.getenv("LIVEKIT_URL"),
-        api_key=os.getenv("LIVEKIT_API_KEY"),
-        api_secret=os.getenv("LIVEKIT_API_SECRET"),
+        agent_name=settings.livekit_agent_name,
+        ws_url=settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
     )
 
 

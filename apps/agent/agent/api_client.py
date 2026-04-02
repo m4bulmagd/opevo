@@ -1,6 +1,6 @@
-import os
-
 import httpx
+
+from agent.config import get_settings
 
 
 class AgentApiClient:
@@ -11,8 +11,9 @@ class AgentApiClient:
         agent_token: str | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        self.base_url = (base_url or os.getenv("API_BASE_URL", "http://api:8000")).rstrip("/")
-        self.agent_token = agent_token or os.getenv("AGENT_INTERNAL_API_TOKEN")
+        settings = get_settings()
+        self.base_url = (base_url or settings.api_base_url).rstrip("/")
+        self.agent_token = agent_token or settings.agent_internal_api_token
         self.http_client = http_client
 
     async def complete_call(self, payload: dict) -> dict:

@@ -8,6 +8,10 @@ from redis.asyncio import Redis
 
 from app.core.config import get_settings
 
+# SHARED CONTRACT — apps/agent/agent/event_publisher.py uses the same prefix.
+# Update both if changing.
+REALTIME_CHANNEL_PREFIX = "realtime:user:"
+
 
 def get_redis_client() -> Redis:
     settings = get_settings()
@@ -25,14 +29,14 @@ class RedisEventBus:
 
     @staticmethod
     def channel_name(user_id: str) -> str:
-        return f"realtime:user:{user_id}"
+        return f"{REALTIME_CHANNEL_PREFIX}{user_id}"
 
     async def publish_json(self, user_id: str, payload: dict) -> None:
         await self.redis_client.publish(self.channel_name(user_id), json.dumps(payload))
 
     async def subscribe(self) -> AsyncIterator[tuple[str, dict]]:
         pubsub = self.redis_client.pubsub()
-        await pubsub.psubscribe("realtime:user:*")
+        await pubsub.psubscribe(f"{REALTIME_CHANNEL_PREFIX}*")
         try:
             async for message in pubsub.listen():
                 if message.get("type") != "pmessage" or not message.get("data"):

@@ -1,5 +1,10 @@
 import json
-import os
+
+from agent.config import get_settings
+
+# SHARED CONTRACT — apps/api/app/core/redis.py uses the same prefix.
+# Update both if changing.
+REALTIME_CHANNEL_PREFIX = "realtime:user:"
 
 
 class RedisEventBus:
@@ -8,14 +13,14 @@ class RedisEventBus:
 
     @staticmethod
     def channel_name(user_id: str) -> str:
-        return f"realtime:user:{user_id}"
+        return f"{REALTIME_CHANNEL_PREFIX}{user_id}"
 
     async def publish_json(self, user_id: str, payload: dict) -> None:
         if self.redis_client is None:
             from redis.asyncio import Redis
 
             self.redis_client = Redis.from_url(
-                os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+                get_settings().redis_url,
                 decode_responses=True,
             )
         await self.redis_client.publish(self.channel_name(user_id), json.dumps(payload))

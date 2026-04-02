@@ -1,5 +1,6 @@
 import pytest
 
+from agent.config import get_settings
 from agent.pipeline_factory import build_agent_runtime
 from agent.pipeline_factory import build_pipeline_config
 from agent.debug_streams import InstrumentedAgent
@@ -204,6 +205,7 @@ def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> No
 
 def test_pipeline_factory_builds_sts_runtime_with_gemini_realtime(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    get_settings.cache_clear()
 
     agent, session = build_agent_runtime(
         {
@@ -228,7 +230,8 @@ def test_pipeline_factory_builds_sts_runtime_with_gemini_realtime(monkeypatch) -
 
 
 def test_pipeline_factory_rejects_sts_without_google_credentials(monkeypatch) -> None:
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    get_settings.cache_clear()
 
     with pytest.raises(ValueError, match="Gemini credentials"):
         build_agent_runtime(
@@ -246,6 +249,7 @@ def test_pipeline_factory_rejects_sts_without_google_credentials(monkeypatch) ->
 
 def test_pipeline_factory_rejects_unsupported_sts_provider(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    get_settings.cache_clear()
 
     with pytest.raises(ValueError, match="Unsupported STS provider"):
         build_agent_runtime(

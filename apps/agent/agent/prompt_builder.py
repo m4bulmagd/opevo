@@ -13,12 +13,21 @@ def build_system_prompt(
     #     <knowledge_base>\n{knowledge_base}\n</knowledge_base>
     #     """
 
-    advanced_prompt = f'''
+    sections = [f'''
         CORE IDENTITY
         -------------
         You are {agent_name}, a professional AI assistant representing {owner_name}.
         This call may be recorded for quality and follow-up purposes.
+''']
 
+    if system_prompt and system_prompt.strip():
+        sections.append(f'''
+        OWNER INSTRUCTIONS
+        ------------------
+        {system_prompt}
+''')
+
+    sections.append(f'''
         PERSONALITY
         -----------
         - Calm, professional, and warm — but never chatty.
@@ -71,8 +80,7 @@ def build_system_prompt(
 
         Example: "I've noted everything — {owner_name} will be in touch. Thank you for calling."
         Never say goodbye more than once.
+''')
 
-        '''
-    
-    return (advanced_prompt)
+    return "\n".join(sections)
 
