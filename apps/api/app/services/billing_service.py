@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from arq.connections import ArqRedis
 
 from app.core.config import get_settings
 from app.providers.telephony.base import TelephonyProvisioningReviewRequired
@@ -23,7 +24,12 @@ PLAN_MINUTES = {
 
 
 class BillingService:
-    def __init__(self, session: AsyncSession, telephony_service: TelephonyService | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        telephony_service: TelephonyService | None = None,
+        arq_pool: ArqRedis | None = None,
+    ) -> None:
         self.session = session
         self.settings = get_settings()
         self.user_repository = UserRepository(session)
@@ -32,43 +38,19 @@ class BillingService:
         self.notification_repository = NotificationRepository(session)
         self.webhook_event_repository = WebhookEventRepository(session)
         self.telephony_service = telephony_service or TelephonyService(session)
+        self.arq_pool = arq_pool
 
     def verify_signature(self, payload: bytes, signature_header: str | None) -> None:
         if not self.settings.stripe_webhook_secret:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Stripe secret not configured")
-        if not signature_header:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Stripe signature")
-
-        timestamp: str | None = None
-        provided_signatures: list[str] = []
-        for part in signature_header.split(","):
-            key, sep, value = part.partition("=")
-            if not sep:
-                continue
-            if key == "t":
-                timestamp = value
-            elif key == "v1":
-                provided_signatures.append(value)
-
-        if not timestamp or not provided_signatures:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Stripe signature")
-
-        try:
-            webhook_timestamp = int(timestamp)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Stripe signature") from exc
-
-        if abs(int(time.time()) - webhook_timestamp) > 300:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Expired Stripe signature")
-
-        signed_payload = timestamp.encode("utf-8") + b"." + payload
-        expected = hmac.new(
-            self.settings.stripe_webhook_secret.encode("utf-8"),
-            signed_payload,
-            hashlib.sha256,
-        ).hexdigest()
-        if not any(hmac.compare_digest(provided, expected) for provided in provided_signatures):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Stripe signature")
+            
+        from app.core.webhook_verifier import verify_hmac_signature
+        verify_hmac_signature(
+            secret=self.settings.stripe_webhook_secret,
+            payload=payload,
+            headers={"stripe-signature": signature_header or ""},
+            is_clerk=False,
+        )
 
     async def handle_event(self, envelope: dict) -> None:
         is_new = await self.webhook_event_repository.record_if_new(
@@ -114,15 +96,9 @@ class BillingService:
             current_period_start=current_period_start,
             current_period_end=current_period_end,
         )
-        try:
-            await self.telephony_service.provision_number(user.id, country_code=user.country_code or "FR")
-        except TelephonyProvisioningReviewRequired as exc:
-            await self.notification_repository.create(
-                user_id=user.id,
-                call_id=None,
-                notification_type="phone_number_provisioning_review_required",
-                status="pending",
-                payload=exc.payload,
+        if self.arq_pool:
+            await self.arq_pool.enqueue_job(
+                "phone_provisioning_job", {"user_id": str(user.id)}
             )
         await self.usage_repository.create(
             user_id=user.id,

@@ -3,6 +3,7 @@ from agent.main import build_worker_options
 from agent.main import _send_initial_greeting
 from agent.main import _register_standard_session_handlers
 from agent.main import _register_sts_session_handlers
+from agent.schemas import DispatchMetadata
 from pathlib import Path
 
 
@@ -48,10 +49,10 @@ class FakeRuntime:
         self.caller_text: list[str] = []
         self.agent_text: list[str] = []
 
-    async def handle_caller_transcript(self, _metadata: dict, text: str) -> None:
+    async def handle_caller_transcript(self, _metadata: DispatchMetadata, text: str) -> None:
         self.caller_text.append(text)
 
-    async def handle_agent_utterance(self, _metadata: dict, text: str) -> None:
+    async def handle_agent_utterance(self, _metadata: DispatchMetadata, text: str) -> None:
         self.agent_text.append(text)
 
 
@@ -97,7 +98,7 @@ def test_register_standard_session_handlers_forwards_final_caller_and_agent_text
     _run_scheduled_coroutine(monkeypatch)
     session = FakeSession()
     runtime = FakeRuntime()
-    metadata = {"call_id": "call-1", "user_id": "user-1"}
+    metadata = DispatchMetadata(call_id="call-1", user_id="user-1", agent_name="Agent", owner_name="Owner")
 
     _register_standard_session_handlers(session, runtime, metadata)
 
@@ -112,7 +113,7 @@ def test_register_sts_session_handlers_forwards_caller_and_agent_text(monkeypatc
     _run_scheduled_coroutine(monkeypatch)
     session = FakeSession()
     runtime = FakeRuntime()
-    metadata = {"call_id": "call-1", "user_id": "user-1"}
+    metadata = DispatchMetadata(call_id="call-1", user_id="user-1", agent_name="Agent", owner_name="Owner")
 
     _register_sts_session_handlers(session, runtime, metadata)
 
@@ -129,11 +130,13 @@ def test_send_initial_greeting_uses_say_for_standard_mode() -> None:
     asyncio.run(
         _send_initial_greeting(
             session,
-            {
-                "agent_name": "Assistant",
-                "owner_name": "Sam",
-                "pipeline_mode": "stt_llm_tts",
-            },
+            DispatchMetadata(
+                call_id="test",
+                user_id="test",
+                agent_name="Assistant",
+                owner_name="Sam",
+                pipeline_mode="stt_llm_tts",
+            ),
         )
     )
 
@@ -149,11 +152,13 @@ def test_send_initial_greeting_uses_generate_reply_for_sts_mode() -> None:
     asyncio.run(
         _send_initial_greeting(
             session,
-            {
-                "agent_name": "Assistant",
-                "owner_name": "Sam",
-                "pipeline_mode": "sts",
-            },
+            DispatchMetadata(
+                call_id="test",
+                user_id="test",
+                agent_name="Assistant",
+                owner_name="Sam",
+                pipeline_mode="sts",
+            ),
         )
     )
 

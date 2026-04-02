@@ -5,6 +5,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -18,7 +19,8 @@ from app.repositories.user_repository import UserRepository
 
 @dataclass(slots=True)
 class UserIdentity:
-    user_id: str
+    clerk_user_id: str
+    internal_user_id: UUID | None = None
 
 
 class AuthProvider(ABC):
@@ -27,7 +29,7 @@ class AuthProvider(ABC):
         raise NotImplementedError
 
     def get_user_id(self, token: str) -> str:
-        return self.verify_token(token).user_id
+        return self.verify_token(token).clerk_user_id
 
 
 class ClerkAuthProvider(AuthProvider):
@@ -56,57 +58,21 @@ class ClerkAuthProvider(AuthProvider):
         if not subject:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing subject")
 
-        return UserIdentity(user_id=subject)
+        return UserIdentity(clerk_user_id=subject)
 
     def verify_webhook(self, payload: bytes, headers: dict[str, str]) -> str:
         if not self.settings.clerk_webhook_secret:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Webhook secret not configured")
 
-        signature = headers.get("svix-signature")
-        event_id = headers.get("svix-id")
-        timestamp = headers.get("svix-timestamp")
-        if not signature or not event_id:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing webhook signature")
-        if not timestamp:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing webhook timestamp")
-
-        try:
-            webhook_timestamp = int(timestamp)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook timestamp") from exc
-
-        # Svix-signed Clerk webhooks should be recent to reduce replay risk.
-        if abs(int(time.time()) - webhook_timestamp) > 300:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook timestamp expired")
-
-        secret = self._decode_svix_secret(self.settings.clerk_webhook_secret)
-        signed_content = event_id.encode("utf-8") + b"." + timestamp.encode("utf-8") + b"." + payload
-        expected = base64.b64encode(
-            hmac.new(
-                secret,
-                signed_content,
-                hashlib.sha256,
-            ).digest()
-        ).decode("utf-8")
-
-        provided_signatures = [
-            part.split(",", 1)[1]
-            for part in signature.split()
-            if part.startswith("v1,") and "," in part
-        ]
-        if not provided_signatures:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing v1 webhook signature")
-
-        if not any(hmac.compare_digest(provided, expected) for provided in provided_signatures):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature")
-
-        return event_id
-
-    @staticmethod
-    def _decode_svix_secret(secret: str) -> bytes:
-        if secret.startswith("whsec_"):
-            return base64.b64decode(secret[len("whsec_") :].encode("utf-8"))
-        return secret.encode("utf-8")
+        from app.core.webhook_verifier import verify_hmac_signature
+        
+        verify_hmac_signature(
+            secret=self.settings.clerk_webhook_secret,
+            payload=payload,
+            headers=headers,
+            is_clerk=True,
+        )
+        return headers.get("svix-id", "")
 
     def _resolve_jwks_url(self) -> str:
         if self.settings.clerk_jwks_url:
@@ -142,10 +108,11 @@ async def require_user_identity(
     except jwt.PyJWTError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
-    user = await UserRepository(session).get_by_clerk_user_id(identity.user_id)
+    user = await UserRepository(session).get_by_clerk_user_id(identity.clerk_user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not synced")
 
+    identity.internal_user_id = user.id
     return identity
 
 

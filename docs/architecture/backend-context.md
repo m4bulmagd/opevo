@@ -24,6 +24,12 @@ This document captures implementation notes and staging verification for the bac
 - Contract details and usage examples for that surface are documented in [billing-usage-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/billing-usage-api.md).
 - Internal and integration surfaces are documented in [integration-endpoints.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/integration-endpoints.md).
 
+## Known Contract Drift
+
+- Product-facing docs may still describe a broader planned backend surface than what is currently implemented in `apps/api`. Treat this file and the focused docs under `docs/architecture/` as the current source for implemented backend contracts.
+- User-facing call delete is currently a soft delete, not a destructive delete. The current call-history contract is documented in [call-history-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/call-history-api.md).
+- The implemented realtime endpoint is `GET /ws` with first-message auth, as documented in [integration-endpoints.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/integration-endpoints.md). Older product docs may still reference a more specific websocket path shape.
+
 ## Verified Locally
 
 - API tests covering health, auth, billing, telephony, realtime, LiveKit dispatch, repository flow, and post-call lifecycle.

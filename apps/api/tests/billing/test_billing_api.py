@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
@@ -53,7 +54,7 @@ async def test_get_subscription_returns_null_for_new_user() -> None:
     from app.routers.billing import get_subscription
 
     response = await get_subscription(
-        identity=UserIdentity(user_id="user_123"),
+        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
         service=FakeBillingQueryService(),
     )
 
@@ -65,7 +66,7 @@ async def test_get_usage_returns_zeroed_snapshot_without_subscription() -> None:
     from app.routers.billing import get_usage
 
     response = await get_usage(
-        identity=UserIdentity(user_id="user_123"),
+        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
         service=FakeBillingQueryService(),
     )
 
@@ -80,7 +81,7 @@ async def test_get_usage_ledger_returns_recent_entries() -> None:
 
     service = FakeBillingQueryService()
     response = await get_usage_ledger(
-        identity=UserIdentity(user_id="user_123"),
+        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
         limit=2,
         service=service,
     )
@@ -128,7 +129,7 @@ async def test_create_checkout_session_returns_url() -> None:
 
     response = await create_checkout_session(
         payload=CheckoutSessionRequest(plan_tier="starter"),
-        identity=UserIdentity(user_id="user_123"),
+        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
         service=FakeBillingSessionService(),
         query_service=FakeEmptySubscriptionQueryService(),
         user=type("User", (), {"email": "billing@example.com"})(),
@@ -145,7 +146,7 @@ async def test_create_checkout_session_rejects_active_subscription() -> None:
     with pytest.raises(HTTPException) as exc_info:
         await create_checkout_session(
             payload=CheckoutSessionRequest(plan_tier="starter"),
-            identity=UserIdentity(user_id="user_123"),
+            identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
             service=FakeBillingSessionService(),
             query_service=FakeActiveSubscriptionQueryService(),
             user=type("User", (), {"email": "billing@example.com"})(),
@@ -161,7 +162,7 @@ async def test_create_portal_session_returns_url() -> None:
 
     response = await create_portal_session(
         payload=PortalSessionRequest(return_url="https://app.example.com/settings"),
-        identity=UserIdentity(user_id="user_123"),
+        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
         service=FakeBillingSessionService(),
         query_service=FakeActiveSubscriptionQueryService(),
     )
@@ -177,7 +178,7 @@ async def test_create_portal_session_rejects_missing_customer() -> None:
     with pytest.raises(HTTPException) as exc_info:
         await create_portal_session(
             payload=PortalSessionRequest(return_url="https://app.example.com/settings"),
-            identity=UserIdentity(user_id="user_123"),
+            identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
             service=FakeBillingSessionService(),
             query_service=FakeEmptySubscriptionQueryService(),
         )

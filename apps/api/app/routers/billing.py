@@ -39,7 +39,7 @@ async def get_current_user(
     identity: UserIdentity = Depends(require_user_identity),
     session: AsyncSession = Depends(get_session),
 ):
-    user = await UserRepository(session).get_by_clerk_user_id(identity.user_id)
+    user = await UserRepository(session).get_by_clerk_user_id(identity.clerk_user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not synced")
     return user
@@ -50,7 +50,7 @@ async def get_subscription(
     identity: UserIdentity = Depends(require_user_identity),
     service: BillingQueryService = Depends(get_billing_query_service),
 ) -> SubscriptionResponse | None:
-    return await service.get_subscription(identity.user_id)
+    return await service.get_subscription(identity.internal_user_id)
 
 
 @router.get("/usage", response_model=UsageSnapshotResponse)
@@ -58,7 +58,7 @@ async def get_usage(
     identity: UserIdentity = Depends(require_user_identity),
     service: BillingQueryService = Depends(get_billing_query_service),
 ) -> UsageSnapshotResponse:
-    return await service.get_usage_snapshot(identity.user_id)
+    return await service.get_usage_snapshot(identity.internal_user_id)
 
 
 @router.get("/usage-ledger", response_model=UsageLedgerListResponse)
@@ -67,7 +67,7 @@ async def get_usage_ledger(
     service: BillingQueryService = Depends(get_billing_query_service),
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> UsageLedgerListResponse:
-    return await service.get_usage_ledger(identity.user_id, limit=limit)
+    return await service.get_usage_ledger(identity.internal_user_id, limit=limit)
 
 
 @router.post("/checkout-session", response_model=HostedSessionResponse)
@@ -78,7 +78,7 @@ async def create_checkout_session(
     query_service: BillingQueryService = Depends(get_billing_query_service),
     user=Depends(get_current_user),
 ) -> HostedSessionResponse:
-    existing_subscription = await query_service.get_subscription(identity.user_id)
+    existing_subscription = await query_service.get_subscription(identity.internal_user_id)
     if existing_subscription is not None and existing_subscription.status == "active":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -87,9 +87,9 @@ async def create_checkout_session(
 
     try:
         session = service.create_checkout_session(
-            user_id=identity.user_id,
+            user_id=str(identity.internal_user_id),
             customer_email=user.email,
-            clerk_user_id=identity.user_id,
+            clerk_user_id=identity.clerk_user_id,
             plan_tier=payload.plan_tier,
         )
     except BillingSessionStateError as exc:
@@ -113,7 +113,7 @@ async def create_portal_session(
     service: BillingSessionService = Depends(get_billing_session_service),
     query_service: BillingQueryService = Depends(get_billing_query_service),
 ) -> HostedSessionResponse:
-    subscription = await query_service.get_subscription(identity.user_id)
+    subscription = await query_service.get_subscription(identity.internal_user_id)
     if subscription is None or not subscription.stripe_customer_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

@@ -19,9 +19,11 @@ async def handle_stripe_webhook(
     telephony_provider: TelephonyProvider = Depends(get_telephony_provider),
 ) -> Response:
     payload = await request.body()
+    arq_pool = getattr(request.app.state, "arq_pool", None)
     billing_service = BillingService(
         session,
         telephony_service=TelephonyService(session, provider=telephony_provider),
+        arq_pool=arq_pool,
     )
     billing_service.verify_signature(payload, request.headers.get("stripe-signature"))
     envelope = StripeWebhookEnvelope.model_validate_json(payload)

@@ -11,8 +11,37 @@ from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.usage_ledger import UsageLedger
-from app.providers.telephony.base import TelephonyProvisioningReviewRequired
+from app.models.usage_ledger import UsageLedger
 
+from tests.fakes import FakeTelephonyProvider, MockArqPool, ReviewRequiredTelephonyProvider
+
+
+@pytest.mark.anyio
+async def test_invalid_signature_is_rejected(
+    async_client,
+    stripe_subscription_created_payload,
+) -> None:
+    response = await async_client.post(
+        "/webhooks/stripe",
+        content=json.dumps(stripe_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
+        headers={"Stripe-Signature": "t=123,v1=invalid"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_unknown_event_type_returns_200_no_op(
+    async_client,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    payload = {**stripe_subscription_created_payload, "type": "unknown_event_type"}
+    response = await async_client.post(
+        "/webhooks/stripe",
+        content=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers=signed_stripe_headers_factory(payload),
+    )
+    assert response.status_code == 202
 
 @pytest.mark.anyio
 async def test_subscription_activation_provisions_usage_ledger(
@@ -29,19 +58,7 @@ async def test_subscription_activation_provisions_usage_ledger(
             await session.commit()
         await engine.dispose()
 
-    class FakeTelephonyProvider:
-        async def provision_number(self, *, country_code: str) -> dict:
-            return {
-                "e164": "+33123456789",
-                "provider_number_id": "pn_123",
-                "provider_connection_name": "app-active",
-            }
 
-        async def enable_number(self, *, provider_number_id: str) -> str:
-            return "app-active"
-
-        async def disable_number(self, *, provider_number_id: str) -> str:
-            return "app-disabled"
 
     async def fetch_numbers() -> list[PhoneNumber]:
         engine = create_async_engine(client_database_url, future=True)
@@ -57,15 +74,35 @@ async def test_subscription_activation_provisions_usage_ledger(
     from app.main import app
     from app.webhooks.stripe import get_telephony_provider
 
+
+
+    pool = MockArqPool()
+    app.state.arq_pool = pool
+
     app.dependency_overrides[get_telephony_provider] = lambda: FakeTelephonyProvider()
     response = await async_client.post(
         "/webhooks/stripe",
         content=json.dumps(stripe_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
         headers=signed_stripe_headers_factory(stripe_subscription_created_payload),
     )
-    app.dependency_overrides.pop(get_telephony_provider, None)
-
+    
     assert response.status_code == 202
+    
+    assert len(pool.enqueued_jobs) == 1
+    assert pool.enqueued_jobs[0][0] == "phone_provisioning_job"
+    
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    
+    await phone_provisioning_job({
+        "telephony_provider": FakeTelephonyProvider(),
+        "session_factory": session_factory
+    }, pool.enqueued_jobs[0][1])
+    
+    await engine.dispose()
+
     assert (await fetch_numbers())[0].e164 == "+33123456789"
 
 
@@ -174,22 +211,7 @@ async def test_subscription_activation_persists_subscription_and_support_notific
             await session.commit()
         await engine.dispose()
 
-    class ReviewRequiredTelephonyProvider:
-        async def provision_number(self, *, country_code: str) -> dict:
-            raise TelephonyProvisioningReviewRequired(
-                reason="no_affordable_number",
-                payload={
-                    "event": "phone_number_provisioning_review_required",
-                    "country_code": country_code,
-                    "contact_support": True,
-                },
-            )
 
-        async def enable_number(self, *, provider_number_id: str) -> str:
-            return "app-active"
-
-        async def disable_number(self, *, provider_number_id: str) -> str:
-            return "app-disabled"
 
     async def fetch_state() -> tuple[list[Subscription], list[Notification], list[UsageLedger], list[PhoneNumber]]:
         engine = create_async_engine(client_database_url, future=True)
@@ -207,13 +229,34 @@ async def test_subscription_activation_persists_subscription_and_support_notific
     from app.main import app
     from app.webhooks.stripe import get_telephony_provider
 
+
+
+    pool = MockArqPool()
+    app.state.arq_pool = pool
+
     app.dependency_overrides[get_telephony_provider] = lambda: ReviewRequiredTelephonyProvider()
     response = await async_client.post(
         "/webhooks/stripe",
         content=json.dumps(stripe_current_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
         headers=signed_stripe_headers_factory(stripe_current_subscription_created_payload),
     )
-    app.dependency_overrides.pop(get_telephony_provider, None)
+    
+    assert response.status_code == 202
+    
+    assert len(pool.enqueued_jobs) == 1
+    assert pool.enqueued_jobs[0][0] == "phone_provisioning_job"
+    
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    
+    await phone_provisioning_job({
+        "telephony_provider": ReviewRequiredTelephonyProvider(),
+        "session_factory": session_factory
+    }, pool.enqueued_jobs[0][1])
+    
+    await engine.dispose()
 
     subscriptions, notifications, ledgers, phone_numbers = await fetch_state()
 

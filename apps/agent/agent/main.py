@@ -13,6 +13,7 @@ from agent.event_publisher import EventPublisher
 from agent.pipeline_factory import build_agent_runtime
 from agent.pipeline_factory import _resolve_speechmatics_turn_detection_mode
 from agent.providers import PipelineMode
+from agent.schemas import DispatchMetadata
 from agent.session_runtime import SessionRuntime
 
 
@@ -58,7 +59,7 @@ async def _handle_sts_conversation_item_added(runtime: SessionRuntime, metadata:
         await runtime.handle_agent_utterance(metadata, text)
 
 
-def _register_standard_session_handlers(session, runtime: SessionRuntime, metadata: dict) -> None:
+def _register_standard_session_handlers(session, runtime: SessionRuntime, metadata: DispatchMetadata) -> None:
     def on_user_input_transcribed(event) -> None:
         asyncio.create_task(_handle_standard_user_input_transcribed(runtime, metadata, event))
 
@@ -69,26 +70,26 @@ def _register_standard_session_handlers(session, runtime: SessionRuntime, metada
     session.on("conversation_item_added", on_conversation_item_added)
 
 
-def _register_sts_session_handlers(session, runtime: SessionRuntime, metadata: dict) -> None:
+def _register_sts_session_handlers(session, runtime: SessionRuntime, metadata: DispatchMetadata) -> None:
     def on_conversation_item_added(event) -> None:
         asyncio.create_task(_handle_sts_conversation_item_added(runtime, metadata, event))
 
     session.on("conversation_item_added", on_conversation_item_added)
 
 
-def _register_session_handlers(session, runtime: SessionRuntime, metadata: dict) -> None:
-    if metadata.get("pipeline_mode", PipelineMode.STT_LLM_TTS.value) == PipelineMode.STS.value:
+def _register_session_handlers(session, runtime: SessionRuntime, metadata: DispatchMetadata) -> None:
+    if getattr(metadata, "pipeline_mode", PipelineMode.STT_LLM_TTS.value) == PipelineMode.STS.value:
         _register_sts_session_handlers(session, runtime, metadata)
         return
     _register_standard_session_handlers(session, runtime, metadata)
 
-async def _send_initial_greeting(session, metadata: dict) -> None:
+async def _send_initial_greeting(session, metadata: DispatchMetadata) -> None:
     greeting = (
-        f"Hello, I'm {metadata['agent_name']}, an AI assistant representing "
-        f"{metadata['owner_name']}. This call may be recorded. How can I help you?"
+        f"Hello, I'm {metadata.agent_name}, an AI assistant representing "
+        f"{metadata.owner_name}. This call may be recorded. How can I help you?"
     )
 
-    if metadata.get("pipeline_mode", PipelineMode.STT_LLM_TTS.value) == PipelineMode.STS.value:
+    if getattr(metadata, "pipeline_mode", PipelineMode.STT_LLM_TTS.value) == PipelineMode.STS.value:
         result = session.generate_reply(
             instructions=f'Start the conversation by saying exactly: "{greeting}"'
         )
@@ -100,14 +101,15 @@ async def _send_initial_greeting(session, metadata: dict) -> None:
 
 
 async def entrypoint(context: JobContext) -> None:
-    metadata = json.loads(context.job.metadata or "{}")
+    metadata_dict = json.loads(context.job.metadata or "{}")
+    metadata = DispatchMetadata.model_validate(metadata_dict)
     started_at = time.monotonic()
     await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
     await context.wait_for_participant()
 
     prewarmed = getattr(context.proc, "userdata", {}) or {}
     agent, session = build_agent_runtime(
-        metadata,
+        metadata_dict,
         vad=prewarmed.get("silero_vad"),
         inference_executor=context.inference_executor,
     )

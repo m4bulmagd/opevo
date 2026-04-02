@@ -7,6 +7,7 @@ from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.usage_repository import UsageRepository
 from app.services.notification_service import NotificationService
 from app.services.recording_service import RecordingService
+from app.providers.storage.s3 import get_s3_storage
 from app.services.summary_service import SummaryService
 from app.services.telephony_service import TelephonyService
 
@@ -40,7 +41,7 @@ class CallLifecycleService:
         self.phone_number_repository = PhoneNumberRepository(session)
         self.telephony_service = telephony_service or TelephonyService(session)
         self.summary_service = summary_service or SummaryService()
-        self.recording_service = recording_service or RecordingService()
+        self.recording_service = recording_service or RecordingService(provider=get_s3_storage())
         self.notification_service = notification_service or NotificationService(session)
 
     async def finalize_call(self, payload: dict) -> CallFinalizationResult:

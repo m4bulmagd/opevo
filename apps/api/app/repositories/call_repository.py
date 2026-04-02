@@ -14,11 +14,15 @@ class CallRepository:
     async def get_by_id(self, call_id: UUID) -> Call | None:
         return await self.session.get(Call, call_id)
 
-    async def list_visible_by_user_id(self, user_id: UUID) -> list[Call]:
+    async def list_visible_by_user_id(
+        self, user_id: UUID, *, limit: int = 100, offset: int = 0
+    ) -> list[Call]:
         result = await self.session.execute(
             select(Call)
             .where(Call.user_id == user_id, Call.deleted_at.is_(None))
             .order_by(Call.started_at.desc().nullslast(), Call.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
         return list(result.scalars())
 

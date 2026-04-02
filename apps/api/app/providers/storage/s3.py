@@ -1,5 +1,6 @@
 import asyncio
 import io
+from functools import lru_cache
 from urllib.parse import urlparse
 
 from app.core.config import get_settings
@@ -74,3 +75,8 @@ class S3Storage(StorageProvider):
             self.bucket_name,
             object_key,
         )
+
+
+@lru_cache()
+def get_s3_storage() -> S3Storage:
+    return S3Storage()

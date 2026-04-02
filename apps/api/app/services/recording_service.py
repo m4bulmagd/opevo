@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 from uuid import UUID
 
+from fastapi import Depends
+
 from app.providers.storage.base import StorageProvider
-from app.providers.storage.s3 import S3Storage
+from app.providers.storage.s3 import S3Storage, get_s3_storage
 
 
 @dataclass(frozen=True)
@@ -13,8 +15,8 @@ class RecordingResult:
 
 
 class RecordingService:
-    def __init__(self, provider: StorageProvider | None = None) -> None:
-        self.provider = provider or S3Storage()
+    def __init__(self, provider: StorageProvider) -> None:
+        self.provider = provider
 
     async def store_recording(self, payload: dict) -> RecordingResult:
         recording_bytes = payload.get("recording_bytes")
@@ -46,3 +48,9 @@ class RecordingService:
             return await self.provider.get_download_url(object_key=recording_object_key)
         except FileNotFoundError:
             return None
+
+
+def get_recording_service(
+    storage_provider: S3Storage = Depends(get_s3_storage),
+) -> RecordingService:
+    return RecordingService(provider=storage_provider)

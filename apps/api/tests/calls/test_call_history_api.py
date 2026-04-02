@@ -345,7 +345,7 @@ async def test_get_call_detail_mints_fresh_recording_url_from_object_key(
         db_session,
         recording_service=FakeRecordingService(),
     ).get_call_detail(
-        "user_calls",
+        call.user_id,
         call.id,
     )
 
@@ -373,7 +373,7 @@ async def test_get_call_detail_returns_null_recording_url_when_object_missing(
         db_session,
         recording_service=FakeMissingRecordingService(),
     ).get_call_detail(
-        "user_calls",
+        call.user_id,
         call.id,
     )
 

@@ -57,7 +57,7 @@ async def get_agent_config(
     service: AgentConfigService = Depends(get_agent_config_service),
 ) -> AgentConfigResponse:
     try:
-        config = await service.get_by_clerk_user_id(identity.user_id)
+        config = await service.get_by_user_id(identity.internal_user_id)
     except AgentConfigNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -73,8 +73,8 @@ async def patch_agent_config(
     service: AgentConfigService = Depends(get_agent_config_service),
 ) -> AgentConfigResponse:
     try:
-        config = await service.update_by_clerk_user_id(
-            identity.user_id,
+        config = await service.update_by_user_id(
+            identity.internal_user_id,
             payload.model_dump(exclude_none=True),
         )
     except AgentConfigNotFoundError as exc:

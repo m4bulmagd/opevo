@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.call_repository import CallRepository
 from app.repositories.message_repository import MessageRepository
-from app.repositories.user_repository import UserRepository
 from app.schemas.calls import (
     CallDetailResponse,
     CallHistoryListItem,
@@ -21,23 +20,19 @@ class CallHistoryService:
     def __init__(
         self,
         session: AsyncSession,
-        recording_service: RecordingService | None = None,
+        recording_service: RecordingService,
     ) -> None:
         self.session = session
-        self.user_repository = UserRepository(session)
         self.call_repository = CallRepository(session)
         self.message_repository = MessageRepository(session)
-        self.recording_service = recording_service or RecordingService()
+        self.recording_service = recording_service
 
-    async def _get_user_id(self, clerk_user_id: str):
-        user = await self.user_repository.get_by_clerk_user_id(clerk_user_id)
-        if user is None:
-            raise CallHistoryNotFoundError
-        return user.id
-
-    async def list_calls(self, clerk_user_id: str) -> list[CallHistoryListItem]:
-        user_id = await self._get_user_id(clerk_user_id)
-        calls = await self.call_repository.list_visible_by_user_id(user_id)
+    async def list_calls(
+        self, user_id: UUID, *, limit: int = 100, offset: int = 0
+    ) -> list[CallHistoryListItem]:
+        calls = await self.call_repository.list_visible_by_user_id(
+            user_id, limit=limit, offset=offset
+        )
         return [
             CallHistoryListItem(
                 id=call.id,
@@ -53,8 +48,7 @@ class CallHistoryService:
             for call in calls
         ]
 
-    async def get_call_detail(self, clerk_user_id: str, call_id: UUID) -> CallDetailResponse:
-        user_id = await self._get_user_id(clerk_user_id)
+    async def get_call_detail(self, user_id: UUID, call_id: UUID) -> CallDetailResponse:
         call = await self.call_repository.get_visible_by_id(call_id, user_id=user_id)
         if call is None:
             raise CallHistoryNotFoundError
@@ -89,8 +83,7 @@ class CallHistoryService:
             ],
         )
 
-    async def delete_call(self, clerk_user_id: str, call_id: UUID) -> None:
-        user_id = await self._get_user_id(clerk_user_id)
+    async def delete_call(self, user_id: UUID, call_id: UUID) -> None:
         call = await self.call_repository.get_visible_by_id(call_id, user_id=user_id)
         if call is None:
             raise CallHistoryNotFoundError

@@ -7,6 +7,7 @@ async def test_clerk_user_created_webhook_upserts_local_user(
     signed_clerk_headers,
     clerk_user_created_payload,
     clerk_user_created_payload_bytes,
+    client_database_url,
 ) -> None:
     response = await async_client.post(
         "/webhooks/clerk",
@@ -15,3 +16,18 @@ async def test_clerk_user_created_webhook_upserts_local_user(
     )
 
     assert response.status_code == 202
+
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from app.models.user import User
+
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        result = await session.execute(select(User).where(User.clerk_user_id == clerk_user_created_payload["data"]["id"]))
+        user = result.scalar_one_or_none()
+        
+    await engine.dispose()
+    
+    assert user is not None
+    assert user.email == clerk_user_created_payload["data"]["email_addresses"][0]["email_address"]

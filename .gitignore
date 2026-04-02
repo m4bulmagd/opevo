@@ -9,3 +9,6 @@ TechStack_BuildPlan.md
 .pytest_cache/
 .venv/
 __pycache__/
+.env
+.env.*
+!.env.example

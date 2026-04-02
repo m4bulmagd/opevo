@@ -6,6 +6,7 @@ Backend and agent monorepo for the AI Call Assistant MVP.
 
 - `apps/api`: FastAPI backend for auth, billing, telephony coordination, webhooks, realtime, and persistence.
 - `apps/agent`: LiveKit agent worker for prompt construction, provider selection, and call runtime execution.
+- `apps/web`: Next.js customer dashboard for onboarding, agent configuration, call review, and billing.
 
 ## Local Verification
 
@@ -21,6 +22,15 @@ UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -v
 ```bash
 cd apps/agent
 UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -v
+```
+
+### Web
+
+```bash
+cd apps/web
+npm run test -- --run
+npm run lint
+npm run build
 ```
 
 ## Docker Builds
@@ -39,6 +49,13 @@ cd apps/agent
 docker build -t ai-call-agent .
 ```
 
+### Web
+
+```bash
+cd apps/web
+docker build -t ai-call-web .
+```
+
 ## Local Infra
 
 Start the stateful dependencies first:
@@ -50,7 +67,7 @@ docker compose up -d postgres redis minio minio-init
 Deployment-like runtime launch:
 
 ```bash
-docker compose --profile app up --build api worker agent
+docker compose --profile app up --build api worker agent web
 ```
 
 ## Local Dev Overlay
@@ -62,9 +79,10 @@ docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker a
 ```
 
 What it does:
-- `api` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/api/app) and runs `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`
-- `worker` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/api/app) and runs `uv run arq app.workers.arq_worker.WorkerSettings`
-- `agent` bind-mounts [apps/agent/agent](/home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp/apps/agent/agent) and runs `python dev_runner.py`, which restarts the worker when Python files change
+- `api` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/apps/api/app) and runs `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`
+- `worker` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/apps/api/app) and runs `uv run arq app.workers.arq_worker.WorkerSettings`
+- `agent` bind-mounts [apps/agent/agent](/home/i933k/code/ai/bmad-opevo/apps/agent/agent) and runs `python dev_runner.py`, which restarts the worker when Python files change
+- `web` bind-mounts [apps/web](/home/i933k/code/ai/bmad-opevo/apps/web) and runs `npm run dev -- --hostname 0.0.0.0`
 
 Important limits:
 - Source edits reload automatically, but dependency changes still require rebuilding the image
@@ -74,8 +92,8 @@ Important limits:
 Useful commands:
 
 ```bash
-docker compose -f compose.yaml -f compose.dev.yaml --profile app logs -f api worker agent
-docker compose -f compose.yaml -f compose.dev.yaml --profile app restart api worker agent
+docker compose -f compose.yaml -f compose.dev.yaml --profile app logs -f api worker agent web
+docker compose -f compose.yaml -f compose.dev.yaml --profile app restart api worker agent web
 ```
 
 Live STT/LLM/TTS debug logs:
@@ -111,6 +129,8 @@ Core local endpoints:
 - MinIO bucket: `recordings`
 
 ## Staging Checklist
+
+For the current backend implementation and partial staging-smoke status, see [backend-context.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/backend-context.md). The checklist below is the intended smoke path, not a claim that every item is already complete.
 
 - [ ] API starts with real Postgres and Redis
 - [ ] Agent worker starts with real LiveKit credentials

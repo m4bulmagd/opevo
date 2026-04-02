@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
     call_finalization_pool = None
     if settings.app_env != "test":
         call_finalization_pool = await create_arq_pool()
+        app.state.arq_pool = call_finalization_pool
         app.state.call_finalization_queue = CallFinalizationQueue(call_finalization_pool)
         relay_task = asyncio.create_task(app.state.realtime_service.fanout_forever())
 
@@ -51,6 +53,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+settings = get_settings()
+if settings.cors_allowed_origins:
+    origins = [origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 app.include_router(agent_router)
 app.include_router(billing_router)
 app.include_router(calls_router)

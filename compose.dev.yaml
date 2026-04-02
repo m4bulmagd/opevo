@@ -20,3 +20,12 @@ services:
       - ./apps/agent/agent:/app/agent
       - ./apps/agent/dev_runner.py:/app/dev_runner.py
     command: ["uv", "run", "python", "dev_runner.py"]
+
+  web:
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+    command: >
+      sh -lc "npm install &&
+      exec npm run dev -- --hostname 0.0.0.0"

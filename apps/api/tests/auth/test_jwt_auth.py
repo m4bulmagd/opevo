@@ -9,7 +9,7 @@ def test_clerk_auth_provider_accepts_valid_rs256_token(
 ) -> None:
     identity = ClerkAuthProvider().verify_token(rs256_clerk_token_for("user_active"))
 
-    assert identity.user_id == "user_active"
+    assert identity.clerk_user_id == "user_active"
 
 
 def test_clerk_auth_provider_accepts_valid_rs256_token_via_jwks_url(
@@ -41,7 +41,7 @@ def test_clerk_auth_provider_accepts_valid_rs256_token_via_jwks_url(
         rs256_clerk_token_for("user_active")
     )
 
-    assert identity.user_id == "user_active"
+    assert identity.clerk_user_id == "user_active"
 
 
 @pytest.mark.anyio
