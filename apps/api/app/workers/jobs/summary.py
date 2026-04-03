@@ -1,8 +1,9 @@
+from app.providers.summaries.gemini import GeminiSummaryProvider
 from app.services.summary_service import SummaryService
 
 
 async def summary_job(ctx, payload: dict) -> dict:
-    result = await SummaryService().create_summary(payload)
+    result = await SummaryService(provider=GeminiSummaryProvider()).create_summary(payload)
     return {
         "summary_text": result.text,
         "summary_data": result.data,

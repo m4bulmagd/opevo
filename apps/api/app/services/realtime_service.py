@@ -25,8 +25,8 @@ class RealtimeService:
             return None
 
         identity = self.auth_provider.verify_token(message["token"])
-        await self.websocket_manager.connect(identity.user_id, websocket)
-        return identity.user_id
+        await self.websocket_manager.connect(identity.clerk_user_id, websocket)
+        return identity.clerk_user_id
 
     async def publish_call_started(self, user_id: str, *, room_name: str, call_id: str) -> None:
         await self.event_bus.publish_json(
