@@ -188,6 +188,31 @@ class FakeSession:
         self.commits += 1
 
 
+def build_dispatch_service(
+    session,
+    dispatch_client,
+    *,
+    phone_number_repository=None,
+    agent_config_repository=None,
+    call_repository=None,
+    user_repository=None,
+    usage_repository=None,
+    realtime_service=None,
+    recording_service=None,
+) -> LiveKitDispatchService:
+    return LiveKitDispatchService(
+        session,
+        dispatch_client,
+        phone_number_repository=phone_number_repository or FakePhoneNumberRepository(FakePhoneNumber(id=uuid4(), user_id=uuid4(), e164="+33000000000")),
+        agent_config_repository=agent_config_repository or FakeAgentConfigRepository(FakeAgentConfig(id=uuid4(), agent_name="A", owner_context=None, system_prompt="", knowledge_base="", pipeline_mode="stt_llm_tts")),
+        call_repository=call_repository or FakeCallRepository(call_id=uuid4()),
+        user_repository=user_repository or FakeUserRepository(FakeUser(id=uuid4(), full_name=None, email="x@x.com")),
+        usage_repository=usage_repository or FakeUsageRepository(),
+        realtime_service=realtime_service or FakeRealtimeService(),
+        recording_service=recording_service or FakeRecordingService(),
+    )
+
+
 @pytest.mark.anyio
 async def test_dispatch_service_includes_agent_runtime_configuration() -> None:
     user_id = uuid4()
@@ -205,17 +230,16 @@ async def test_dispatch_service_includes_agent_runtime_configuration() -> None:
     dispatch_client = FakeDispatchClient()
     realtime_service = FakeRealtimeService()
     session = FakeSession()
-    service = LiveKitDispatchService(
+    service = build_dispatch_service(
         session,
-        dispatch_client=dispatch_client,
+        dispatch_client,
+        phone_number_repository=FakePhoneNumberRepository(phone_number),
+        agent_config_repository=FakeAgentConfigRepository(agent_config),
+        call_repository=FakeCallRepository(call_id=uuid4()),
+        user_repository=FakeUserRepository(user),
+        usage_repository=FakeUsageRepository(),
         realtime_service=realtime_service,
-        recording_service=FakeRecordingService(),
     )
-    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
-    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
-    service.call_repository = FakeCallRepository(call_id=uuid4())
-    service.user_repository = FakeUserRepository(user)
-    service.usage_repository = FakeUsageRepository()
 
     await service.handle_participant_joined(
         {
@@ -258,17 +282,16 @@ async def test_dispatch_service_matches_called_number_with_formatting_variation(
     dispatch_client = FakeDispatchClient()
     realtime_service = FakeRealtimeService()
     session = FakeSession()
-    service = LiveKitDispatchService(
+    service = build_dispatch_service(
         session,
-        dispatch_client=dispatch_client,
+        dispatch_client,
+        phone_number_repository=FakePhoneNumberRepository(phone_number),
+        agent_config_repository=FakeAgentConfigRepository(agent_config),
+        call_repository=FakeCallRepository(call_id=uuid4()),
+        user_repository=FakeUserRepository(user),
+        usage_repository=FakeUsageRepository(),
         realtime_service=realtime_service,
-        recording_service=FakeRecordingService(),
     )
-    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
-    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
-    service.call_repository = FakeCallRepository(call_id=uuid4())
-    service.user_repository = FakeUserRepository(user)
-    service.usage_repository = FakeUsageRepository()
 
     await service.handle_participant_joined(
         {
@@ -303,22 +326,19 @@ async def test_dispatch_service_persists_recording_metadata_when_egress_starts()
     user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
 
     dispatch_client = FakeDispatchClient()
-    realtime_service = FakeRealtimeService()
     recording_service = FakeRecordingService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
     call_repository.call.user_id = user_id
-    service = LiveKitDispatchService(
+    service = build_dispatch_service(
         session,
-        dispatch_client=dispatch_client,
-        realtime_service=realtime_service,
+        dispatch_client,
+        phone_number_repository=FakePhoneNumberRepository(phone_number),
+        agent_config_repository=FakeAgentConfigRepository(agent_config),
+        call_repository=call_repository,
+        user_repository=FakeUserRepository(user),
         recording_service=recording_service,
     )
-    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
-    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
-    service.call_repository = call_repository
-    service.user_repository = FakeUserRepository(user)
-    service.usage_repository = FakeUsageRepository()
 
     await service.handle_participant_joined(
         {
@@ -369,17 +389,16 @@ async def test_dispatch_service_does_not_start_recording_for_sip_join() -> None:
     recording_service = FakeRecordingService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
-    service = LiveKitDispatchService(
+    service = build_dispatch_service(
         session,
-        dispatch_client=dispatch_client,
+        dispatch_client,
+        phone_number_repository=FakePhoneNumberRepository(phone_number),
+        agent_config_repository=FakeAgentConfigRepository(agent_config),
+        call_repository=call_repository,
+        user_repository=FakeUserRepository(user),
         realtime_service=realtime_service,
         recording_service=recording_service,
     )
-    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
-    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
-    service.call_repository = call_repository
-    service.user_repository = FakeUserRepository(user)
-    service.usage_repository = FakeUsageRepository()
 
     await service.handle_participant_joined(
         {
@@ -417,22 +436,19 @@ async def test_dispatch_service_skips_agent_join_when_recording_already_started(
     user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
 
     dispatch_client = FakeDispatchClient()
-    realtime_service = FakeRealtimeService()
     recording_service = FakeRecordingService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
     call_repository.call.recording_egress_id = "egress_existing"
-    service = LiveKitDispatchService(
+    service = build_dispatch_service(
         session,
-        dispatch_client=dispatch_client,
-        realtime_service=realtime_service,
+        dispatch_client,
+        phone_number_repository=FakePhoneNumberRepository(phone_number),
+        agent_config_repository=FakeAgentConfigRepository(agent_config),
+        call_repository=call_repository,
+        user_repository=FakeUserRepository(user),
         recording_service=recording_service,
     )
-    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
-    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
-    service.call_repository = call_repository
-    service.user_repository = FakeUserRepository(user)
-    service.usage_repository = FakeUsageRepository()
 
     await service.handle_participant_joined(
         {
@@ -453,19 +469,16 @@ async def test_dispatch_service_skips_agent_join_when_recording_already_started(
 
 @pytest.mark.anyio
 async def test_dispatch_service_stops_recording_when_sip_participant_leaves() -> None:
-    dispatch_client = FakeDispatchClient()
-    realtime_service = FakeRealtimeService()
     recording_service = FakeRecordingService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
     call_repository.call.recording_egress_id = "egress_123"
-    service = LiveKitDispatchService(
+    service = build_dispatch_service(
         session,
-        dispatch_client=dispatch_client,
-        realtime_service=realtime_service,
+        FakeDispatchClient(),
+        call_repository=call_repository,
         recording_service=recording_service,
     )
-    service.call_repository = call_repository
 
     await service.handle_participant_left(
         {
@@ -487,18 +500,15 @@ async def test_dispatch_service_stops_recording_when_sip_participant_leaves() ->
 
 @pytest.mark.anyio
 async def test_dispatch_service_continues_when_recording_stop_fails() -> None:
-    dispatch_client = FakeDispatchClient()
-    realtime_service = FakeRealtimeService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
     call_repository.call.recording_egress_id = "egress_123"
-    service = LiveKitDispatchService(
+    service = build_dispatch_service(
         session,
-        dispatch_client=dispatch_client,
-        realtime_service=realtime_service,
+        FakeDispatchClient(),
+        call_repository=call_repository,
         recording_service=FakeFailingStopRecordingService(),
     )
-    service.call_repository = call_repository
 
     await service.handle_participant_left(
         {
@@ -533,21 +543,18 @@ async def test_dispatch_service_continues_when_recording_egress_fails() -> None:
     user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
 
     dispatch_client = FakeDispatchClient()
-    realtime_service = FakeRealtimeService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
     call_repository.call.user_id = user_id
-    service = LiveKitDispatchService(
+    service = build_dispatch_service(
         session,
-        dispatch_client=dispatch_client,
-        realtime_service=realtime_service,
+        dispatch_client,
+        phone_number_repository=FakePhoneNumberRepository(phone_number),
+        agent_config_repository=FakeAgentConfigRepository(agent_config),
+        call_repository=call_repository,
+        user_repository=FakeUserRepository(user),
         recording_service=FakeFailingRecordingService(),
     )
-    service.phone_number_repository = FakePhoneNumberRepository(phone_number)
-    service.agent_config_repository = FakeAgentConfigRepository(agent_config)
-    service.call_repository = call_repository
-    service.user_repository = FakeUserRepository(user)
-    service.usage_repository = FakeUsageRepository()
 
     await service.handle_participant_joined(
         {

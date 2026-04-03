@@ -2,8 +2,8 @@ import json
 
 from agent.config import get_settings
 
-# SHARED CONTRACT — apps/api/app/core/redis.py uses the same prefix.
-# Update both if changing.
+# SHARED CONTRACT — apps/api/app/core/redis.py and
+# libs/shared/constants.py use the same prefix. Update all if changing.
 REALTIME_CHANNEL_PREFIX = "realtime:user:"
 
 

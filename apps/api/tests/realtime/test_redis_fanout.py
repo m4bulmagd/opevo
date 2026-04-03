@@ -1,5 +1,6 @@
 import pytest
 
+from app.core.auth import ClerkAuthProvider
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import WebSocketManager
 
@@ -28,7 +29,11 @@ class FakeWebSocket:
 @pytest.mark.anyio
 async def test_realtime_service_publishes_call_started_into_event_bus() -> None:
     event_bus = FakeEventBus()
-    service = RealtimeService(event_bus=event_bus)
+    service = RealtimeService(
+        auth_provider=ClerkAuthProvider(),
+        event_bus=event_bus,
+        websocket_manager=WebSocketManager(),
+    )
 
     await service.publish_call_started("user_123", room_name="room-1", call_id="call-1")
 
@@ -54,7 +59,11 @@ async def test_realtime_service_relays_bus_events_to_connected_websockets() -> N
             )
         ]
     )
-    service = RealtimeService(event_bus=event_bus, websocket_manager=manager)
+    service = RealtimeService(
+        auth_provider=ClerkAuthProvider(),
+        event_bus=event_bus,
+        websocket_manager=manager,
+    )
 
     await service.fanout_once()
 

@@ -26,6 +26,7 @@ class S3Storage(StorageProvider):
         self.secret_key = secret_key or settings.s3_secret_key
         self.region = region or settings.s3_region
         self.client = client
+        self._bucket_verified = False
 
     def _build_client(self):
         from minio import Minio
@@ -47,8 +48,11 @@ class S3Storage(StorageProvider):
         return self.client
 
     def _ensure_bucket_exists(self, client) -> None:
+        if self._bucket_verified:
+            return
         if not client.bucket_exists(self.bucket_name):
             client.make_bucket(self.bucket_name)
+        self._bucket_verified = True
 
     async def upload_bytes(self, *, object_key: str, data: bytes, content_type: str) -> StoredObject:
         client = self._get_client()

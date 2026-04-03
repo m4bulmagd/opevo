@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -6,10 +7,12 @@ from app.repositories.message_repository import MessageRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.usage_repository import UsageRepository
 from app.services.notification_service import NotificationService
-from app.services.recording_service import RecordingService
-from app.providers.storage.s3 import get_s3_storage
+from app.services.recording_service import RecordingResult, RecordingService
 from app.services.summary_service import SummaryService
 from app.services.telephony_service import TelephonyService
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -29,20 +32,24 @@ class CallLifecycleService:
         self,
         session,
         *,
-        telephony_service: TelephonyService | None = None,
-        summary_service: SummaryService | None = None,
-        recording_service: RecordingService | None = None,
-        notification_service: NotificationService | None = None,
+        call_repository: CallRepository,
+        message_repository: MessageRepository,
+        usage_repository: UsageRepository,
+        phone_number_repository: PhoneNumberRepository,
+        telephony_service: TelephonyService,
+        summary_service: SummaryService,
+        recording_service: RecordingService,
+        notification_service: NotificationService,
     ) -> None:
         self.session = session
-        self.call_repository = CallRepository(session)
-        self.message_repository = MessageRepository(session)
-        self.usage_repository = UsageRepository(session)
-        self.phone_number_repository = PhoneNumberRepository(session)
-        self.telephony_service = telephony_service or TelephonyService(session)
-        self.summary_service = summary_service or SummaryService()
-        self.recording_service = recording_service or RecordingService(provider=get_s3_storage())
-        self.notification_service = notification_service or NotificationService(session)
+        self.call_repository = call_repository
+        self.message_repository = message_repository
+        self.usage_repository = usage_repository
+        self.phone_number_repository = phone_number_repository
+        self.telephony_service = telephony_service
+        self.summary_service = summary_service
+        self.recording_service = recording_service
+        self.notification_service = notification_service
 
     async def finalize_call(self, payload: dict) -> CallFinalizationResult:
         call_id = UUID(payload["call_id"])
@@ -66,7 +73,13 @@ class CallLifecycleService:
             )
 
         summary_result = await self.summary_service.create_summary(payload)
-        recording_result = await self.recording_service.store_recording(payload)
+
+        try:
+            recording_result = await self.recording_service.store_recording(payload)
+        except Exception:
+            logger.exception("recording upload failed for call %s", call_id)
+            recording_result = RecordingResult(object_key=None, url=None, job_enqueued=False)
+
         await self.message_repository.create_many(
             call_id=call.id,
             transcript=payload.get("transcript") or [],
@@ -101,7 +114,11 @@ class CallLifecycleService:
         if number_disabled:
             phone_number = await self.phone_number_repository.get_by_user_id(payload["user_id"])
             if phone_number is not None:
-                await self.telephony_service.disable_number(payload["user_id"])
+                try:
+                    await self.telephony_service.disable_number(payload["user_id"])
+                except Exception:
+                    logger.exception("failed to disable number for user %s", payload["user_id"])
+                    number_disabled = False
 
         await self.session.commit()
 

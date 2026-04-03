@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TranscriptLineRequest(BaseModel):
@@ -13,7 +13,7 @@ class AgentCallCompletionRequest(BaseModel):
     user_id: UUID
     duration_seconds: int
     minutes_remaining: int
-    transcript: list[TranscriptLineRequest] = []
+    transcript: list[TranscriptLineRequest] = Field(default=[], max_length=2000)
     caller_number: str | None = None
     recording_bytes_base64: str | None = None
 

@@ -52,14 +52,17 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, clerk_key_material: dict[str, 
 
     from app.core.config import get_settings
     from app.core.database import get_engine, get_session_factory
+    from app.core.redis import get_redis_client
 
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+    get_redis_client.cache_clear()
     yield
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+    get_redis_client.cache_clear()
 
 
 @pytest.fixture

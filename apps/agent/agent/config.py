@@ -4,7 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class AgentSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     # LiveKit
     livekit_url: str | None = None
@@ -25,6 +27,10 @@ class AgentSettings(BaseSettings):
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id: str = "ODq5zmih8GrVes37Dizd"
     deepgram_api_key: str | None = None
+
+    # API client
+    api_timeout_seconds: float = 10.0
+    api_max_retries: int = 3
 
     # Agent behavior
     agent_debug_streams: bool = False

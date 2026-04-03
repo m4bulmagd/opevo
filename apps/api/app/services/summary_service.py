@@ -16,8 +16,8 @@ class SummaryResult:
 
 
 class SummaryService:
-    def __init__(self, provider: SummaryProvider | None = None) -> None:
-        self.provider = provider or self._build_default_provider()
+    def __init__(self, provider: SummaryProvider) -> None:
+        self.provider = provider
 
     async def create_summary(self, payload: dict) -> SummaryResult:
         transcript = self._normalize_transcript(payload.get("transcript") or [])

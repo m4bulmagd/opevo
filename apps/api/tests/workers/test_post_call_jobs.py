@@ -8,6 +8,11 @@ from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.notification import Notification
 from app.models.phone_number import PhoneNumber
+from app.repositories.call_repository import CallRepository
+from app.repositories.message_repository import MessageRepository
+from app.repositories.notification_repository import NotificationRepository
+from app.repositories.phone_number_repository import PhoneNumberRepository
+from app.repositories.usage_repository import UsageRepository
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.notification_service import NotificationService
 from app.services.recording_service import RecordingService
@@ -69,6 +74,30 @@ def build_structured_summary_service() -> FakeStructuredSummaryService:
     return FakeStructuredSummaryService()
 
 
+def build_lifecycle_service(
+    session,
+    *,
+    summary_service=None,
+    recording_service=None,
+    notification_service=None,
+    telephony_service=None,
+) -> CallLifecycleService:
+    return CallLifecycleService(
+        session,
+        call_repository=CallRepository(session),
+        message_repository=MessageRepository(session),
+        usage_repository=UsageRepository(session),
+        phone_number_repository=PhoneNumberRepository(session),
+        telephony_service=telephony_service or TelephonyService(session, provider=FakeTelephonyProvider()),
+        summary_service=summary_service or build_structured_summary_service(),
+        recording_service=recording_service or RecordingService(provider=FakeStorageProvider()),
+        notification_service=notification_service or NotificationService(
+            provider=FakeNotificationProvider(),
+            notification_repository=NotificationRepository(session),
+        ),
+    )
+
+
 @pytest.mark.anyio
 async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, active_user) -> None:
     call = Call(
@@ -80,12 +109,7 @@ async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, acti
     db_session.add(call)
     await db_session.commit()
 
-    service = CallLifecycleService(
-        db_session,
-        summary_service=build_structured_summary_service(),
-        recording_service=RecordingService(provider=FakeStorageProvider()),
-        notification_service=NotificationService(db_session, provider=FakeNotificationProvider()),
-    )
+    service = build_lifecycle_service(db_session)
 
     result = await service.finalize_call(
         {
@@ -146,12 +170,7 @@ async def test_call_completion_persists_structured_summary_data(
     db_session.add(call)
     await db_session.commit()
 
-    service = CallLifecycleService(
-        db_session,
-        summary_service=FakeStructuredSummaryService(),
-        recording_service=RecordingService(provider=FakeStorageProvider()),
-        notification_service=NotificationService(db_session, provider=FakeNotificationProvider()),
-    )
+    service = build_lifecycle_service(db_session)
 
     result = await service.finalize_call(
         {
@@ -185,11 +204,12 @@ async def test_call_completion_records_failed_notification_but_still_completes(
     db_session.add(call)
     await db_session.commit()
 
-    service = CallLifecycleService(
+    service = build_lifecycle_service(
         db_session,
-        summary_service=build_structured_summary_service(),
-        recording_service=RecordingService(provider=FakeStorageProvider()),
-        notification_service=NotificationService(db_session, provider=FakeFailingNotificationProvider()),
+        notification_service=NotificationService(
+            provider=FakeFailingNotificationProvider(),
+            notification_repository=NotificationRepository(db_session),
+        ),
     )
 
     result = await service.finalize_call(
@@ -229,11 +249,9 @@ async def test_call_completion_continues_when_summary_generation_fails(
     db_session.add(call)
     await db_session.commit()
 
-    service = CallLifecycleService(
+    service = build_lifecycle_service(
         db_session,
         summary_service=FakeFailingSummaryService(),
-        recording_service=RecordingService(provider=FakeStorageProvider()),
-        notification_service=NotificationService(db_session, provider=FakeNotificationProvider()),
     )
 
     result = await service.finalize_call(
@@ -275,11 +293,8 @@ async def test_call_finalization_job_skips_duplicate_completed_call(
     monkeypatch.setattr(call_finalization_module, "get_session_factory", lambda: session_factory)
     monkeypatch.setattr(
         call_finalization_module,
-        "CallLifecycleService",
-        lambda session: CallLifecycleService(
-            session,
-            summary_service=build_structured_summary_service(),
-        ),
+        "_build_lifecycle_service",
+        lambda session: build_lifecycle_service(session),
     )
 
     payload = {
@@ -338,14 +353,7 @@ async def test_minute_exhaustion_disables_number(db_session, active_user) -> Non
     db_session.add(phone_number)
     await db_session.commit()
 
-    telephony_service = TelephonyService(db_session, provider=FakeTelephonyProvider())
-    service = CallLifecycleService(
-        db_session,
-        telephony_service=telephony_service,
-        summary_service=build_structured_summary_service(),
-        recording_service=RecordingService(provider=FakeStorageProvider()),
-        notification_service=NotificationService(db_session, provider=FakeNotificationProvider()),
-    )
+    service = build_lifecycle_service(db_session)
 
     result = await service.finalize_call(
         {

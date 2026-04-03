@@ -1,22 +1,21 @@
 from fastapi import WebSocket
 
-from app.core.auth import AuthProvider, ClerkAuthProvider
+from app.core.auth import AuthProvider
 from app.core.redis import RedisEventBus
-from app.websockets.manager import manager
 from app.websockets.manager import WebSocketManager
 
 
 class RealtimeService:
     def __init__(
         self,
-        auth_provider: AuthProvider | None = None,
+        auth_provider: AuthProvider,
         *,
-        event_bus: RedisEventBus | None = None,
-        websocket_manager: WebSocketManager | None = None,
+        event_bus: RedisEventBus,
+        websocket_manager: WebSocketManager,
     ) -> None:
-        self.auth_provider = auth_provider or ClerkAuthProvider()
-        self.event_bus = event_bus or RedisEventBus()
-        self.websocket_manager = websocket_manager or manager
+        self.auth_provider = auth_provider
+        self.event_bus = event_bus
+        self.websocket_manager = websocket_manager
 
     async def authenticate(self, websocket: WebSocket) -> str | None:
         message = await websocket.receive_json()

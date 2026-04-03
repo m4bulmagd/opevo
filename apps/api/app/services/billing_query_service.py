@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,8 +48,10 @@ class BillingQueryService:
         )
 
     async def get_usage_snapshot(self, user_id: UUID | str) -> UsageSnapshotResponse:
-        subscription = await self.subscription_repository.get_by_user_id(user_id)
-        minutes_remaining = await self.usage_repository.get_current_balance(user_id=user_id)
+        subscription, minutes_remaining = await asyncio.gather(
+            self.subscription_repository.get_by_user_id(user_id),
+            self.usage_repository.get_current_balance(user_id=user_id),
+        )
 
         if subscription is None:
             return UsageSnapshotResponse(

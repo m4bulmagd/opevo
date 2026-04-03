@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -14,6 +15,9 @@ class RecordingResult:
     job_enqueued: bool
 
 
+logger = logging.getLogger(__name__)
+
+
 class RecordingService:
     def __init__(self, provider: StorageProvider) -> None:
         self.provider = provider
@@ -24,11 +28,15 @@ class RecordingService:
             return RecordingResult(object_key=None, url=None, job_enqueued=False)
 
         object_key = f"calls/{payload['user_id']}/{payload['call_id']}.mp3"
-        stored_object = await self.provider.upload_bytes(
-            object_key=object_key,
-            data=recording_bytes,
-            content_type="audio/mpeg",
-        )
+        try:
+            stored_object = await self.provider.upload_bytes(
+                object_key=object_key,
+                data=recording_bytes,
+                content_type="audio/mpeg",
+            )
+        except Exception:
+            logger.exception("recording storage failed for call %s", payload.get("call_id"))
+            return RecordingResult(object_key=None, url=None, job_enqueued=False)
         return RecordingResult(
             object_key=stored_object.object_key,
             url=stored_object.url,

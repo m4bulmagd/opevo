@@ -11,6 +11,7 @@ from app.core.database import get_session
 from app.providers.telephony.telnyx import get_telephony_provider
 from app.schemas.agent import AgentConfigPatchRequest, AgentConfigResponse
 from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionResponse
+from app.repositories.agent_config_repository import AgentConfigRepository
 from app.services.agent_config_service import (
     AgentConfigNotFoundError,
     AgentConfigPhoneNumberNotFoundError,
@@ -47,6 +48,7 @@ def get_agent_config_service(
 ) -> AgentConfigService:
     return AgentConfigService(
         session,
+        agent_config_repository=AgentConfigRepository(session),
         telephony_service=TelephonyService(session, provider=telephony_provider),
     )
 

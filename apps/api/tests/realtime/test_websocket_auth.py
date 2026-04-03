@@ -1,6 +1,9 @@
 import pytest
 
+from app.core.auth import ClerkAuthProvider
+from app.core.redis import RedisEventBus
 from app.services.realtime_service import RealtimeService
+from app.websockets.manager import WebSocketManager
 
 
 class FakeWebSocket:
@@ -22,7 +25,12 @@ class FakeWebSocket:
 async def test_websocket_requires_auth_message_before_events() -> None:
     websocket = FakeWebSocket()
 
-    result = await RealtimeService().authenticate(websocket)
+    service = RealtimeService(
+        auth_provider=ClerkAuthProvider(),
+        event_bus=RedisEventBus(),
+        websocket_manager=WebSocketManager(),
+    )
+    result = await service.authenticate(websocket)
 
     assert result is None
     assert websocket.sent_messages == [{"type": "error", "detail": "auth_required"}]

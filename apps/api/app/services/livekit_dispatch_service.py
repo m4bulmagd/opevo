@@ -21,18 +21,24 @@ class LiveKitDispatchService:
         self,
         session: AsyncSession,
         dispatch_client,
-        realtime_service: RealtimeService | None = None,
-        recording_service: LiveKitRecordingService | None = None,
+        *,
+        phone_number_repository: PhoneNumberRepository,
+        agent_config_repository: AgentConfigRepository,
+        call_repository: CallRepository,
+        user_repository: UserRepository,
+        usage_repository: UsageRepository,
+        realtime_service: RealtimeService,
+        recording_service: LiveKitRecordingService,
     ) -> None:
         self.session = session
         self.dispatch_client = dispatch_client
-        self.phone_number_repository = PhoneNumberRepository(session)
-        self.agent_config_repository = AgentConfigRepository(session)
-        self.call_repository = CallRepository(session)
-        self.user_repository = UserRepository(session)
-        self.usage_repository = UsageRepository(session)
-        self.realtime_service = realtime_service or RealtimeService()
-        self.recording_service = recording_service or LiveKitRecordingService()
+        self.phone_number_repository = phone_number_repository
+        self.agent_config_repository = agent_config_repository
+        self.call_repository = call_repository
+        self.user_repository = user_repository
+        self.usage_repository = usage_repository
+        self.realtime_service = realtime_service
+        self.recording_service = recording_service
 
     async def handle_participant_joined(self, event: dict) -> None:
         participant = event.get("participant", {})

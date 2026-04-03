@@ -11,7 +11,7 @@ class TelephonyService:
         self.provider = provider or TelephonyTelnyx()
         self.phone_number_repository = PhoneNumberRepository(session)
 
-    async def provision_number(self, user_id, *, country_code: str, commit: bool = True):
+    async def provision_number(self, user_id, *, country_code: str):
         existing_number = await self.phone_number_repository.get_by_user_id(user_id)
         if existing_number is not None:
             return existing_number
@@ -25,13 +25,10 @@ class TelephonyService:
             provider_connection_name=provisioned["provider_connection_name"],
             is_active=provisioned["provider_connection_name"] == "app-active",
         )
-        if commit:
-            await self.session.commit()
-        else:
-            await self.session.flush()
+        await self.session.flush()
         return phone_number
 
-    async def enable_number(self, user_id, *, commit: bool = True):
+    async def enable_number(self, user_id):
         phone_number = await self.phone_number_repository.get_by_user_id(user_id)
         if phone_number is None:
             raise ValueError("Phone number not found")
@@ -40,13 +37,10 @@ class TelephonyService:
             provider_number_id=phone_number.provider_number_id
         )
         phone_number.is_active = phone_number.provider_connection_name == "app-active"
-        if commit:
-            await self.session.commit()
-        else:
-            await self.session.flush()
+        await self.session.flush()
         return phone_number
 
-    async def disable_number(self, user_id, *, commit: bool = True):
+    async def disable_number(self, user_id):
         phone_number = await self.phone_number_repository.get_by_user_id(user_id)
         if phone_number is None:
             raise ValueError("Phone number not found")
@@ -55,8 +49,5 @@ class TelephonyService:
             provider_number_id=phone_number.provider_number_id
         )
         phone_number.is_active = False
-        if commit:
-            await self.session.commit()
-        else:
-            await self.session.flush()
+        await self.session.flush()
         return phone_number

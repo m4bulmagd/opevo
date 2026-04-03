@@ -20,6 +20,13 @@ from agent.session_runtime import SessionRuntime
 logger = logging.getLogger(__name__)
 
 
+async def _safe_task(coro) -> None:
+    try:
+        await coro
+    except Exception:
+        logger.exception("unhandled error in background event handler")
+
+
 def _register_inference_runners() -> None:
     if get_settings().livekit_turn_detector_enabled:
         importlib.import_module("livekit.plugins.turn_detector.multilingual")
@@ -61,10 +68,10 @@ async def _handle_sts_conversation_item_added(runtime: SessionRuntime, metadata:
 
 def _register_standard_session_handlers(session, runtime: SessionRuntime, metadata: DispatchMetadata) -> None:
     def on_user_input_transcribed(event) -> None:
-        asyncio.create_task(_handle_standard_user_input_transcribed(runtime, metadata, event))
+        asyncio.create_task(_safe_task(_handle_standard_user_input_transcribed(runtime, metadata, event)))
 
     def on_conversation_item_added(event) -> None:
-        asyncio.create_task(_handle_standard_conversation_item_added(runtime, metadata, event))
+        asyncio.create_task(_safe_task(_handle_standard_conversation_item_added(runtime, metadata, event)))
 
     session.on("user_input_transcribed", on_user_input_transcribed)
     session.on("conversation_item_added", on_conversation_item_added)
@@ -72,7 +79,7 @@ def _register_standard_session_handlers(session, runtime: SessionRuntime, metada
 
 def _register_sts_session_handlers(session, runtime: SessionRuntime, metadata: DispatchMetadata) -> None:
     def on_conversation_item_added(event) -> None:
-        asyncio.create_task(_handle_sts_conversation_item_added(runtime, metadata, event))
+        asyncio.create_task(_safe_task(_handle_sts_conversation_item_added(runtime, metadata, event)))
 
     session.on("conversation_item_added", on_conversation_item_added)
 

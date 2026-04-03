@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator
+from functools import lru_cache
 
 from arq import create_pool
 from arq.connections import ArqRedis
@@ -8,11 +9,12 @@ from redis.asyncio import Redis
 
 from app.core.config import get_settings
 
-# SHARED CONTRACT — apps/agent/agent/event_publisher.py uses the same prefix.
-# Update both if changing.
+# SHARED CONTRACT — apps/agent/agent/event_publisher.py and
+# libs/shared/constants.py use the same prefix. Update all if changing.
 REALTIME_CHANNEL_PREFIX = "realtime:user:"
 
 
+@lru_cache
 def get_redis_client() -> Redis:
     settings = get_settings()
     return Redis.from_url(settings.redis_url, decode_responses=True)

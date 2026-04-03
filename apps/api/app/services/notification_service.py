@@ -13,9 +13,13 @@ class NotificationResult:
 
 
 class NotificationService:
-    def __init__(self, session, provider: NotificationProvider | None = None) -> None:
-        self.provider = provider or FirebaseNotificationProvider()
-        self.notification_repository = NotificationRepository(session)
+    def __init__(
+        self,
+        provider: NotificationProvider,
+        notification_repository: NotificationRepository,
+    ) -> None:
+        self.provider = provider
+        self.notification_repository = notification_repository
 
     async def create_call_completed_notification(
         self,
