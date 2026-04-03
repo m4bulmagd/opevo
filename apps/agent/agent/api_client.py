@@ -33,7 +33,8 @@ class AgentApiClient:
             raise ValueError("AGENT_INTERNAL_API_TOKEN is required")
 
         url = f"{self.base_url}/api/agent/calls/{payload['call_id']}/complete"
-        headers = {"x-agent-token": self.agent_token}
+        token = payload.get("dispatch_token") or self.agent_token
+        headers = {"x-agent-token": token}
         body = {
             "user_id": payload["user_id"],
             "duration_seconds": payload["duration_seconds"],

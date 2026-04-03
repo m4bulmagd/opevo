@@ -15,6 +15,7 @@ class DispatchMetadata(BaseModel):
     pipeline_mode: str | None = None
     minutes_remaining: int = 0
     caller_number: str | None = None
+    dispatch_token: str | None = None
 
 
 class CallTranscriptItem(BaseModel):

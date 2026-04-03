@@ -62,8 +62,11 @@ class SessionRuntime:
                 caller_number=metadata.caller_number,
                 transcript=self.transcript,
             )
+            call_payload = payload.model_dump()
+            if metadata.dispatch_token:
+                call_payload["dispatch_token"] = metadata.dispatch_token
             try:
-                await self.api_client.complete_call(payload.model_dump())
+                await self.api_client.complete_call(call_payload)
             except Exception:
                 logger.exception(
                     "failed to complete call %s after retries", metadata.call_id,

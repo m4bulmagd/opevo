@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import UserIdentity, require_user_identity
 from app.core.config import get_settings
 from app.core.database import get_session
+from app.core.dispatch_token import verify_dispatch_token
 from app.providers.telephony.telnyx import get_telephony_provider
 from app.schemas.agent import AgentConfigPatchRequest, AgentConfigResponse
 from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionResponse
@@ -25,8 +26,21 @@ from app.workers.call_finalization_queue import CallFinalizationQueue
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 
-async def require_agent_internal_token(x_agent_token: str = Header(...)) -> None:
+async def require_agent_auth(
+    call_id: UUID | None = None,
+    x_agent_token: str = Header(...),
+) -> None:
     settings = get_settings()
+
+    # Try dispatch JWT first (scoped to call_id)
+    if call_id is not None and settings.agent_dispatch_jwt_secret:
+        try:
+            verify_dispatch_token(x_agent_token, expected_call_id=str(call_id))
+            return
+        except Exception:
+            pass
+
+    # Fallback to static token
     expected_token = settings.agent_internal_api_token
     if not expected_token or not hmac.compare_digest(x_agent_token, expected_token):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
@@ -105,7 +119,7 @@ async def patch_agent_config(
 async def complete_call(
     call_id: UUID,
     payload: AgentCallCompletionRequest,
-    _: None = Depends(require_agent_internal_token),
+    _: None = Depends(require_agent_auth),
     queue: CallFinalizationQueue = Depends(get_call_finalization_queue),
 ) -> AgentCallCompletionResponse:
     recording_bytes = (

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.rate_limit import limiter
 
 from app.core.auth import UserIdentity, require_user_identity
 from app.core.database import get_session
@@ -71,7 +73,9 @@ async def get_usage_ledger(
 
 
 @router.post("/checkout-session", response_model=HostedSessionResponse)
+@limiter.limit("10/minute")
 async def create_checkout_session(
+    request: Request,
     payload: CheckoutSessionRequest,
     identity: UserIdentity = Depends(require_user_identity),
     service: BillingSessionService = Depends(get_billing_session_service),
@@ -107,7 +111,9 @@ async def create_checkout_session(
 
 
 @router.post("/portal-session", response_model=HostedSessionResponse)
+@limiter.limit("10/minute")
 async def create_portal_session(
+    request: Request,
     payload: PortalSessionRequest,
     identity: UserIdentity = Depends(require_user_identity),
     service: BillingSessionService = Depends(get_billing_session_service),

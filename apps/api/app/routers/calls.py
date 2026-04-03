@@ -1,8 +1,10 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.rate_limit import limiter
 
 from app.core.auth import UserIdentity, require_user_identity
 from app.core.database import get_session
@@ -22,7 +24,9 @@ def get_call_history_service(
 
 
 @router.get("", response_model=CallHistoryListResponse)
+@limiter.limit("60/minute")
 async def list_calls(
+    request: Request,
     identity: UserIdentity = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_history_service),
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
@@ -33,7 +37,9 @@ async def list_calls(
 
 
 @router.get("/{call_id}", response_model=CallDetailResponse)
+@limiter.limit("60/minute")
 async def get_call(
+    request: Request,
     call_id: UUID,
     identity: UserIdentity = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_history_service),

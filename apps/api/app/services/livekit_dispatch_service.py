@@ -3,6 +3,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.dispatch_token import create_dispatch_token
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository, normalize_phone_number
@@ -141,6 +142,10 @@ class LiveKitDispatchService:
             livekit_room_id=room_name,
             caller_number=caller_number,
         )
+        dispatch_token = create_dispatch_token(
+            call_id=str(call.id),
+            user_id=str(phone_number.user_id),
+        )
         metadata = LiveKitDispatchMetadata(
             user_id=str(phone_number.user_id),
             agent_config_id=str(agent_config.id),
@@ -154,6 +159,7 @@ class LiveKitDispatchService:
             system_prompt=agent_config.system_prompt,
             knowledge_base=agent_config.knowledge_base,
             pipeline_mode=agent_config.pipeline_mode,
+            dispatch_token=dispatch_token,
         )
         await self.dispatch_client.create_dispatch(
             room_name=room_name,

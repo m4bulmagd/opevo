@@ -14,3 +14,4 @@ class LiveKitDispatchMetadata(BaseModel):
     system_prompt: str
     knowledge_base: str
     pipeline_mode: str
+    dispatch_token: str | None = None

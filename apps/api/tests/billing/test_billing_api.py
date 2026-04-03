@@ -1,10 +1,22 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
 
 from app.core.auth import UserIdentity
+
+
+def _fake_request():
+    """Minimal request-like object for rate-limited endpoints called directly."""
+    req = SimpleNamespace()
+    req.client = SimpleNamespace(host="127.0.0.1")
+    req.state = SimpleNamespace()
+    req.scope = {"type": "http"}
+    req.url = SimpleNamespace(path="/test")
+    req.app = SimpleNamespace(state=SimpleNamespace(limiter=None))
+    return req
 from app.schemas.billing_api import UsageLedgerEntryResponse, UsageLedgerListResponse, UsageSnapshotResponse
 
 
@@ -128,6 +140,7 @@ async def test_create_checkout_session_returns_url() -> None:
     from app.schemas.billing_api import CheckoutSessionRequest
 
     response = await create_checkout_session(
+        request=_fake_request(),
         payload=CheckoutSessionRequest(plan_tier="starter"),
         identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
         service=FakeBillingSessionService(),
@@ -145,6 +158,7 @@ async def test_create_checkout_session_rejects_active_subscription() -> None:
 
     with pytest.raises(HTTPException) as exc_info:
         await create_checkout_session(
+            request=_fake_request(),
             payload=CheckoutSessionRequest(plan_tier="starter"),
             identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
             service=FakeBillingSessionService(),
@@ -161,6 +175,7 @@ async def test_create_portal_session_returns_url() -> None:
     from app.schemas.billing_api import PortalSessionRequest
 
     response = await create_portal_session(
+        request=_fake_request(),
         payload=PortalSessionRequest(return_url="https://app.example.com/settings"),
         identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
         service=FakeBillingSessionService(),
@@ -177,6 +192,7 @@ async def test_create_portal_session_rejects_missing_customer() -> None:
 
     with pytest.raises(HTTPException) as exc_info:
         await create_portal_session(
+            request=_fake_request(),
             payload=PortalSessionRequest(return_url="https://app.example.com/settings"),
             identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
             service=FakeBillingSessionService(),
