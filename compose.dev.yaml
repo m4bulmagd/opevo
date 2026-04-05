@@ -22,10 +22,13 @@ services:
     command: ["uv", "run", "python", "dev_runner.py"]
 
   web:
+    environment:
+      NODE_ENV: development
+      NODE_OPTIONS: --max-old-space-size=4096
     volumes:
       - ./apps/web:/app
       - /app/node_modules
       - /app/.next
     command: >
-      sh -lc "npm install &&
-      exec npm run dev -- --hostname 0.0.0.0"
+      sh -lc "npm install --include=dev &&
+      exec npm run dev -- --hostname 0.0.0.0 --webpack"

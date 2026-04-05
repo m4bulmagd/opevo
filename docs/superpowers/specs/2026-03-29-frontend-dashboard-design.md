@@ -2,7 +2,9 @@
 
 ## Goal
 
-Add the first customer-facing frontend for the AI Call Assistant MVP as a single authenticated dashboard app. The initial product should help end customers get their AI phone agent live quickly, then transition into day-to-day operation without feeling like onboarding and operations are separate products.
+Rebuild the customer-facing frontend as a new `apps/web` Next.js dashboard that uses the `dashboard-temp` template as its structural and visual foundation while serving this product's actual customer workflows.
+
+The result should feel like the template was adapted into the product, not like a separate custom dashboard was designed from scratch.
 
 ## Users
 
@@ -15,51 +17,91 @@ Primary jobs:
 - get the agent configured and live
 - monitor recent calls, summaries, and recordings
 - update agent behavior safely
-- understand remaining usage and subscription state
+- understand usage and subscription state
 
 ## Product Direction
 
-The frontend should feel:
+The frontend should keep the template's strengths:
 
-- calm and trustworthy
-- premium and sharp
+- persistent sidebar application shell
+- clean shadcn-based surfaces
+- preset-driven theme system
+- light and dark mode support
+- responsive dashboard behavior
+- crisp spacing and card rhythm
 
-The design should avoid generic SaaS dashboard patterns. The interface should read as an operational control surface with guided activation, not a wall of interchangeable cards.
+The frontend should not introduce a second competing design language. Product-specific screens should inherit the template's layout grammar, color tokens, typography defaults, and interaction patterns.
+
+## Template Alignment
+
+The rebuild should explicitly align to `dashboard-temp` in these ways:
+
+- keep the frontend rooted at `apps/web`
+- use a `src/` app structure inside `apps/web`
+- keep Next.js 16 App Router conventions used by the template
+- keep Biome as the primary formatter and linter
+- keep shadcn/ui primitives and the template's sidebar/header composition
+- keep the built-in preference model for theme mode, theme preset, layout width, navbar style, and sidebar behavior
+- keep the bundled theme presets available
+
+The rebuild should explicitly differ from `dashboard-temp` in these ways:
+
+- remove demo dashboards, placeholder pages, and unrelated sample data
+- replace template navigation with product navigation
+- replace template demo content with product data from the backend
+- keep auth and app routes focused on this product only
 
 ## Scope
 
 This slice adds:
 
-- a new authenticated frontend app
-- an adaptive home route that prioritizes setup before activation and operations after activation
-- customer-facing screens for calls, agent configuration, and billing
-- integration with the existing backend contracts for agent config, call history, and billing
+- a fresh `apps/web` frontend app
+- the template shell adapted to customer product routes
+- an authenticated `/dashboard` experience for `Home`, `Calls`, `Agent`, and `Billing`
+- Clerk-based auth integration in the frontend
+- backend integration for agent config, call history, and billing
+- template-preserving theme and layout controls inside the dashboard
 
 This slice does not add:
 
-- internal admin tooling
 - a public marketing site as the primary deliverable
-- frontend features that require backend contracts not already implemented
+- internal admin tooling
+- product-specific theme token redesign beyond template presets
+- features that need backend APIs not already implemented
 
-## Recommended Stack
+## App Location And Stack
+
+Frontend app location:
+
+- `apps/web`
+
+Recommended stack:
 
 - Next.js App Router
 - TypeScript
-- Tailwind CSS
-- Clerk for auth in the frontend
+- Tailwind CSS v4
+- shadcn/ui
+- Biome
+- Clerk
+- Vitest and React Testing Library
 
-## Product Shape
+## Route Shape
 
-The frontend should be one authenticated app with a stable navigation model and a home route that changes by account state.
+Primary product routes:
 
-Primary routes:
+- `/dashboard`
+- `/dashboard/calls`
+- `/dashboard/calls/[callId]`
+- `/dashboard/agent`
+- `/dashboard/billing`
 
-- `/app`
-- `/app/calls`
-- `/app/agent`
-- `/app/billing`
+Supporting routes:
 
-The home route should behave as the command center for both first-run activation and ongoing operations.
+- `/sign-in`
+- `/sign-up`
+- `/unauthorized`
+
+The template shell should wrap the authenticated `/dashboard` area, but the user-facing route prefix should remain `/dashboard`.
 
 ## Information Architecture
 
@@ -70,49 +112,81 @@ Primary navigation:
 - `Agent`
 - `Billing`
 
-### `/app` for first-run customers
+Sidebar behavior:
 
-The home screen should be dominated by a setup checklist until the agent is live.
+- use the template's persistent sidebar system
+- preserve inset sidebar behavior and collapsible states
+- map sidebar items directly to product routes
+- avoid filler groups or coming-soon sections in the first release
+
+Header behavior:
+
+- preserve the template-style top bar
+- keep theme and layout controls
+- keep a user/account control tied to Clerk
+- remove demo-only controls that do not support product use
+
+## Theme And Visual Rules
+
+The product should respect the template style, colors, and theme system.
+
+Required rules:
+
+- keep the template `default` preset as the initial default
+- keep `brutalist`, `soft-pop`, and `tangerine` available as selectable presets
+- keep the template light, dark, and system theme modes
+- keep the template's spacing, radii, shadows, and card treatment unless a product requirement forces a deviation
+- reuse template CSS variables instead of inventing a new token layer for this slice
+- reuse template typography defaults before introducing custom font changes
+
+This means product screens can be adapted, but they should still look native beside the template shell and controls.
+
+## Screen Composition
+
+The product should use the template's dashboard composition style: sidebar shell, compact top bar, and content areas built from cards, lists, and split-density sections.
+
+### `/dashboard`
+
+The home route should remain the command center, but it should be built with template-native composition:
+
+- top summary row for current operational state
+- primary activity column for setup or recent call activity
+- secondary column for compact context such as agent status and usage
+
+#### First-run state
 
 Key modules:
 
-- status hero showing readiness state
-- guided setup sequence
-- compact agent snapshot
-- quiet empty-state placeholder for calls until history exists
+- readiness summary card
+- staged setup checklist
+- agent snapshot card
+- quiet empty state for calls
 
-The setup sequence should cover:
-
-- naming the agent
-- adding owner or business context
-- choosing `pipeline_mode`
-- enabling the agent
-
-### `/app` for active customers
-
-Once the agent is live, the same home route should shift to operations.
+#### Active state
 
 Key modules:
 
-- current enabled or disabled state
-- recent calls with summary snippets
-- quick access to latest recordings when available
-- shortcuts into agent settings and full call history
-- compact usage and subscription summary
+- recent calls list
+- concise status and readiness cards
+- quick links into agent settings and billing
+- compact usage summary
 
-### `/app/calls`
+### `/dashboard/calls`
 
-This route should expose the implemented call-history surface:
+This route should use template-native list/detail presentation:
 
-- list view from `GET /api/calls`
-- detail view for one call from `GET /api/calls/{call_id}`
-- transcript display
-- recording access when `recording_url` is available
-- soft-delete action using `DELETE /api/calls/{call_id}`
+- call list built from the existing backend API
+- clear status chips and timestamps
+- call detail page for transcript and recording review
+- archive action framed as removal from the active view
 
-### `/app/agent`
+Avoid modal-heavy review flows. Dedicated page transitions are the better match here.
 
-This route should expose the editable agent configuration:
+### `/dashboard/agent`
+
+This route should use a form-driven settings page with shadcn fields and grouped cards.
+
+Editable fields:
 
 - `agent_name`
 - `owner_context`
@@ -121,131 +195,78 @@ This route should expose the editable agent configuration:
 - `pipeline_mode`
 - `is_enabled`
 
-The enable toggle should be treated as a consequential operational action because the backend synchronously switches telephony routing.
+The enable toggle is a consequential action and should have guarded pending, success, and failure states.
 
-### `/app/billing`
+### `/dashboard/billing`
 
-This route should expose:
+This route should use compact finance-style cards and lists:
 
-- current subscription state
+- subscription state
 - usage snapshot
-- recent usage ledger activity
-- hosted Stripe checkout flow for unsubscribed users
-- hosted Stripe billing portal flow for subscribed users
-
-## Screen Composition
-
-The visual layout should use a calm editorial structure rather than repetitive equal-sized cards.
-
-Recommended composition for `/app`:
-
-- top band with page identity and live-state indicator
-- wide main column for the dominant workflow
-- narrower supporting column for compact operational context
-
-### First-run home composition
-
-Main column:
-
-- staged setup flow with one clear next action
-- each completed setup step collapses into a short summary row
-- final enable action with explicit pending, success, and failure states
-
-Supporting column:
-
-- agent snapshot
-- runtime mode
-- readiness summary
-
-### Active home composition
-
-Main column:
-
-- recent call activity
-- summary-first list items
-- clear path into call detail
-
-Supporting column:
-
-- agent enabled state
-- quick actions
-- minutes remaining
-- subscription summary
-
-## Interaction Design
-
-The app should feel operationally crisp and trustworthy.
-
-Interaction rules:
-
-- avoid modals for core call detail
-- use dedicated pages or split views for transcript and recording review
-- use guarded pending state for `is_enabled` changes instead of false optimism
-- allow low-risk fields to autosave only if the UX remains legible
-- prefer explicit save for prompt-heavy fields such as `system_prompt` and `knowledge_base`
-- phrase delete as archival or removal from view because the backend soft-deletes calls
+- recent usage ledger items
+- checkout action for unsubscribed users
+- billing portal action for subscribed users
 
 ## Backend Alignment
 
-The frontend should align to current implemented backend contracts rather than assumed future APIs.
+The frontend should align to current backend contracts.
 
 ### Agent config
 
-Use the authenticated agent config API documented in:
+Use:
 
 - [`docs/architecture/agent-config-api.md`](/home/i933k/code/ai/bmad-opevo/docs/architecture/agent-config-api.md)
 
 ### Calls
 
-Use the authenticated call-history API documented in:
+Use:
 
 - [`docs/architecture/call-history-api.md`](/home/i933k/code/ai/bmad-opevo/docs/architecture/call-history-api.md)
 
 ### Billing
 
-Use the authenticated billing and usage API documented in:
+Use:
 
 - [`docs/architecture/billing-usage-api.md`](/home/i933k/code/ai/bmad-opevo/docs/architecture/billing-usage-api.md)
 
 ## State Handling
 
-The frontend should treat missing backend state as normal first-run conditions where appropriate.
-
 Expected behavior:
 
-- auth gate all app routes
-- treat missing or uninitialized config state as setup-needed, not app-failure
-- render zero-usage billing states as valid starter states
-- render empty calls as a teaching state, not a blank screen
-- surface `409` enable failures as actionable setup issues
-- surface `502` enable failures as temporary telephony problems
-- handle `recording_url = null` as an expired-retention or unavailable-recording state
+- auth gate all `/dashboard` routes
+- treat missing config as first-run setup state
+- treat empty calls as a valid teaching state
+- treat zero usage as a valid starter billing state
+- handle `recording_url = null` as unavailable or expired recording state
+- surface agent enable failures clearly, especially `409` and `502` style failures
 
 ## Responsive Behavior
 
-The app should remain fully usable on mobile widths.
+The rebuild should preserve the template's responsive dashboard behavior.
 
 Responsive expectations:
 
-- home screen collapses from two columns into one without hiding critical actions
-- calls list keeps summary and status readable on small screens
-- agent config editing remains practical on touch devices
-- navigation should adapt, not amputate
+- sidebar collapses cleanly on smaller widths
+- top bar controls remain usable on touch devices
+- `/dashboard` home layout collapses to one column without hiding key actions
+- calls list remains readable on mobile
+- agent forms remain practical on smaller screens
+- billing cards stack without losing action clarity
 
 ## Testing
 
-The first frontend build should include coverage for:
+The first frontend rebuild should include coverage for:
 
 - authenticated route protection
-- adaptive home behavior for first-run and activated users
+- template shell rendering on product routes
+- theme and preference controls persisting expected state
+- adaptive `/dashboard` behavior for first-run and active users
 - agent config hydration, save flow, and enable-toggle failure states
 - calls list empty and populated states
-- call detail transcript rendering
-- missing or expired recording state
+- call detail transcript and recording rendering
 - billing usage snapshot rendering
-- hosted Stripe checkout and billing portal action handling
-- mobile-width layout behavior on the primary screens
+- hosted checkout and billing portal actions
 
 ## Recommendation
 
-Build the first frontend as a single authenticated customer dashboard with a setup-led home experience that evolves into an operating surface after activation. This best matches the product priority of making both “get live quickly” and “operate confidently” first-class outcomes without splitting the experience into separate applications or disjoint flows.
+Rebuild the frontend as a fresh `apps/web` app that keeps the product IA on `/dashboard` while adopting the `dashboard-temp` template's shell, theme system, and visual language as the actual foundation. This gives the product a stronger starting point, avoids repeating the discarded custom dashboard direction, and keeps future work aligned with a stable template architecture.

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import get_session
 from app.repositories.user_repository import UserRepository
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -106,6 +109,23 @@ async def require_user_identity(
     try:
         identity = auth_provider.verify_token(credentials.credentials)
     except jwt.PyJWTError as exc:
+        try:
+            unverified_payload = jwt.decode(
+                credentials.credentials,
+                options={"verify_signature": False, "verify_exp": False, "verify_aud": False},
+                algorithms=["RS256"],
+            )
+        except Exception:
+            unverified_payload = {"decode_error": "unable to inspect token"}
+
+        logger.warning(
+            "Rejected Clerk token: error=%s iss=%r aud=%r azp=%r sub=%r",
+            str(exc),
+            unverified_payload.get("iss"),
+            unverified_payload.get("aud"),
+            unverified_payload.get("azp"),
+            unverified_payload.get("sub"),
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
     user = await UserRepository(session).get_by_clerk_user_id(identity.clerk_user_id)

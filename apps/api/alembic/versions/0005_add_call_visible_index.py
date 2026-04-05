@@ -8,6 +8,7 @@ Create Date: 2026-04-03 12:00:00
 from collections.abc import Sequence
 
 from alembic import op
+import sqlalchemy as sa
 
 
 revision: str = "0005_add_call_visible_index"
@@ -20,7 +21,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_calls_user_visible",
         "calls",
-        ["user_id", op.desc("started_at")],
+        ["user_id", sa.text("started_at DESC")],
         postgresql_where="deleted_at IS NULL",
     )
 

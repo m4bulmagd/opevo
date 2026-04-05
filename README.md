@@ -28,10 +28,13 @@ UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -v
 
 ```bash
 cd apps/web
+npm install
 npm run test -- --run
 npm run lint
 npm run build
 ```
+
+For local web development, start from [apps/web/.env.example](/home/i933k/code/ai/bmad-opevo/apps/web/.env.example). The Docker `web` service reads `apps/web/.env`, and local `npm run dev` can also use `.env.local` if you prefer. The dashboard builds without Clerk keys, but hosted auth and protected data only work when `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` are configured.
 
 ## Docker Builds
 
@@ -70,12 +73,17 @@ Deployment-like runtime launch:
 docker compose --profile app up --build api worker agent web
 ```
 
+The web container uses:
+- `API_BASE_URL=http://api:8000` for server-side requests inside the Compose network
+- `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` for browser-visible URLs
+- `NEXT_PUBLIC_APP_URL=http://localhost:3000` for billing return URLs and app links
+
 ## Local Dev Overlay
 
 For faster iteration without rebuilding containers on every code change, use the dev overlay:
 
 ```bash
-docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker agent
+docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker agent web
 ```
 
 What it does:
@@ -83,6 +91,11 @@ What it does:
 - `worker` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/apps/api/app) and runs `uv run arq app.workers.arq_worker.WorkerSettings`
 - `agent` bind-mounts [apps/agent/agent](/home/i933k/code/ai/bmad-opevo/apps/agent/agent) and runs `python dev_runner.py`, which restarts the worker when Python files change
 - `web` bind-mounts [apps/web](/home/i933k/code/ai/bmad-opevo/apps/web) and runs `npm run dev -- --hostname 0.0.0.0`
+
+Frontend-specific notes:
+- The dashboard keeps the template shell, colors, and theme presets: `default`, `brutalist`, `soft-pop`, and `tangerine`
+- Product routes live under `/dashboard`, `/dashboard/calls`, `/dashboard/agent`, and `/dashboard/billing`
+- Without Clerk env vars, the UI renders setup notices instead of the hosted sign-in flow
 
 Important limits:
 - Source edits reload automatically, but dependency changes still require rebuilding the image
