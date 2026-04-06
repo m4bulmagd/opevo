@@ -31,6 +31,10 @@ const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 
+type ClientCookieStore = {
+  set: (options: { name: string; value: string; expires?: number | Date; path?: string }) => Promise<void>
+}
+
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
   open: boolean
@@ -50,6 +54,23 @@ function useSidebar() {
   }
 
   return context
+}
+
+function persistSidebarCookie(openState: boolean) {
+  const cookieStore = (window as Window & { cookieStore?: ClientCookieStore }).cookieStore
+
+  if (cookieStore) {
+    void cookieStore.set({
+      name: SIDEBAR_COOKIE_NAME,
+      value: String(openState),
+      expires: Date.now() + SIDEBAR_COOKIE_MAX_AGE * 1000,
+      path: "/",
+    })
+    return
+  }
+
+  // biome-ignore lint/suspicious/noDocumentCookie: Cookie Store API is not available in every supported browser yet.
+  document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
 }
 
 function SidebarProvider({
@@ -81,8 +102,8 @@ function SidebarProvider({
         _setOpen(openState)
       }
 
-      // This sets the cookie to keep the sidebar state.
-      document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+      // Keep the sidebar state persisted for the next visit.
+      persistSidebarCookie(openState)
     },
     [setOpenProp, open]
   )

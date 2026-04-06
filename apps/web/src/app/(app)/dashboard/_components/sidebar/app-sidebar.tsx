@@ -24,7 +24,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarMenuButton asChild>
               <Link prefetch={false} href="/dashboard">
                 <Command />
-                <span className="font-semibold text-base">AI Call Assistant</span>
+                <span className="font-semibold text-base">Presvo</span>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>

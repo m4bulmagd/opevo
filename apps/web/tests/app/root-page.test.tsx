@@ -1,10 +1,21 @@
+import type { AnchorHTMLAttributes } from "react";
+
+import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const redirectMock = vi.fn();
 const getServerSessionStateMock = vi.fn();
 
-vi.mock("next/navigation", () => ({
-  redirect: redirectMock,
+vi.mock("next/link", () => ({
+  default: ({
+    children,
+    href,
+    prefetch: _prefetch,
+    ...props
+  }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
+    <a href={href} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("@/lib/auth/server-session", () => ({
@@ -13,25 +24,29 @@ vi.mock("@/lib/auth/server-session", () => ({
 
 describe("root page", () => {
   beforeEach(() => {
-    redirectMock.mockReset();
     getServerSessionStateMock.mockReset();
   });
 
-  it("sends signed-out users to sign-in", async () => {
+  it("shows landing-page auth actions to signed-out users", async () => {
     getServerSessionStateMock.mockResolvedValue({ isAuthenticated: false });
 
     const { default: Page } = await import("@/app/page");
-    await Page();
+    render(await Page());
 
-    expect(redirectMock).toHaveBeenCalledWith("/sign-in");
+    expect(screen.getByRole("link", { name: /^Presvo$/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /Log in/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /Sign up/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: /Dashboard/i })).not.toBeInTheDocument();
   });
 
-  it("sends signed-in users to /dashboard", async () => {
+  it("shows dashboard actions to signed-in users", async () => {
     getServerSessionStateMock.mockResolvedValue({ isAuthenticated: true });
 
     const { default: Page } = await import("@/app/page");
-    await Page();
+    render(await Page());
 
-    expect(redirectMock).toHaveBeenCalledWith("/dashboard");
+    expect(screen.getAllByRole("link", { name: /Dashboard/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: /Log in/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Sign up/i })).not.toBeInTheDocument();
   });
 });

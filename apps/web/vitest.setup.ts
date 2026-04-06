@@ -20,3 +20,19 @@ Object.defineProperty(window, "matchMedia", {
     dispatchEvent: () => false,
   }),
 });
+
+const canvasContext2DMock = {
+  beginPath: vi.fn(),
+  fillRect: vi.fn(),
+  lineTo: vi.fn(),
+  moveTo: vi.fn(),
+  stroke: vi.fn(),
+  fillStyle: "",
+  lineWidth: 1,
+  strokeStyle: "",
+};
+
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  writable: true,
+  value: vi.fn(() => canvasContext2DMock),
+});

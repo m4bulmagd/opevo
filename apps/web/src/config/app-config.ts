@@ -3,12 +3,12 @@ import packageJson from "../../package.json";
 const currentYear = new Date().getFullYear();
 
 export const APP_CONFIG = {
-  name: "AI Call Assistant",
+  name: "Presvo",
   version: packageJson.version,
-  copyright: `© ${currentYear}, AI Call Assistant.`,
+  copyright: `© ${currentYear}, Presvo.`,
   meta: {
-    title: "AI Call Assistant",
+    title: "Presvo",
     description:
-      "Customer dashboard for managing agent setup, calls, configuration, and billing with the dashboard template shell.",
+      "Presvo helps professional individuals and small businesses manage AI voice agents, call review, configuration, and billing.",
   },
 };
