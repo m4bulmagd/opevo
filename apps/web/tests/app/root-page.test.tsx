@@ -31,12 +31,14 @@ describe("root page", () => {
     getServerSessionStateMock.mockResolvedValue({ isAuthenticated: false });
 
     const { default: Page } = await import("@/app/page");
-    render(await Page());
+    const { container } = render(await Page());
 
     expect(screen.getByRole("link", { name: /^Presvo$/i })).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: /Log in/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: /Sign up/i }).length).toBeGreaterThan(0);
     expect(screen.queryByRole("link", { name: /Dashboard/i })).not.toBeInTheDocument();
+    expect(container.querySelector("[data-motion='stagger']")).not.toBeNull();
+    expect(container.querySelectorAll("[data-motion='fade-up']").length).toBeGreaterThan(3);
   });
 
   it("shows dashboard actions to signed-in users", async () => {
