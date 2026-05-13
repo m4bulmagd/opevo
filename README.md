@@ -8,6 +8,19 @@ Backend and agent monorepo for the AI Call Assistant MVP.
 - `apps/agent`: LiveKit agent worker for prompt construction, provider selection, and call runtime execution.
 - `apps/web`: Next.js customer dashboard for onboarding, agent configuration, call review, and billing.
 
+## Self-Serve France Launch Contract
+
+The current MVP scope is intentionally narrow:
+
+- France-only self-serve onboarding
+- one paid plan: `starter`
+- one launch pipeline: `stt_llm_tts`
+- automatic French number provisioning after the first fresh paid Stripe invoice
+- required agent setup before routing can be enabled
+- visible onboarding status in the dashboard with assigned number display and manual retry for retryable provisioning failures
+
+Anything outside that contract, especially additional plans or `sts`, should be treated as post-MVP work until the real self-serve path is verified in staging.
+
 ## Local Verification
 
 ### API
@@ -71,6 +84,12 @@ Deployment-like runtime launch:
 
 ```bash
 docker compose --profile app up --build api worker agent web
+```
+
+The core app stack can also be started without the web container when you only need the backend and agent services:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker agent
 ```
 
 The web container uses:
@@ -143,7 +162,7 @@ Core local endpoints:
 
 ## Staging Checklist
 
-For the current backend implementation and partial staging-smoke status, see [backend-context.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/backend-context.md). The checklist below is the intended smoke path, not a claim that every item is already complete.
+For the current backend implementation and partial staging-smoke status, see [backend-context.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/backend-context.md). The checklist below is the intended France self-serve smoke path, not a claim that every item is already complete.
 
 - [ ] API starts with real Postgres and Redis
 - [ ] Agent worker starts with real LiveKit credentials
@@ -151,4 +170,10 @@ For the current backend implementation and partial staging-smoke status, see [ba
 - [ ] Stripe webhook resets minutes
 - [ ] Telnyx number can be provisioned
 - [ ] LiveKit dispatch reaches the agent
-- [ ] Post-call summary, recording metadata, notification persistence, and usage deduction complete successfully
+- [ ] New Clerk user signs up and reaches the dashboard
+- [ ] User starts the `starter` Stripe checkout flow
+- [ ] First fresh `invoice.paid` activates the subscription and enqueues France number provisioning
+- [ ] A French number is assigned automatically and shown in onboarding status
+- [ ] User completes agent setup and enables routing without staff intervention
+- [ ] LiveKit dispatch reaches the agent for the assigned number
+- [ ] One real inbound call persists transcript, summary, recording metadata, and minute deduction

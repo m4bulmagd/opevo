@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import type { AgentConfig } from "@/lib/types/agent";
+import type { OnboardingStatus } from "@/lib/types/onboarding";
 
 type ChecklistStep = {
   title: string;
@@ -13,33 +14,41 @@ type ChecklistStep = {
   complete: boolean;
 };
 
-function getChecklistSteps(agentConfig: AgentConfig | null): ChecklistStep[] {
+function getChecklistSteps(agentConfig: AgentConfig | null, onboardingStatus: OnboardingStatus): ChecklistStep[] {
   return [
     {
-      title: "Name your agent",
-      description: "Give the assistant a clear public-facing identity.",
-      complete: Boolean(agentConfig?.agent_name?.trim()),
+      title: "Activate billing",
+      description: "Subscribe to the starter plan to unlock automatic number provisioning.",
+      complete: onboardingStatus.subscription_status === "active",
     },
     {
-      title: "Add business context",
-      description: "Provide owner context or a lightweight knowledge base.",
-      complete: Boolean(agentConfig?.owner_context?.trim() || agentConfig?.knowledge_base?.trim()),
+      title: "Provision your French number",
+      description: "Wait for the app to assign your live number before you enable routing.",
+      complete: onboardingStatus.phone_number_status === "ready",
     },
     {
-      title: "Choose a voice pipeline",
-      description: "Confirm whether this workspace should run STT/LLM/TTS or STS mode.",
-      complete: Boolean(agentConfig?.pipeline_mode),
+      title: "Finish agent setup",
+      description: "Add a non-default agent name, business context, and prompt or knowledge base.",
+      complete:
+        onboardingStatus.agent_setup_complete &&
+        Boolean(agentConfig?.agent_name?.trim() && agentConfig.owner_context?.trim()),
     },
     {
       title: "Enable your agent",
-      description: "Switch routing live once the rest of the setup feels safe.",
-      complete: Boolean(agentConfig?.is_enabled),
+      description: "Switch routing live only after billing, number assignment, and setup are all complete.",
+      complete: onboardingStatus.routing_enabled,
     },
   ];
 }
 
-export function SetupChecklist({ agentConfig }: { agentConfig: AgentConfig | null }) {
-  const steps = getChecklistSteps(agentConfig);
+export function SetupChecklist({
+  agentConfig,
+  onboardingStatus,
+}: {
+  agentConfig: AgentConfig | null;
+  onboardingStatus: OnboardingStatus;
+}) {
+  const steps = getChecklistSteps(agentConfig, onboardingStatus);
   const completeCount = steps.filter((step) => step.complete).length;
 
   return (
@@ -49,7 +58,7 @@ export function SetupChecklist({ agentConfig }: { agentConfig: AgentConfig | nul
           <Sparkles className="size-4 text-muted-foreground" />
           Setup checklist
         </CardTitle>
-        <CardDescription>Move through the essentials before switching your number routing live.</CardDescription>
+        <CardDescription>Move through the self-serve launch steps before switching your number routing live.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex items-center justify-between rounded-lg border border-dashed px-4 py-3">

@@ -4,11 +4,18 @@ This document captures implementation notes and staging verification for the bac
 
 ## Current State
 
+- Self-serve France MVP implementation is now in place locally: the launch contract is France-only, `starter`-only, `stt_llm_tts`-only, and onboarding-first.
 - Chunk 1 foundation implemented: app scaffold, config, schema, repositories, and Clerk auth sync.
 - Chunk 2 core API paths implemented: Stripe billing webhook, telephony service boundary, authenticated websocket gate, and LiveKit inbound dispatch webhook.
 - Chunk 3 initial agent and post-call layers implemented: provider registry, prompt builder, worker entrypoint scaffold, and post-call lifecycle scaffolding.
+- Stripe activation for self-serve onboarding now happens on the first fresh `invoice.paid` instead of `customer.subscription.created`, so subscription activation, minute allocation, and provisioning are tied to a paid invoice.
+- Billing checkout is narrowed to the `starter` plan at the API and web layers.
+- Phone provisioning now has a durable `phone_number_provisionings` record with retryability, failure reason, linked number, and France-only enforcement.
+- Onboarding status now exposes `subscription_status`, `plan_tier`, `minutes_remaining`, `phone_number`, `phone_number_status`, `routing_enabled`, `agent_setup_complete`, `overall_status`, and `can_retry_provisioning` through `GET /api/onboarding`, plus `POST /api/onboarding/retry-provisioning`.
 - Agent config API now exposes authenticated read/update of the editable runtime fields through `GET /api/agent/config` and `PATCH /api/agent/config`.
 - `PATCH /api/agent/config` now treats `is_enabled` as a synchronous telephony toggle, switching the assigned Telnyx number between `app-active` and `app-disabled` in the same request and rolling the config change back if the provider update fails.
+- New Clerk users now get a persisted default `agent_configs` row automatically, and `GET /api/agent/config` no longer depends on a frontend-synthesized fallback object.
+- `PATCH /api/agent/config` now enforces self-serve readiness gates before enabling routing: active paid subscription, successful France provisioning, assigned number readiness, and complete agent setup.
 - Contract details and usage examples for that surface are documented in [agent-config-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/agent-config-api.md).
 - Call history API now exposes `GET /api/calls`, `GET /api/calls/{call_id}`, and `DELETE /api/calls/{call_id}` for authenticated users.
 - User-facing call delete is now a soft delete: deleted calls disappear from list/detail APIs, while transcript rows and recording objects remain available for admin/manual recovery later.
@@ -33,14 +40,17 @@ This document captures implementation notes and staging verification for the bac
 ## Verified Locally
 
 - API tests covering health, auth, billing, telephony, realtime, LiveKit dispatch, repository flow, and post-call lifecycle.
-- Agent config API tests now cover full-config reads, normal field updates, enable toggles, missing-number conflicts, and rollback on telephony failure.
+- Agent config API tests now cover bootstrapped first-run config reads, readiness-gated enables, successful telephony toggles, and rollback on telephony failure.
 - Call history API tests now cover visible-call listing, transcript detail, fresh recording URL minting, and soft-delete behavior.
 - LiveKit recording provider tests now cover audio-only room composite egress request shaping, explicit stop behavior, and provider-failure wrapping.
 - LiveKit dispatch service tests now cover recording metadata persistence, delayed start on agent join, early stop on SIP leave, and non-blocking recording start/stop failure behavior.
 - Summary service tests now cover structured-summary success, malformed provider output, and non-blocking provider failure.
 - Billing query service tests now cover subscription lookup, usage snapshot assembly, and usage-ledger ordering.
-- Billing session service tests now cover hosted Stripe checkout price mapping and portal precondition validation.
+- Billing session service tests now cover hosted Stripe checkout price mapping, starter-only enforcement, and portal precondition validation.
 - Billing router tests now cover read-side contract behavior plus checkout/portal session state handling.
+- Stripe webhook tests now cover subscription-shell creation on `customer.subscription.created`, paid-invoice activation, invoice metadata bootstrap, and no double-crediting/provisioning on later invoices.
+- Phone provisioning worker tests now cover durable provisioning state persistence, retryable failures, linked-number success, and France-only defaults.
+- Onboarding service and router tests now cover status precedence, assigned-number visibility, retryability, and retry enqueue behavior.
 - Agent tests covering prompt building, pipeline config selection, Gemini STS runtime construction, and runtime event emission.
 - API Docker image build.
 - Agent Docker image build.
@@ -54,6 +64,8 @@ This document captures implementation notes and staging verification for the bac
 ## Staging Smoke Status
 
 Partially executed on 2026-03-16.
+
+Self-serve France MVP code path updated locally on 2026-04-12. The real-provider staging path below still needs to be rerun against the new onboarding flow before launch.
 
 Verified in staging:
 
@@ -78,11 +90,13 @@ Verified in staging:
 
 Not yet fully verified in staging:
 
-- A fresh `invoice.paid` event after the persisted subscription exists. Re-sending the same Stripe event id is deduplicated by `webhook_events`, so it does not create a second reset row.
-- Real Telnyx purchase and `app-active` / `app-disabled` switching with `TELNYX_ORDERING_ENABLED=true`.
+- The updated self-serve path where the first fresh `invoice.paid` activates the subscription, allocates minutes, and enqueues provisioning for a brand-new customer.
+- A fresh later `invoice.paid` event after the persisted subscription exists. Re-sending the same Stripe event id is deduplicated by `webhook_events`, so it does not create a second reset row.
+- Real Telnyx purchase and `app-active` / `app-disabled` switching with `TELNYX_ORDERING_ENABLED=true` for the self-serve France flow.
 - The new queue-backed call finalization flow with the dedicated `worker` service in Compose.
 - LiveKit room composite egress writing one mixed recording directly into the configured bucket.
 - Fresh signed recording access from `GET /api/calls/{call_id}` after a real egress-created recording exists.
+- End-to-end self-serve onboarding state transitions in the dashboard: `subscription_active`, `provisioning_number`, `setup_required`, `ready_to_enable`, and `live`.
 - End-to-end call persistence, transcript capture, summary generation, and actual minute deduction for the Stripe-backed user.
 - Hosted Stripe Checkout and Billing Portal session creation against real API credentials and configured price ids.
 
@@ -92,7 +106,6 @@ Ready for manual execution once these external credentials and endpoints are ava
 - Telnyx API key and active/disabled connection IDs
 - LiveKit URL, API key, and API secret
 - Stripe secret key, price ids, and checkout redirect URLs
-- Google Gemini API key for `pipeline_mode="sts"`
 - Speechmatics, Deepgram, and ElevenLabs credentials as needed for `pipeline_mode="stt_llm_tts"`
 - Reachable staging Postgres, Redis, and S3-compatible storage if not using the local Compose stack
 
@@ -104,7 +117,6 @@ Ready for manual execution once these external credentials and endpoints are ava
 - Queue-backed finalization with the dedicated `worker` service during a real forwarded call.
 - One real forwarded call that confirms `recording_object_key` and `recording_egress_id` are persisted and that the bucket contains the mixed audio file.
 - End-to-end forwarded phone call with transcript, summary, and minute deduction for the Stripe-backed user.
-- One real inbound call for a user configured with `pipeline_mode="sts"` to compare latency and verify transcript/finalization behavior on the Gemini native-audio path.
 - Hosted Stripe Checkout and Billing Portal session creation with the configured success/cancel URLs.
 
 ## Blockers For Full Staging Smoke Path

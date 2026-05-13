@@ -16,9 +16,11 @@ from app.repositories.agent_config_repository import AgentConfigRepository
 from app.services.agent_config_service import (
     AgentConfigNotFoundError,
     AgentConfigPhoneNumberNotFoundError,
+    AgentConfigReadinessError,
     AgentConfigService,
     AgentConfigTelephonySyncError,
 )
+from app.services.onboarding_service import OnboardingService
 from app.services.telephony_service import TelephonyService
 from app.workers.call_finalization_queue import CallFinalizationQueue
 
@@ -64,6 +66,7 @@ def get_agent_config_service(
         session,
         agent_config_repository=AgentConfigRepository(session),
         telephony_service=TelephonyService(session, provider=telephony_provider),
+        onboarding_service=OnboardingService(session),
     )
 
 
@@ -102,6 +105,11 @@ async def patch_agent_config(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Phone number not found",
+        ) from exc
+    except AgentConfigReadinessError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agent setup incomplete",
         ) from exc
     except AgentConfigTelephonySyncError as exc:
         raise HTTPException(

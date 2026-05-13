@@ -41,6 +41,7 @@ describe("billing page", () => {
     expect(screen.getByText(/No active subscription/i)).toBeInTheDocument();
     expect(screen.getByText(/No billing activity yet/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Start starter plan/i })).toBeInTheDocument();
+    expect(screen.queryByText(/standard/i)).not.toBeInTheDocument();
   });
 
   it("renders portal action for active subscriptions", async () => {
@@ -92,6 +93,7 @@ describe("billing page", () => {
     const portalResult = await createPortalSessionAction();
 
     expect(checkoutResult.url).toBe("https://checkout.test");
+    expect(createCheckoutSessionMock).toHaveBeenCalledWith("starter");
     expect(portalResult.url).toBe("https://portal.test");
   });
 });

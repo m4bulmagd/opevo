@@ -108,6 +108,8 @@ class FakeBillingSessionService:
         self.portal_url = portal_url
 
     def create_checkout_session(self, *, user_id, customer_email, clerk_user_id, plan_tier):
+        if plan_tier != "starter":
+            raise ValueError(f"Unsupported plan tier: {plan_tier}")
         return type("HostedSession", (), {"url": self.checkout_url})()
 
     def create_portal_session(self, *, customer_id, return_url):
@@ -149,6 +151,15 @@ async def test_create_checkout_session_returns_url() -> None:
     )
 
     assert response.url == "https://checkout.stripe.test/session"
+
+
+def test_checkout_request_rejects_standard_plan() -> None:
+    from pydantic import ValidationError
+
+    from app.schemas.billing_api import CheckoutSessionRequest
+
+    with pytest.raises(ValidationError):
+        CheckoutSessionRequest(plan_tier="standard")
 
 
 @pytest.mark.anyio

@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal, InvalidOperation
 
 import telnyx
@@ -10,6 +11,7 @@ MAX_SELECTION_ATTEMPTS = 3
 MAX_TOTAL_COST_USD = Decimal("2.00")
 ALLOWED_NUMBER_TYPES = ("national", "local")
 
+logger = logging.getLogger(__name__)
 
 class TelephonyTelnyx(TelephonyProvider):
     def __init__(
@@ -33,6 +35,7 @@ class TelephonyTelnyx(TelephonyProvider):
         self.phone_number_resource = phone_number_resource
 
     async def provision_number(self, *, country_code: str) -> dict:
+        logger.info(f"Attempting to provision number with Telnyx for country_code={country_code}")
         inspected_candidates: list[dict] = []
         selected_candidate: dict | None = None
 
@@ -77,6 +80,7 @@ class TelephonyTelnyx(TelephonyProvider):
             )
 
         selected_number = selected_candidate["e164"]
+        logger.info("Selected Telnyx number %s for provisioning (country_code=%s)", selected_number, country_code)
         if not self.ordering_enabled:
             raise TelephonyProvisioningReviewRequired(
                 reason="ordering_disabled",

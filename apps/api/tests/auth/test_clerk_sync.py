@@ -19,6 +19,7 @@ async def test_clerk_user_created_webhook_upserts_local_user(
 
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from app.models.agent_config import AgentConfig
     from app.models.user import User
 
     engine = create_async_engine(client_database_url, future=True)
@@ -26,8 +27,14 @@ async def test_clerk_user_created_webhook_upserts_local_user(
     async with session_factory() as session:
         result = await session.execute(select(User).where(User.clerk_user_id == clerk_user_created_payload["data"]["id"]))
         user = result.scalar_one_or_none()
+        config = (
+            await session.execute(select(AgentConfig).where(AgentConfig.user_id == user.id))
+        ).scalar_one_or_none()
         
     await engine.dispose()
     
     assert user is not None
     assert user.email == clerk_user_created_payload["data"]["email_addresses"][0]["email_address"]
+    assert config is not None
+    assert config.pipeline_mode == "stt_llm_tts"
+    assert config.is_enabled is False

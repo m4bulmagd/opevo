@@ -16,6 +16,12 @@ class AgentConfigRepository:
         await self.session.flush()
         return config
 
+    async def get_or_create_default(self, user_id: UUID) -> AgentConfig:
+        config = await self.get_by_user_id(user_id)
+        if config is not None:
+            return config
+        return await self.create_default(user_id)
+
     async def get_by_user_id(self, user_id: UUID) -> AgentConfig | None:
         result = await self.session.execute(select(AgentConfig).where(AgentConfig.user_id == user_id))
         return result.scalar_one_or_none()

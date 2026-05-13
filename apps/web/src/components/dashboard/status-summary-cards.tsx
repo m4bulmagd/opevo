@@ -6,17 +6,42 @@ import { formatMinutes, toTitleCase } from "@/lib/formatters";
 import type { AgentConfig } from "@/lib/types/agent";
 import type { UsageSnapshot } from "@/lib/types/billing";
 import type { CallHistoryListItem } from "@/lib/types/calls";
+import type { OnboardingStatus } from "@/lib/types/onboarding";
+
+function getLaunchBadge(onboardingStatus: OnboardingStatus) {
+  switch (onboardingStatus.overall_status) {
+    case "live":
+      return { label: "Live", variant: "default" as const };
+    case "ready_to_enable":
+      return { label: "Ready", variant: "default" as const };
+    case "provisioning_failed":
+      return { label: "Action needed", variant: "secondary" as const };
+    case "provisioning_number":
+      return { label: "Provisioning", variant: "secondary" as const };
+    case "setup_required":
+      return { label: "Setup", variant: "secondary" as const };
+    case "subscription_active":
+      return { label: "Subscribed", variant: "secondary" as const };
+    default:
+      return { label: "Draft", variant: "secondary" as const };
+  }
+}
 
 export function StatusSummaryCards({
   agentConfig,
+  onboardingStatus,
   calls,
   usageSnapshot,
 }: {
   agentConfig: AgentConfig | null;
+  onboardingStatus: OnboardingStatus;
   calls: CallHistoryListItem[];
   usageSnapshot: UsageSnapshot;
 }) {
   const latestCall = calls[0] ?? null;
+  const launchBadge = getLaunchBadge(onboardingStatus);
+  const secondaryText =
+    onboardingStatus.phone_number ?? (agentConfig ? toTitleCase(agentConfig.pipeline_mode) : "Starter setup required");
 
   return (
     <div className="grid gap-4 md:grid-cols-3">
@@ -24,19 +49,15 @@ export function StatusSummaryCards({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Bot className="size-4 text-muted-foreground" />
-            Agent state
+            Launch status
           </CardTitle>
         </CardHeader>
         <CardContent className="flex items-center justify-between gap-3">
           <div className="flex flex-col gap-1">
             <span className="font-medium">{agentConfig?.agent_name ?? "Setup required"}</span>
-            <span className="text-muted-foreground text-xs">
-              {agentConfig ? toTitleCase(agentConfig.pipeline_mode) : "No configuration yet"}
-            </span>
+            <span className="text-muted-foreground text-xs">{secondaryText}</span>
           </div>
-          <Badge variant={agentConfig?.is_enabled ? "default" : "secondary"}>
-            {agentConfig?.is_enabled ? "Live" : "Draft"}
-          </Badge>
+          <Badge variant={launchBadge.variant}>{launchBadge.label}</Badge>
         </CardContent>
       </Card>
       <Card size="sm">

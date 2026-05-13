@@ -25,7 +25,7 @@ describe("agent page", () => {
       owner_context: "Reception for North Clinic",
       system_prompt: "Be helpful.",
       knowledge_base: "Open weekdays",
-      pipeline_mode: "sts",
+      pipeline_mode: "stt_llm_tts",
       is_enabled: true,
     });
 
@@ -35,16 +35,17 @@ describe("agent page", () => {
     expect(screen.getByDisplayValue("Ava")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Reception for North Clinic")).toBeInTheDocument();
     expect(screen.getByText(/Enable call routing/i)).toBeInTheDocument();
-    expect(screen.getByText(/This is operationally significant/i)).toBeInTheDocument();
+    expect(screen.getByText(/Billing, number assignment, and setup must be complete before routing can go live/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^STS$/i)).not.toBeInTheDocument();
   });
 
   it("returns a conflict message for guarded enable failures", async () => {
-    patchAgentConfigMock.mockRejectedValueOnce(new BackendApiError("Phone number not found", 409));
+    patchAgentConfigMock.mockRejectedValueOnce(new BackendApiError("Agent setup incomplete", 409));
 
     const { saveAgentSettingsAction } = await import("@/app/(app)/dashboard/agent/actions");
     const result = await saveAgentSettingsAction({ is_enabled: true });
 
     expect(result.status).toBe("error");
-    expect(result.message).toMatch(/Phone number not found/i);
+    expect(result.message).toMatch(/billing is active, your number is assigned, and setup is complete/i);
   });
 });

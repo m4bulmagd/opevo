@@ -9,7 +9,7 @@ type HostedActionResult = {
   url?: string;
 };
 
-export async function createCheckoutSessionAction(planTier: "starter" | "standard"): Promise<HostedActionResult> {
+export async function createCheckoutSessionAction(planTier: "starter"): Promise<HostedActionResult> {
   try {
     const session = await createCheckoutSession(planTier);
     return {

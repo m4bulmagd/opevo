@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.notification import Notification
+from app.models.phone_number import PhoneNumber
 from app.services.notification_service import NotificationService
 from app.repositories.notification_repository import NotificationRepository
 
@@ -498,3 +499,126 @@ async def test_transcript_flush_job_missing_call_id(
 
     with pytest.raises((KeyError, TypeError)):
         await transcript_flush_module.transcript_flush_job(CTX, payload)
+
+
+# ===========================================================================
+# phone_provisioning_job tests
+# ===========================================================================
+
+
+class CapturingProvisioningProvider:
+    def __init__(self) -> None:
+        self.country_codes: list[str] = []
+
+    async def provision_number(self, *, country_code: str) -> dict:
+        self.country_codes.append(country_code)
+        return {
+            "e164": "+33123456789",
+            "provider_number_id": "pn_123",
+            "provider_connection_name": "app-active",
+        }
+
+    async def enable_number(self, *, provider_number_id: str) -> str:
+        return "app-active"
+
+    async def disable_number(self, *, provider_number_id: str) -> str:
+        return "app-disabled"
+
+
+class ReviewRequiredProvisioningProvider:
+    async def provision_number(self, *, country_code: str) -> dict:
+        from app.providers.telephony.base import TelephonyProvisioningReviewRequired
+
+        raise TelephonyProvisioningReviewRequired(
+            reason="no_affordable_number",
+            payload={
+                "event": "phone_number_provisioning_review_required",
+                "country_code": country_code,
+                "contact_support": True,
+            },
+        )
+
+    async def enable_number(self, *, provider_number_id: str) -> str:
+        return "app-active"
+
+    async def disable_number(self, *, provider_number_id: str) -> str:
+        return "app-disabled"
+
+
+@pytest.mark.anyio
+async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_default(
+    db_session, active_user
+) -> None:
+    from app.models.phone_number_provisioning import PhoneNumberProvisioning
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    active_user.country_code = None
+    await db_session.commit()
+
+    provider = CapturingProvisioningProvider()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    await phone_provisioning_job(
+        {
+            "telephony_provider": provider,
+            "session_factory": session_factory,
+        },
+        {"user_id": str(active_user.id)},
+    )
+
+    provisionings = (
+        await db_session.execute(
+            select(PhoneNumberProvisioning).where(PhoneNumberProvisioning.user_id == active_user.id)
+        )
+    ).scalars().all()
+    phone_numbers = (
+        await db_session.execute(select(PhoneNumber).where(PhoneNumber.user_id == active_user.id))
+    ).scalars().all()
+
+    assert provider.country_codes == ["FR"]
+    assert len(phone_numbers) == 1
+    assert len(provisionings) == 1
+    assert provisionings[0].status == "succeeded"
+    assert provisionings[0].attempt_count == 1
+    assert provisionings[0].can_retry is False
+    assert provisionings[0].phone_number_id == phone_numbers[0].id
+
+
+@pytest.mark.anyio
+async def test_phone_provisioning_job_persists_retryable_failure_state(
+    db_session, active_user
+) -> None:
+    from app.models.phone_number_provisioning import PhoneNumberProvisioning
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    await phone_provisioning_job(
+        {
+            "telephony_provider": ReviewRequiredProvisioningProvider(),
+            "session_factory": session_factory,
+        },
+        {"user_id": str(active_user.id)},
+    )
+
+    provisionings = (
+        await db_session.execute(
+            select(PhoneNumberProvisioning).where(PhoneNumberProvisioning.user_id == active_user.id)
+        )
+    ).scalars().all()
+    notifications = (
+        await db_session.execute(
+            select(Notification).where(Notification.user_id == active_user.id)
+        )
+    ).scalars().all()
+    phone_numbers = (
+        await db_session.execute(select(PhoneNumber).where(PhoneNumber.user_id == active_user.id))
+    ).scalars().all()
+
+    assert len(provisionings) == 1
+    assert provisionings[0].status == "failed"
+    assert provisionings[0].attempt_count == 1
+    assert provisionings[0].can_retry is True
+    assert provisionings[0].last_error_reason == "no_affordable_number"
+    assert not phone_numbers
+    assert notifications[0].notification_type == "phone_number_provisioning_review_required"

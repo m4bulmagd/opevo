@@ -4,6 +4,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.agent_config import AgentConfig
 from app.models.phone_number import PhoneNumber
+from app.models.phone_number_provisioning import PhoneNumberProvisioning
+from app.models.subscription import Subscription
 from app.models.user import User
 
 
@@ -56,6 +58,53 @@ async def seed_phone_number(database_url: str, *, clerk_user_id: str, is_active:
                 provider_number_id="pn_123",
                 provider_connection_name="app-active" if is_active else "app-disabled",
                 is_active=is_active,
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+
+async def seed_subscription(database_url: str, *, clerk_user_id: str, status: str = "active", plan_tier: str = "starter") -> None:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = (
+            await session.execute(select(User).where(User.clerk_user_id == clerk_user_id))
+        ).scalar_one()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id=f"cus_{clerk_user_id}",
+                stripe_subscription_id=f"sub_{clerk_user_id}",
+                plan_tier=plan_tier,
+                status=status,
+                allocated_minutes=60,
+                current_period_start=None,
+                current_period_end=None,
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+
+async def seed_provisioning(database_url: str, *, clerk_user_id: str, status: str, can_retry: bool = False) -> None:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = (
+            await session.execute(select(User).where(User.clerk_user_id == clerk_user_id))
+        ).scalar_one()
+        phone_number = (
+            await session.execute(select(PhoneNumber).where(PhoneNumber.user_id == user.id))
+        ).scalar_one_or_none()
+        session.add(
+            PhoneNumberProvisioning(
+                user_id=user.id,
+                phone_number_id=phone_number.id if phone_number is not None else None,
+                target_country_code="FR",
+                status=status,
+                attempt_count=1,
+                can_retry=can_retry,
             )
         )
         await session.commit()
@@ -119,6 +168,28 @@ async def test_get_agent_config_returns_full_config(
 
 
 @pytest.mark.anyio
+async def test_get_agent_config_returns_bootstrapped_default_config(
+    async_client, client_database_url, rs256_clerk_token_for
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(User(clerk_user_id="user_bootstrap_cfg", email="boot@example.com"))
+        await session.commit()
+    await engine.dispose()
+
+    response = await async_client.get(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for('user_bootstrap_cfg')}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["agent_name"] == "Assistant"
+    assert response.json()["pipeline_mode"] == "stt_llm_tts"
+    assert response.json()["is_enabled"] is False
+
+
+@pytest.mark.anyio
 async def test_patch_agent_config_updates_prompt_fields_without_toggle(
     async_client, client_database_url, rs256_clerk_token_for
 ) -> None:
@@ -170,9 +241,15 @@ async def test_patch_agent_config_enables_number_when_is_enabled_changes(
         client_database_url,
         clerk_user_id="user_agent_cfg",
         email="agent@example.com",
+        agent_name="Presvo Front Desk",
+        owner_context="Dental office reception",
+        system_prompt="Handle inbound calls professionally.",
+        knowledge_base="Open weekdays",
         is_enabled=False,
     )
     await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
 
     from app.main import app
     from app.providers.telephony.telnyx import get_telephony_provider
@@ -207,8 +284,13 @@ async def test_patch_agent_config_toggle_without_phone_number_returns_409(
         client_database_url,
         clerk_user_id="user_agent_cfg",
         email="agent@example.com",
+        agent_name="Presvo Front Desk",
+        owner_context="Dental office reception",
+        system_prompt="Handle inbound calls professionally.",
+        knowledge_base="Open weekdays",
         is_enabled=False,
     )
+    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
 
     response = await async_client.patch(
         "/api/agent/config",
@@ -217,7 +299,90 @@ async def test_patch_agent_config_toggle_without_phone_number_returns_409(
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "Phone number not found"
+    assert response.json()["detail"] == "Agent setup incomplete"
+
+
+@pytest.mark.anyio
+async def test_patch_agent_config_enable_without_active_subscription_returns_409(
+    async_client, client_database_url, rs256_clerk_token_for
+) -> None:
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        email="agent@example.com",
+        agent_name="Presvo Front Desk",
+        owner_context="Dental office reception",
+        system_prompt="Handle inbound calls professionally.",
+        knowledge_base="Open weekdays",
+        is_enabled=False,
+    )
+    await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
+
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"},
+        json={"is_enabled": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Agent setup incomplete"
+
+
+@pytest.mark.anyio
+async def test_patch_agent_config_enable_without_successful_provisioning_returns_409(
+    async_client, client_database_url, rs256_clerk_token_for
+) -> None:
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        email="agent@example.com",
+        agent_name="Presvo Front Desk",
+        owner_context="Dental office reception",
+        system_prompt="Handle inbound calls professionally.",
+        knowledge_base="Open weekdays",
+        is_enabled=False,
+    )
+    await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="failed", can_retry=True)
+
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"},
+        json={"is_enabled": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Agent setup incomplete"
+
+
+@pytest.mark.anyio
+async def test_patch_agent_config_enable_with_incomplete_setup_returns_409(
+    async_client, client_database_url, rs256_clerk_token_for
+) -> None:
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        email="agent@example.com",
+        agent_name="Assistant",
+        owner_context="",
+        system_prompt="",
+        knowledge_base="",
+        is_enabled=False,
+    )
+    await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
+
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"},
+        json={"is_enabled": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Agent setup incomplete"
 
 
 @pytest.mark.anyio
@@ -238,9 +403,15 @@ async def test_patch_agent_config_rolls_back_when_telephony_switch_fails(
         client_database_url,
         clerk_user_id="user_agent_cfg",
         email="agent@example.com",
+        agent_name="Presvo Front Desk",
+        owner_context="Dental office reception",
+        system_prompt="Handle inbound calls professionally.",
+        knowledge_base="Open weekdays",
         is_enabled=False,
     )
     await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
 
     from app.main import app
     from app.providers.telephony.telnyx import get_telephony_provider

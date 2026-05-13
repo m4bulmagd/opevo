@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_config import AgentConfig
 from app.repositories.agent_config_repository import AgentConfigRepository
+from app.services.onboarding_service import OnboardingService
 from app.services.telephony_service import TelephonyService
 
 
@@ -19,22 +20,25 @@ class AgentConfigTelephonySyncError(Exception):
     pass
 
 
+class AgentConfigReadinessError(Exception):
+    pass
+
+
 class AgentConfigService:
     def __init__(
         self,
         session: AsyncSession,
         agent_config_repository: AgentConfigRepository,
         telephony_service: TelephonyService,
+        onboarding_service: OnboardingService,
     ) -> None:
         self.session = session
         self.agent_config_repository = agent_config_repository
         self.telephony_service = telephony_service
+        self.onboarding_service = onboarding_service
 
     async def get_by_user_id(self, user_id: UUID) -> AgentConfig:
-        config = await self.agent_config_repository.get_by_user_id(user_id)
-        if config is None:
-            raise AgentConfigNotFoundError
-        return config
+        return await self.agent_config_repository.get_or_create_default(user_id)
 
     async def update_by_user_id(
         self, user_id: UUID, updates: dict[str, object]
@@ -53,6 +57,7 @@ class AgentConfigService:
             config = await self.agent_config_repository.update_fields(config, updates)
             if should_toggle:
                 if bool(requested_enabled):
+                    await self._ensure_ready_to_enable(user_id, config)
                     await self.telephony_service.enable_number(user_id)
                 else:
                     await self.telephony_service.disable_number(user_id)
@@ -60,6 +65,9 @@ class AgentConfigService:
         except ValueError as exc:
             await self.session.rollback()
             raise AgentConfigPhoneNumberNotFoundError from exc
+        except AgentConfigReadinessError:
+            await self.session.rollback()
+            raise
         except AgentConfigPhoneNumberNotFoundError:
             raise
         except Exception as exc:
@@ -68,3 +76,12 @@ class AgentConfigService:
 
         await self.session.refresh(config)
         return config
+
+    async def _ensure_ready_to_enable(self, user_id: UUID, config: AgentConfig) -> None:
+        status = await self.onboarding_service.get_status(user_id)
+        if status.subscription_status != "active":
+            raise AgentConfigReadinessError
+        if status.phone_number_status != "ready":
+            raise AgentConfigReadinessError
+        if not self.onboarding_service._is_agent_setup_complete(config):
+            raise AgentConfigReadinessError

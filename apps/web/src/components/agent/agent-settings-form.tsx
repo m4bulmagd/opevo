@@ -12,11 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import type { AgentConfig, PipelineMode } from "@/lib/types/agent";
+import type { AgentConfig } from "@/lib/types/agent";
 
 export function AgentSettingsForm({ initialConfig }: { initialConfig: AgentConfig }) {
-  const [formState, setFormState] = useState(initialConfig);
+  const [formState, setFormState] = useState({
+    ...initialConfig,
+    pipeline_mode: "stt_llm_tts" as const,
+  });
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -99,19 +101,13 @@ export function AgentSettingsForm({ initialConfig }: { initialConfig: AgentConfi
           <Field>
             <FieldLabel>Pipeline mode</FieldLabel>
             <FieldContent>
-              <ToggleGroup
-                type="single"
-                variant="outline"
-                value={formState.pipeline_mode}
-                onValueChange={(value) => {
-                  if (!value) return;
-                  setFormState((current) => ({ ...current, pipeline_mode: value as PipelineMode }));
-                }}
-              >
-                <ToggleGroupItem value="stt_llm_tts">STT / LLM / TTS</ToggleGroupItem>
-                <ToggleGroupItem value="sts">STS</ToggleGroupItem>
-              </ToggleGroup>
-              <FieldDescription>Choose the runtime pipeline used for live calls.</FieldDescription>
+              <div className="rounded-lg border border-border/70 bg-muted/20 px-4 py-3">
+                <div className="font-medium text-sm">STT / LLM / TTS</div>
+                <div className="mt-1 text-muted-foreground text-xs">
+                  The France launch ships on a single verified runtime path.
+                </div>
+              </div>
+              <FieldDescription>The launch pipeline is fixed while self-serve onboarding is being proven.</FieldDescription>
             </FieldContent>
           </Field>
 
@@ -119,7 +115,7 @@ export function AgentSettingsForm({ initialConfig }: { initialConfig: AgentConfi
             <FieldContent>
               <FieldLabel htmlFor="is_enabled">Enable call routing</FieldLabel>
               <FieldDescription>
-                This is operationally significant because the backend switches telephony routing immediately.
+                Billing, number assignment, and setup must be complete before routing can go live.
               </FieldDescription>
             </FieldContent>
             <Switch

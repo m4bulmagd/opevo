@@ -16,6 +16,7 @@ from app.routers.agent import router as agent_router
 from app.routers.billing import router as billing_router
 from app.routers.calls import router as calls_router
 from app.routers.health import router as health_router
+from app.routers.onboarding import router as onboarding_router
 from app.routers.websocket import router as websocket_router
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import manager as websocket_manager
@@ -95,6 +96,7 @@ app.include_router(agent_router)
 app.include_router(billing_router)
 app.include_router(calls_router)
 app.include_router(health_router)
+app.include_router(onboarding_router)
 app.include_router(websocket_router)
 app.include_router(clerk_webhook_router)
 app.include_router(livekit_webhook_router)

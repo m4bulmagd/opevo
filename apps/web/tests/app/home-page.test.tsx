@@ -2,11 +2,17 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const getAgentConfigMock = vi.fn();
+const getOnboardingStatusMock = vi.fn();
 const listCallsMock = vi.fn();
 const getUsageSnapshotMock = vi.fn();
 
 vi.mock("@/lib/api/agent", () => ({
   getAgentConfig: getAgentConfigMock,
+}));
+
+vi.mock("@/lib/api/onboarding", () => ({
+  getOnboardingStatus: getOnboardingStatusMock,
+  retryProvisioning: vi.fn(),
 }));
 
 vi.mock("@/lib/api/calls", () => ({
@@ -19,7 +25,25 @@ vi.mock("@/lib/api/billing", () => ({
 
 describe("dashboard page", () => {
   it("shows setup UI for first-run users", async () => {
-    getAgentConfigMock.mockResolvedValueOnce(null);
+    getAgentConfigMock.mockResolvedValueOnce({
+      agent_name: "Assistant",
+      owner_context: null,
+      system_prompt: "",
+      knowledge_base: "",
+      pipeline_mode: "stt_llm_tts",
+      is_enabled: false,
+    });
+    getOnboardingStatusMock.mockResolvedValueOnce({
+      subscription_status: null,
+      plan_tier: null,
+      minutes_remaining: 0,
+      phone_number: null,
+      phone_number_status: "missing",
+      routing_enabled: false,
+      agent_setup_complete: false,
+      overall_status: "not_subscribed",
+      can_retry_provisioning: false,
+    });
     listCallsMock.mockResolvedValueOnce([]);
     getUsageSnapshotMock.mockResolvedValueOnce({
       minutes_remaining: 0,
@@ -34,9 +58,10 @@ describe("dashboard page", () => {
     render(await Page());
 
     expect(screen.getByText(/Setup checklist/i)).toBeInTheDocument();
-    expect(screen.getByText(/Name your agent/i)).toBeInTheDocument();
+    expect(screen.getByText(/Activate billing/i)).toBeInTheDocument();
+    expect(screen.getByText(/Start your setup/i)).toBeInTheDocument();
     expect(screen.getByText(/No calls yet/i)).toBeInTheDocument();
-    expect(screen.getByText(/No active plan/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/No active plan/i).length).toBeGreaterThan(0);
   });
 
   it("shows live activity for enabled agents", async () => {
@@ -45,8 +70,19 @@ describe("dashboard page", () => {
       owner_context: "Reception for North Clinic",
       system_prompt: "Be helpful.",
       knowledge_base: "Open weekdays",
-      pipeline_mode: "sts",
+      pipeline_mode: "stt_llm_tts",
       is_enabled: true,
+    });
+    getOnboardingStatusMock.mockResolvedValueOnce({
+      subscription_status: "active",
+      plan_tier: "starter",
+      minutes_remaining: 183,
+      phone_number: "+33123456789",
+      phone_number_status: "ready",
+      routing_enabled: true,
+      agent_setup_complete: true,
+      overall_status: "live",
+      can_retry_provisioning: false,
     });
     listCallsMock.mockResolvedValueOnce([
       {

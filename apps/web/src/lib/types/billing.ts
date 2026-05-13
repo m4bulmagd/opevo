@@ -1,14 +1,14 @@
 export type UsageSnapshot = {
   minutes_remaining: number;
   allocated_minutes: number;
-  plan_tier: string | null;
+  plan_tier: "starter" | null;
   subscription_status: string | null;
   current_period_start: string | null;
   current_period_end: string | null;
 };
 
 export type Subscription = {
-  plan_tier: string;
+  plan_tier: "starter";
   status: string;
   allocated_minutes: number;
   current_period_start: string | null;

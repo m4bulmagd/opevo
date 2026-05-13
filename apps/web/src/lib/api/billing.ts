@@ -16,7 +16,7 @@ export async function getUsageLedger(limit = 20) {
   return backendFetch<UsageLedgerListResponse>(`/api/billing/usage-ledger?${params.toString()}`);
 }
 
-export async function createCheckoutSession(planTier: "starter" | "standard") {
+export async function createCheckoutSession(planTier: "starter") {
   return backendFetch<{ url: string }>("/api/billing/checkout-session", {
     method: "POST",
     body: JSON.stringify({ plan_tier: planTier }),

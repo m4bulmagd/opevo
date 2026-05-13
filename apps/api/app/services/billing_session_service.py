@@ -90,8 +90,6 @@ class BillingSessionService:
     def _resolve_price_id(self, plan_tier: str) -> str:
         if plan_tier == "starter":
             return self._require_config(self.price_starter, "Stripe starter price is required")
-        if plan_tier == "standard":
-            return self._require_config(self.price_standard, "Stripe standard price is required")
         raise BillingSessionStateError(f"Unsupported plan tier: {plan_tier}")
 
     def _get_client(self):

@@ -24,7 +24,7 @@ export async function saveAgentSettingsAction(payload: AgentConfigPatch): Promis
       if (error.status === 409) {
         return {
           status: "error",
-          message: "Phone number not found. Assign a number before enabling routing.",
+          message: "Enable routing only after billing is active, your number is assigned, and setup is complete.",
         };
       }
 

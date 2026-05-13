@@ -45,7 +45,7 @@ export function BillingActionsCard({ subscription }: { subscription: Subscriptio
     <Card>
       <CardHeader>
         <CardTitle>Billing actions</CardTitle>
-        <CardDescription>Launch the hosted Stripe flow that matches the current subscription state.</CardDescription>
+        <CardDescription>France self-serve launch uses a single starter plan with hosted Stripe checkout.</CardDescription>
       </CardHeader>
       <CardContent>
         {subscription?.status === "active" ? (

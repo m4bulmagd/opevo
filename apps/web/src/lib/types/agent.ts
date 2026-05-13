@@ -1,4 +1,4 @@
-export type PipelineMode = "stt_llm_tts" | "sts";
+export type PipelineMode = "stt_llm_tts";
 
 export type AgentConfig = {
   agent_name: string;

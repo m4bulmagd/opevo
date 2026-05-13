@@ -9,6 +9,7 @@ from arq.connections import ArqRedis
 
 from app.core.config import get_settings
 from app.providers.telephony.base import TelephonyProvisioningReviewRequired
+from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
@@ -34,6 +35,7 @@ class BillingService:
         self.settings = get_settings()
         self.user_repository = UserRepository(session)
         self.subscription_repository = SubscriptionRepository(session)
+        self.phone_number_repository = PhoneNumberRepository(session)
         self.usage_repository = UsageRepository(session)
         self.notification_repository = NotificationRepository(session)
         self.webhook_event_repository = WebhookEventRepository(session)
@@ -96,16 +98,6 @@ class BillingService:
             current_period_start=current_period_start,
             current_period_end=current_period_end,
         )
-        if self.arq_pool:
-            await self.arq_pool.enqueue_job(
-                "phone_provisioning_job", {"user_id": str(user.id)}
-            )
-        await self.usage_repository.create(
-            user_id=user.id,
-            event_type="subscription_activated",
-            minutes_delta=allocated_minutes,
-            balance_after=allocated_minutes,
-        )
 
     async def _handle_invoice_paid(self, event_object: dict) -> None:
         subscription_id = self._extract_invoice_subscription_id(event_object)
@@ -114,19 +106,69 @@ class BillingService:
 
         subscription = await self.subscription_repository.get_by_stripe_subscription_id(subscription_id)
         if subscription is None:
-            return
+            subscription = await self._bootstrap_subscription_from_invoice(subscription_id, event_object)
+            if subscription is None:
+                return
 
         plan_tier = self._extract_invoice_plan_tier(event_object) or subscription.plan_tier
-        allocated_minutes = PLAN_MINUTES.get(plan_tier, subscription.allocated_minutes)
+        allocated_minutes = PLAN_MINUTES.get(plan_tier, subscription.allocated_minutes or 60)
         subscription.plan_tier = plan_tier
         subscription.allocated_minutes = allocated_minutes
         subscription.status = "active"
+
+        latest_entries = await self.usage_repository.list_recent_by_user_id(user_id=subscription.user_id, limit=1)
+        is_first_activation = len(latest_entries) == 0
+
+        if is_first_activation:
+            await self.usage_repository.create(
+                user_id=subscription.user_id,
+                event_type="subscription_activated",
+                minutes_delta=allocated_minutes,
+                balance_after=allocated_minutes,
+            )
+            if self.arq_pool and await self.phone_number_repository.get_by_user_id(subscription.user_id) is None:
+                await self.arq_pool.enqueue_job(
+                    "phone_provisioning_job",
+                    {"user_id": str(subscription.user_id)},
+                )
+            return
 
         await self.usage_repository.create(
             user_id=subscription.user_id,
             event_type="invoice_paid_reset",
             minutes_delta=allocated_minutes,
             balance_after=allocated_minutes,
+        )
+
+    async def _bootstrap_subscription_from_invoice(
+        self,
+        subscription_id: str,
+        event_object: dict,
+    ):
+        clerk_user_id = self._extract_invoice_clerk_user_id(event_object)
+        if not clerk_user_id:
+            return None
+
+        user = await self.user_repository.get_by_clerk_user_id(clerk_user_id)
+        if user is None:
+            return None
+
+        plan_tier = (
+            self._extract_invoice_plan_tier(event_object)
+            or self._extract_invoice_plan_tier_from_metadata(event_object)
+            or "starter"
+        )
+        allocated_minutes = PLAN_MINUTES.get(plan_tier, 60)
+
+        return await self.subscription_repository.upsert_by_stripe_subscription_id(
+            user_id=user.id,
+            stripe_customer_id=event_object["customer"],
+            stripe_subscription_id=subscription_id,
+            plan_tier=plan_tier,
+            status="active",
+            allocated_minutes=allocated_minutes,
+            current_period_start=None,
+            current_period_end=None,
         )
 
     @staticmethod
@@ -155,6 +197,24 @@ class BillingService:
             if lookup_key:
                 return lookup_key
         return None
+
+    @staticmethod
+    def _extract_invoice_clerk_user_id(event_object: dict) -> str | None:
+        subscription_details = event_object.get("parent", {}).get("subscription_details", {})
+        metadata = subscription_details.get("metadata", {})
+        clerk_user_id = metadata.get("clerk_user_id")
+        if clerk_user_id:
+            return clerk_user_id
+        return event_object.get("metadata", {}).get("clerk_user_id")
+
+    @staticmethod
+    def _extract_invoice_plan_tier_from_metadata(event_object: dict) -> str | None:
+        subscription_details = event_object.get("parent", {}).get("subscription_details", {})
+        metadata = subscription_details.get("metadata", {})
+        plan_tier = metadata.get("plan_tier")
+        if plan_tier:
+            return plan_tier
+        return event_object.get("metadata", {}).get("plan_tier")
 
     @staticmethod
     def _extract_subscription_period_bounds(event_object: dict) -> tuple[datetime | None, datetime | None]:

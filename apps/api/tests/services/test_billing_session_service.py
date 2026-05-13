@@ -47,7 +47,30 @@ def test_create_checkout_session_uses_price_mapping() -> None:
 
     assert result.url == "https://checkout.stripe.test/session"
     assert client.checkout.Session.calls[0]["line_items"][0]["price"] == "price_starter_123"
+    assert client.checkout.Session.calls[0]["metadata"]["plan_tier"] == "starter"
     assert client.checkout.Session.calls[0]["metadata"]["clerk_user_id"] == "clerk_123"
+    assert client.checkout.Session.calls[0]["subscription_data"]["metadata"]["plan_tier"] == "starter"
+
+
+def test_create_checkout_session_rejects_standard_plan() -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    service = BillingSessionService(
+        stripe_client=FakeStripeClient(),
+        secret_key="sk_test_123",
+        price_starter="price_starter_123",
+        price_standard="price_standard_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported plan tier: standard"):
+        service.create_checkout_session(
+            user_id="user_123",
+            customer_email="billing@example.com",
+            clerk_user_id="clerk_123",
+            plan_tier="standard",
+        )
 
 
 def test_create_portal_session_requires_customer_id() -> None:

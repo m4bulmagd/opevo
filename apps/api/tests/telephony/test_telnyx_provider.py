@@ -1,3 +1,4 @@
+import logging
 import pytest
 from types import SimpleNamespace
 
@@ -144,6 +145,34 @@ async def test_telnyx_provider_tries_national_then_local_and_stops_before_orderi
     assert FakeAvailablePhoneNumberResource.calls[0]["filter[phone_number_type]"] == "national"
     assert FakeAvailablePhoneNumberResource.calls[1]["filter[phone_number_type]"] == "local"
     assert not FakePhoneNumberOrderResource.calls
+
+
+@pytest.mark.anyio
+async def test_telnyx_provider_logs_selected_candidate_before_review_required(caplog) -> None:
+    FakeAvailablePhoneNumberResource.responses = [
+        [
+            SimpleNamespace(
+                phone_number="+33111111111",
+                cost_information={"currency": "USD", "upfront_cost": "1.00000", "monthly_cost": "0.50000"},
+            )
+        ],
+    ]
+
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        active_connection_id="conn_active",
+        disabled_connection_id="conn_disabled",
+        ordering_enabled=False,
+        available_phone_number_resource=FakeAvailablePhoneNumberResource,
+        phone_number_order_resource=FakePhoneNumberOrderResource,
+        phone_number_resource=FakePhoneNumberResource,
+    )
+
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(TelephonyProvisioningReviewRequired):
+            await provider.provision_number(country_code="FR")
+
+    assert "Selected Telnyx number +33111111111 for provisioning (country_code=FR)" in caplog.text
 
 
 @pytest.mark.anyio

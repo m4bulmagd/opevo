@@ -37,7 +37,7 @@ class UsageLedgerListResponse(BaseModel):
 
 
 class CheckoutSessionRequest(BaseModel):
-    plan_tier: Literal["starter", "standard"]
+    plan_tier: Literal["starter"]
 
 
 class HostedSessionResponse(BaseModel):

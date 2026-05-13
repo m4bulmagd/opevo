@@ -1,5 +1,4 @@
 import json
-import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -10,7 +9,6 @@ from app.models.notification import Notification
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
 from app.models.user import User
-from app.models.usage_ledger import UsageLedger
 from app.models.usage_ledger import UsageLedger
 
 from tests.fakes import FakeTelephonyProvider, MockArqPool, ReviewRequiredTelephonyProvider
@@ -60,14 +58,15 @@ async def test_subscription_activation_provisions_usage_ledger(
 
 
 
-    async def fetch_numbers() -> list[PhoneNumber]:
+    async def fetch_state() -> tuple[list[Subscription], list[UsageLedger], list[PhoneNumber]]:
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            result = await session.execute(select(PhoneNumber))
-            rows = list(result.scalars())
+            subscriptions = list((await session.execute(select(Subscription))).scalars())
+            ledgers = list((await session.execute(select(UsageLedger))).scalars())
+            phone_numbers = list((await session.execute(select(PhoneNumber))).scalars())
         await engine.dispose()
-        return rows
+        return subscriptions, ledgers, phone_numbers
 
     await seed_user()
 
@@ -85,25 +84,15 @@ async def test_subscription_activation_provisions_usage_ledger(
         content=json.dumps(stripe_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
         headers=signed_stripe_headers_factory(stripe_subscription_created_payload),
     )
-    
-    assert response.status_code == 202
-    
-    assert len(pool.enqueued_jobs) == 1
-    assert pool.enqueued_jobs[0][0] == "phone_provisioning_job"
-    
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
-    
-    engine = create_async_engine(client_database_url, future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    
-    await phone_provisioning_job({
-        "telephony_provider": FakeTelephonyProvider(),
-        "session_factory": session_factory
-    }, pool.enqueued_jobs[0][1])
-    
-    await engine.dispose()
 
-    assert (await fetch_numbers())[0].e164 == "+33123456789"
+    assert response.status_code == 202
+    subscriptions, ledgers, phone_numbers = await fetch_state()
+
+    assert len(pool.enqueued_jobs) == 0
+    assert subscriptions[0].stripe_subscription_id == "sub_123"
+    assert subscriptions[0].plan_tier == "starter"
+    assert not ledgers
+    assert not phone_numbers
 
 
 @pytest.mark.anyio
@@ -201,7 +190,7 @@ async def test_subscription_activation_persists_subscription_and_support_notific
     async_client,
     client_database_url,
     signed_stripe_headers_factory,
-    stripe_current_subscription_created_payload,
+    stripe_invoice_paid_payload,
 ) -> None:
     async def seed_user() -> None:
         engine = create_async_engine(client_database_url, future=True)
@@ -226,6 +215,13 @@ async def test_subscription_activation_persists_subscription_and_support_notific
 
     await seed_user()
 
+    invoice_payload = json.loads(json.dumps(stripe_invoice_paid_payload))
+    invoice_payload["data"]["object"]["lines"]["data"][0]["price"] = {"lookup_key": "starter"}
+    invoice_payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
+        "clerk_user_id": "user_123",
+        "plan_tier": "starter",
+    }
+
     from app.main import app
     from app.webhooks.stripe import get_telephony_provider
 
@@ -237,8 +233,8 @@ async def test_subscription_activation_persists_subscription_and_support_notific
     app.dependency_overrides[get_telephony_provider] = lambda: ReviewRequiredTelephonyProvider()
     response = await async_client.post(
         "/webhooks/stripe",
-        content=json.dumps(stripe_current_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
-        headers=signed_stripe_headers_factory(stripe_current_subscription_created_payload),
+        content=json.dumps(invoice_payload, separators=(",", ":")).encode("utf-8"),
+        headers=signed_stripe_headers_factory(invoice_payload),
     )
     
     assert response.status_code == 202
@@ -294,6 +290,14 @@ async def test_invoice_paid_resets_minutes(
                     current_period_end=datetime.fromtimestamp(1712592000, UTC),
                 )
             )
+            session.add(
+                UsageLedger(
+                    user_id=user.id,
+                    event_type="subscription_activated",
+                    minutes_delta=120,
+                    balance_after=120,
+                )
+            )
             await session.commit()
         await engine.dispose()
 
@@ -316,3 +320,58 @@ async def test_invoice_paid_resets_minutes(
 
     assert response.status_code == 202
     assert (await fetch_ledgers())[-1].event_type == "invoice_paid_reset"
+
+
+@pytest.mark.anyio
+async def test_invoice_paid_bootstraps_subscription_activation_and_enqueues_provisioning(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_invoice_paid_payload,
+) -> None:
+    async def seed_user() -> None:
+        engine = create_async_engine(client_database_url, future=True)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            session.add(User(clerk_user_id="user_123", email="billing@example.com"))
+            await session.commit()
+        await engine.dispose()
+
+    async def fetch_state() -> tuple[list[Subscription], list[UsageLedger]]:
+        engine = create_async_engine(client_database_url, future=True)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            subscriptions = list((await session.execute(select(Subscription))).scalars())
+            ledgers = list((await session.execute(select(UsageLedger))).scalars())
+        await engine.dispose()
+        return subscriptions, ledgers
+
+    await seed_user()
+
+    invoice_payload = json.loads(json.dumps(stripe_invoice_paid_payload))
+    invoice_payload["data"]["object"]["lines"]["data"][0]["price"] = {"lookup_key": "starter"}
+    invoice_payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
+        "clerk_user_id": "user_123",
+        "plan_tier": "starter",
+    }
+
+    from app.main import app
+
+    pool = MockArqPool()
+    app.state.arq_pool = pool
+
+    response = await async_client.post(
+        "/webhooks/stripe",
+        content=json.dumps(invoice_payload, separators=(",", ":")).encode("utf-8"),
+        headers=signed_stripe_headers_factory(invoice_payload),
+    )
+
+    assert response.status_code == 202
+
+    subscriptions, ledgers = await fetch_state()
+    assert subscriptions[0].stripe_subscription_id == "sub_123"
+    assert subscriptions[0].plan_tier == "starter"
+    assert subscriptions[0].status == "active"
+    assert ledgers[-1].event_type == "subscription_activated"
+    assert len(pool.enqueued_jobs) == 1
+    assert pool.enqueued_jobs[0][0] == "phone_provisioning_job"
