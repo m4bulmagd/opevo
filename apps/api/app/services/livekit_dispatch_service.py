@@ -4,6 +4,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dispatch_token import create_dispatch_token
+from app.core.logging import report_safe_exception
 from app.core.redaction import redact_phone
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
@@ -68,12 +69,15 @@ class LiveKitDispatchService:
 
         try:
             await self.recording_service.stop_room_recording(egress_id=call.recording_egress_id)
-        except Exception:
-            logger.exception(
-                "livekit recording stop failed room=%s call_id=%s egress_id=%s",
-                room_name,
-                str(call.id),
-                call.recording_egress_id,
+        except Exception as exc:
+            report_safe_exception(
+                logger,
+                event="livekit_recording_stop_failed",
+                operation="stop_room_recording",
+                error=exc,
+                call_id=call.id,
+                provider_request_id=call.recording_egress_id,
+                status="failed",
             )
 
         await self.session.commit()
@@ -94,8 +98,7 @@ class LiveKitDispatchService:
         raw_caller_number = attributes.get("sip.phoneNumber")
         if not raw_called_number:
             logger.info(
-                "livekit dispatch skipped event=missing_called_number room=%s participant_kind=%s",
-                event.get("room", {}).get("name"),
+                "livekit dispatch skipped event=missing_called_number participant_kind=%s",
                 participant.get("kind"),
             )
             await self.session.commit()
@@ -168,8 +171,7 @@ class LiveKitDispatchService:
             metadata=metadata.model_dump_json(),
         )
         logger.info(
-            "livekit dispatch created room=%s called=%s caller=%s call_id=%s user_id=%s",
-            room_name,
+            "livekit dispatch created called=%s caller=%s call_id=%s user_id=%s",
             redact_phone(called_number),
             redact_phone(caller_number),
             str(call.id),
@@ -199,12 +201,15 @@ class LiveKitDispatchService:
                 user_id=call.user_id,
                 call_id=call.id,
             )
-        except Exception:
-            logger.exception(
-                "livekit recording start failed room=%s call_id=%s user_id=%s",
-                room_name,
-                str(call.id),
-                str(call.user_id),
+        except Exception as exc:
+            report_safe_exception(
+                logger,
+                event="livekit_recording_start_failed",
+                operation="start_room_recording",
+                error=exc,
+                call_id=call.id,
+                user_id=call.user_id,
+                status="failed",
             )
         else:
             await self.call_repository.set_recording_metadata(

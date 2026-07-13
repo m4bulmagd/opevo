@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.core.logging import report_safe_exception
 from app.repositories.call_repository import CallRepository
 from app.repositories.message_repository import MessageRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
@@ -76,8 +77,16 @@ class CallLifecycleService:
 
         try:
             recording_result = await self.recording_service.store_recording(payload)
-        except Exception:
-            logger.exception("recording upload failed for call %s", call_id)
+        except Exception as exc:
+            report_safe_exception(
+                logger,
+                event="call_recording_upload_failed",
+                operation="store_recording",
+                error=exc,
+                call_id=call_id,
+                user_id=payload.get("user_id"),
+                status="failed",
+            )
             recording_result = RecordingResult(object_key=None, url=None, job_enqueued=False)
 
         await self.message_repository.create_many(
@@ -116,8 +125,21 @@ class CallLifecycleService:
             if phone_number is not None:
                 try:
                     await self.telephony_service.disable_number(payload["user_id"])
-                except Exception:
-                    logger.exception("failed to disable number for user %s", payload["user_id"])
+                except Exception as exc:
+                    report_safe_exception(
+                        logger,
+                        event="phone_number_disable_failed",
+                        operation="disable_phone_number",
+                        error=exc,
+                        call_id=call_id,
+                        user_id=payload.get("user_id"),
+                        provider_request_id=getattr(
+                            phone_number,
+                            "provider_number_id",
+                            None,
+                        ),
+                        status="failed",
+                    )
                     number_disabled = False
 
         await self.session.commit()

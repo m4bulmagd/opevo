@@ -14,6 +14,7 @@ from agent.pipeline_factory import build_agent_runtime
 from agent.pipeline_factory import _resolve_speechmatics_turn_detection_mode
 from agent.providers import PipelineMode
 from agent.runtime_validation import validate_agent_runtime
+from agent.safe_logging import report_safe_exception
 from agent.schemas import DispatchMetadata
 from agent.session_runtime import SessionRuntime
 
@@ -24,8 +25,13 @@ logger = logging.getLogger(__name__)
 async def _safe_task(coro) -> None:
     try:
         await coro
-    except Exception:
-        logger.exception("unhandled error in background event handler")
+    except Exception as exc:
+        report_safe_exception(
+            logger,
+            event="background_event_handler_failed",
+            operation="run_background_event_handler",
+            error=exc,
+        )
 
 
 def _register_inference_runners() -> None:
@@ -147,8 +153,13 @@ def prewarm_assets(proc) -> None:
             userdata["silero_vad"] = silero.VAD.load()
         except ModuleNotFoundError:
             logger.info("silero prewarm skipped: optional package unavailable")
-        except Exception:
-            logger.exception("silero prewarm failed")
+        except Exception as exc:
+            report_safe_exception(
+                logger,
+                event="silero_prewarm_failed",
+                operation="load_silero_vad",
+                error=exc,
+            )
 
     if settings.livekit_turn_detector_enabled:
         logger.info("turn detector will initialize in job context")
@@ -163,8 +174,13 @@ def prewarm_assets(proc) -> None:
     try:
         if _resolve_speechmatics_turn_detection_mode(speechmatics) == speechmatics.TurnDetectionMode.SMART_TURN:
             SmartTurnDetector().setup()
-    except Exception:
-        logger.exception("speechmatics prewarm failed")
+    except Exception as exc:
+        report_safe_exception(
+            logger,
+            event="speechmatics_prewarm_failed",
+            operation="setup_smart_turn_detector",
+            error=exc,
+        )
 
 
 def build_worker_options() -> WorkerOptions:

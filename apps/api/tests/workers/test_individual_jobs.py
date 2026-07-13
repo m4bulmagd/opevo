@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from types import SimpleNamespace
+import traceback
 from uuid import UUID, uuid4
 
 import pytest
@@ -777,3 +778,122 @@ async def test_phone_provisioning_unexpected_failure_does_not_log_or_persist_exc
         "error_type": "RuntimeError",
     }
     assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_phone_provisioning_sanitizes_sensitive_exception_class_name(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    sensitive_type_sentinel = "ProviderAuthorizationTokenSentinelError"
+    sensitive_error_type = type(sensitive_type_sentinel, (RuntimeError,), {})
+    session, provisioning_repository, _notification_repository = (
+        install_phone_provisioning_job_fakes(
+            monkeypatch,
+            error=sensitive_error_type("provider failure"),
+        )
+    )
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError) as exc_info:
+            await phone_provisioning_job(
+                {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+                {"user_id": "00000000-0000-0000-0000-000000000123"},
+            )
+
+    assert sensitive_type_sentinel not in str(exc_info.value)
+    assert sensitive_type_sentinel not in caplog.text
+    assert provisioning_repository.failed_calls[0]["reason"] == "Exception"
+    assert provisioning_repository.failed_calls[0]["payload"] == {
+        "error_type": "Exception",
+    }
+
+
+def assert_exception_state_is_sanitized(
+    error: BaseException,
+    *sentinels: str,
+) -> None:
+    rendered_traceback = "".join(
+        traceback.format_exception(type(error), error, error.__traceback__)
+    )
+    for sentinel in sentinels:
+        assert sentinel not in str(error)
+        assert sentinel not in rendered_traceback
+    assert error.__context__ is None
+    assert error.__cause__ is None
+
+
+@pytest.mark.anyio
+async def test_phone_provisioning_mark_failed_error_does_not_chain_provider_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    provider_sentinel = "PROVIDER_AUTHORIZATION_SENTINEL_FROM_MARK_FAILED_PATH"
+    persistence_sentinel = "PERSISTENCE_TOKEN_SENTINEL_FROM_MARK_FAILED"
+    session, provisioning_repository, _notification_repository = (
+        install_phone_provisioning_job_fakes(
+            monkeypatch,
+            error=RuntimeError(provider_sentinel),
+        )
+    )
+
+    async def fail_mark_failed(**_kwargs) -> None:
+        raise RuntimeError(persistence_sentinel)
+
+    monkeypatch.setattr(provisioning_repository, "mark_failed", fail_mark_failed)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError) as exc_info:
+            await phone_provisioning_job(
+                {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+                {"user_id": "00000000-0000-0000-0000-000000000123"},
+            )
+
+    assert_exception_state_is_sanitized(
+        exc_info.value,
+        provider_sentinel,
+        persistence_sentinel,
+    )
+    assert provider_sentinel not in caplog.text
+    assert persistence_sentinel not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_phone_provisioning_commit_error_does_not_chain_provider_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    provider_sentinel = "PROVIDER_AUTHORIZATION_SENTINEL_FROM_COMMIT_PATH"
+    persistence_sentinel = "PERSISTENCE_TOKEN_SENTINEL_FROM_COMMIT"
+    session, _provisioning_repository, _notification_repository = (
+        install_phone_provisioning_job_fakes(
+            monkeypatch,
+            error=RuntimeError(provider_sentinel),
+        )
+    )
+
+    async def fail_commit() -> None:
+        raise RuntimeError(persistence_sentinel)
+
+    monkeypatch.setattr(session, "commit", fail_commit)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError) as exc_info:
+            await phone_provisioning_job(
+                {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+                {"user_id": "00000000-0000-0000-0000-000000000123"},
+            )
+
+    assert_exception_state_is_sanitized(
+        exc_info.value,
+        provider_sentinel,
+        persistence_sentinel,
+    )
+    assert provider_sentinel not in caplog.text
+    assert persistence_sentinel not in caplog.text

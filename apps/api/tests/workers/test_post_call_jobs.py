@@ -1,3 +1,4 @@
+import logging
 import pytest
 from uuid import uuid4
 
@@ -22,6 +23,11 @@ from app.services.telephony_service import TelephonyService
 class FakeTelephonyProvider:
     async def disable_number(self, *, provider_number_id: str) -> str:
         return "app-disabled"
+
+
+class FakeFailingDisableTelephonyProvider:
+    async def disable_number(self, *, provider_number_id: str) -> str:
+        raise RuntimeError("TELNYX_AUTHORIZATION_SENTINEL_FROM_DISABLE")
 
 
 class FakeStorageProvider:
@@ -369,3 +375,56 @@ async def test_minute_exhaustion_disables_number(db_session, active_user) -> Non
     assert result.number_disabled is True
     refreshed_number = await db_session.get(PhoneNumber, phone_number.id)
     assert refreshed_number.provider_connection_name == "app-disabled"
+
+
+@pytest.mark.anyio
+async def test_disable_number_failure_does_not_render_provider_exception(
+    db_session,
+    active_user,
+    caplog,
+) -> None:
+    call = Call(
+        id=uuid4(),
+        user_id=active_user.id,
+        caller_number="+33222222222",
+        status="pending",
+    )
+    phone_number = PhoneNumber(
+        user_id=active_user.id,
+        e164="+33999888777",
+        country_code="FR",
+        provider="telnyx",
+        provider_number_id="pn_456",
+        provider_connection_name="app-active",
+        is_active=True,
+    )
+    db_session.add(call)
+    db_session.add(phone_number)
+    await db_session.commit()
+    service = build_lifecycle_service(
+        db_session,
+        telephony_service=TelephonyService(
+            db_session,
+            provider=FakeFailingDisableTelephonyProvider(),
+        ),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        result = await service.finalize_call(
+            {
+                "user_id": active_user.id,
+                "call_id": str(call.id),
+                "duration_seconds": 61,
+                "minutes_remaining": 1,
+                "caller_number": "+33222222222",
+                "transcript": [{"speaker": "CALLER", "text": "Call me back."}],
+            }
+        )
+
+    assert result.number_disabled is False
+    assert "TELNYX_AUTHORIZATION_SENTINEL_FROM_DISABLE" not in caplog.text
+    assert "event=phone_number_disable_failed" in caplog.text
+    assert "operation=disable_phone_number" in caplog.text
+    assert f"call_id={call.id}" in caplog.text
+    assert f"user_id={active_user.id}" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

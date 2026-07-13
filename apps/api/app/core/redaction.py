@@ -1,46 +1,46 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
+from uuid import UUID
 
 
 _PHONE_MASK = "******"
 _SUPPORTED_PHONE_CHARACTERS = re.compile(r"^\+?[0-9\s().-]+$")
-_SAFE_OPERATIONAL_EXTRA_KEYS = frozenset(
+_SAFE_LABEL_EXTRA_KEYS = frozenset(
+    {
+        "errortype",
+        "event",
+        "operation",
+        "provider",
+        "status",
+    }
+)
+_SAFE_IDENTIFIER_EXTRA_KEYS = frozenset(
+    {
+        "callid",
+        "eventid",
+        "operationid",
+        "providerrequestid",
+        "roomid",
+        "userid",
+    }
+)
+_SAFE_METRIC_EXTRA_KEYS = frozenset(
     {
         "audioseconds",
         "attemptcount",
-        "callid",
         "charactercount",
         "count",
         "duration",
         "durationms",
         "elapsedms",
-        "errortype",
-        "event",
-        "eventid",
         "framecount",
         "latency",
         "latencyms",
-        "operation",
-        "operationid",
-        "provider",
-        "providerrequestid",
-        "roomid",
-        "status",
         "tokencount",
-        "userid",
     }
-)
-_SAFE_OPERATIONAL_METRIC_SUFFIXES = (
-    "count",
-    "duration",
-    "durationms",
-    "durationseconds",
-    "elapsedms",
-    "elapsedseconds",
-    "latency",
-    "latencyms",
 )
 _SENSITIVE_EXTRA_KEY_MARKERS = (
     "accesskey",
@@ -71,7 +71,8 @@ _SENSITIVE_EXTRA_KEY_MARKERS = (
     "transcript",
 )
 _STANDARD_LOG_RECORD_KEYS = frozenset(logging.makeLogRecord({}).__dict__)
-_SAFE_EXTRA_VALUE_TYPES = (str, int, float, bool, type(None))
+_SAFE_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
+_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
 def redact_phone(value: str | None) -> str | None:
@@ -107,15 +108,69 @@ def _normalize_extra_key(key: object) -> str | None:
     return "".join(character for character in key.casefold() if character.isalnum())
 
 
-def _is_safe_operational_extra_key(key: object) -> bool:
+def _contains_sensitive_marker(value: str) -> bool:
+    normalized = "".join(character for character in value.casefold() if character.isalnum())
+    return any(marker in normalized for marker in _SENSITIVE_EXTRA_KEY_MARKERS)
+
+
+def safe_log_label(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if _SAFE_LABEL.fullmatch(value) is None or _contains_sensitive_marker(value):
+        return None
+    return value
+
+
+def _looks_like_french_phone_number(value: str) -> bool:
+    digits = "".join(character for character in value if character.isdigit())
+    return (
+        len(digits) == 10
+        and digits.startswith("0")
+        and not digits.startswith("00")
+    ) or (
+        len(digits) == 11
+        and digits.startswith("33")
+        and digits[2] != "0"
+    ) or (
+        len(digits) == 13
+        and digits.startswith("0033")
+        and digits[4] != "0"
+    )
+
+
+def safe_log_identifier(value: object) -> str | None:
+    if isinstance(value, UUID):
+        return str(value)
+    if not isinstance(value, str):
+        return None
+    if _SAFE_IDENTIFIER.fullmatch(value) is None:
+        return None
+    if _looks_like_french_phone_number(value):
+        return None
+    if not any(character.isalpha() for character in value):
+        return None
+    if _contains_sensitive_marker(value):
+        return None
+    return value
+
+
+def _is_safe_metric(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return value >= 0 and math.isfinite(value)
+
+
+def _is_safe_operational_extra(key: object, value: object) -> bool:
     normalized = _normalize_extra_key(key)
     if normalized is None:
         return False
-    if normalized in _SAFE_OPERATIONAL_EXTRA_KEYS:
-        return True
-    if any(marker in normalized for marker in _SENSITIVE_EXTRA_KEY_MARKERS):
-        return False
-    return normalized.endswith(_SAFE_OPERATIONAL_METRIC_SUFFIXES)
+    if normalized in _SAFE_LABEL_EXTRA_KEYS:
+        return safe_log_label(value) is not None
+    if normalized in _SAFE_IDENTIFIER_EXTRA_KEYS:
+        return safe_log_identifier(value) is not None
+    if normalized in _SAFE_METRIC_EXTRA_KEYS:
+        return _is_safe_metric(value)
+    return False
 
 
 class SafeExtraFilter(logging.Filter):
@@ -124,9 +179,6 @@ class SafeExtraFilter(logging.Filter):
             if key in _STANDARD_LOG_RECORD_KEYS:
                 continue
             value = record.__dict__[key]
-            if not _is_safe_operational_extra_key(key) or not isinstance(
-                value,
-                _SAFE_EXTRA_VALUE_TYPES,
-            ):
+            if not _is_safe_operational_extra(key, value):
                 del record.__dict__[key]
         return True

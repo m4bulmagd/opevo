@@ -10,11 +10,14 @@ from app.models.user import User
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 
 
+ROOM_NAME_SENTINEL = "room_TRANSCRIPT_SENTINEL_+33612345678"
+
+
 class FakeLiveKitReceiver:
     def receive(self, body: bytes, authorization: str | None) -> dict:
         return {
             "event": "participant_joined",
-            "room": {"name": "room_123"},
+            "room": {"name": ROOM_NAME_SENTINEL},
             "participant": {
                 "identity": "sip_caller",
                 "kind": "SIP",
@@ -59,6 +62,50 @@ class FakeRealtimeService:
         self.call_started_events.append(
             {"user_id": user_id, "room_name": room_name, "call_id": call_id}
         )
+
+
+class FakeWebhookRequest:
+    headers = {"authorization": "Bearer test"}
+
+    async def body(self) -> bytes:
+        return b"{}"
+
+
+class FakeRoomSentinelReceiver:
+    def receive(self, body: bytes, authorization: str | None) -> dict:
+        return {
+            "event": "room_finished",
+            "room": {"name": ROOM_NAME_SENTINEL},
+            "participant": {"kind": "STANDARD", "attributes": {}},
+        }
+
+
+class FakeWebhookSession:
+    def __init__(self) -> None:
+        self.commits = 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
+@pytest.mark.anyio
+async def test_webhook_log_does_not_render_provider_controlled_room_name(caplog) -> None:
+    from app.webhooks.livekit import handle_livekit_webhook
+
+    session = FakeWebhookSession()
+    with caplog.at_level(logging.INFO):
+        response = await handle_livekit_webhook(
+            FakeWebhookRequest(),
+            session=session,
+            webhook_receiver=FakeRoomSentinelReceiver(),
+            dispatch_client=FakeDispatchClient(),
+            realtime_service=FakeRealtimeService(),
+        )
+
+    assert response.status_code == 202
+    assert session.commits == 1
+    assert ROOM_NAME_SENTINEL not in caplog.text
+    assert "livekit webhook received event=room_finished" in caplog.text
 
 
 @pytest.mark.anyio
@@ -127,10 +174,13 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
 
     metadata = json.loads(dispatch_client.calls[0]["metadata"])
     assert response.status_code == 202
-    assert dispatch_client.calls[0]["room_name"] == "room_123"
+    assert dispatch_client.calls[0]["room_name"] == ROOM_NAME_SENTINEL
     assert realtime_service.call_started_events[0]["user_id"] == metadata["user_id"]
     assert realtime_service.call_started_events[0]["call_id"] == metadata["call_id"]
-    assert realtime_service.call_started_events[0]["room_name"] == "room_123"
+    assert realtime_service.call_started_events[0]["room_name"] == ROOM_NAME_SENTINEL
+    assert ROOM_NAME_SENTINEL not in caplog.text
+    assert metadata["call_id"] in caplog.text
+    assert metadata["user_id"] in caplog.text
     assert "SIP_ATTRIBUTE_SENTINEL_SECRET" not in caplog.text
     assert "+33123456789" not in caplog.text
     assert "+33999888777" not in caplog.text

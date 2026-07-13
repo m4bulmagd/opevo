@@ -1,10 +1,6 @@
 import logging
-import re
 
-from app.core.redaction import SafeExtraFilter
-
-
-_OPAQUE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+from app.core.redaction import SafeExtraFilter, safe_log_identifier, safe_log_label
 
 
 def _install_safe_filter(target: logging.Filterer) -> None:
@@ -29,28 +25,32 @@ def report_safe_exception(
     *,
     event: str,
     operation: str,
-    error: BaseException,
+    error: BaseException | None = None,
+    error_type: str | None = None,
     call_id: object = None,
     user_id: object = None,
     status: str | None = None,
     provider_request_id: object = None,
     level: int = logging.ERROR,
 ) -> None:
-    fields: list[tuple[str, object]] = [
+    fields: list[tuple[str, object]] = []
+    for key, value in (
         ("event", event),
         ("operation", operation),
-        ("error_type", type(error).__name__),
-    ]
-    if status is not None:
-        fields.append(("status", status))
+        ("error_type", type(error).__name__ if error is not None else error_type),
+        ("status", status),
+    ):
+        safe_value = safe_log_label(value)
+        if safe_value is not None:
+            fields.append((key, safe_value))
     for key, value in (
         ("call_id", call_id),
         ("user_id", user_id),
         ("provider_request_id", provider_request_id),
     ):
-        rendered_value = str(value) if value is not None else ""
-        if _OPAQUE_IDENTIFIER.fullmatch(rendered_value):
-            fields.append((key, rendered_value))
+        safe_value = safe_log_identifier(value)
+        if safe_value is not None:
+            fields.append((key, safe_value))
 
     logger.log(
         level,

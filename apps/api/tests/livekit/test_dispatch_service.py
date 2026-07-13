@@ -1,4 +1,5 @@
 import json
+import logging
 from dataclasses import dataclass
 from types import SimpleNamespace
 from uuid import UUID
@@ -7,6 +8,11 @@ from uuid import uuid4
 import pytest
 
 from app.services.livekit_dispatch_service import LiveKitDispatchService
+
+
+ROOM_NAME_SENTINEL = "room_TRANSCRIPT_SENTINEL_+33612345678"
+RECORDING_START_SENTINEL = "RECORDING_START_AUTHORIZATION_SENTINEL"
+RECORDING_STOP_SENTINEL = "RECORDING_STOP_TRANSCRIPT_SENTINEL"
 
 
 class FakeDispatchClient:
@@ -172,12 +178,12 @@ class FakeRecordingService:
 
 class FakeFailingRecordingService:
     async def start_room_recording(self, *, room_name: str, user_id: UUID, call_id: UUID):
-        raise RuntimeError("egress unavailable")
+        raise RuntimeError(RECORDING_START_SENTINEL)
 
 
 class FakeFailingStopRecordingService(FakeRecordingService):
     async def stop_room_recording(self, *, egress_id: str):
-        raise RuntimeError("egress stop unavailable")
+        raise RuntimeError(RECORDING_STOP_SENTINEL)
 
 
 class FakeSession:
@@ -499,9 +505,10 @@ async def test_dispatch_service_stops_recording_when_sip_participant_leaves() ->
 
 
 @pytest.mark.anyio
-async def test_dispatch_service_continues_when_recording_stop_fails() -> None:
+async def test_dispatch_service_continues_when_recording_stop_fails(caplog) -> None:
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
+    call_repository.call.livekit_room_id = ROOM_NAME_SENTINEL
     call_repository.call.recording_egress_id = "egress_123"
     service = build_dispatch_service(
         session,
@@ -510,26 +517,34 @@ async def test_dispatch_service_continues_when_recording_stop_fails() -> None:
         recording_service=FakeFailingStopRecordingService(),
     )
 
-    await service.handle_participant_left(
-        {
-            "event": "participant_left",
-            "room": {"name": "room_123"},
-            "participant": {
-                "identity": "sip_caller",
-                "kind": "SIP",
-                "attributes": {
-                    "sip.phoneNumber": "+33123456789",
+    with caplog.at_level(logging.ERROR):
+        await service.handle_participant_left(
+            {
+                "event": "participant_left",
+                "room": {"name": ROOM_NAME_SENTINEL},
+                "participant": {
+                    "identity": "sip_caller",
+                    "kind": "SIP",
+                    "attributes": {
+                        "sip.phoneNumber": "+33123456789",
+                    },
                 },
-            },
-        }
-    )
+            }
+        )
 
-    assert call_repository.active_by_room_calls == ["room_123"]
+    assert call_repository.active_by_room_calls == [ROOM_NAME_SENTINEL]
     assert session.commits == 1
+    assert RECORDING_STOP_SENTINEL not in caplog.text
+    assert ROOM_NAME_SENTINEL not in caplog.text
+    assert "event=livekit_recording_stop_failed" in caplog.text
+    assert "operation=stop_room_recording" in caplog.text
+    assert f"call_id={call_repository.call.id}" in caplog.text
+    assert "provider_request_id=egress_123" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 @pytest.mark.anyio
-async def test_dispatch_service_continues_when_recording_egress_fails() -> None:
+async def test_dispatch_service_continues_when_recording_egress_fails(caplog) -> None:
     user_id = uuid4()
     phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
     agent_config = FakeAgentConfig(
@@ -546,6 +561,7 @@ async def test_dispatch_service_continues_when_recording_egress_fails() -> None:
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
     call_repository.call.user_id = user_id
+    call_repository.call.livekit_room_id = ROOM_NAME_SENTINEL
     service = build_dispatch_service(
         session,
         dispatch_client,
@@ -556,18 +572,26 @@ async def test_dispatch_service_continues_when_recording_egress_fails() -> None:
         recording_service=FakeFailingRecordingService(),
     )
 
-    await service.handle_participant_joined(
-        {
-            "event": "participant_joined",
-            "room": {"name": "room_123"},
-            "participant": {
-                "identity": "agent_123",
-                "kind": "STANDARD",
-                "attributes": {},
-            },
-        }
-    )
+    with caplog.at_level(logging.ERROR):
+        await service.handle_participant_joined(
+            {
+                "event": "participant_joined",
+                "room": {"name": ROOM_NAME_SENTINEL},
+                "participant": {
+                    "identity": "agent_123",
+                    "kind": "STANDARD",
+                    "attributes": {},
+                },
+            }
+        )
 
     assert dispatch_client.calls == []
-    assert call_repository.pending_by_room_calls == ["room_123"]
+    assert call_repository.pending_by_room_calls == [ROOM_NAME_SENTINEL]
     assert call_repository.recording_metadata_calls == []
+    assert RECORDING_START_SENTINEL not in caplog.text
+    assert ROOM_NAME_SENTINEL not in caplog.text
+    assert "event=livekit_recording_start_failed" in caplog.text
+    assert "operation=start_room_recording" in caplog.text
+    assert f"call_id={call_repository.call.id}" in caplog.text
+    assert f"user_id={user_id}" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

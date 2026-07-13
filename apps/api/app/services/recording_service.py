@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import Depends
 
+from app.core.logging import report_safe_exception
 from app.providers.storage.base import StorageProvider
 from app.providers.storage.s3 import S3Storage, get_s3_storage
 
@@ -34,8 +35,16 @@ class RecordingService:
                 data=recording_bytes,
                 content_type="audio/mpeg",
             )
-        except Exception:
-            logger.exception("recording storage failed for call %s", payload.get("call_id"))
+        except Exception as exc:
+            report_safe_exception(
+                logger,
+                event="recording_storage_failed",
+                operation="upload_recording",
+                error=exc,
+                call_id=payload.get("call_id"),
+                user_id=payload.get("user_id"),
+                status="failed",
+            )
             return RecordingResult(object_key=None, url=None, job_enqueued=False)
         return RecordingResult(
             object_key=stored_object.object_key,

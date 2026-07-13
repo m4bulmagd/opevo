@@ -1,3 +1,4 @@
+import logging
 import pytest
 from uuid import uuid4
 
@@ -18,12 +19,21 @@ build_lifecycle_service = _module.build_lifecycle_service
 
 class FakeFailingStorageProvider:
     async def upload_bytes(self, *, object_key: str, data: bytes, content_type: str):
-        raise OSError("S3 bucket unreachable")
+        raise OSError("STORAGE_AUTHORIZATION_SENTINEL")
+
+
+class FakeExplodingRecordingService:
+    async def store_recording(self, payload: dict):
+        raise RuntimeError("OUTER_RECORDING_TRANSCRIPT_SENTINEL")
 
 
 # T5-1: Recording upload failure (provider raises) — call should still complete
 @pytest.mark.anyio
-async def test_recording_upload_failure_call_still_completes(db_session, active_user) -> None:
+async def test_recording_upload_failure_call_still_completes(
+    db_session,
+    active_user,
+    caplog,
+) -> None:
     call = Call(
         id=uuid4(),
         user_id=active_user.id,
@@ -38,22 +48,69 @@ async def test_recording_upload_failure_call_still_completes(db_session, active_
         recording_service=RecordingService(provider=FakeFailingStorageProvider()),
     )
 
-    result = await service.finalize_call(
-        {
-            "user_id": active_user.id,
-            "call_id": str(call.id),
-            "duration_seconds": 61,
-            "minutes_remaining": 10,
-            "caller_number": "+33111111111",
-            "transcript": [{"speaker": "CALLER", "text": "Hello"}],
-            "recording_bytes": b"fake-audio",
-        }
-    )
+    with caplog.at_level(logging.ERROR):
+        result = await service.finalize_call(
+            {
+                "user_id": active_user.id,
+                "call_id": str(call.id),
+                "duration_seconds": 61,
+                "minutes_remaining": 10,
+                "caller_number": "+33111111111",
+                "transcript": [{"speaker": "CALLER", "text": "Hello"}],
+                "recording_bytes": b"fake-audio",
+            }
+        )
 
     refreshed_call = await db_session.get(Call, call.id)
     assert refreshed_call.status == "completed"
     assert result.recording_job_enqueued is False
     assert result.recording_key is None
+    assert "STORAGE_AUTHORIZATION_SENTINEL" not in caplog.text
+    assert "event=recording_storage_failed" in caplog.text
+    assert "operation=upload_recording" in caplog.text
+    assert f"call_id={call.id}" in caplog.text
+    assert f"user_id={active_user.id}" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_outer_recording_failure_does_not_render_provider_exception(
+    db_session,
+    active_user,
+    caplog,
+) -> None:
+    call = Call(
+        id=uuid4(),
+        user_id=active_user.id,
+        caller_number="+33111111111",
+        status="pending",
+    )
+    db_session.add(call)
+    await db_session.commit()
+    service = build_lifecycle_service(
+        db_session,
+        recording_service=FakeExplodingRecordingService(),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        result = await service.finalize_call(
+            {
+                "user_id": active_user.id,
+                "call_id": str(call.id),
+                "duration_seconds": 61,
+                "minutes_remaining": 10,
+                "caller_number": "+33111111111",
+                "transcript": [{"speaker": "CALLER", "text": "Hello"}],
+            }
+        )
+
+    assert result.recording_job_enqueued is False
+    assert "OUTER_RECORDING_TRANSCRIPT_SENTINEL" not in caplog.text
+    assert "event=call_recording_upload_failed" in caplog.text
+    assert "operation=store_recording" in caplog.text
+    assert f"call_id={call.id}" in caplog.text
+    assert f"user_id={active_user.id}" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 # T5-2: Empty transcript — should complete with no messages

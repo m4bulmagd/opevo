@@ -1,8 +1,14 @@
 import asyncio
+import logging
+import sys
+from types import ModuleType, SimpleNamespace
+
 from agent.main import build_worker_options
+from agent.main import _safe_task
 from agent.main import _send_initial_greeting
 from agent.main import _register_standard_session_handlers
 from agent.main import _register_sts_session_handlers
+from agent.main import prewarm_assets
 from agent.schemas import DispatchMetadata
 from pathlib import Path
 
@@ -165,3 +171,91 @@ def test_send_initial_greeting_uses_generate_reply_for_sts_mode() -> None:
     assert session.say_calls == []
     assert len(session.generate_reply_calls) == 1
     assert "Hello, I'm Assistant, an AI assistant representing Sam." in session.generate_reply_calls[0]["instructions"]
+
+
+def test_background_task_failure_does_not_render_exception_message(caplog) -> None:
+    async def fail_background_task() -> None:
+        raise RuntimeError("BACKGROUND_EVENT_TRANSCRIPT_SENTINEL")
+
+    with caplog.at_level(logging.ERROR):
+        asyncio.run(_safe_task(fail_background_task()))
+
+    assert "BACKGROUND_EVENT_TRANSCRIPT_SENTINEL" not in caplog.text
+    assert "event=background_event_handler_failed" in caplog.text
+    assert "operation=run_background_event_handler" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_silero_prewarm_failure_does_not_render_exception_message(
+    monkeypatch,
+    caplog,
+) -> None:
+    from livekit import plugins
+
+    class FailingVad:
+        @staticmethod
+        def load():
+            raise RuntimeError("SILERO_AUTHORIZATION_SENTINEL")
+
+    fake_silero = ModuleType("livekit.plugins.silero")
+    fake_silero.VAD = FailingVad
+    monkeypatch.setattr(plugins, "silero", fake_silero, raising=False)
+    monkeypatch.setitem(sys.modules, "livekit.plugins.silero", fake_silero)
+    monkeypatch.setattr(
+        "agent.main.get_settings",
+        lambda: SimpleNamespace(
+            livekit_silero_vad_enabled=True,
+            livekit_turn_detector_enabled=False,
+        ),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        prewarm_assets(SimpleNamespace(userdata={}))
+
+    assert "SILERO_AUTHORIZATION_SENTINEL" not in caplog.text
+    assert "event=silero_prewarm_failed" in caplog.text
+    assert "operation=load_silero_vad" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_speechmatics_prewarm_failure_does_not_render_exception_message(
+    monkeypatch,
+    caplog,
+) -> None:
+    from livekit import plugins
+
+    smart_turn_mode = object()
+    fake_speechmatics = ModuleType("livekit.plugins.speechmatics")
+    fake_speechmatics.TurnDetectionMode = SimpleNamespace(SMART_TURN=smart_turn_mode)
+
+    class FailingSmartTurnDetector:
+        def setup(self) -> None:
+            raise RuntimeError("SPEECHMATICS_TOKEN_SENTINEL")
+
+    fake_smart_turn = ModuleType("speechmatics.voice._smart_turn")
+    fake_smart_turn.SmartTurnDetector = FailingSmartTurnDetector
+    monkeypatch.setattr(plugins, "speechmatics", fake_speechmatics, raising=False)
+    monkeypatch.setitem(sys.modules, "livekit.plugins.speechmatics", fake_speechmatics)
+    monkeypatch.setitem(sys.modules, "speechmatics.voice._smart_turn", fake_smart_turn)
+    monkeypatch.setattr(
+        "agent.main.get_settings",
+        lambda: SimpleNamespace(
+            livekit_silero_vad_enabled=False,
+            livekit_turn_detector_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "agent.main._resolve_speechmatics_turn_detection_mode",
+        lambda _plugin: smart_turn_mode,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        prewarm_assets(SimpleNamespace(userdata={}))
+
+    assert "SPEECHMATICS_TOKEN_SENTINEL" not in caplog.text
+    assert "event=speechmatics_prewarm_failed" in caplog.text
+    assert "operation=setup_smart_turn_detector" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
