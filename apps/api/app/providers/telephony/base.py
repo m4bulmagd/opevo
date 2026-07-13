@@ -8,6 +8,12 @@ class TelephonyProvisioningReviewRequired(Exception):
         self.payload = payload
 
 
+class TelephonyProvisioningPending(Exception):
+    def __init__(self, *, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class TelephonyProvider(ABC):
     @abstractmethod
     async def provision_number(

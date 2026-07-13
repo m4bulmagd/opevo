@@ -22,6 +22,10 @@ from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.usage_ledger import UsageLedger
 from app.repositories.outbox_repository import OutboxRepository
+from app.repositories.phone_number_provisioning_repository import (
+    PhoneNumberProvisioningRepository,
+)
+from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.services.outbox_service import OutboxService
 from app.services.onboarding_service import OnboardingRetryNotAllowedError, OnboardingService
 
@@ -462,6 +466,35 @@ async def test_provider_handler_runs_after_claim_transaction_releases_row_lock(
 
 
 @pytest.mark.anyio
+async def test_delivery_claims_each_event_only_when_its_handler_is_ready(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    first = await _add_event(outbox_session_factory)
+    second = await _add_event(outbox_session_factory)
+    handler_order: list[UUID] = []
+
+    async def handler(_ctx: dict, item: OutboxEvent) -> None:
+        if item.id == first.id:
+            async with outbox_session_factory() as probe_session:
+                later = await probe_session.get(OutboxEvent, second.id)
+                assert later is not None
+                assert later.status == "pending"
+        handler_order.append(item.id)
+
+    result = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "outbox_handlers": {"phone.disable": handler},
+        }
+    )
+
+    assert result == {"claimed": 2, "delivered": 2, "retried": 0, "failed": 0}
+    assert handler_order == [first.id, second.id]
+
+
+@pytest.mark.anyio
 async def test_unknown_topic_is_terminal_without_provider_retry(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -833,7 +866,84 @@ async def test_provisioning_provider_runs_without_provisioning_row_lock(
 
 
 @pytest.mark.anyio
-async def test_default_provision_handler_threads_durable_idempotency_key(
+async def test_same_provisioning_key_serializes_provider_execution_past_lease_overlap(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    async with outbox_session_factory() as session:
+        user = User(
+            clerk_user_id=f"provision_serial_{uuid4().hex}",
+            email=f"provision_serial_{uuid4().hex}@example.com",
+            country_code="FR",
+        )
+        session.add(user)
+        await session.commit()
+        user_id = user.id
+
+    first_provider_started = asyncio.Event()
+    allow_first_provider_to_finish = asyncio.Event()
+    second_provider_started = asyncio.Event()
+    provider_calls: list[str | None] = []
+
+    class BlockingProvider:
+        async def provision_number(
+            self,
+            *,
+            country_code: str,
+            operation_key: str | None = None,
+        ) -> dict:
+            provider_calls.append(operation_key)
+            if len(provider_calls) == 1:
+                first_provider_started.set()
+                await allow_first_provider_to_finish.wait()
+            else:
+                second_provider_started.set()
+            return {
+                "e164": "+33123456781",
+                "provider_number_id": f"pn_serial_{user_id.hex}",
+                "provider_connection_name": "app-disabled",
+            }
+
+        async def enable_number(self, *, provider_number_id: str) -> str:
+            return "app-active"
+
+        async def disable_number(self, *, provider_number_id: str) -> str:
+            return "app-disabled"
+
+    ctx = {
+        "session_factory": outbox_session_factory,
+        "telephony_provider": BlockingProvider(),
+    }
+    payload = {"user_id": str(user_id)}
+    operation_key = "outbox:phone-provision:lease-overlap"
+    first = asyncio.create_task(
+        phone_provisioning_job(
+            ctx,
+            payload,
+            operation_key=operation_key,
+        )
+    )
+    await asyncio.wait_for(first_provider_started.wait(), timeout=2)
+    reclaimed = asyncio.create_task(
+        phone_provisioning_job(
+            ctx,
+            payload,
+            operation_key=operation_key,
+        )
+    )
+    await asyncio.sleep(0.1)
+    overlapped_provider_execution = second_provider_started.is_set()
+    allow_first_provider_to_finish.set()
+    results = await asyncio.gather(first, reclaimed, return_exceptions=True)
+
+    assert not overlapped_provider_execution
+    assert results == [None, None]
+    assert provider_calls == [operation_key]
+
+
+@pytest.mark.anyio
+async def test_default_provision_handler_threads_key_but_requires_durable_number(
     outbox_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -866,10 +976,309 @@ async def test_default_provision_handler_threads_durable_idempotency_key(
         {"session_factory": outbox_session_factory}
     )
 
-    assert result["delivered"] == 1
+    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
     assert calls == [
         ({"user_id": str(user_id)}, event.idempotency_key)
     ]
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.last_error_code == "provider_terminal"
+
+
+@pytest.mark.anyio
+async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_routing(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    async with outbox_session_factory() as session:
+        user = User(
+            clerk_user_id=f"provision_crash_{uuid4().hex}",
+            email=f"provision_crash_{uuid4().hex}@example.com",
+            country_code="FR",
+        )
+        session.add(user)
+        await session.commit()
+        user_id = user.id
+    event = await _add_event(
+        outbox_session_factory,
+        topic="phone.provision",
+        aggregate_id=user_id,
+        idempotency_key="outbox:phone-provision:crash-safe-disabled",
+        payload={"user_id": str(user_id)},
+    )
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+
+    class CrashThenReconcileDisabledProvider:
+        def __init__(self) -> None:
+            self.operation_keys: list[str | None] = []
+            self.provisioned_connections: list[str] = []
+            self.routing_disables: list[str] = []
+
+        async def provision_number(
+            self,
+            *,
+            country_code: str,
+            operation_key: str | None = None,
+        ) -> dict:
+            self.operation_keys.append(operation_key)
+            self.provisioned_connections.append("app-disabled")
+            if len(self.operation_keys) == 1:
+                raise RuntimeError("simulated crash after provider accepted order")
+            return {
+                "e164": "+33123456782",
+                "provider_number_id": f"pn_crash_{user_id.hex}",
+                "provider_connection_name": "app-disabled",
+            }
+
+        async def enable_number(self, *, provider_number_id: str) -> str:
+            raise AssertionError("an ineligible new number must not be enabled")
+
+        async def disable_number(self, *, provider_number_id: str) -> str:
+            self.routing_disables.append(provider_number_id)
+            return "app-disabled"
+
+    provider = CrashThenReconcileDisabledProvider()
+    ctx = {
+        "session_factory": outbox_session_factory,
+        "telephony_provider": provider,
+        "outbox_now": lambda: current_time,
+    }
+
+    first = await outbox_delivery_job(ctx)
+    assert first == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
+    async with outbox_session_factory() as session:
+        assert await PhoneNumberRepository(session).get_by_user_id(user_id) is None
+        provisioning = await PhoneNumberProvisioningRepository(
+            session
+        ).get_by_user_id(user_id)
+        assert provisioning is not None
+        assert provisioning.can_retry is True
+        assert provisioning.provider_operation_key == event.idempotency_key
+
+    current_time += timedelta(seconds=10)
+    second = await outbox_delivery_job(ctx)
+
+    assert second == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
+    assert provider.operation_keys == [event.idempotency_key, event.idempotency_key]
+    assert provider.provisioned_connections == ["app-disabled", "app-disabled"]
+    assert provider.routing_disables == [f"pn_crash_{user_id.hex}"]
+    async with outbox_session_factory() as session:
+        phone_number = await PhoneNumberRepository(session).get_by_user_id(user_id)
+        assert phone_number is not None
+        assert phone_number.provider_connection_name == "app-disabled"
+        assert phone_number.is_active is False
+
+
+@pytest.mark.anyio
+async def test_pending_order_retries_outbox_without_customer_retry(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.providers.telephony.base import TelephonyProvisioningPending
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    async with outbox_session_factory() as session:
+        user = User(
+            clerk_user_id=f"provision_pending_{uuid4().hex}",
+            email=f"provision_pending_{uuid4().hex}@example.com",
+            country_code="FR",
+        )
+        session.add(user)
+        await session.commit()
+        user_id = user.id
+    event = await _add_event(
+        outbox_session_factory,
+        topic="phone.provision",
+        aggregate_id=user_id,
+        idempotency_key="outbox:phone-provision:pending-order",
+        payload={"user_id": str(user_id)},
+    )
+
+    class PendingProvider:
+        async def provision_number(self, **_kwargs) -> dict:
+            raise TelephonyProvisioningPending(reason="existing_order_pending")
+
+        async def enable_number(self, *, provider_number_id: str) -> str:
+            raise AssertionError
+
+        async def disable_number(self, *, provider_number_id: str) -> str:
+            raise AssertionError
+
+    result = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "telephony_provider": PendingProvider(),
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
+    async with outbox_session_factory() as session:
+        stored_event = await session.get(OutboxEvent, event.id)
+        provisioning = await PhoneNumberProvisioningRepository(
+            session
+        ).get_by_user_id(user_id)
+        assert stored_event is not None
+        assert stored_event.status == "pending"
+        assert stored_event.last_error_code == "provider_retryable"
+        assert provisioning is not None
+        assert provisioning.status == "failed"
+        assert provisioning.can_retry is False
+        assert provisioning.last_error_reason == "existing_order_pending"
+        assert provisioning.provider_operation_key == event.idempotency_key
+
+
+@pytest.mark.anyio
+async def test_existing_order_conflict_is_terminal_and_disables_customer_retry(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.providers.telephony.base import TelephonyProvisioningReviewRequired
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    async with outbox_session_factory() as session:
+        user = User(
+            clerk_user_id=f"provision_conflict_{uuid4().hex}",
+            email=f"provision_conflict_{uuid4().hex}@example.com",
+            country_code="FR",
+        )
+        session.add(user)
+        await session.commit()
+        user_id = user.id
+    event = await _add_event(
+        outbox_session_factory,
+        topic="phone.provision",
+        aggregate_id=user_id,
+        idempotency_key="outbox:phone-provision:order-conflict",
+        payload={"user_id": str(user_id)},
+    )
+
+    class ConflictProvider:
+        async def provision_number(self, **_kwargs) -> dict:
+            raise TelephonyProvisioningReviewRequired(
+                reason="existing_order_conflict",
+                payload={
+                    "event": "phone_number_provisioning_review_required",
+                    "contact_support": True,
+                    "manual_review_required": True,
+                },
+            )
+
+        async def enable_number(self, *, provider_number_id: str) -> str:
+            raise AssertionError
+
+        async def disable_number(self, *, provider_number_id: str) -> str:
+            raise AssertionError
+
+    result = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "telephony_provider": ConflictProvider(),
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
+    async with outbox_session_factory() as session:
+        stored_event = await session.get(OutboxEvent, event.id)
+        provisioning = await PhoneNumberProvisioningRepository(
+            session
+        ).get_by_user_id(user_id)
+        assert stored_event is not None
+        assert stored_event.status == "failed"
+        assert stored_event.last_error_code == "provider_terminal"
+        assert provisioning is not None
+        assert provisioning.status == "failed"
+        assert provisioning.can_retry is False
+        assert provisioning.last_error_reason == "existing_order_conflict"
+
+
+@pytest.mark.anyio
+async def test_customer_retry_new_event_reuses_original_provider_operation_key(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    original_provider_key = "outbox:phone-provision:original-attempt"
+    async with outbox_session_factory() as session:
+        user = User(
+            clerk_user_id=f"provision_customer_retry_{uuid4().hex}",
+            email=f"provision_customer_retry_{uuid4().hex}@example.com",
+            country_code="FR",
+        )
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id=f"cus_{uuid4().hex}",
+                stripe_subscription_id=f"sub_{uuid4().hex}",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+            )
+        )
+        session.add(
+            PhoneNumberProvisioning(
+                user_id=user.id,
+                target_country_code="FR",
+                status="failed",
+                attempt_count=1,
+                can_retry=True,
+                provider_operation_key=original_provider_key,
+            )
+        )
+        await session.commit()
+        user_id = user.id
+
+    async with outbox_session_factory() as session:
+        await OnboardingService(session).retry_provisioning(
+            user_id,
+            arq_pool=None,
+        )
+        retry_event = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.aggregate_id == user_id)
+        )
+        assert retry_event is not None
+
+    provider_keys: list[str | None] = []
+
+    class RetryProvider:
+        async def provision_number(
+            self,
+            *,
+            country_code: str,
+            operation_key: str | None = None,
+        ) -> dict:
+            provider_keys.append(operation_key)
+            return {
+                "e164": "+33123456783",
+                "provider_number_id": f"pn_customer_retry_{user_id.hex}",
+                "provider_connection_name": "app-disabled",
+            }
+
+        async def enable_number(self, *, provider_number_id: str) -> str:
+            raise AssertionError
+
+        async def disable_number(self, *, provider_number_id: str) -> str:
+            return "app-disabled"
+
+    result = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "telephony_provider": RetryProvider(),
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
+    assert retry_event.idempotency_key != original_provider_key
+    assert provider_keys == [original_provider_key]
+    async with outbox_session_factory() as session:
+        provisioning = await PhoneNumberProvisioningRepository(
+            session
+        ).get_by_user_id(user_id)
+        assert provisioning is not None
+        assert provisioning.status == "succeeded"
+        assert provisioning.provider_operation_key == original_provider_key
 
 
 @pytest.mark.anyio

@@ -79,16 +79,18 @@ async def outbox_delivery_job(ctx: dict[str, Any], _payload: dict | None = None)
     )
     result = {"claimed": 0, "delivered": 0, "retried": 0, "failed": 0}
 
-    claim_time = now_provider()
-    async with session_factory() as session:
-        claimed = await OutboxRepository(session).claim_batch(
-            limit=OUTBOX_BATCH_SIZE,
-            now=claim_time,
-        )
-        await session.commit()
-    result["claimed"] = len(claimed)
-
-    for event in claimed:
+    for _ in range(OUTBOX_BATCH_SIZE):
+        claim_time = now_provider()
+        async with session_factory() as session:
+            claimed = await OutboxRepository(session).claim_batch(
+                limit=1,
+                now=claim_time,
+            )
+            await session.commit()
+        if not claimed:
+            break
+        event = claimed[0]
+        result["claimed"] += 1
         attempt_count = event.attempt_count
         try:
             try:

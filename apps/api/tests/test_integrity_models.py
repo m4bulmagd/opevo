@@ -80,6 +80,16 @@ def test_phone_number_provisioning_checks_use_final_task7_state_set() -> None:
         ),
     }
 
+    operation_key = PhoneNumberProvisioning.__table__.columns[
+        "provider_operation_key"
+    ]
+    assert operation_key.nullable is True
+    assert operation_key.type.length == 255
+    assert (
+        "uq_phone_number_provisionings_provider_operation_key"
+        in _constraint_names(PhoneNumberProvisioning)
+    )
+
 
 def test_subscription_persists_nullable_stripe_event_ordering_fields() -> None:
     columns = Subscription.__table__.columns

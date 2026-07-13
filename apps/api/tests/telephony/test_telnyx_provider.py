@@ -2,7 +2,10 @@ import logging
 import pytest
 from types import SimpleNamespace
 
-from app.providers.telephony.base import TelephonyProvisioningReviewRequired
+from app.providers.telephony.base import (
+    TelephonyProvisioningPending,
+    TelephonyProvisioningReviewRequired,
+)
 from app.providers.telephony.telnyx import TelephonyTelnyx
 from app.services.telephony_service import TelephonyService
 
@@ -145,7 +148,7 @@ async def test_telnyx_provider_orders_number_and_sets_connection() -> None:
 
     assert result["e164"] == "+33123456789"
     assert result["provider_number_id"] == "pn_123"
-    assert result["provider_connection_name"] == "app-active"
+    assert result["provider_connection_name"] == "app-disabled"
     assert FakePhoneNumberOrderResource.calls[0]["phone_numbers"] == [{"phone_number": "+33123456789"}]
     assert (
         FakePhoneNumberOrderResource.calls[0]["customer_reference"]
@@ -154,7 +157,7 @@ async def test_telnyx_provider_orders_number_and_sets_connection() -> None:
     assert FakePhoneNumberOrderResource.list_calls == [
         {"filter[customer_reference]": "outbox:phone-provision:evt_123"}
     ]
-    assert FakePhoneNumberResource.modify_calls[0]["connection_id"] == "conn_active"
+    assert FakePhoneNumberResource.modify_calls[0]["connection_id"] == "conn_disabled"
 
 
 @pytest.mark.anyio
@@ -202,25 +205,87 @@ async def test_telnyx_provider_reconciles_same_operation_before_buying_again() -
 
 
 @pytest.mark.anyio
+async def test_telnyx_provider_reports_existing_pending_order_for_outbox_retry() -> None:
+    FakeAvailablePhoneNumberResource.calls = []
+    FakePhoneNumberOrderResource.calls = []
+    FakePhoneNumberOrderResource.list_calls = []
+    FakePhoneNumberOrderResource.orders = [
+        SimpleNamespace(
+            id="order_pending",
+            customer_reference="outbox:phone-provision:stable",
+            requirements_met=False,
+            phone_numbers=[
+                SimpleNamespace(
+                    phone_number="+33123456789",
+                    status="pending",
+                )
+            ],
+        )
+    ]
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        active_connection_id="conn_active",
+        disabled_connection_id="conn_disabled",
+        ordering_enabled=True,
+        available_phone_number_resource=FakeAvailablePhoneNumberResource,
+        phone_number_order_resource=FakePhoneNumberOrderResource,
+        phone_number_resource=FakePhoneNumberResource,
+    )
+
+    with pytest.raises(TelephonyProvisioningPending) as exc_info:
+        await provider.provision_number(
+            country_code="FR",
+            operation_key="outbox:phone-provision:stable",
+        )
+
+    assert exc_info.value.reason == "existing_order_pending"
+    assert not FakePhoneNumberOrderResource.calls
+    assert not FakeAvailablePhoneNumberResource.calls
+
+
+@pytest.mark.anyio
+async def test_telnyx_provider_requires_manual_review_for_unmet_success_order() -> None:
+    FakeAvailablePhoneNumberResource.calls = []
+    FakePhoneNumberOrderResource.calls = []
+    FakePhoneNumberOrderResource.orders = [
+        SimpleNamespace(
+            id="order_unmet",
+            customer_reference="outbox:phone-provision:stable",
+            requirements_met=False,
+            phone_numbers=[
+                SimpleNamespace(
+                    phone_number="+33123456789",
+                    status="success",
+                )
+            ],
+        )
+    ]
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        active_connection_id="conn_active",
+        disabled_connection_id="conn_disabled",
+        ordering_enabled=True,
+        available_phone_number_resource=FakeAvailablePhoneNumberResource,
+        phone_number_order_resource=FakePhoneNumberOrderResource,
+        phone_number_resource=FakePhoneNumberResource,
+    )
+
+    with pytest.raises(TelephonyProvisioningReviewRequired) as exc_info:
+        await provider.provision_number(
+            country_code="FR",
+            operation_key="outbox:phone-provision:stable",
+        )
+
+    assert exc_info.value.reason == "existing_order_requires_review"
+    assert exc_info.value.payload["manual_review_required"] is True
+    assert not FakePhoneNumberOrderResource.calls
+    assert not FakeAvailablePhoneNumberResource.calls
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("orders", "expected_reason"),
     [
-        (
-            [
-                SimpleNamespace(
-                    id="order_pending",
-                    customer_reference="outbox:phone-provision:stable",
-                    requirements_met=False,
-                    phone_numbers=[
-                        SimpleNamespace(
-                            phone_number="+33123456789",
-                            status="pending",
-                        )
-                    ],
-                )
-            ],
-            "existing_order_requires_review",
-        ),
         (
             [
                 SimpleNamespace(

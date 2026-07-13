@@ -1,6 +1,15 @@
 from uuid import UUID
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, ForeignKey, Integer, String, Uuid
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.schema import conv
 
@@ -20,6 +29,12 @@ class PhoneNumberProvisioning(UUIDPrimaryKeyMixin, TimestampMixin, Base):
                 "ck_phone_number_provisionings_attempt_count_nonnegative"
             ),
         ),
+        UniqueConstraint(
+            "provider_operation_key",
+            name=conv(
+                "uq_phone_number_provisionings_provider_operation_key"
+            ),
+        ),
     )
 
     user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False, unique=True, index=True)
@@ -32,3 +47,7 @@ class PhoneNumberProvisioning(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     can_retry: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     last_error_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_error_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    provider_operation_key: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )

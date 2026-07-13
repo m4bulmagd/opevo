@@ -626,8 +626,8 @@ git commit -m "fix: make usage accounting authoritative and concurrency safe"
 async def test_outbox_event_rolls_back_with_business_transaction(session):
     await outbox.add(
         topic="phone.disable",
-        aggregate_type="subscription",
-        aggregate_id=subscription.id,
+        aggregate_type="user",
+        aggregate_id=user.id,
         idempotency_key="stripe:sub_updated:evt_123",
         payload={"user_id": str(user.id)},
     )
@@ -664,7 +664,7 @@ delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), n
 
 - [ ] **Step 4: Implement claim, exponential retry, and terminal failure**
 
-Claim in a short transaction, increment `attempt_count` as the claim generation, set a five-minute lease in `next_attempt_at`, and commit before provider I/O. Expired `processing` work is reclaimable; completion/retry updates must match `(id, attempt_count)` so an old worker cannot overwrite a newer claim. Preserve aggregate order when claiming.
+Claim one event in a short transaction immediately before its handler runs, up to the per-job cap; do not preclaim a batch whose leases can age while earlier provider calls execute. Increment `attempt_count` as the claim generation, set a five-minute lease in `next_attempt_at`, and commit before provider I/O. Expired `processing` work is reclaimable; completion/retry updates must match `(id, attempt_count)` so an old worker cannot overwrite a newer claim. Preserve aggregate order when claiming. Provisioning additionally takes a PostgreSQL transaction-scoped advisory lock keyed by its durable provider operation key on a dedicated connection, so a lease-reclaimed worker cannot overlap the same Telnyx operation after a long provider call.
 
 Retry after failures at 10 seconds, 1 minute, 5 minutes, 30 minutes, and 2 hours. After those five retry opportunities, mark the event `failed` on the sixth total delivery failure and emit a structured error metric. Unknown topics and malformed reference payloads fail terminally. Persist allowlisted safe error codes only; never store raw provider error bodies in `last_error_code`.
 
@@ -674,7 +674,7 @@ Only earlier `pending` or `processing` events block a later event for the same a
 
 Write `phone.provision`, `phone.enable`, and `phone.disable` events inside Stripe, onboarding-retry, and agent-configuration transactions. Schedule only the generic delivery job after commit; enqueue failure is nonfatal because PostgreSQL is authoritative. The minute reconciliation poller also claims due/expired events, so a process crash between commit and enqueue does not lose work.
 
-Telnyx provisioning passes the stable outbox idempotency key as `customer_reference`, reconciles an existing order by that reference before creating one, and therefore survives provider-success/DB-failure replay. Routing delivery re-derives the desired current state before provider I/O, so a stale enable intent cannot override a later cancellation. LiveKit dispatch remains owned by Task 8; post-call recording and notification production remains owned by Task 10.
+Telnyx provisioning stores the first outbox idempotency key in nullable, uniquely constrained `phone_number_provisionings.provider_operation_key` before provider I/O and passes that stable value as `customer_reference`. Provider replay and a later customer-created retry event reuse the stored key. Reconcile an existing order by that reference before creating one, attach every newly ordered or reconciled number to the disabled connection, and do not mark the outbox event delivered until the `PhoneNumber` exists durably. Pending/in-progress orders remain automatic outbox retries with customer retry disabled; conflicts, malformed orders, missing keys, and manual-review states fail terminally with customer retry disabled, while safe no-purchase and unexpected transient failures may expose retry. Routing delivery alone may enable the number after re-deriving current eligibility, so a stale enable intent cannot override a later cancellation. LiveKit dispatch remains owned by Task 8; post-call recording and notification production remains owned by Task 10.
 
 Routing delivery always reapplies the authoritative absolute enable/disable provider operation, even when the database projection already matches, then validates the returned connection name before persisting the projection. Provisioning commits its short `running` transition before Telnyx I/O. Terminal-failure logs use the redaction filter's preserved `event`, `operation`, `status`, and `count` fields.
 

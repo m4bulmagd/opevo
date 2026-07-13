@@ -25,8 +25,14 @@ class PhoneNumberProvisioningRepository:
         )
         return result.scalar_one_or_none()
 
-    async def mark_running(self, *, user_id, target_country_code: str) -> PhoneNumberProvisioning:
-        provisioning = await self.get_by_user_id(user_id)
+    async def mark_running(
+        self,
+        *,
+        user_id,
+        target_country_code: str,
+        operation_key: str | None = None,
+    ) -> PhoneNumberProvisioning:
+        provisioning = await self.get_by_user_id_for_update(user_id)
         if provisioning is None:
             provisioning = PhoneNumberProvisioning(
                 user_id=user_id,
@@ -36,6 +42,7 @@ class PhoneNumberProvisioningRepository:
                 can_retry=False,
                 last_error_reason=None,
                 last_error_payload=None,
+                provider_operation_key=operation_key,
             )
             self.session.add(provisioning)
         else:
@@ -46,6 +53,8 @@ class PhoneNumberProvisioningRepository:
             provisioning.last_error_reason = None
             provisioning.last_error_payload = None
             provisioning.phone_number_id = None
+            if provisioning.provider_operation_key is None:
+                provisioning.provider_operation_key = operation_key
 
         await self.session.flush()
         return provisioning

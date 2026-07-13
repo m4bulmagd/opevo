@@ -139,6 +139,26 @@ def test_upgrade_adds_outbox_checks_and_due_work_index(
     assert "aggregate_type = 'user'" in str(normalization[0][0][0])
     assert "json_build_object('user_id'" in str(normalization[0][0][0])
 
+    added_columns = _ddl_calls(operations, "add_column")
+    assert len(added_columns) == 1
+    table_name, operation_key = added_columns[0][0]
+    assert table_name == "phone_number_provisionings"
+    assert operation_key.name == "provider_operation_key"
+    assert operation_key.type.length == 255
+    assert operation_key.nullable is True
+
+    unique_constraints = _ddl_calls(operations, "create_unique_constraint")
+    assert unique_constraints == [
+        (
+            (
+                "uq_phone_number_provisionings_provider_operation_key",
+                "phone_number_provisionings",
+                ["provider_operation_key"],
+            ),
+            {},
+        )
+    ]
+
 
 def test_preflight_failure_is_opaque_and_prevents_ddl(
     monkeypatch: pytest.MonkeyPatch,
@@ -170,6 +190,11 @@ def test_downgrade_removes_due_index_then_checks(
         ("drop_index", "ix_outbox_events_due_work"),
         (
             "drop_constraint",
+            "uq_phone_number_provisionings_provider_operation_key",
+        ),
+        ("drop_column", "phone_number_provisionings"),
+        (
+            "drop_constraint",
             "ck_phone_number_provisionings_attempt_count_nonnegative",
         ),
         ("drop_constraint", "ck_phone_number_provisionings_status_allowed"),
@@ -196,6 +221,7 @@ def test_downgrade_uses_preformatted_check_names_with_repo_naming_convention() -
 
     sql = output.getvalue()
     expected_names = (
+        "uq_phone_number_provisionings_provider_operation_key",
         "ck_phone_number_provisionings_attempt_count_nonnegative",
         "ck_phone_number_provisionings_status_allowed",
         "ck_outbox_events_delivery_consistent",

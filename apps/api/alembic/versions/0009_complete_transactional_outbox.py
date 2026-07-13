@@ -150,6 +150,19 @@ def upgrade() -> None:
         "phone_number_provisionings",
         "attempt_count >= 0",
     )
+    op.add_column(
+        "phone_number_provisionings",
+        sa.Column(
+            "provider_operation_key",
+            sa.String(length=255),
+            nullable=True,
+        ),
+    )
+    op.create_unique_constraint(
+        op.f("uq_phone_number_provisionings_provider_operation_key"),
+        "phone_number_provisionings",
+        ["provider_operation_key"],
+    )
     op.create_index(
         "ix_outbox_events_due_work",
         "outbox_events",
@@ -160,6 +173,12 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_outbox_events_due_work", table_name="outbox_events")
+    op.drop_constraint(
+        op.f("uq_phone_number_provisionings_provider_operation_key"),
+        "phone_number_provisionings",
+        type_="unique",
+    )
+    op.drop_column("phone_number_provisionings", "provider_operation_key")
     op.drop_constraint(
         op.f("ck_phone_number_provisionings_attempt_count_nonnegative"),
         "phone_number_provisionings",

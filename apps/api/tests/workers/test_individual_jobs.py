@@ -578,8 +578,10 @@ class CapturingPhoneProvisioningRepository:
     def __init__(self) -> None:
         self.failed_calls: list[dict] = []
 
-    async def mark_running(self, **kwargs) -> None:
-        return None
+    async def mark_running(self, **kwargs):
+        return SimpleNamespace(
+            provider_operation_key=kwargs.get("operation_key")
+        )
 
     async def mark_failed(self, **kwargs) -> None:
         self.failed_calls.append(kwargs)
@@ -677,6 +679,125 @@ async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_de
     assert provisionings[0].attempt_count == 1
     assert provisionings[0].can_retry is False
     assert provisionings[0].phone_number_id == phone_numbers[0].id
+    assert (
+        provisionings[0].provider_operation_key
+        == "outbox:phone-provision:evt_123"
+    )
+
+
+@pytest.mark.anyio
+async def test_phone_provisioning_reuses_first_provider_key_across_customer_retry(
+    db_session, active_user
+) -> None:
+    from app.models.phone_number_provisioning import PhoneNumberProvisioning
+    from app.providers.telephony.base import TelephonyProvisioningReviewRequired
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    class RetryThenSucceedProvider(CapturingProvisioningProvider):
+        async def provision_number(
+            self,
+            *,
+            country_code: str,
+            operation_key: str | None = None,
+        ) -> dict:
+            self.country_codes.append(country_code)
+            self.operation_keys.append(operation_key)
+            if len(self.operation_keys) == 1:
+                raise TelephonyProvisioningReviewRequired(
+                    reason="no_affordable_number",
+                    payload={
+                        "event": "phone_number_provisioning_review_required",
+                        "country_code": country_code,
+                        "contact_support": True,
+                    },
+                )
+            return {
+                "e164": "+33123456789",
+                "provider_number_id": "pn_123",
+                "provider_connection_name": "app-disabled",
+            }
+
+    provider = RetryThenSucceedProvider()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    await phone_provisioning_job(
+        {
+            "telephony_provider": provider,
+            "session_factory": session_factory,
+        },
+        {"user_id": str(active_user.id)},
+        operation_key="outbox:phone-provision:first-event",
+    )
+    await phone_provisioning_job(
+        {
+            "telephony_provider": provider,
+            "session_factory": session_factory,
+        },
+        {"user_id": str(active_user.id)},
+        operation_key="outbox:phone-provision:customer-retry-event",
+    )
+
+    provisioning = await db_session.scalar(
+        select(PhoneNumberProvisioning).where(
+            PhoneNumberProvisioning.user_id == active_user.id
+        )
+    )
+    assert provisioning is not None
+    assert provider.operation_keys == [
+        "outbox:phone-provision:first-event",
+        "outbox:phone-provision:first-event",
+    ]
+    assert (
+        provisioning.provider_operation_key
+        == "outbox:phone-provision:first-event"
+    )
+    assert provisioning.status == "succeeded"
+
+
+@pytest.mark.anyio
+async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
+    db_session, active_user
+) -> None:
+    from app.models.phone_number_provisioning import PhoneNumberProvisioning
+    from app.providers.telephony.base import TelephonyProvisioningPending
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    class PendingProvider(CapturingProvisioningProvider):
+        async def provision_number(
+            self,
+            *,
+            country_code: str,
+            operation_key: str | None = None,
+        ) -> dict:
+            self.operation_keys.append(operation_key)
+            raise TelephonyProvisioningPending(reason="existing_order_pending")
+
+    provider = PendingProvider()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(TelephonyProvisioningPending):
+        await phone_provisioning_job(
+            {
+                "telephony_provider": provider,
+                "session_factory": session_factory,
+            },
+            {"user_id": str(active_user.id)},
+            operation_key="outbox:phone-provision:pending",
+        )
+
+    provisioning = await db_session.scalar(
+        select(PhoneNumberProvisioning).where(
+            PhoneNumberProvisioning.user_id == active_user.id
+        )
+    )
+    assert provisioning is not None
+    assert provisioning.status == "failed"
+    assert provisioning.can_retry is False
+    assert provisioning.last_error_reason == "existing_order_pending"
+    assert (
+        provisioning.provider_operation_key
+        == "outbox:phone-provision:pending"
+    )
 
 
 @pytest.mark.anyio

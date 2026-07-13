@@ -7,6 +7,9 @@ from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
+from app.repositories.phone_number_provisioning_repository import (
+    PhoneNumberProvisioningRepository,
+)
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.services.onboarding_service import OnboardingService
@@ -33,6 +36,26 @@ async def deliver_phone_provision(
         dict(event.payload),
         operation_key=event.idempotency_key,
     )
+    user_id = UUID(event.payload["user_id"])
+    session_factory = ctx.get("session_factory") or get_session_factory()
+    async with session_factory() as session:
+        phone_number = await PhoneNumberRepository(session).get_by_user_id(user_id)
+        provisioning = await PhoneNumberProvisioningRepository(
+            session
+        ).get_by_user_id(user_id)
+        await session.commit()
+    if phone_number is None:
+        retryable = bool(
+            provisioning is not None
+            and (
+                provisioning.can_retry
+                or provisioning.last_error_reason == "existing_order_pending"
+            )
+        )
+        raise OutboxDeliveryError(
+            "provider_retryable" if retryable else "provider_terminal",
+            retryable=retryable,
+        )
     await deliver_phone_routing(ctx, event)
 
 

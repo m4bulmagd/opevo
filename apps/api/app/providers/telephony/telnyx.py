@@ -5,7 +5,11 @@ import telnyx
 
 from app.core.config import get_settings
 from app.core.redaction import redact_phone
-from app.providers.telephony.base import TelephonyProvider, TelephonyProvisioningReviewRequired
+from app.providers.telephony.base import (
+    TelephonyProvider,
+    TelephonyProvisioningPending,
+    TelephonyProvisioningReviewRequired,
+)
 
 
 MAX_SELECTION_ATTEMPTS = 3
@@ -159,13 +163,6 @@ class TelephonyTelnyx(TelephonyProvider):
                 order_count=1,
             )
 
-        if self._read_field(order, "requirements_met") is not True:
-            self._raise_existing_order_review(
-                reason="existing_order_requires_review",
-                country_code=country_code,
-                order_count=1,
-            )
-
         ordered_numbers = list(self._read_field(order, "phone_numbers") or [])
         if len(ordered_numbers) != 1:
             self._raise_existing_order_review(
@@ -176,7 +173,12 @@ class TelephonyTelnyx(TelephonyProvider):
         ordered_number = ordered_numbers[0]
         status = self._read_field(ordered_number, "status")
         status = getattr(status, "value", status)
-        if status != "success":
+        if status in {"pending", "in_progress"}:
+            raise TelephonyProvisioningPending(reason="existing_order_pending")
+        if (
+            status != "success"
+            or self._read_field(order, "requirements_met") is not True
+        ):
             self._raise_existing_order_review(
                 reason="existing_order_requires_review",
                 country_code=country_code,
@@ -203,13 +205,13 @@ class TelephonyTelnyx(TelephonyProvider):
         self.phone_number_resource.modify(
             provider_number.id,
             api_key=self.api_key,
-            connection_id=self.active_connection_id,
+            connection_id=self.disabled_connection_id,
         )
 
         return {
             "e164": selected_number,
             "provider_number_id": provider_number.id,
-            "provider_connection_name": "app-active",
+            "provider_connection_name": "app-disabled",
         }
 
     @staticmethod
