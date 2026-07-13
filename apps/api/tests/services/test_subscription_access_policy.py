@@ -71,3 +71,20 @@ def test_can_start_checkout_only_without_subscription_or_after_terminal_status(
     allowed: bool,
 ) -> None:
     assert SubscriptionAccessPolicy.can_start_checkout(status) is allowed
+
+
+@pytest.mark.parametrize(
+    ("status", "allowed"),
+    [
+        ("canceled", True),
+        ("incomplete_expired", True),
+        ("active", False),
+        ("trialing", False),
+        ("unknown", False),
+    ],
+)
+def test_can_replace_subscription_is_the_terminal_status_contract(
+    status: str,
+    allowed: bool,
+) -> None:
+    assert SubscriptionAccessPolicy.can_replace_subscription(status) is allowed

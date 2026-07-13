@@ -12,8 +12,7 @@ import type { Subscription } from "@/lib/types/billing";
 
 export function BillingActionsCard({ subscription }: { subscription: Subscription | null }) {
   const [isPending, startTransition] = useTransition();
-  const canStartCheckout =
-    subscription === null || subscription.status === "canceled" || subscription.status === "incomplete_expired";
+  const canStartCheckout = subscription === null || subscription.can_start_checkout;
 
   const handleCheckout = () => {
     startTransition(async () => {

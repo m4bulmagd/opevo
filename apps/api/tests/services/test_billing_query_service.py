@@ -61,6 +61,37 @@ async def test_get_subscription_returns_none_when_missing() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("status", "can_start_checkout"),
+    [("active", False), ("canceled", True)],
+)
+async def test_get_subscription_exposes_checkout_eligibility(
+    status: str,
+    can_start_checkout: bool,
+) -> None:
+    from app.services.billing_query_service import BillingQueryService
+
+    subscription = SimpleNamespace(
+        plan_tier="starter",
+        status=status,
+        allocated_minutes=60,
+        current_period_start=None,
+        current_period_end=None,
+        stripe_customer_id="cus_policy",
+        stripe_subscription_id="sub_policy",
+    )
+    service = BillingQueryService(
+        subscription_repository=FakeSubscriptionRepository(subscription),
+        usage_repository=FakeUsageRepository(),
+    )
+
+    result = await service.get_subscription("user_123")
+
+    assert result is not None
+    assert result.can_start_checkout is can_start_checkout
+
+
+@pytest.mark.anyio
 async def test_get_usage_ledger_returns_newest_first_with_limit() -> None:
     from app.services.billing_query_service import BillingQueryService
 

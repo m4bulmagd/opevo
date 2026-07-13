@@ -2,11 +2,12 @@
 
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -18,6 +19,7 @@ from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.services.billing_query_service import BillingQueryService
+from app.services.billing_service import BillingService
 from app.services.onboarding_service import OnboardingService
 
 
@@ -104,3 +106,80 @@ async def test_billing_and_onboarding_share_a_real_postgres_async_session(
     assert usage.subscription_status == "trialing"
     assert onboarding.subscription_status == "trialing"
     assert onboarding.overall_status == "subscription_active"
+
+
+@pytest.mark.anyio
+async def test_stale_identity_map_cannot_regress_locked_subscription(
+    task5_service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    generation = datetime(2026, 1, 1, tzinfo=UTC)
+    initial_watermark = datetime(2026, 2, 1, tzinfo=UTC)
+    newer_watermark = datetime(2026, 4, 1, tzinfo=UTC)
+    older_event = datetime(2026, 3, 1, tzinfo=UTC)
+    newer_period_end = datetime(2026, 6, 1, tzinfo=UTC)
+
+    async with task5_service_session_factory() as seed_session:
+        user = User(
+            clerk_user_id=f"user_stale_{uuid4().hex}",
+            email=f"stale_{uuid4().hex}@example.com",
+        )
+        seed_session.add(user)
+        await seed_session.flush()
+        subscription = Subscription(
+            user_id=user.id,
+            stripe_customer_id="cus_before_concurrent_update",
+            stripe_subscription_id="sub_concurrent_ordering",
+            plan_tier="starter",
+            status="active",
+            allocated_minutes=60,
+            current_period_end=datetime(2026, 3, 1, tzinfo=UTC),
+            stripe_subscription_created_at=generation,
+            last_stripe_event_created_at=initial_watermark,
+        )
+        seed_session.add(subscription)
+        await seed_session.commit()
+        user_id = user.id
+
+    async with task5_service_session_factory() as stale_session:
+        stale_subscription = await stale_session.scalar(
+            select(Subscription).where(Subscription.user_id == user_id)
+        )
+        assert stale_subscription is not None
+        assert stale_subscription.status == "active"
+
+        async with task5_service_session_factory() as newer_session:
+            current = await newer_session.scalar(
+                select(Subscription).where(Subscription.user_id == user_id)
+            )
+            assert current is not None
+            current.status = "past_due"
+            current.stripe_customer_id = "cus_after_concurrent_update"
+            current.current_period_end = newer_period_end
+            current.last_stripe_event_created_at = newer_watermark
+            await newer_session.commit()
+
+        service = BillingService(stale_session)
+        await service._handle_subscription_event(
+            {
+                "id": "sub_concurrent_ordering",
+                "created": int(generation.timestamp()),
+                "status": "active",
+                "metadata": {},
+                "items": {"data": []},
+            },
+            "evt_stale_identity_map",
+            "customer.subscription.updated",
+            older_event,
+        )
+        await stale_session.commit()
+
+    async with task5_service_session_factory() as verify_session:
+        persisted = await verify_session.scalar(
+            select(Subscription).where(Subscription.user_id == user_id)
+        )
+
+    assert persisted is not None
+    assert persisted.status == "past_due"
+    assert persisted.stripe_customer_id == "cus_after_concurrent_update"
+    assert persisted.current_period_end == newer_period_end
+    assert persisted.last_stripe_event_created_at == newer_watermark

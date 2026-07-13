@@ -3,7 +3,7 @@ from datetime import datetime
 
 class SubscriptionAccessPolicy:
     _ROUTING_STATUSES = frozenset({"active", "trialing"})
-    _CHECKOUT_STATUSES = frozenset({None, "canceled", "incomplete_expired"})
+    _REPLACEABLE_STATUSES = frozenset({"canceled", "incomplete_expired"})
 
     @classmethod
     def can_route(cls, status: str, period_end: datetime | None) -> bool:
@@ -16,4 +16,8 @@ class SubscriptionAccessPolicy:
 
     @classmethod
     def can_start_checkout(cls, status: str | None) -> bool:
-        return status in cls._CHECKOUT_STATUSES
+        return status is None or cls.can_replace_subscription(status)
+
+    @classmethod
+    def can_replace_subscription(cls, status: str) -> bool:
+        return status in cls._REPLACEABLE_STATUSES

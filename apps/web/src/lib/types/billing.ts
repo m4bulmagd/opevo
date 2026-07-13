@@ -15,6 +15,7 @@ export type Subscription = {
   current_period_end: string | null;
   stripe_customer_id: string | null;
   stripe_subscription_id: string | null;
+  can_start_checkout: boolean;
 };
 
 export type UsageLedgerEntry = {

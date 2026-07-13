@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.repositories.subscription_repository import (
+    StripeSubscriptionConflictError,
     StripeSubscriptionOwnershipError,
     SubscriptionRepository,
 )
@@ -108,6 +109,153 @@ async def test_older_subscription_generation_cannot_replace_current_row(
     assert ignored is None
     assert current.stripe_subscription_id == "sub_new"
     assert current.status == "active"
+
+
+@pytest.mark.anyio
+async def test_legacy_same_id_delayed_routing_event_cannot_restore_access(
+    db_session: AsyncSession,
+) -> None:
+    user = await _user(db_session, "legacy-delayed-routing")
+    legacy_watermark = datetime(2026, 4, 1, tzinfo=UTC)
+    legacy = Subscription(
+        user_id=user.id,
+        stripe_customer_id="cus_legacy_delayed",
+        stripe_subscription_id="sub_legacy_delayed",
+        plan_tier="starter",
+        status="canceled",
+        allocated_minutes=60,
+        stripe_subscription_created_at=None,
+        last_stripe_event_created_at=None,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=legacy_watermark,
+    )
+    db_session.add(legacy)
+    await db_session.flush()
+
+    ignored = await SubscriptionRepository(
+        db_session
+    ).upsert_by_stripe_subscription_id(
+        **_upsert_arguments(
+            user.id,
+            subscription_id="sub_legacy_delayed",
+            customer_id="cus_legacy_delayed",
+            status="active",
+            subscription_created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            event_created_at=datetime(2026, 3, 1, tzinfo=UTC),
+        )
+    )
+
+    assert ignored is None
+    assert legacy.status == "canceled"
+    assert legacy.stripe_subscription_created_at is None
+    assert legacy.last_stripe_event_created_at is None
+
+
+@pytest.mark.anyio
+async def test_older_subscription_cannot_replace_terminal_legacy_row(
+    db_session: AsyncSession,
+) -> None:
+    user = await _user(db_session, "legacy-old-replacement")
+    legacy = Subscription(
+        user_id=user.id,
+        stripe_customer_id="cus_legacy_replacement",
+        stripe_subscription_id="sub_legacy_current",
+        plan_tier="starter",
+        status="canceled",
+        allocated_minutes=60,
+        stripe_subscription_created_at=None,
+        last_stripe_event_created_at=None,
+        created_at=datetime(2026, 4, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 4, 1, tzinfo=UTC),
+    )
+    db_session.add(legacy)
+    await db_session.flush()
+
+    ignored = await SubscriptionRepository(
+        db_session
+    ).upsert_by_stripe_subscription_id(
+        **_upsert_arguments(
+            user.id,
+            subscription_id="sub_legacy_older",
+            customer_id="cus_legacy_replacement",
+            status="active",
+            subscription_created_at=datetime(2026, 3, 1, tzinfo=UTC),
+            event_created_at=datetime(2026, 5, 1, tzinfo=UTC),
+        )
+    )
+
+    assert ignored is None
+    assert legacy.stripe_subscription_id == "sub_legacy_current"
+    assert legacy.status == "canceled"
+
+
+@pytest.mark.anyio
+async def test_equal_generation_for_distinct_subscription_is_ambiguous(
+    db_session: AsyncSession,
+) -> None:
+    user = await _user(db_session, "equal-generation")
+    generation = datetime(2026, 3, 1, tzinfo=UTC)
+    await SubscriptionRepository(db_session).upsert_by_stripe_subscription_id(
+        **_upsert_arguments(
+            user.id,
+            subscription_id="sub_equal_current",
+            customer_id="cus_equal_generation",
+            status="canceled",
+            subscription_created_at=generation,
+            event_created_at=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+    )
+
+    with pytest.raises(StripeSubscriptionConflictError):
+        await SubscriptionRepository(db_session).upsert_by_stripe_subscription_id(
+            **_upsert_arguments(
+                user.id,
+                subscription_id="sub_equal_other",
+                customer_id="cus_equal_generation",
+                status="active",
+                subscription_created_at=generation,
+                event_created_at=datetime(2026, 5, 1, tzinfo=UTC),
+            )
+        )
+
+
+@pytest.mark.anyio
+async def test_legacy_invoice_uses_effective_generation_and_event_watermark(
+    db_session: AsyncSession,
+) -> None:
+    user = await _user(db_session, "legacy-invoice")
+    legacy = Subscription(
+        user_id=user.id,
+        stripe_customer_id="cus_legacy_invoice",
+        stripe_subscription_id="sub_legacy_invoice",
+        plan_tier="starter",
+        status="canceled",
+        allocated_minutes=60,
+        stripe_subscription_created_at=None,
+        last_stripe_event_created_at=None,
+        created_at=datetime(2026, 3, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 4, 1, tzinfo=UTC),
+    )
+    db_session.add(legacy)
+    await db_session.flush()
+    repository = SubscriptionRepository(db_session)
+
+    same_id, apply_same_id = await repository.resolve_invoice_target_for_update(
+        stripe_subscription_id="sub_legacy_invoice",
+        incoming_status="active",
+        event_created_at=datetime(2026, 3, 15, tzinfo=UTC),
+    )
+    old_id, apply_old_id = await repository.resolve_invoice_target_for_update(
+        stripe_subscription_id="sub_legacy_older",
+        user_id=user.id,
+        incoming_status="active",
+        event_created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+
+    assert same_id is legacy
+    assert apply_same_id is False
+    assert old_id is legacy
+    assert apply_old_id is False
 
 
 @pytest.mark.anyio

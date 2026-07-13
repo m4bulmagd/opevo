@@ -53,6 +53,7 @@ describe("billing page", () => {
       current_period_end: "2026-03-31T23:59:59Z",
       stripe_customer_id: "cus_123",
       stripe_subscription_id: "sub_123",
+      can_start_checkout: false,
     });
     getUsageSnapshotMock.mockResolvedValueOnce({
       minutes_remaining: 183,
@@ -98,6 +99,7 @@ describe("billing page", () => {
       current_period_end: "2026-03-31T23:59:59Z",
       stripe_customer_id: "cus_123",
       stripe_subscription_id: "sub_123",
+      can_start_checkout: false,
     });
     getUsageSnapshotMock.mockResolvedValueOnce({
       minutes_remaining: 60,
@@ -128,6 +130,7 @@ describe("billing page", () => {
       current_period_end: "2026-03-31T23:59:59Z",
       stripe_customer_id: "cus_123",
       stripe_subscription_id: "sub_123",
+      can_start_checkout: true,
     });
     getUsageSnapshotMock.mockResolvedValueOnce({
       minutes_remaining: 60,
@@ -144,6 +147,34 @@ describe("billing page", () => {
 
     expect(screen.getByRole("button", { name: /Start starter plan/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Manage billing/i })).not.toBeInTheDocument();
+  });
+
+  it("uses backend checkout eligibility instead of duplicating status policy", async () => {
+    getSubscriptionMock.mockResolvedValueOnce({
+      plan_tier: "starter",
+      status: "canceled",
+      allocated_minutes: 60,
+      current_period_start: null,
+      current_period_end: null,
+      stripe_customer_id: "cus_policy",
+      stripe_subscription_id: "sub_policy",
+      can_start_checkout: false,
+    });
+    getUsageSnapshotMock.mockResolvedValueOnce({
+      minutes_remaining: 0,
+      allocated_minutes: 60,
+      plan_tier: "starter",
+      subscription_status: "canceled",
+      current_period_start: null,
+      current_period_end: null,
+    });
+    getUsageLedgerMock.mockResolvedValueOnce({ entries: [] });
+
+    const { default: Page } = await import("@/app/(app)/dashboard/billing/page");
+    render(await Page());
+
+    expect(screen.getByRole("button", { name: /Manage billing/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Start starter plan/i })).not.toBeInTheDocument();
   });
 
   it("creates hosted billing sessions through the server actions", async () => {

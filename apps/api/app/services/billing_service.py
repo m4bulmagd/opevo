@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.subscription_repository import (
     StripeSubscriptionConflictError,
+    StripeSubscriptionDataError,
     SubscriptionRepository,
 )
 from app.repositories.usage_repository import UsageRepository
@@ -117,8 +118,10 @@ class BillingService:
         event_created_at: datetime,
     ) -> None:
         stripe_subscription_id = event_object["id"]
-        existing = await self.subscription_repository.get_by_stripe_subscription_id(
-            stripe_subscription_id
+        existing_user_id = (
+            await self.subscription_repository.get_user_id_by_stripe_subscription_id(
+                stripe_subscription_id
+            )
         )
         clerk_user_id = event_object.get("metadata", {}).get("clerk_user_id")
         user = (
@@ -126,14 +129,16 @@ class BillingService:
             if clerk_user_id
             else None
         )
-        user_id = user.id if user is not None else (existing.user_id if existing else None)
+        user_id = user.id if user is not None else existing_user_id
         if user_id is None:
             return
 
         plan_tier = self._extract_subscription_plan_tier(event_object)
-        if plan_tier is None and existing is not None:
-            plan_tier = existing.plan_tier
-        allocated_minutes = self._require_plan_minutes(plan_tier)
+        allocated_minutes = (
+            self._require_plan_minutes(plan_tier)
+            if plan_tier is not None
+            else None
+        )
 
         subscription_status = event_object.get("status")
         if subscription_status is None and event_type == "customer.subscription.deleted":
@@ -142,30 +147,23 @@ class BillingService:
         subscription_created_at = self._stripe_timestamp(event_object.get("created"))
 
         current_period_start, current_period_end = self._extract_subscription_period_bounds(event_object)
-        if existing is not None:
-            current_period_start = current_period_start or existing.current_period_start
-            current_period_end = current_period_end or existing.current_period_end
 
         stripe_customer_id = event_object.get("customer")
-        if stripe_customer_id is None and existing is not None:
-            stripe_customer_id = existing.stripe_customer_id
-        if not stripe_customer_id:
-            raise UnsupportedStripeLifecycleError(
-                "Stripe subscription customer is invalid"
+        try:
+            subscription = await self.subscription_repository.upsert_by_stripe_subscription_id(
+                user_id=user_id,
+                stripe_customer_id=stripe_customer_id,
+                stripe_subscription_id=stripe_subscription_id,
+                plan_tier=plan_tier,
+                status=subscription_status,
+                allocated_minutes=allocated_minutes,
+                current_period_start=current_period_start,
+                current_period_end=current_period_end,
+                stripe_subscription_created_at=subscription_created_at,
+                last_stripe_event_created_at=event_created_at,
             )
-
-        subscription = await self.subscription_repository.upsert_by_stripe_subscription_id(
-            user_id=user_id,
-            stripe_customer_id=stripe_customer_id,
-            stripe_subscription_id=stripe_subscription_id,
-            plan_tier=plan_tier,
-            status=subscription_status,
-            allocated_minutes=allocated_minutes,
-            current_period_start=current_period_start,
-            current_period_end=current_period_end,
-            stripe_subscription_created_at=subscription_created_at,
-            last_stripe_event_created_at=event_created_at,
-        )
+        except StripeSubscriptionDataError as exc:
+            raise UnsupportedStripeLifecycleError from exc
 
         if subscription is None:
             return

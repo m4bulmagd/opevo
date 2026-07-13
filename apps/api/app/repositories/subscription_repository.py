@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -16,9 +17,11 @@ class StripeSubscriptionConflictError(ValueError):
     pass
 
 
-class SubscriptionRepository:
-    _RESUBSCRIBABLE_STATUSES = frozenset({"canceled", "incomplete_expired"})
+class StripeSubscriptionDataError(ValueError):
+    pass
 
+
+class SubscriptionRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
@@ -26,15 +29,25 @@ class SubscriptionRepository:
         result = await self.session.execute(select(Subscription).where(Subscription.user_id == user_id))
         return result.scalar_one_or_none()
 
+    async def get_user_id_by_stripe_subscription_id(
+        self,
+        stripe_subscription_id: str,
+    ) -> UUID | None:
+        return await self.session.scalar(
+            select(Subscription.user_id).where(
+                Subscription.stripe_subscription_id == stripe_subscription_id
+            )
+        )
+
     async def upsert_by_stripe_subscription_id(
         self,
         *,
         user_id,
-        stripe_customer_id: str,
+        stripe_customer_id: str | None,
         stripe_subscription_id: str,
-        plan_tier: str,
+        plan_tier: str | None,
         status: str,
-        allocated_minutes: int,
+        allocated_minutes: int | None,
         current_period_start,
         current_period_end,
         stripe_subscription_created_at: datetime | None = None,
@@ -50,16 +63,16 @@ class SubscriptionRepository:
             select(Subscription)
             .where(Subscription.user_id == user_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         subscription = current_result.scalar_one_or_none()
 
-        target_result = await self.session.execute(
-            select(Subscription)
+        target_user_id = await self.session.scalar(
+            select(Subscription.user_id)
             .where(Subscription.stripe_subscription_id == stripe_subscription_id)
             .with_for_update()
         )
-        target_subscription = target_result.scalar_one_or_none()
-        if target_subscription is not None and target_subscription.user_id != user_id:
+        if target_user_id is not None and target_user_id != user_id:
             raise StripeSubscriptionOwnershipError(
                 "Stripe subscription is already assigned to another user"
             )
@@ -88,7 +101,16 @@ class SubscriptionRepository:
                 raise StripeSubscriptionConflictError(
                     "A replacement subscription must have a known generation"
                 )
-            elif subscription.status not in self._RESUBSCRIBABLE_STATUSES:
+            elif self._different_subscription_generation_is_ambiguous(
+                subscription,
+                stripe_subscription_created_at,
+            ):
+                raise StripeSubscriptionConflictError(
+                    "Distinct Stripe subscriptions have an ambiguous generation"
+                )
+            elif not SubscriptionAccessPolicy.can_replace_subscription(
+                subscription.status
+            ):
                 raise StripeSubscriptionConflictError(
                     "A nonterminal subscription cannot be replaced"
                 )
@@ -97,13 +119,27 @@ class SubscriptionRepository:
             subscription = Subscription(user_id=user_id)
             self.session.add(subscription)
 
-        subscription.stripe_customer_id = stripe_customer_id
+        resolved_customer_id = stripe_customer_id or subscription.stripe_customer_id
+        resolved_plan_tier = plan_tier or subscription.plan_tier
+        resolved_allocated_minutes = (
+            allocated_minutes
+            if allocated_minutes is not None
+            else subscription.allocated_minutes
+        )
+        if not resolved_customer_id or not resolved_plan_tier:
+            raise StripeSubscriptionDataError(
+                "Stripe subscription is missing required customer or plan data"
+            )
+
+        subscription.stripe_customer_id = resolved_customer_id
         subscription.stripe_subscription_id = stripe_subscription_id
-        subscription.plan_tier = plan_tier
+        subscription.plan_tier = resolved_plan_tier
         subscription.status = status
-        subscription.allocated_minutes = allocated_minutes
-        subscription.current_period_start = current_period_start
-        subscription.current_period_end = current_period_end
+        subscription.allocated_minutes = resolved_allocated_minutes
+        if current_period_start is not None or subscription.current_period_start is None:
+            subscription.current_period_start = current_period_start
+        if current_period_end is not None or subscription.current_period_end is None:
+            subscription.current_period_end = current_period_end
         if stripe_subscription_created_at is not None:
             subscription.stripe_subscription_created_at = stripe_subscription_created_at
         if last_stripe_event_created_at is not None:
@@ -141,16 +177,14 @@ class SubscriptionRepository:
             select(Subscription)
             .where(Subscription.user_id == resolved_user_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if current is None:
             return None, can_bootstrap
 
         if current.stripe_subscription_id != stripe_subscription_id:
-            current_generation = current.stripe_subscription_created_at
-            if (
-                current_generation is not None
-                and self._as_utc(event_created_at) < self._as_utc(current_generation)
-            ):
+            current_generation = self._effective_subscription_generation(current)
+            if self._as_utc(event_created_at) < self._as_utc(current_generation):
                 return current, False
             raise StripeSubscriptionConflictError(
                 "Invoice does not match the current Stripe subscription"
@@ -182,12 +216,11 @@ class SubscriptionRepository:
         incoming_status: str,
         event_created_at: datetime | None,
     ) -> bool:
-        last_event_created_at = subscription.last_stripe_event_created_at
-        if event_created_at is None or last_event_created_at is None:
+        if event_created_at is None:
             return False
 
         incoming_created_at = cls._as_utc(event_created_at)
-        last_created_at = cls._as_utc(last_event_created_at)
+        last_created_at = cls._as_utc(cls._effective_event_watermark(subscription))
         if incoming_created_at < last_created_at:
             return True
         return bool(
@@ -205,12 +238,21 @@ class SubscriptionRepository:
         subscription: Subscription,
         incoming_generation: datetime | None,
     ) -> bool:
-        current_generation = subscription.stripe_subscription_created_at
+        if incoming_generation is None:
+            return False
+        current_generation = cls._effective_subscription_generation(subscription)
         return bool(
-            current_generation is not None
-            and incoming_generation is not None
-            and cls._as_utc(incoming_generation) <= cls._as_utc(current_generation)
+            cls._as_utc(incoming_generation) < cls._as_utc(current_generation)
         )
+
+    @classmethod
+    def _different_subscription_generation_is_ambiguous(
+        cls,
+        subscription: Subscription,
+        incoming_generation: datetime,
+    ) -> bool:
+        current_generation = cls._effective_subscription_generation(subscription)
+        return cls._as_utc(incoming_generation) == cls._as_utc(current_generation)
 
     @classmethod
     def _same_id_generation_conflicts(
@@ -223,6 +265,18 @@ class SubscriptionRepository:
             current_generation is not None
             and incoming_generation is not None
             and cls._as_utc(incoming_generation) != cls._as_utc(current_generation)
+        )
+
+    @staticmethod
+    def _effective_subscription_generation(subscription: Subscription) -> datetime:
+        return subscription.stripe_subscription_created_at or subscription.created_at
+
+    @staticmethod
+    def _effective_event_watermark(subscription: Subscription) -> datetime:
+        return (
+            subscription.last_stripe_event_created_at
+            or subscription.updated_at
+            or subscription.created_at
         )
 
     @staticmethod

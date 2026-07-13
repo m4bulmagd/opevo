@@ -140,6 +140,7 @@ class FakeActiveSubscriptionQueryService:
             current_period_end=datetime(2026, 4, 1, tzinfo=UTC),
             stripe_customer_id="cus_123",
             stripe_subscription_id="sub_123",
+            can_start_checkout=False,
         )
 
 

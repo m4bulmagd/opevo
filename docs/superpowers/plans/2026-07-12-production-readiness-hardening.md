@@ -465,6 +465,8 @@ Use Stripe's SDK verifier for Stripe events and Svix's verifier for Clerk events
 
 Serialize subscription lifecycle changes by locking the user and current subscription rows. Ignore provably stale events, permit replacement only after a terminal subscription, and reject ambiguous ownership or ordering as a retryable conflict so the entire webhook transaction rolls back.
 
+Refresh the subscription entity after acquiring the user lock so an older request cannot reuse identity-mapped pre-lock state. For rows deployed before Stripe ordering fields existed, use `created_at` as the conservative generation boundary and `updated_at`/`created_at` as the event watermark until a safe same-subscription event supplies exact Stripe timestamps. Distinct subscriptions with equal second-resolution generations are ambiguous and must remain retryable.
+
 - [ ] **Step 4: Disable local access on non-routing statuses**
 
 Persist the Stripe status and create a durable `disable_phone_routing` intent when a subscription becomes non-routing. Do not call Telnyx inside the webhook transaction; Task 7 delivers the intent through the outbox.

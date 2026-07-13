@@ -12,6 +12,7 @@ from app.schemas.billing_api import (
     UsageLedgerListResponse,
     UsageSnapshotResponse,
 )
+from app.services.subscription_access_policy import SubscriptionAccessPolicy
 
 
 class BillingQueryService:
@@ -44,6 +45,9 @@ class BillingQueryService:
             current_period_end=subscription.current_period_end,
             stripe_customer_id=subscription.stripe_customer_id,
             stripe_subscription_id=subscription.stripe_subscription_id,
+            can_start_checkout=SubscriptionAccessPolicy.can_start_checkout(
+                subscription.status
+            ),
         )
 
     async def get_usage_snapshot(self, user_id: UUID | str) -> UsageSnapshotResponse:

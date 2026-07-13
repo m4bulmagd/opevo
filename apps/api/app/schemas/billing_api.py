@@ -12,6 +12,7 @@ class SubscriptionResponse(BaseModel):
     current_period_end: datetime | None
     stripe_customer_id: str | None
     stripe_subscription_id: str | None
+    can_start_checkout: bool
 
 
 class UsageSnapshotResponse(BaseModel):
