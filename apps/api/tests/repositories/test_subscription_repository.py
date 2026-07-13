@@ -152,6 +152,44 @@ async def test_legacy_same_id_delayed_routing_event_cannot_restore_access(
 
 
 @pytest.mark.anyio
+async def test_legacy_same_id_delayed_nonrouting_event_still_revokes_access(
+    db_session: AsyncSession,
+) -> None:
+    user = await _user(db_session, "legacy-delayed-revocation")
+    legacy = Subscription(
+        user_id=user.id,
+        stripe_customer_id="cus_legacy_revocation",
+        stripe_subscription_id="sub_legacy_revocation",
+        plan_tier="starter",
+        status="active",
+        allocated_minutes=60,
+        stripe_subscription_created_at=None,
+        last_stripe_event_created_at=None,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 4, 1, tzinfo=UTC),
+    )
+    db_session.add(legacy)
+    await db_session.flush()
+
+    updated = await SubscriptionRepository(
+        db_session
+    ).upsert_by_stripe_subscription_id(
+        **_upsert_arguments(
+            user.id,
+            subscription_id="sub_legacy_revocation",
+            customer_id="cus_legacy_revocation",
+            status="past_due",
+            subscription_created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            event_created_at=datetime(2026, 3, 1, tzinfo=UTC),
+        )
+    )
+
+    assert updated is legacy
+    assert legacy.status == "past_due"
+    assert legacy.last_stripe_event_created_at is None
+
+
+@pytest.mark.anyio
 async def test_older_subscription_cannot_replace_terminal_legacy_row(
     db_session: AsyncSession,
 ) -> None:

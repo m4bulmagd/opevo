@@ -216,7 +216,10 @@ class BillingService:
         subscription.plan_tier = plan_tier
         subscription.allocated_minutes = allocated_minutes
         subscription.status = "active"
-        subscription.last_stripe_event_created_at = event_created_at
+        self.subscription_repository.advance_known_event_watermark(
+            subscription,
+            event_created_at,
+        )
 
         latest_entries = await self.usage_repository.list_recent_by_user_id(user_id=subscription.user_id, limit=1)
         is_first_activation = len(latest_entries) == 0
@@ -275,7 +278,10 @@ class BillingService:
                 return
         else:
             subscription.status = "past_due"
-            subscription.last_stripe_event_created_at = event_created_at
+            self.subscription_repository.advance_known_event_watermark(
+                subscription,
+                event_created_at,
+            )
 
         await self._add_disable_intent_if_needed(
             subscription=subscription,

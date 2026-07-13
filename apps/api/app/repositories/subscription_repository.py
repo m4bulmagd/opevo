@@ -77,8 +77,18 @@ class SubscriptionRepository:
                 "Stripe subscription is already assigned to another user"
             )
 
+        is_same_subscription = bool(
+            subscription is not None
+            and subscription.stripe_subscription_id == stripe_subscription_id
+        )
+        preserve_unknown_event_watermark = bool(
+            is_same_subscription
+            and subscription is not None
+            and subscription.last_stripe_event_created_at is None
+        )
+
         if subscription is not None:
-            if subscription.stripe_subscription_id == stripe_subscription_id:
+            if is_same_subscription:
                 if self._same_subscription_event_is_stale(
                     subscription,
                     incoming_status=status,
@@ -119,14 +129,26 @@ class SubscriptionRepository:
             subscription = Subscription(user_id=user_id)
             self.session.add(subscription)
 
-        resolved_customer_id = stripe_customer_id or subscription.stripe_customer_id
-        resolved_plan_tier = plan_tier or subscription.plan_tier
-        resolved_allocated_minutes = (
-            allocated_minutes
-            if allocated_minutes is not None
-            else subscription.allocated_minutes
-        )
-        if not resolved_customer_id or not resolved_plan_tier:
+        if is_same_subscription:
+            resolved_customer_id = (
+                stripe_customer_id or subscription.stripe_customer_id
+            )
+            resolved_plan_tier = plan_tier or subscription.plan_tier
+            resolved_allocated_minutes = (
+                allocated_minutes
+                if allocated_minutes is not None
+                else subscription.allocated_minutes
+            )
+        else:
+            resolved_customer_id = stripe_customer_id
+            resolved_plan_tier = plan_tier
+            resolved_allocated_minutes = allocated_minutes
+
+        if (
+            not resolved_customer_id
+            or not resolved_plan_tier
+            or resolved_allocated_minutes is None
+        ):
             raise StripeSubscriptionDataError(
                 "Stripe subscription is missing required customer or plan data"
             )
@@ -136,13 +158,16 @@ class SubscriptionRepository:
         subscription.plan_tier = resolved_plan_tier
         subscription.status = status
         subscription.allocated_minutes = resolved_allocated_minutes
-        if current_period_start is not None or subscription.current_period_start is None:
+        if not is_same_subscription or current_period_start is not None:
             subscription.current_period_start = current_period_start
-        if current_period_end is not None or subscription.current_period_end is None:
+        if not is_same_subscription or current_period_end is not None:
             subscription.current_period_end = current_period_end
         if stripe_subscription_created_at is not None:
             subscription.stripe_subscription_created_at = stripe_subscription_created_at
-        if last_stripe_event_created_at is not None:
+        if (
+            last_stripe_event_created_at is not None
+            and not preserve_unknown_event_watermark
+        ):
             subscription.last_stripe_event_created_at = last_stripe_event_created_at
 
         await self.session.flush()
@@ -216,20 +241,28 @@ class SubscriptionRepository:
         incoming_status: str,
         event_created_at: datetime | None,
     ) -> bool:
+        current_can_route = SubscriptionAccessPolicy.can_route(
+            subscription.status,
+            subscription.current_period_end,
+        )
+        incoming_can_route = SubscriptionAccessPolicy.can_route(
+            incoming_status,
+            None,
+        )
+        last_event_created_at = subscription.last_stripe_event_created_at
+        if last_event_created_at is None:
+            return incoming_can_route and not current_can_route
         if event_created_at is None:
             return False
 
         incoming_created_at = cls._as_utc(event_created_at)
-        last_created_at = cls._as_utc(cls._effective_event_watermark(subscription))
+        last_created_at = cls._as_utc(last_event_created_at)
         if incoming_created_at < last_created_at:
             return True
         return bool(
             incoming_created_at == last_created_at
-            and SubscriptionAccessPolicy.can_route(incoming_status, None)
-            and not SubscriptionAccessPolicy.can_route(
-                subscription.status,
-                subscription.current_period_end,
-            )
+            and incoming_can_route
+            and not current_can_route
         )
 
     @classmethod
@@ -272,12 +305,12 @@ class SubscriptionRepository:
         return subscription.stripe_subscription_created_at or subscription.created_at
 
     @staticmethod
-    def _effective_event_watermark(subscription: Subscription) -> datetime:
-        return (
-            subscription.last_stripe_event_created_at
-            or subscription.updated_at
-            or subscription.created_at
-        )
+    def advance_known_event_watermark(
+        subscription: Subscription,
+        event_created_at: datetime,
+    ) -> None:
+        if subscription.last_stripe_event_created_at is not None:
+            subscription.last_stripe_event_created_at = event_created_at
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:

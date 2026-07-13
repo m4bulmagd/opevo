@@ -931,3 +931,188 @@ async def test_equal_generation_distinct_subscription_is_retryable_and_rolls_bac
     assert subscription.stripe_subscription_id == "sub_equal_current"
     assert subscription.status == "canceled"
     assert conflict_event is None
+
+
+@pytest.mark.anyio
+async def test_sparse_new_subscription_does_not_inherit_terminal_subscription_data(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(clerk_user_id="user_123", email="sparse-replacement@example.com")
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_terminal",
+                stripe_subscription_id="sub_terminal",
+                plan_tier="starter",
+                status="canceled",
+                allocated_minutes=60,
+                current_period_start=datetime(2026, 1, 1, tzinfo=UTC),
+                current_period_end=datetime(2026, 2, 1, tzinfo=UTC),
+                stripe_subscription_created_at=datetime.fromtimestamp(10, UTC),
+                last_stripe_event_created_at=datetime.fromtimestamp(20, UTC),
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    malformed = deepcopy(stripe_subscription_created_payload)
+    malformed.update(id="evt_sparse_replacement", created=300)
+    malformed["data"]["object"].update(
+        id="sub_sparse_replacement",
+        created=200,
+        customer=None,
+    )
+    malformed["data"]["object"]["items"]["data"][0]["price"]["lookup_key"] = None
+    malformed["data"]["object"]["metadata"].pop("plan_tier", None)
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        malformed,
+    )
+
+    assert response.status_code == 400
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        malformed_event = await session.scalar(
+            select(WebhookEvent).where(
+                WebhookEvent.external_event_id == "evt_sparse_replacement"
+            )
+        )
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.stripe_customer_id == "cus_terminal"
+    assert subscription.stripe_subscription_id == "sub_terminal"
+    assert subscription.plan_tier == "starter"
+    assert subscription.status == "canceled"
+    assert subscription.allocated_minutes == 60
+    assert subscription.current_period_start == datetime(2026, 1, 1)
+    assert subscription.current_period_end == datetime(2026, 2, 1)
+    assert malformed_event is None
+
+
+@pytest.mark.anyio
+async def test_delayed_cancellation_revokes_legacy_active_subscription(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(clerk_user_id="user_123", email="legacy-cancel@example.com")
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_123",
+                stripe_subscription_id="sub_123",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                stripe_subscription_created_at=None,
+                last_stripe_event_created_at=None,
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                updated_at=datetime(2026, 4, 1, tzinfo=UTC),
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    delayed = deepcopy(stripe_subscription_created_payload)
+    delayed.update(
+        id="evt_delayed_legacy_cancel",
+        created=100,
+        type="customer.subscription.deleted",
+    )
+    delayed["data"]["object"].update(created=10, status="canceled")
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        delayed,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.status == "canceled"
+    assert subscription.last_stripe_event_created_at is None
+    assert len(outbox_events) == 1
+
+
+@pytest.mark.anyio
+async def test_delayed_invoice_failure_revokes_legacy_active_subscription(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_invoice_paid_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(clerk_user_id="user_123", email="legacy-invoice-failure@example.com")
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_123",
+                stripe_subscription_id="sub_123",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                stripe_subscription_created_at=None,
+                last_stripe_event_created_at=None,
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                updated_at=datetime(2026, 4, 1, tzinfo=UTC),
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    delayed = deepcopy(stripe_invoice_paid_payload)
+    delayed.update(
+        id="evt_delayed_legacy_invoice_failure",
+        created=100,
+        type="invoice.payment_failed",
+    )
+    delayed["data"]["object"].update(status="open", paid=False)
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        delayed,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.status == "past_due"
+    assert subscription.last_stripe_event_created_at is None
+    assert len(outbox_events) == 1
