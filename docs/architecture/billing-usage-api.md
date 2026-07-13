@@ -69,7 +69,6 @@ Request body:
 Allowed `plan_tier` values:
 
 - `starter`
-- `standard`
 
 Response:
 
@@ -97,6 +96,8 @@ Request body:
 }
 ```
 
+`return_url` is optional for compatibility. When supplied, its scheme, host, and port must match the configured server URL. Its path is ignored.
+
 Response:
 
 ```json
@@ -108,6 +109,8 @@ Response:
 Behavior:
 
 - uses the current local subscription's `stripe_customer_id`
+- always sends the server-owned `STRIPE_BILLING_PORTAL_RETURN_URL` to Stripe
+- returns `400` for malformed or off-origin caller return URLs
 - returns `409` when no Stripe customer is available yet
 
 ## Required API Config
@@ -118,9 +121,9 @@ Add these values to [`apps/api/.env`](/home/i933k/code/ai/bmad-opevo/apps/api/.e
 STRIPE_SECRET_KEY=replace-me
 STRIPE_WEBHOOK_SECRET=replace-me
 STRIPE_PRICE_STARTER=price_replace_me
-STRIPE_PRICE_STANDARD=price_replace_me
 STRIPE_CHECKOUT_SUCCESS_URL=https://your-app.example.com/billing/success
 STRIPE_CHECKOUT_CANCEL_URL=https://your-app.example.com/billing/cancel
+STRIPE_BILLING_PORTAL_RETURN_URL=https://your-app.example.com/settings/billing
 ```
 
 ## Notes

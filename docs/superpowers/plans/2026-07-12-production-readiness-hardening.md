@@ -397,18 +397,30 @@ git commit -m "fix: enforce billing and webhook idempotency in postgres"
 - Create: `apps/api/app/services/subscription_access_policy.py`
 - Modify: `apps/api/pyproject.toml`
 - Modify: `apps/api/app/core/config.py`
+- Modify: `apps/api/app/core/runtime_validation.py`
+- Create: `apps/api/app/core/http_origin.py`
 - Modify: `apps/api/app/core/webhook_verifier.py`
 - Modify: `apps/api/app/webhooks/stripe.py`
+- Modify: `apps/api/app/routers/billing.py`
+- Modify: `apps/api/app/schemas/billing_api.py`
 - Modify: `apps/api/app/webhooks/clerk.py`
 - Modify: `apps/api/app/services/billing_service.py`
 - Modify: `apps/api/app/services/billing_session_service.py`
+- Modify: `apps/api/app/services/billing_query_service.py`
 - Modify: `apps/api/app/services/onboarding_service.py`
 - Modify: `apps/api/app/repositories/subscription_repository.py`
+- Create: `apps/api/alembic/versions/0008_add_outbox_and_call_lifecycle.py`
+- Create: `apps/api/app/models/outbox_event.py`
+- Modify: `apps/api/app/models/__init__.py`
+- Create: `apps/api/app/repositories/outbox_repository.py`
+- Create: `apps/api/app/services/outbox_service.py`
 - Modify: `apps/api/tests/billing/test_stripe_webhooks.py`
 - Modify: `apps/api/tests/services/test_onboarding_service.py`
 - Create: `apps/api/tests/services/test_subscription_access_policy.py`
 - Create: `apps/api/tests/test_webhook_verifier.py`
 - Modify: `apps/api/tests/services/test_billing_session_service.py`
+- Create: `apps/api/tests/integration/test_subscription_disable_intent.py`
+- Create: `apps/api/tests/integration/test_postgres_subscription_service_sessions.py`
 
 **Interfaces:**
 - Produces: `SubscriptionAccessPolicy.can_route(status: str, period_end: datetime | None) -> bool`.
@@ -452,6 +464,8 @@ Use Stripe's SDK verifier for Stripe events and Svix's verifier for Clerk events
 
 Persist the Stripe status and create a durable `disable_phone_routing` intent when a subscription becomes non-routing. Do not call Telnyx inside the webhook transaction; Task 7 delivers the intent through the outbox.
 
+Dependency correction: introduce the insert-only outbox table, model, repository, and service in this task so the disable intent is committed atomically with the subscription transition. Task 7 retains ownership of claiming, delivery, retries, terminal failure, reconciliation polling, and moving the remaining provider operations onto the outbox.
+
 Configure one server-owned billing-portal return URL. Reject caller-supplied return URLs outside the configured application origin; the API must not operate as an open redirect.
 
 - [ ] **Step 5: Remove same-session `asyncio.gather` calls**
@@ -462,7 +476,8 @@ Run repository operations sequentially in `BillingQueryService` and `OnboardingS
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
-git add apps/api/pyproject.toml apps/api/uv.lock apps/api/app/services/subscription_access_policy.py apps/api/app/core/webhook_verifier.py apps/api/app/webhooks/stripe.py apps/api/app/webhooks/clerk.py apps/api/app/services/billing_service.py apps/api/app/services/billing_session_service.py apps/api/app/services/billing_query_service.py apps/api/app/services/onboarding_service.py apps/api/app/repositories/subscription_repository.py apps/api/tests/billing/test_stripe_webhooks.py apps/api/tests/services apps/api/tests/test_webhook_verifier.py
+# Stage only the exact Task 5 paths listed above plus the dependency-correction
+# outbox files and their focused tests; never stage unrelated workspace changes.
 git commit -m "fix: enforce complete subscription access lifecycle"
 ```
 
@@ -545,11 +560,11 @@ git commit -m "fix: make usage accounting authoritative and concurrency safe"
 ### Task 7: Add a transactional outbox for provider operations
 
 **Files:**
-- Create: `apps/api/alembic/versions/0008_add_outbox_and_call_lifecycle.py`
-- Create: `apps/api/app/models/outbox_event.py`
+- Modify: `apps/api/alembic/versions/0008_add_outbox_and_call_lifecycle.py`
+- Modify: `apps/api/app/models/outbox_event.py`
 - Modify: `apps/api/app/models/__init__.py`
-- Create: `apps/api/app/repositories/outbox_repository.py`
-- Create: `apps/api/app/services/outbox_service.py`
+- Modify: `apps/api/app/repositories/outbox_repository.py`
+- Modify: `apps/api/app/services/outbox_service.py`
 - Create: `apps/api/app/workers/jobs/outbox_delivery.py`
 - Modify: `apps/api/app/workers/arq_worker.py`
 - Modify: `apps/api/app/services/billing_service.py`
@@ -584,11 +599,11 @@ Add two-worker tests showing one event is claimed once and repeated delivery is 
 
 Run: `cd apps/api && TEST_DATABASE_URL="$DATABASE_URL" TEST_REDIS_URL="$REDIS_URL" UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/integration/test_outbox_delivery.py -v`
 
-Expected: failure because the outbox does not exist.
+Expected: failure because claiming, delivery, retry, and terminal-failure behavior do not exist yet.
 
-- [ ] **Step 3: Add the outbox schema**
+- [ ] **Step 3: Complete the outbox delivery state machine and repository**
 
-The table contains:
+The existing Task 5 table already contains the launch shape below. Add the final allowed-state constraint and claim/update queries without replacing the insert-only API:
 
 ```python
 idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)

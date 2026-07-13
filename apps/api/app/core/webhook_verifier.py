@@ -1,73 +1,65 @@
-import base64
-import hashlib
-import hmac
 import time
-from typing import Any
+from collections.abc import Mapping
 
+import stripe
 from fastapi import HTTPException, status
+from svix.webhooks import Webhook, WebhookVerificationError
 
 
-def verify_hmac_signature(
+INVALID_WEBHOOK_DETAIL = "Invalid webhook signature"
+
+
+def verify_stripe_signature(
+    *,
     secret: str,
     payload: bytes,
-    headers: dict[str, str],
+    signature_header: str | None,
     max_age_seconds: int = 300,
-    is_clerk: bool = False,
 ) -> None:
-    if is_clerk:
-        msg_id = headers.get("svix-id", "")
-        msg_timestamp = headers.get("svix-timestamp", "")
-        msg_signature = headers.get("svix-signature", "")
-        
-        if not msg_id or not msg_timestamp or not msg_signature:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing svix headers")
-            
-        try:
-            timestamp_int = int(msg_timestamp)
-            if time.time() - timestamp_int > max_age_seconds:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook too old")
-        except ValueError:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid timestamp format")
-            
-        signed_content = f"{msg_id}.{msg_timestamp}.".encode("utf-8") + payload
-        clerk_secret_bytes = base64.b64decode(secret.split("_")[1] if secret.startswith("whsec_") else secret)
-        
-        expected_sig = hmac.new(clerk_secret_bytes, signed_content, hashlib.sha256).digest()
-        encoded_sig = base64.b64encode(expected_sig).decode("utf-8")
-        
-        passed_sigs = msg_signature.split(" ")
-        for passed_sig in passed_sigs:
-            version, signature = passed_sig.split(",", 1)
-            if version == "v1" and hmac.compare_digest(signature, encoded_sig):
-                return
-                
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature")
-    
-    else:
-        # Stripe
-        stripe_signature = headers.get("stripe-signature", "")
-        if not stripe_signature:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing stripe signature")
-            
-        parts = dict(part.split("=") for part in stripe_signature.split(",") if "=" in part)
-        timestamp = parts.get("t", "")
-        signatures = [part.split("=")[1] for part in stripe_signature.split(",") if part.startswith("v1=")]
-        
-        if not timestamp or not signatures:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid stripe signature format")
-            
-        try:
-            timestamp_int = int(timestamp)
-            if time.time() - timestamp_int > max_age_seconds:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook too old")
-        except ValueError:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid timestamp format")
-            
-        signed_content = f"{timestamp}.".encode("utf-8") + payload
-        expected_sig = hmac.new(secret.encode("utf-8"), signed_content, hashlib.sha256).hexdigest()
-        
-        for signature in signatures:
-            if hmac.compare_digest(signature, expected_sig):
-                return
-                
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature")
+    if not signature_header:
+        raise _invalid_signature()
+
+    try:
+        stripe.WebhookSignature.verify_header(
+            payload=payload.decode("utf-8"),
+            header=signature_header,
+            secret=secret,
+            tolerance=max_age_seconds,
+        )
+        timestamp = _stripe_timestamp(signature_header)
+    except (stripe.SignatureVerificationError, UnicodeDecodeError, ValueError):
+        raise _invalid_signature() from None
+
+    # Stripe's SDK rejects old signatures, but intentionally accepts signatures
+    # dated in the future. Bound both sides of the replay window explicitly.
+    if timestamp > time.time() + max_age_seconds:
+        raise _invalid_signature()
+
+
+def verify_svix_signature(
+    *,
+    secret: str,
+    payload: bytes,
+    headers: Mapping[str, str],
+) -> str:
+    try:
+        Webhook(secret).verify(payload, headers)
+    except (WebhookVerificationError, ValueError):
+        raise _invalid_signature() from None
+
+    return headers.get("svix-id", "")
+
+
+def _stripe_timestamp(signature_header: str) -> int:
+    for component in signature_header.split(","):
+        key, separator, value = component.partition("=")
+        if key == "t" and separator and value:
+            return int(value)
+    raise ValueError("missing timestamp")
+
+
+def _invalid_signature() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=INVALID_WEBHOOK_DETAIL,
+    )

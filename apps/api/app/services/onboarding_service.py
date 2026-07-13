@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +10,7 @@ from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.schemas.onboarding import OnboardingStatusResponse, RetryProvisioningResponse
+from app.services.subscription_access_policy import SubscriptionAccessPolicy
 
 
 class OnboardingRetryNotAllowedError(Exception):
@@ -50,17 +50,24 @@ class OnboardingService:
         self.agent_config_repository = agent_config_repository
 
     async def get_status(self, user_id: UUID | str) -> OnboardingStatusResponse:
-        subscription, minutes_remaining, phone_number, provisioning, config = await asyncio.gather(
-            self.subscription_repository.get_by_user_id(user_id),
-            self.usage_repository.get_current_balance(user_id=user_id),
-            self.phone_number_repository.get_by_user_id(user_id),
-            self.provisioning_repository.get_by_user_id(user_id),
-            self.agent_config_repository.get_by_user_id(user_id),
+        subscription = await self.subscription_repository.get_by_user_id(user_id)
+        minutes_remaining = await self.usage_repository.get_current_balance(
+            user_id=user_id
         )
+        phone_number = await self.phone_number_repository.get_by_user_id(user_id)
+        provisioning = await self.provisioning_repository.get_by_user_id(user_id)
+        config = await self.agent_config_repository.get_by_user_id(user_id)
 
         subscription_status = subscription.status if subscription is not None else None
         plan_tier = subscription.plan_tier if subscription is not None else None
-        subscription_active = subscription is not None and subscription.status == "active" and subscription.plan_tier == "starter"
+        subscription_access = bool(
+            subscription is not None
+            and subscription.plan_tier == "starter"
+            and SubscriptionAccessPolicy.can_route(
+                subscription.status,
+                getattr(subscription, "current_period_end", None),
+            )
+        )
 
         if provisioning is not None and provisioning.status == "failed":
             phone_number_status = "failed"
@@ -72,17 +79,23 @@ class OnboardingService:
             phone_number_status = "missing"
 
         agent_setup_complete = self._is_agent_setup_complete(config)
-        routing_enabled = bool((config is not None and config.is_enabled) or (phone_number is not None and phone_number.is_active))
+        routing_enabled = bool(
+            subscription_access
+            and (
+                (config is not None and config.is_enabled)
+                or (phone_number is not None and phone_number.is_active)
+            )
+        )
         can_retry_provisioning = bool(
             provisioning is not None
             and provisioning.status == "failed"
             and provisioning.can_retry
             and phone_number is None
-            and subscription_active
+            and subscription_access
         )
 
         overall_status = self._derive_overall_status(
-            subscription_active=subscription_active,
+            subscription_active=subscription_access,
             phone_number_status=phone_number_status,
             agent_setup_complete=agent_setup_complete,
             routing_enabled=routing_enabled,

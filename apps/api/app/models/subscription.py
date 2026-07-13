@@ -16,13 +16,22 @@ class Subscription(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "allocated_minutes >= 0",
             name=conv("ck_subscriptions_allocated_minutes_nonnegative"),
         ),
+        CheckConstraint(
+            "status IN ('trialing', 'active', 'past_due', 'unpaid', "
+            "'canceled', 'incomplete', 'incomplete_expired', 'paused')",
+            name=conv("ck_subscriptions_status_allowed"),
+        ),
+        CheckConstraint(
+            "plan_tier = 'starter'",
+            name=conv("ck_subscriptions_plan_tier_allowed"),
+        ),
     )
 
     user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False, index=True)
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     plan_tier: Mapped[str] = mapped_column(String(50), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="inactive")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="incomplete")
     allocated_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

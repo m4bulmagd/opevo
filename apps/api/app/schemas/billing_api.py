@@ -45,4 +45,4 @@ class HostedSessionResponse(BaseModel):
 
 
 class PortalSessionRequest(BaseModel):
-    return_url: str
+    return_url: str | None = None

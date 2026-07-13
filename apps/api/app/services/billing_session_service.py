@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.core.config import get_settings
+from app.core.http_origin import parse_http_origin
 
 
 class BillingSessionStateError(ValueError):
@@ -10,6 +11,10 @@ class BillingSessionStateError(ValueError):
 
 
 class BillingSessionProviderError(RuntimeError):
+    pass
+
+
+class BillingPortalReturnUrlError(BillingSessionStateError):
     pass
 
 
@@ -25,17 +30,19 @@ class BillingSessionService:
         stripe_client=None,
         secret_key: str | None = None,
         price_starter: str | None = None,
-        price_standard: str | None = None,
         checkout_success_url: str | None = None,
         checkout_cancel_url: str | None = None,
+        billing_portal_return_url: str | None = None,
     ) -> None:
         settings = get_settings()
         self._stripe_client = stripe_client
         self.secret_key = secret_key or settings.stripe_secret_key
         self.price_starter = price_starter or settings.stripe_price_starter
-        self.price_standard = price_standard or settings.stripe_price_standard
         self.checkout_success_url = checkout_success_url or settings.stripe_checkout_success_url
         self.checkout_cancel_url = checkout_cancel_url or settings.stripe_checkout_cancel_url
+        self.billing_portal_return_url = (
+            billing_portal_return_url or settings.stripe_billing_portal_return_url
+        )
 
     def create_checkout_session(
         self,
@@ -72,15 +79,43 @@ class BillingSessionService:
 
         return HostedSession(url=session.url)
 
-    def create_portal_session(self, *, customer_id: str | None, return_url: str) -> HostedSession:
+    def create_portal_session(
+        self,
+        *,
+        customer_id: str | None,
+        return_url: str | None = None,
+    ) -> HostedSession:
         if not customer_id:
             raise BillingSessionStateError("Stripe customer ID is required")
+
+        configured_return_url = self._require_config(
+            self.billing_portal_return_url,
+            "Stripe billing portal return URL is required",
+        )
+        try:
+            configured_origin = parse_http_origin(configured_return_url)
+        except ValueError:
+            raise BillingSessionStateError(
+                "Stripe billing portal return URL is invalid"
+            ) from None
+
+        if return_url is not None:
+            try:
+                caller_origin = parse_http_origin(return_url)
+            except ValueError:
+                raise BillingPortalReturnUrlError(
+                    "Invalid billing portal return URL"
+                ) from None
+            if caller_origin != configured_origin:
+                raise BillingPortalReturnUrlError(
+                    "Invalid billing portal return URL"
+                )
 
         stripe = self._get_client()
         try:
             session = stripe.billing_portal.Session.create(
                 customer=customer_id,
-                return_url=return_url,
+                return_url=configured_return_url,
             )
         except Exception as exc:
             raise BillingSessionProviderError("Failed to create Stripe billing portal session") from exc

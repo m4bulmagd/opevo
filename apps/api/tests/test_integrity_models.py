@@ -37,6 +37,8 @@ def test_models_expose_exact_integrity_constraint_names() -> None:
     assert "uq_call_messages_call_sequence" in _constraint_names(CallMessage)
     assert "uq_subscriptions_user_id" in _constraint_names(Subscription)
     assert "ck_subscriptions_allocated_minutes_nonnegative" in _constraint_names(Subscription)
+    assert "ck_subscriptions_status_allowed" in _constraint_names(Subscription)
+    assert "ck_subscriptions_plan_tier_allowed" in _constraint_names(Subscription)
     assert "ck_calls_duration_seconds_nonnegative" in _constraint_names(Call)
     assert "ck_calls_minutes_charged_nonnegative" in _constraint_names(Call)
 
@@ -366,11 +368,67 @@ def test_subscription_is_unique_per_user(sqlite_session: Session) -> None:
     sqlite_session.add(
         Subscription(
             user_id=user.id,
-            plan_tier="standard",
+            plan_tier="starter",
             status="active",
-            allocated_minutes=120,
+            allocated_minutes=60,
         )
     )
+    with pytest.raises(IntegrityError):
+        sqlite_session.flush()
+
+
+@pytest.mark.parametrize(
+    "subscription_status",
+    [
+        "trialing",
+        "active",
+        "past_due",
+        "unpaid",
+        "canceled",
+        "incomplete",
+        "incomplete_expired",
+        "paused",
+    ],
+)
+def test_subscription_accepts_exact_provider_status_set(
+    sqlite_session: Session,
+    subscription_status: str,
+) -> None:
+    user = _sync_user(sqlite_session, suffix=f"status_{subscription_status}")
+    sqlite_session.add(
+        Subscription(
+            user_id=user.id,
+            plan_tier="starter",
+            status=subscription_status,
+            allocated_minutes=60,
+        )
+    )
+
+    sqlite_session.flush()
+
+
+@pytest.mark.parametrize(
+    ("plan_tier", "subscription_status"),
+    [("standard", "active"), ("starter", "inactive"), ("starter", "unknown")],
+)
+def test_subscription_rejects_unsupported_plan_or_status(
+    sqlite_session: Session,
+    plan_tier: str,
+    subscription_status: str,
+) -> None:
+    user = _sync_user(
+        sqlite_session,
+        suffix=f"invalid_{plan_tier}_{subscription_status}",
+    )
+    sqlite_session.add(
+        Subscription(
+            user_id=user.id,
+            plan_tier=plan_tier,
+            status=subscription_status,
+            allocated_minutes=60,
+        )
+    )
+
     with pytest.raises(IntegrityError):
         sqlite_session.flush()
 

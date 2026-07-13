@@ -222,9 +222,9 @@ async def test_integrity_constraints_cover_all_identities(
             ),
             Subscription(
                 user_id=user.id,
-                plan_tier="standard",
+                plan_tier="starter",
                 status="active",
-                allocated_minutes=120,
+                allocated_minutes=60,
             ),
         ),
     ]

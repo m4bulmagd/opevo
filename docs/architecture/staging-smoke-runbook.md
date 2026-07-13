@@ -47,9 +47,9 @@ CLERK_WEBHOOK_SECRET=<your-clerk-webhook-secret>
 STRIPE_WEBHOOK_SECRET=<your-stripe-webhook-secret>
 STRIPE_SECRET_KEY=<your-stripe-secret-key>
 STRIPE_PRICE_STARTER=<your-starter-price-id>
-STRIPE_PRICE_STANDARD=<your-standard-price-id>
 STRIPE_CHECKOUT_SUCCESS_URL=<your-checkout-success-url>
 STRIPE_CHECKOUT_CANCEL_URL=<your-checkout-cancel-url>
+STRIPE_BILLING_PORTAL_RETURN_URL=<your-server-owned-portal-return-url>
 LIVEKIT_URL=<your-livekit-url>
 LIVEKIT_API_KEY=<your-livekit-api-key>
 LIVEKIT_API_SECRET=<your-livekit-api-secret>
@@ -183,7 +183,7 @@ Expected:
 Create a test-mode Stripe subscription event that includes:
 
 - `metadata.clerk_user_id=<the Clerk user id from Step 1>`
-- a price whose `lookup_key` is either `starter` or `standard`
+- a price whose `lookup_key` is `starter`
 
 The safest path is to create a real test subscription in Stripe rather than relying on a generic trigger event.
 
@@ -262,6 +262,7 @@ Expected:
 
 - response contains a Stripe Billing Portal URL for subscribed users
 - response is `409` when no Stripe customer exists yet
+- the optional caller `return_url` must share the configured URL's exact origin; Stripe always receives `STRIPE_BILLING_PORTAL_RETURN_URL`
 
 ## Step 4: Telnyx Active / Disabled Switch Smoke
 

@@ -1,34 +1,53 @@
-import hashlib
-import hmac
-import time
 from datetime import UTC, datetime
 
+from arq.connections import ArqRedis
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from arq.connections import ArqRedis
 
 from app.core.config import get_settings
-from app.providers.telephony.base import TelephonyProvisioningReviewRequired
 from app.repositories.phone_number_repository import PhoneNumberRepository
-from app.repositories.notification_repository import NotificationRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
-from app.services.telephony_service import TelephonyService
+from app.services.outbox_service import OutboxService
+from app.services.subscription_access_policy import SubscriptionAccessPolicy
 
 
 PLAN_MINUTES = {
     "starter": 60,
-    "standard": 120,
 }
+
+RECOGNIZED_SUBSCRIPTION_STATUSES = frozenset(
+    {
+        "trialing",
+        "active",
+        "past_due",
+        "unpaid",
+        "canceled",
+        "incomplete",
+        "incomplete_expired",
+        "paused",
+    }
+)
+
+STRIPE_EVENT_HANDLER_MAP = {
+    "customer.subscription.created": "_handle_subscription_event",
+    "customer.subscription.updated": "_handle_subscription_event",
+    "customer.subscription.deleted": "_handle_subscription_event",
+    "invoice.paid": "_handle_invoice_paid",
+    "invoice.payment_failed": "_handle_invoice_payment_failed",
+}
+
+
+class UnsupportedStripeLifecycleError(ValueError):
+    pass
 
 
 class BillingService:
     def __init__(
         self,
         session: AsyncSession,
-        telephony_service: TelephonyService | None = None,
         arq_pool: ArqRedis | None = None,
     ) -> None:
         self.session = session
@@ -37,21 +56,20 @@ class BillingService:
         self.subscription_repository = SubscriptionRepository(session)
         self.phone_number_repository = PhoneNumberRepository(session)
         self.usage_repository = UsageRepository(session)
-        self.notification_repository = NotificationRepository(session)
         self.webhook_event_repository = WebhookEventRepository(session)
-        self.telephony_service = telephony_service or TelephonyService(session)
+        self.outbox_service = OutboxService(session)
         self.arq_pool = arq_pool
 
     def verify_signature(self, payload: bytes, signature_header: str | None) -> None:
         if not self.settings.stripe_webhook_secret:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Stripe secret not configured")
             
-        from app.core.webhook_verifier import verify_hmac_signature
-        verify_hmac_signature(
+        from app.core.webhook_verifier import verify_stripe_signature
+
+        verify_stripe_signature(
             secret=self.settings.stripe_webhook_secret,
             payload=payload,
-            headers={"stripe-signature": signature_header or ""},
-            is_clerk=False,
+            signature_header=signature_header,
         )
 
     async def handle_event(self, envelope: dict) -> None:
@@ -68,38 +86,85 @@ class BillingService:
         event_type = envelope["type"]
         event_object = envelope["data"]["object"]
 
-        if event_type == "customer.subscription.created":
-            await self._handle_subscription_created(event_object)
-        elif event_type == "invoice.paid":
-            await self._handle_invoice_paid(event_object)
+        handler_name = STRIPE_EVENT_HANDLER_MAP.get(event_type)
+        if handler_name is not None:
+            handler = getattr(self, handler_name)
+            await handler(event_object, envelope["id"], event_type)
 
         await self.session.commit()
 
-    async def _handle_subscription_created(self, event_object: dict) -> None:
+    async def _handle_subscription_event(
+        self,
+        event_object: dict,
+        event_id: str,
+        event_type: str,
+    ) -> None:
+        stripe_subscription_id = event_object["id"]
+        existing = await self.subscription_repository.get_by_stripe_subscription_id(
+            stripe_subscription_id
+        )
         clerk_user_id = event_object.get("metadata", {}).get("clerk_user_id")
-        if not clerk_user_id:
+        user = (
+            await self.user_repository.get_by_clerk_user_id(clerk_user_id)
+            if clerk_user_id
+            else None
+        )
+        user_id = user.id if user is not None else (existing.user_id if existing else None)
+        if user_id is None:
             return
 
-        user = await self.user_repository.get_by_clerk_user_id(clerk_user_id)
-        if user is None:
-            return
+        plan_tier = self._extract_subscription_plan_tier(event_object)
+        if plan_tier is None and existing is not None:
+            plan_tier = existing.plan_tier
+        allocated_minutes = self._require_plan_minutes(plan_tier)
 
-        plan_tier = event_object["items"]["data"][0]["price"].get("lookup_key", "starter")
-        allocated_minutes = PLAN_MINUTES.get(plan_tier, 60)
+        subscription_status = event_object.get("status")
+        if subscription_status is None and event_type == "customer.subscription.deleted":
+            subscription_status = "canceled"
+        subscription_status = self._require_subscription_status(subscription_status)
+
         current_period_start, current_period_end = self._extract_subscription_period_bounds(event_object)
+        if existing is not None:
+            current_period_start = current_period_start or existing.current_period_start
+            current_period_end = current_period_end or existing.current_period_end
 
-        await self.subscription_repository.upsert_by_stripe_subscription_id(
-            user_id=user.id,
-            stripe_customer_id=event_object["customer"],
-            stripe_subscription_id=event_object["id"],
+        stripe_customer_id = event_object.get("customer")
+        if stripe_customer_id is None and existing is not None:
+            stripe_customer_id = existing.stripe_customer_id
+        if not stripe_customer_id:
+            raise UnsupportedStripeLifecycleError(
+                "Stripe subscription customer is invalid"
+            )
+
+        subscription = await self.subscription_repository.upsert_by_stripe_subscription_id(
+            user_id=user_id,
+            stripe_customer_id=stripe_customer_id,
+            stripe_subscription_id=stripe_subscription_id,
             plan_tier=plan_tier,
-            status=event_object.get("status", "active"),
+            status=subscription_status,
             allocated_minutes=allocated_minutes,
             current_period_start=current_period_start,
             current_period_end=current_period_end,
         )
 
-    async def _handle_invoice_paid(self, event_object: dict) -> None:
+        await self._add_disable_intent_if_needed(
+            subscription=subscription,
+            event_id=event_id,
+            event_type=event_type,
+        )
+
+    async def _handle_invoice_paid(
+        self,
+        event_object: dict,
+        _event_id: str,
+        _event_type: str,
+    ) -> None:
+        if not SubscriptionAccessPolicy.should_grant_invoice(
+            event_object.get("status", ""),
+            event_object.get("paid") is True,
+        ):
+            return
+
         subscription_id = self._extract_invoice_subscription_id(event_object)
         if not subscription_id:
             return
@@ -111,7 +176,7 @@ class BillingService:
                 return
 
         plan_tier = self._extract_invoice_plan_tier(event_object) or subscription.plan_tier
-        allocated_minutes = PLAN_MINUTES.get(plan_tier, subscription.allocated_minutes or 60)
+        allocated_minutes = self._require_plan_minutes(plan_tier)
         subscription.plan_tier = plan_tier
         subscription.allocated_minutes = allocated_minutes
         subscription.status = "active"
@@ -140,10 +205,42 @@ class BillingService:
             balance_after=allocated_minutes,
         )
 
+    async def _handle_invoice_payment_failed(
+        self,
+        event_object: dict,
+        event_id: str,
+        event_type: str,
+    ) -> None:
+        subscription_id = self._extract_invoice_subscription_id(event_object)
+        if not subscription_id:
+            return
+
+        subscription = await self.subscription_repository.get_by_stripe_subscription_id(
+            subscription_id
+        )
+        if subscription is None:
+            subscription = await self._bootstrap_subscription_from_invoice(
+                subscription_id,
+                event_object,
+                status="past_due",
+            )
+            if subscription is None:
+                return
+        else:
+            subscription.status = "past_due"
+
+        await self._add_disable_intent_if_needed(
+            subscription=subscription,
+            event_id=event_id,
+            event_type=event_type,
+        )
+
     async def _bootstrap_subscription_from_invoice(
         self,
         subscription_id: str,
         event_object: dict,
+        *,
+        status: str = "active",
     ):
         clerk_user_id = self._extract_invoice_clerk_user_id(event_object)
         if not clerk_user_id:
@@ -156,20 +253,68 @@ class BillingService:
         plan_tier = (
             self._extract_invoice_plan_tier(event_object)
             or self._extract_invoice_plan_tier_from_metadata(event_object)
-            or "starter"
         )
-        allocated_minutes = PLAN_MINUTES.get(plan_tier, 60)
+        allocated_minutes = self._require_plan_minutes(plan_tier)
 
         return await self.subscription_repository.upsert_by_stripe_subscription_id(
             user_id=user.id,
             stripe_customer_id=event_object["customer"],
             stripe_subscription_id=subscription_id,
             plan_tier=plan_tier,
-            status="active",
+            status=self._require_subscription_status(status),
             allocated_minutes=allocated_minutes,
             current_period_start=None,
             current_period_end=None,
         )
+
+    async def _add_disable_intent_if_needed(
+        self,
+        *,
+        subscription,
+        event_id: str,
+        event_type: str,
+    ) -> None:
+        if SubscriptionAccessPolicy.can_route(
+            subscription.status,
+            subscription.current_period_end,
+        ):
+            return
+
+        await self.outbox_service.add(
+            topic="phone.disable",
+            aggregate_type="subscription",
+            aggregate_id=subscription.id,
+            idempotency_key=f"stripe:{event_type}:{event_id}",
+            payload={
+                "user_id": str(subscription.user_id),
+                "subscription_id": str(subscription.id),
+                "stripe_subscription_id": subscription.stripe_subscription_id,
+            },
+        )
+
+    @staticmethod
+    def _extract_subscription_plan_tier(event_object: dict) -> str | None:
+        for item in event_object.get("items", {}).get("data", []):
+            lookup_key = item.get("price", {}).get("lookup_key")
+            if lookup_key:
+                return lookup_key
+        return event_object.get("metadata", {}).get("plan_tier")
+
+    @staticmethod
+    def _require_plan_minutes(plan_tier: str | None) -> int:
+        if plan_tier not in PLAN_MINUTES:
+            raise UnsupportedStripeLifecycleError(
+                "Stripe subscription plan is unsupported"
+            )
+        return PLAN_MINUTES[plan_tier]
+
+    @staticmethod
+    def _require_subscription_status(subscription_status: str | None) -> str:
+        if subscription_status not in RECOGNIZED_SUBSCRIPTION_STATUSES:
+            raise UnsupportedStripeLifecycleError(
+                "Stripe subscription status is unsupported"
+            )
+        return subscription_status
 
     @staticmethod
     def _extract_invoice_subscription_id(event_object: dict) -> str | None:

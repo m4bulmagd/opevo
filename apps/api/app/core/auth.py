@@ -1,8 +1,4 @@
-import base64
-import hashlib
-import hmac
 import logging
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -67,15 +63,13 @@ class ClerkAuthProvider(AuthProvider):
         if not self.settings.clerk_webhook_secret:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Webhook secret not configured")
 
-        from app.core.webhook_verifier import verify_hmac_signature
-        
-        verify_hmac_signature(
+        from app.core.webhook_verifier import verify_svix_signature
+
+        return verify_svix_signature(
             secret=self.settings.clerk_webhook_secret,
             payload=payload,
             headers=headers,
-            is_clerk=True,
         )
-        return headers.get("svix-id", "")
 
     def _resolve_jwks_url(self) -> str:
         if self.settings.clerk_jwks_url:

@@ -44,6 +44,7 @@ from app.models.agent_config import AgentConfig  # noqa: E402,F401
 from app.models.call import Call  # noqa: E402,F401
 from app.models.call_message import CallMessage  # noqa: E402,F401
 from app.models.notification import Notification  # noqa: E402,F401
+from app.models.outbox_event import OutboxEvent  # noqa: E402,F401
 from app.models.phone_number import PhoneNumber  # noqa: E402,F401
 from app.models.phone_number_provisioning import PhoneNumberProvisioning  # noqa: E402,F401
 from app.models.subscription import Subscription  # noqa: E402,F401

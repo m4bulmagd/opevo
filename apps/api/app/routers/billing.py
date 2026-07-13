@@ -20,6 +20,7 @@ from app.schemas.billing_api import (
 )
 from app.services.billing_query_service import BillingQueryService
 from app.services.billing_session_service import (
+    BillingPortalReturnUrlError,
     BillingSessionProviderError,
     BillingSessionService,
     BillingSessionStateError,
@@ -131,6 +132,11 @@ async def create_portal_session(
             customer_id=subscription.stripe_customer_id,
             return_url=payload.return_url,
         )
+    except BillingPortalReturnUrlError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid billing portal return URL",
+        ) from exc
     except BillingSessionStateError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

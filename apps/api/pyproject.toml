@@ -16,6 +16,7 @@ dependencies = [
   "slowapi>=0.1.9,<1.0",
   "sqlalchemy>=2.0,<3.0",
   "stripe>=15.0.0",
+  "svix>=1.80,<2.0",
   "telnyx>=2.0,<3.0",
   "uvicorn>=0.34,<1.0",
 ]

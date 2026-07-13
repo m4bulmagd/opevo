@@ -33,9 +33,9 @@ def test_create_checkout_session_uses_price_mapping() -> None:
         stripe_client=client,
         secret_key="sk_test_123",
         price_starter="price_starter_123",
-        price_standard="price_standard_123",
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/settings/billing",
     )
 
     result = service.create_checkout_session(
@@ -59,9 +59,9 @@ def test_create_checkout_session_rejects_standard_plan() -> None:
         stripe_client=FakeStripeClient(),
         secret_key="sk_test_123",
         price_starter="price_starter_123",
-        price_standard="price_standard_123",
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/settings/billing",
     )
 
     with pytest.raises(ValueError, match="Unsupported plan tier: standard"):
@@ -80,10 +80,87 @@ def test_create_portal_session_requires_customer_id() -> None:
         stripe_client=FakeStripeClient(),
         secret_key="sk_test_123",
         price_starter="price_starter_123",
-        price_standard="price_standard_123",
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/settings/billing",
     )
 
     with pytest.raises(ValueError, match="Stripe customer ID is required"):
         service.create_portal_session(customer_id=None, return_url="https://app.example.com/settings")
+
+
+def test_create_portal_session_always_uses_server_owned_return_url() -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    client = FakeStripeClient()
+    service = BillingSessionService(
+        stripe_client=client,
+        secret_key="sk_test_123",
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/settings/billing",
+    )
+
+    result = service.create_portal_session(
+        customer_id="cus_123",
+        return_url="https://app.example.com/account?tab=billing",
+    )
+
+    assert result.url == "https://billing.stripe.test/session"
+    assert client.billing_portal.Session.calls == [
+        {
+            "customer": "cus_123",
+            "return_url": "https://app.example.com/settings/billing",
+        }
+    ]
+
+
+def test_create_portal_session_accepts_omitted_caller_return_url() -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    client = FakeStripeClient()
+    service = BillingSessionService(
+        stripe_client=client,
+        billing_portal_return_url="https://app.example.com/settings/billing",
+    )
+
+    service.create_portal_session(customer_id="cus_123", return_url=None)
+
+    assert client.billing_portal.Session.calls[0]["return_url"] == (
+        "https://app.example.com/settings/billing"
+    )
+
+
+@pytest.mark.parametrize(
+    "caller_return_url",
+    [
+        "http://app.example.com/settings",
+        "https://evil.example.com/settings",
+        "https://app.example.com:444/settings",
+        "https://user@app.example.com/settings",
+        "https://app.example.com:bad/settings",
+        "https://app.example.com/has space",
+        "ftp://app.example.com/settings",
+        "/settings/billing",
+        "not a url",
+    ],
+)
+def test_create_portal_session_rejects_unsafe_caller_return_url(
+    caller_return_url: str,
+) -> None:
+    from app.services.billing_session_service import (
+        BillingPortalReturnUrlError,
+        BillingSessionService,
+    )
+
+    service = BillingSessionService(
+        stripe_client=FakeStripeClient(),
+        billing_portal_return_url="https://app.example.com/settings/billing",
+    )
+
+    with pytest.raises(BillingPortalReturnUrlError):
+        service.create_portal_session(
+            customer_id="cus_123",
+            return_url=caller_return_url,
+        )

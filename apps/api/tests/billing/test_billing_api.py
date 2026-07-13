@@ -116,6 +116,13 @@ class FakeBillingSessionService:
         return type("HostedSession", (), {"url": self.portal_url})()
 
 
+class FakeUnsafePortalSessionService(FakeBillingSessionService):
+    def create_portal_session(self, *, customer_id, return_url):
+        from app.services.billing_session_service import BillingPortalReturnUrlError
+
+        raise BillingPortalReturnUrlError("unsafe return URL")
+
+
 class FakeEmptySubscriptionQueryService:
     async def get_subscription(self, user_id):
         return None
@@ -194,6 +201,40 @@ async def test_create_portal_session_returns_url() -> None:
     )
 
     assert response.url == "https://billing.stripe.test/session"
+
+
+@pytest.mark.anyio
+async def test_create_portal_session_accepts_omitted_return_url() -> None:
+    from app.routers.billing import create_portal_session
+    from app.schemas.billing_api import PortalSessionRequest
+
+    response = await create_portal_session(
+        request=_fake_request(),
+        payload=PortalSessionRequest(),
+        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
+        service=FakeBillingSessionService(),
+        query_service=FakeActiveSubscriptionQueryService(),
+    )
+
+    assert response.url == "https://billing.stripe.test/session"
+
+
+@pytest.mark.anyio
+async def test_create_portal_session_maps_unsafe_return_url_to_bad_request() -> None:
+    from app.routers.billing import create_portal_session
+    from app.schemas.billing_api import PortalSessionRequest
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_portal_session(
+            request=_fake_request(),
+            payload=PortalSessionRequest(return_url="https://evil.example.com/settings"),
+            identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
+            service=FakeUnsafePortalSessionService(),
+            query_service=FakeActiveSubscriptionQueryService(),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Invalid billing portal return URL"
 
 
 @pytest.mark.anyio

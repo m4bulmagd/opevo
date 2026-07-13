@@ -26,6 +26,7 @@ def base_settings() -> Settings:
         stripe_price_starter="stripe-starter-price",
         stripe_checkout_success_url="https://app.example.com/billing/success",
         stripe_checkout_cancel_url="https://app.example.com/billing/cancel",
+        stripe_billing_portal_return_url="https://app.example.com/settings/billing",
         livekit_url="wss://livekit.example.com",
         livekit_api_key="livekit-api-key",
         livekit_api_secret="livekit-api-secret",
@@ -56,6 +57,7 @@ def base_settings() -> Settings:
         ("stripe_price_starter", "STRIPE_PRICE_STARTER"),
         ("stripe_checkout_success_url", "STRIPE_CHECKOUT_SUCCESS_URL"),
         ("stripe_checkout_cancel_url", "STRIPE_CHECKOUT_CANCEL_URL"),
+        ("stripe_billing_portal_return_url", "STRIPE_BILLING_PORTAL_RETURN_URL"),
         ("livekit_url", "LIVEKIT_URL"),
         ("livekit_api_key", "LIVEKIT_API_KEY"),
         ("livekit_api_secret", "LIVEKIT_API_SECRET"),
@@ -121,12 +123,30 @@ def test_production_requires_gemini_credentials_for_gemini_summaries(
         validate_api_runtime(settings)
 
 
-def test_production_keeps_standard_stripe_price_optional(
-    base_settings: Settings,
-) -> None:
-    settings = base_settings.model_copy(update={"stripe_price_standard": ""})
+def test_settings_do_not_expose_a_standard_stripe_price() -> None:
+    assert "stripe_price_standard" not in Settings.model_fields
 
-    validate_api_runtime(settings)
+
+@pytest.mark.parametrize(
+    "portal_return_url",
+    [
+        "ftp://app.example.com/settings",
+        "https://user@app.example.com/settings",
+        "https://app.example.com:bad/settings",
+        "https://app.example.com/has space",
+        "not a url",
+    ],
+)
+def test_production_rejects_invalid_billing_portal_return_url(
+    base_settings: Settings,
+    portal_return_url: str,
+) -> None:
+    settings = base_settings.model_copy(
+        update={"stripe_billing_portal_return_url": portal_return_url}
+    )
+
+    with pytest.raises(RuntimeError, match="STRIPE_BILLING_PORTAL_RETURN_URL"):
+        validate_api_runtime(settings)
 
 
 @pytest.mark.parametrize(
@@ -241,9 +261,10 @@ def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
     assert "STRIPE_SECRET_KEY=replace-me" in api_env
     assert "TELNYX_ORDERING_ENABLED=false" in api_env
     assert "STRIPE_PRICE_STARTER=price_replace_me" in api_env
-    assert "STRIPE_PRICE_STANDARD=price_replace_me" in api_env
+    assert "STRIPE_PRICE_STANDARD" not in api_env
     assert "STRIPE_CHECKOUT_SUCCESS_URL=https://your-app.example.com/billing/success" in api_env
     assert "STRIPE_CHECKOUT_CANCEL_URL=https://your-app.example.com/billing/cancel" in api_env
+    assert "STRIPE_BILLING_PORTAL_RETURN_URL=https://your-app.example.com/settings/billing" in api_env
     assert "CLERK_JWT_SECRET=replace-me" not in api_env
     assert "OPENAI_API_KEY=replace-me" not in api_env
 

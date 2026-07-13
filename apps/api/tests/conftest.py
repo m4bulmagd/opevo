@@ -276,6 +276,8 @@ def stripe_invoice_paid_payload() -> dict:
             "object": {
                 "id": "in_123",
                 "customer": "cus_123",
+                "status": "paid",
+                "paid": True,
                 "parent": {
                     "subscription_details": {
                         "subscription": "sub_123",
@@ -318,4 +320,3 @@ def signed_stripe_headers_factory():
         }
 
     return _build
-

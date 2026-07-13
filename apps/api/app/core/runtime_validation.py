@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 
 from app.core.config import Settings
+from app.core.http_origin import parse_http_origin
 
 
 PRODUCTION_REQUIRED_SETTINGS = (
@@ -13,6 +14,7 @@ PRODUCTION_REQUIRED_SETTINGS = (
     "stripe_price_starter",
     "stripe_checkout_success_url",
     "stripe_checkout_cancel_url",
+    "stripe_billing_portal_return_url",
     "livekit_url",
     "livekit_api_key",
     "livekit_api_secret",
@@ -54,6 +56,12 @@ def validate_api_runtime(settings: Settings) -> None:
             missing.extend(_require(settings, ("gemini_api_key",)))
         else:
             missing.append("SUMMARY_PROVIDER")
+
+    if not _is_missing(settings.stripe_billing_portal_return_url):
+        try:
+            parse_http_origin(settings.stripe_billing_portal_return_url)
+        except ValueError:
+            missing.append("STRIPE_BILLING_PORTAL_RETURN_URL")
 
     if missing:
         raise RuntimeError(
