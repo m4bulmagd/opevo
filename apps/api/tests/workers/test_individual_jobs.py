@@ -425,6 +425,60 @@ async def test_transcript_flush_job_happy_path(
 
 
 @pytest.mark.anyio
+async def test_transcript_flush_job_is_idempotent_and_rejects_sequence_conflict(
+    db_session,
+    active_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.transcript_service import TranscriptSequenceConflictError
+    from app.workers.jobs import transcript_flush as transcript_flush_module
+
+    call = Call(id=uuid4(), user_id=active_user.id, status="completed")
+    db_session.add(call)
+    await db_session.commit()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    monkeypatch.setattr(
+        transcript_flush_module,
+        "get_session_factory",
+        lambda: session_factory,
+    )
+    payload = {
+        "call_id": str(call.id),
+        "transcript": [
+            {"sequence_number": 7, "speaker": "CALLER", "text": "Immutable"}
+        ],
+    }
+
+    await transcript_flush_module.transcript_flush_job(CTX, payload)
+    await transcript_flush_module.transcript_flush_job(CTX, payload)
+    with pytest.raises(TranscriptSequenceConflictError):
+        await transcript_flush_module.transcript_flush_job(
+            CTX,
+            {
+                "call_id": str(call.id),
+                "transcript": [
+                    {
+                        "sequence_number": 7,
+                        "speaker": "AGENT",
+                        "text": "Overwrite attempt",
+                    }
+                ],
+            },
+        )
+
+    rows = list(
+        (
+            await db_session.execute(
+                select(CallMessage).where(CallMessage.call_id == call.id)
+            )
+        ).scalars()
+    )
+    assert [(row.sequence_number, row.speaker, row.text) for row in rows] == [
+        (7, "CALLER", "Immutable")
+    ]
+
+
+@pytest.mark.anyio
 async def test_transcript_flush_job_empty_transcript(
     db_session, active_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:

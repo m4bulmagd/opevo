@@ -32,7 +32,9 @@ def build_lifecycle_service(*, recording_service, telephony_service, phone_numbe
     service = CallLifecycleService(
         session,
         call_repository=call_repository,
-        message_repository=SimpleNamespace(create_many=AsyncMock()),
+        message_repository=SimpleNamespace(
+            list_by_call_id=AsyncMock(return_value=[]),
+        ),
         usage_accounting_service=SimpleNamespace(
             debit_call=AsyncMock(
                 return_value=UsageDebitResult(

@@ -900,26 +900,45 @@ git commit -m "security: scope agent access and enforce call dispatch gates"
 - Create: `apps/api/app/schemas/agent_runtime.py`
 - Create: `apps/api/app/services/transcript_service.py`
 - Modify: `apps/api/app/routers/agent.py`
+- Modify: `apps/api/app/repositories/agent_config_repository.py`
 - Modify: `apps/api/app/repositories/message_repository.py`
+- Modify: `apps/api/app/schemas/calls.py`
+- Modify: `apps/api/app/services/call_lifecycle_service.py`
+- Modify: `apps/api/app/workers/jobs/transcript_flush.py`
+- Modify: `docs/architecture/integration-endpoints.md`
 - Modify: `apps/agent/agent/api_client.py`
+- Modify: `apps/agent/agent/main.py`
+- Modify: `apps/agent/agent/schemas.py`
 - Modify: `apps/agent/agent/session_runtime.py`
 - Create: `apps/api/tests/agent/test_transcript_append.py`
+- Create: `apps/api/tests/integration/test_agent_runtime_transcript_durability.py`
+- Create: `apps/api/tests/integration/test_transcript_concurrency.py`
+- Modify: `apps/api/tests/agent/test_call_completion.py`
+- Create: `apps/api/tests/services/test_transcript_service_authorization.py`
+- Modify: `apps/api/tests/services/test_safe_service_exceptions.py`
+- Modify: `apps/api/tests/workers/test_individual_jobs.py`
+- Modify: `apps/api/tests/workers/test_lifecycle_edge_cases.py`
+- Modify: `apps/api/tests/workers/test_post_call_jobs.py`
 - Modify: `apps/agent/tests/test_session_runtime.py`
+- Modify: `apps/agent/tests/test_session_runtime_errors.py`
 - Modify: `apps/agent/tests/test_api_client.py`
+- Modify: `apps/agent/tests/test_main.py`
 
 **Interfaces:**
 - Produces endpoint `POST /api/agent/calls/{call_id}/transcript`.
-- Request: `{ "sequence_number": int, "speaker": "CALLER" | "AGENT", "text": str }`.
+- Request: `{ "sequence_number": int >= 1, "speaker": "CALLER" | "AGENT", "text": str[1:4000] }`; speaker and text are normalized before persistence.
 - Response: `{ "status": "stored" | "duplicate", "sequence_number": int }`.
 - Produces: `AgentApiClient.append_transcript(call_id, dispatch_token, item) -> dict`.
+- Completion recovery uses the same immutable sequence-bearing item shape. An exact replay is a duplicate; the same sequence with different normalized content is a terminal `409 sequence_conflict` and never overwrites the first row.
+- The completion endpoint commits recovery rows before resolving or enqueueing the Redis finalization queue. Finalization loads the complete ordered transcript from `call_messages` for summary generation.
 
 - [ ] **Step 1: Write API idempotency and ownership tests**
 
-Append sequence 1 twice and assert one row. Append sequence 2 with the wrong call token and assert `401`. Append text exceeding 4,000 Unicode code points and assert `422`.
+Append sequence 1 twice and assert one row. Replay sequence 1 with different content and assert `409` without mutation. Append sequence 2 with the wrong call token and assert `401`. Append empty text or text exceeding 4,000 Unicode code points and assert `422`. Prove a concurrent PostgreSQL insert resolves to one stored row plus an exact duplicate or a deterministic conflict.
 
 - [ ] **Step 2: Write agent buffer tests**
 
-Assert each accepted caller/agent segment receives a monotonically increasing sequence number, is sent by a background flusher, and remains in the bounded pending queue until acknowledged.
+Assert each accepted caller/agent segment receives a monotonically increasing sequence number before any await, is sent by one owned background flusher in strict head order, and remains in the bounded pending queue until a matching `stored` or `duplicate` acknowledgement. Classify timeouts, connection failures, `408`, `425`, `429`, and `5xx` as retryable; classify permanent `4xx` and malformed acknowledgements as fatal.
 
 - [ ] **Step 3: Run targeted tests and verify failure**
 
@@ -932,20 +951,24 @@ Expected: transcript endpoint and flusher behavior do not exist.
 
 - [ ] **Step 4: Implement append-only persistence**
 
-Validate the dispatch token against the call row, normalize the speaker enum, reject empty text, and insert by `(call_id, sequence_number)`. Convert the unique conflict into a `duplicate` response without modifying existing text.
+Validate the dispatch token against the call row, normalize the speaker enum and text, reject invalid input, and insert by `(call_id, sequence_number)` inside a short call-state transaction with a savepoint/unique backstop. Allow exact replay after a terminal transition, but reject new rows once the call is terminal. Convert an identical unique conflict into `duplicate`; raise `sequence_conflict` for different content without logging transcript text.
+
+Completion synchronously merges the sequence-bearing recovery items and commits before it looks up Redis. A queue outage returns `503` only after recovery is durable. The finalization service idempotently supports legacy worker payloads, loads every ordered `CallMessage`, and supplies that full transcript to summary generation before completing the call. The obsolete transcript flush worker delegates to the same idempotent repository semantics.
 
 - [ ] **Step 5: Implement the bounded agent flusher**
 
-Use one background task per call, a maximum pending queue of 200 items, sequential delivery, and exponential retry capped at 10 seconds. Never block audio callbacks on the HTTP request. On finalization, wait up to five seconds for acknowledged flush, then send the remaining bounded transcript in the completion payload as a recovery path.
+Use one owned background task per call, a maximum deque of 200 unacknowledged items, sequential head-only delivery, and exponential retry capped at 10 seconds. Never block audio callbacks on the HTTP request. Queue overflow fails closed and requests LiveKit job shutdown without dropping either an old or new segment silently.
+
+Own every transcript event-handler task. Finalization is serialized, stops acceptance, drains/cancels handler tasks and waits up to five total seconds for acknowledged flush, then cancels and awaits the long-lived flusher before snapshotting the remaining sequence-bearing items. Send that recovery tail in completion; keep the complete bounded in-memory transcript for compatibility and test summary reconstruction from durable rows plus recovery.
 
 - [ ] **Step 6: Prove crash survival**
 
-In the agent test, append three segments, acknowledge two, cancel the runtime task, and assert the API test database contains the two acknowledged segments. Restart finalization with all three segments and assert the unique constraint produces exactly three rows.
+In the agent test, append three segments, acknowledge two, cancel the flusher, and assert the API test database contains the two acknowledged segments. Gracefully finalize with the remaining sequence-bearing item and assert exactly three ordered rows plus a complete three-line summary input. Explicitly document the durability boundary: acknowledged rows survive a process crash; unacknowledged in-memory rows survive only the bounded graceful finalization path. Hard-crash recovery of unacknowledged audio would require a durable local spool and is outside this task.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/api/app/schemas/agent_runtime.py apps/api/app/services/transcript_service.py apps/api/app/routers/agent.py apps/api/app/repositories/message_repository.py apps/api/tests/agent/test_transcript_append.py apps/agent/agent/api_client.py apps/agent/agent/session_runtime.py apps/agent/tests/test_session_runtime.py apps/agent/tests/test_api_client.py
+git add apps/api/app/schemas/agent_runtime.py apps/api/app/services/transcript_service.py apps/api/app/routers/agent.py apps/api/app/repositories/agent_config_repository.py apps/api/app/repositories/message_repository.py apps/api/app/schemas/calls.py apps/api/app/services/call_lifecycle_service.py apps/api/app/workers/jobs/transcript_flush.py apps/api/tests/agent/test_transcript_append.py apps/api/tests/agent/test_call_completion.py apps/api/tests/integration/test_agent_runtime_transcript_durability.py apps/api/tests/integration/test_transcript_concurrency.py apps/api/tests/services/test_transcript_service_authorization.py apps/api/tests/services/test_safe_service_exceptions.py apps/api/tests/workers/test_individual_jobs.py apps/api/tests/workers/test_lifecycle_edge_cases.py apps/api/tests/workers/test_post_call_jobs.py apps/agent/agent/api_client.py apps/agent/agent/main.py apps/agent/agent/schemas.py apps/agent/agent/session_runtime.py apps/agent/tests/test_session_runtime.py apps/agent/tests/test_session_runtime_errors.py apps/agent/tests/test_api_client.py apps/agent/tests/test_main.py docs/architecture/integration-endpoints.md docs/superpowers/plans/2026-07-12-production-readiness-hardening.md
 git commit -m "feat: persist live transcripts incrementally"
 ```
 

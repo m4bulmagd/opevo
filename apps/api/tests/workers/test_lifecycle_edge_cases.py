@@ -203,7 +203,7 @@ async def test_call_not_found_raises_value_error(db_session, active_user) -> Non
         )
 
 
-# T5-5: Already-completed call (status="completed") — should return early with already_completed=True
+# T5-5: Already-completed retries still preserve late transcript recovery.
 @pytest.mark.anyio
 async def test_already_completed_call_returns_early(db_session, active_user) -> None:
     from sqlalchemy import select
@@ -227,7 +227,13 @@ async def test_already_completed_call_returns_early(db_session, active_user) -> 
             "call_id": str(call.id),
             "duration_seconds": 120,
             "caller_number": "+33111111111",
-            "transcript": [{"speaker": "CALLER", "text": "Should not be saved"}],
+            "transcript": [
+                {
+                    "sequence_number": 1,
+                    "speaker": "CALLER",
+                    "text": "Late recovery must be saved",
+                }
+            ],
         }
     )
 
@@ -238,10 +244,11 @@ async def test_already_completed_call_returns_early(db_session, active_user) -> 
     assert result.notification_job_enqueued is False
     assert result.summary_text == "Previous summary"
 
-    # No new messages should have been written
     messages = (
         await db_session.execute(
             select(CallMessage).where(CallMessage.call_id == call.id)
         )
     ).scalars().all()
-    assert messages == []
+    assert [(message.sequence_number, message.text) for message in messages] == [
+        (1, "Late recovery must be saved")
+    ]

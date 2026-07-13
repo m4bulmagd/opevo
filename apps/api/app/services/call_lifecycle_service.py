@@ -10,6 +10,7 @@ from app.services.notification_service import NotificationService
 from app.services.recording_service import RecordingResult, RecordingService
 from app.services.summary_service import SummaryService
 from app.services.telephony_service import TelephonyService
+from app.services.transcript_service import TranscriptService
 from app.services.usage_accounting_service import UsageAccountingService
 
 
@@ -55,6 +56,18 @@ class CallLifecycleService:
     async def finalize_call(self, payload: dict) -> CallFinalizationResult:
         call_id = UUID(payload["call_id"])
         duration_seconds = payload["duration_seconds"]
+        transcript_service = TranscriptService(
+            self.session,
+            call_repository=self.call_repository,
+            message_repository=self.message_repository,
+        )
+        recovery = payload.get("transcript") or []
+        if recovery:
+            await transcript_service.merge_recovery(
+                call_id=call_id,
+                transcript=recovery,
+            )
+
         debit = await self.usage_accounting_service.debit_call(
             call_id=call_id,
             duration_seconds=duration_seconds,
@@ -63,6 +76,7 @@ class CallLifecycleService:
         if call is None:
             raise ValueError("Call not found")
         if debit.already_debited:
+            await self.session.commit()
             return CallFinalizationResult(
                 minutes_charged=debit.minutes_charged,
                 summary_job_enqueued=False,
@@ -74,7 +88,20 @@ class CallLifecycleService:
                 already_completed=True,
             )
 
-        internal_payload = {**payload, "user_id": debit.user_id}
+        messages = await self.message_repository.list_by_call_id(call.id)
+        complete_transcript = [
+            {
+                "sequence_number": message.sequence_number,
+                "speaker": message.speaker,
+                "text": message.text,
+            }
+            for message in messages
+        ]
+        internal_payload = {
+            **payload,
+            "user_id": debit.user_id,
+            "transcript": complete_transcript,
+        }
         summary_result = await self.summary_service.create_summary(internal_payload)
 
         try:
@@ -92,11 +119,6 @@ class CallLifecycleService:
                 status="failed",
             )
             recording_result = RecordingResult(object_key=None, url=None, job_enqueued=False)
-
-        await self.message_repository.create_many(
-            call_id=call.id,
-            transcript=internal_payload.get("transcript") or [],
-        )
 
         await self.call_repository.mark_completed(
             call,

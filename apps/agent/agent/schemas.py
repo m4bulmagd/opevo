@@ -1,4 +1,6 @@
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DispatchMetadata(BaseModel):
@@ -19,8 +21,18 @@ class DispatchMetadata(BaseModel):
 
 
 class CallTranscriptItem(BaseModel):
-    speaker: str
-    text: str
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sequence_number: int = Field(ge=1)
+    speaker: Literal["CALLER", "AGENT"]
+    text: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 class CallCompletionPayload(BaseModel):

@@ -12,6 +12,11 @@ from app.core.dispatch_token import DispatchTokenError, verify_dispatch_token
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.schemas.agent import AgentConfigPatchRequest, AgentConfigResponse
+from app.schemas.agent_runtime import (
+    AuthenticatedAgentIdentity,
+    TranscriptAppendRequest,
+    TranscriptAppendResponse,
+)
 from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionResponse
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.services.agent_config_service import (
@@ -22,6 +27,13 @@ from app.services.agent_config_service import (
     AgentConfigTelephonySyncError,
 )
 from app.services.onboarding_service import OnboardingService
+from app.services.transcript_service import (
+    TranscriptCallNotFoundError,
+    TranscriptCallNotAcceptingError,
+    TranscriptAuthorizationError,
+    TranscriptSequenceConflictError,
+    TranscriptService,
+)
 from app.workers.call_finalization_queue import CallFinalizationQueue
 
 
@@ -32,7 +44,7 @@ async def require_agent_auth(
     call_id: UUID,
     x_agent_token: str | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
-) -> None:
+) -> AuthenticatedAgentIdentity:
     settings = get_settings()
 
     if settings.app_env.strip().lower() == "development":
@@ -43,7 +55,7 @@ async def require_agent_auth(
             and expected_token
             and hmac.compare_digest(x_agent_token, expected_token)
         ):
-            return
+            return AuthenticatedAgentIdentity(trusted_development=True)
 
     if not isinstance(x_agent_token, str) or not x_agent_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
@@ -78,6 +90,10 @@ async def require_agent_auth(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid agent token",
         )
+    return AuthenticatedAgentIdentity(
+        user_id=signed_user_id,
+        agent_config_id=signed_agent_config_id,
+    )
 
 
 def get_call_finalization_queue(request: Request) -> CallFinalizationQueue:
@@ -152,6 +168,48 @@ async def patch_agent_config(
 
 
 @router.post(
+    "/calls/{call_id}/transcript",
+    response_model=TranscriptAppendResponse,
+)
+async def append_transcript(
+    call_id: UUID,
+    payload: TranscriptAppendRequest,
+    identity: AuthenticatedAgentIdentity = Depends(require_agent_auth),
+    session: AsyncSession = Depends(get_session),
+) -> TranscriptAppendResponse:
+    service = TranscriptService(session)
+    try:
+        result = await service.append(
+            call_id=call_id,
+            item=payload,
+            expected_user_id=identity.user_id,
+            expected_agent_config_id=identity.agent_config_id,
+        )
+        await session.commit()
+    except (
+        TranscriptCallNotFoundError,
+        TranscriptAuthorizationError,
+        TranscriptSequenceConflictError,
+        TranscriptCallNotAcceptingError,
+    ) as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=(
+                status.HTTP_404_NOT_FOUND
+                if isinstance(exc, TranscriptCallNotFoundError)
+                else status.HTTP_401_UNAUTHORIZED
+                if isinstance(exc, TranscriptAuthorizationError)
+                else status.HTTP_409_CONFLICT
+            ),
+            detail=exc.code,
+        ) from None
+    return TranscriptAppendResponse(
+        status=result.status,
+        sequence_number=result.sequence_number,
+    )
+
+
+@router.post(
     "/calls/{call_id}/complete",
     response_model=AgentCallCompletionResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -159,23 +217,56 @@ async def patch_agent_config(
 async def complete_call(
     call_id: UUID,
     payload: AgentCallCompletionRequest,
-    _: None = Depends(require_agent_auth),
-    queue: CallFinalizationQueue = Depends(get_call_finalization_queue),
+    request: Request,
+    identity: AuthenticatedAgentIdentity = Depends(require_agent_auth),
+    session: AsyncSession = Depends(get_session),
 ) -> AgentCallCompletionResponse:
+    transcript_service = TranscriptService(session)
+    try:
+        await transcript_service.merge_recovery(
+            call_id=call_id,
+            transcript=payload.transcript,
+            expected_user_id=identity.user_id,
+            expected_agent_config_id=identity.agent_config_id,
+        )
+        await session.commit()
+    except (
+        TranscriptCallNotFoundError,
+        TranscriptAuthorizationError,
+        TranscriptSequenceConflictError,
+    ) as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=(
+                status.HTTP_404_NOT_FOUND
+                if isinstance(exc, TranscriptCallNotFoundError)
+                else status.HTTP_401_UNAUTHORIZED
+                if isinstance(exc, TranscriptAuthorizationError)
+                else status.HTTP_409_CONFLICT
+            ),
+            detail=exc.code,
+        ) from None
+
     recording_bytes = (
         base64.b64decode(payload.recording_bytes_base64.encode("utf-8"))
         if payload.recording_bytes_base64
         else None
     )
-    job_id = await queue.enqueue(
-        {
-            "call_id": str(call_id),
-            "duration_seconds": payload.duration_seconds,
-            "caller_number": payload.caller_number,
-            "transcript": [line.model_dump() for line in payload.transcript],
-            "recording_bytes": recording_bytes,
-        }
-    )
+    queue = get_call_finalization_queue(request)
+    try:
+        job_id = await queue.enqueue(
+            {
+                "call_id": str(call_id),
+                "duration_seconds": payload.duration_seconds,
+                "caller_number": payload.caller_number,
+                "recording_bytes": recording_bytes,
+            }
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Call finalization queue unavailable",
+        ) from None
     return AgentCallCompletionResponse(
         status="accepted",
         queued=True,

@@ -29,6 +29,15 @@ class AgentConfigRepository:
     async def get_by_id(self, agent_config_id: UUID) -> AgentConfig | None:
         return await self.session.get(AgentConfig, agent_config_id)
 
+    async def get_by_id_for_update(self, agent_config_id: UUID) -> AgentConfig | None:
+        result = await self.session.execute(
+            select(AgentConfig)
+            .where(AgentConfig.id == agent_config_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_user_id_for_update(self, user_id: UUID) -> AgentConfig | None:
         result = await self.session.execute(
             select(AgentConfig)

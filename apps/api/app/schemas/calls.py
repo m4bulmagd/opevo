@@ -3,17 +3,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
-class TranscriptLineRequest(BaseModel):
-    speaker: str
-    text: str
+from app.schemas.agent_runtime import TranscriptAppendRequest
 
 
 class AgentCallCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     duration_seconds: int = Field(ge=0)
-    transcript: list[TranscriptLineRequest] = Field(
+    transcript: list[TranscriptAppendRequest] = Field(
         default_factory=list,
         max_length=2000,
     )

@@ -1,6 +1,5 @@
 import json
 import time
-import asyncio
 import logging
 import importlib
 import inspect
@@ -85,10 +84,26 @@ async def _handle_sts_conversation_item_added(runtime: SessionRuntime, metadata:
 
 def _register_standard_session_handlers(session, runtime: SessionRuntime, metadata: DispatchMetadata) -> None:
     def on_user_input_transcribed(event) -> None:
-        asyncio.create_task(_safe_task(_handle_standard_user_input_transcribed(runtime, metadata, event)))
+        runtime.create_handler_task(
+            lambda: _safe_task(
+                _handle_standard_user_input_transcribed(
+                    runtime,
+                    metadata,
+                    event,
+                )
+            )
+        )
 
     def on_conversation_item_added(event) -> None:
-        asyncio.create_task(_safe_task(_handle_standard_conversation_item_added(runtime, metadata, event)))
+        runtime.create_handler_task(
+            lambda: _safe_task(
+                _handle_standard_conversation_item_added(
+                    runtime,
+                    metadata,
+                    event,
+                )
+            )
+        )
 
     session.on("user_input_transcribed", on_user_input_transcribed)
     session.on("conversation_item_added", on_conversation_item_added)
@@ -96,7 +111,11 @@ def _register_standard_session_handlers(session, runtime: SessionRuntime, metada
 
 def _register_sts_session_handlers(session, runtime: SessionRuntime, metadata: DispatchMetadata) -> None:
     def on_conversation_item_added(event) -> None:
-        asyncio.create_task(_safe_task(_handle_sts_conversation_item_added(runtime, metadata, event)))
+        runtime.create_handler_task(
+            lambda: _safe_task(
+                _handle_sts_conversation_item_added(runtime, metadata, event)
+            )
+        )
 
     session.on("conversation_item_added", on_conversation_item_added)
 
@@ -157,7 +176,11 @@ async def entrypoint(context: JobContext) -> None:
         vad=prewarmed.get("silero_vad"),
         inference_executor=context.inference_executor,
     )
-    runtime = SessionRuntime(EventPublisher(), api_client=AgentApiClient())
+    runtime = SessionRuntime(
+        EventPublisher(),
+        api_client=AgentApiClient(),
+        fatal_shutdown=context.shutdown,
+    )
     _register_session_handlers(session, runtime, metadata)
     context.add_shutdown_callback(
         lambda *_: runtime.finalize(

@@ -93,6 +93,10 @@ class FakeRuntime:
     async def handle_agent_utterance(self, _metadata: DispatchMetadata, text: str) -> None:
         self.agent_text.append(text)
 
+    def create_handler_task(self, factory) -> bool:
+        asyncio.run(factory())
+        return True
+
 
 class FakeTranscriptEvent:
     def __init__(self, transcript: str, *, is_final: bool) -> None:
@@ -124,16 +128,7 @@ class FakeGreetingSession:
         self.generate_reply_calls.append(kwargs)
 
 
-def _run_scheduled_coroutine(monkeypatch) -> None:
-    def run_now(coro):
-        asyncio.run(coro)
-        return None
-
-    monkeypatch.setattr("agent.main.asyncio.create_task", run_now)
-
-
-def test_register_standard_session_handlers_forwards_final_caller_and_agent_text(monkeypatch) -> None:
-    _run_scheduled_coroutine(monkeypatch)
+def test_register_standard_session_handlers_forwards_final_caller_and_agent_text() -> None:
     session = FakeSession()
     runtime = FakeRuntime()
     metadata = make_metadata(call_id="call-1", user_id="user-1")
@@ -147,8 +142,7 @@ def test_register_standard_session_handlers_forwards_final_caller_and_agent_text
     assert runtime.agent_text == ["Hi there"]
 
 
-def test_register_sts_session_handlers_forwards_caller_and_agent_text(monkeypatch) -> None:
-    _run_scheduled_coroutine(monkeypatch)
+def test_register_sts_session_handlers_forwards_caller_and_agent_text() -> None:
     session = FakeSession()
     runtime = FakeRuntime()
     metadata = make_metadata(call_id="call-1", user_id="user-1")
@@ -288,6 +282,7 @@ class FakeJobContext:
         self.room = object()
         self.events: list[object] = []
         self.shutdown_callbacks: list[object] = []
+        self.shutdown_reasons: list[str] = []
 
     async def connect(self, **_kwargs) -> None:
         self.events.append("connect")
@@ -298,6 +293,9 @@ class FakeJobContext:
 
     def add_shutdown_callback(self, callback) -> None:
         self.shutdown_callbacks.append(callback)
+
+    def shutdown(self, reason: str = "") -> None:
+        self.shutdown_reasons.append(reason)
 
 
 class FakeEntrypointSession(FakeSession):
@@ -333,6 +331,37 @@ async def test_entrypoint_connects_then_waits_only_for_sip_participant(
     assert session.started is True
     assert session.start_kwargs["room_options"].participant_identity == "sip-caller"
     assert session.start_kwargs["room_options"].participant_kinds == [3]
+
+
+@pytest.mark.anyio
+async def test_entrypoint_injects_job_shutdown_into_session_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    context = FakeJobContext(metadata)
+    session = FakeEntrypointSession()
+    captured: dict = {}
+
+    class CapturingRuntime:
+        def __init__(self, *_args, **kwargs) -> None:
+            captured.update(kwargs)
+
+        def create_handler_task(self, _factory) -> bool:
+            return True
+
+        async def finalize(self, *_args, **_kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "agent.main.build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+    monkeypatch.setattr("agent.main.SessionRuntime", CapturingRuntime)
+
+    await entrypoint(context)
+    captured["fatal_shutdown"]("transcript_buffer_overflow")
+
+    assert context.shutdown_reasons == ["transcript_buffer_overflow"]
 
 
 def test_silero_prewarm_failure_does_not_render_exception_message(

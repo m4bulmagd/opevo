@@ -21,10 +21,16 @@ class FakeQueueCall:
 
 
 class FakeCallFinalizationQueue:
-    def __init__(self) -> None:
+    def __init__(self, *, session=None) -> None:
         self.calls: list[FakeQueueCall] = []
+        self.session = session
 
     async def enqueue(self, payload: dict) -> str:
+        if self.session is not None:
+            if hasattr(self.session, "commits"):
+                assert self.session.commits == 1
+            else:
+                assert self.session.in_transaction() is False
         job_id = f"call-finalization:{payload['call_id']}"
         self.calls.append(
             FakeQueueCall(
@@ -41,6 +47,7 @@ class FakeAuthSession:
         self.call = call
         self.agent_config = agent_config
         self.lookups: list[tuple[type, object]] = []
+        self.commits = 0
 
     async def get(self, model: type, object_id):
         self.lookups.append((model, object_id))
@@ -53,6 +60,12 @@ class FakeAuthSession:
         ):
             return self.agent_config
         return None
+
+    async def execute(self, _statement):
+        return SimpleNamespace(scalar_one_or_none=lambda: self.call)
+
+    async def commit(self) -> None:
+        self.commits += 1
 
 
 def _configure_auth(
@@ -83,14 +96,18 @@ def _build_completion_app(fake_queue, *, auth_session=None):
 
     app = FastAPI()
     app.include_router(agent_router)
+    app.state.call_finalization_queue = fake_queue
     app.dependency_overrides[get_call_finalization_queue] = (
         override_get_call_finalization_queue
     )
-    if auth_session is not None:
-        async def override_get_session():
-            yield auth_session
+    session = auth_session or FakeAuthSession(
+        call=SimpleNamespace(status="pending"),
+    )
 
-        app.dependency_overrides[get_session] = override_get_session
+    async def override_get_session():
+        yield session
+
+    app.dependency_overrides[get_session] = override_get_session
     return app
 
 
@@ -110,10 +127,7 @@ async def test_agent_completion_endpoint_enqueues_call_finalization_job(
             headers={"x-agent-token": "test-agent-token"},
             json={
                 "duration_seconds": 61,
-                "transcript": [
-                    {"speaker": "CALLER", "text": "What time do you open?"},
-                    {"speaker": "AGENT", "text": "We open at nine."},
-                ],
+                "transcript": [],
             },
         )
 
@@ -130,10 +144,6 @@ async def test_agent_completion_endpoint_enqueues_call_finalization_job(
                 "call_id": str(call_id),
                 "duration_seconds": 61,
                 "caller_number": None,
-                "transcript": [
-                    {"speaker": "CALLER", "text": "What time do you open?"},
-                    {"speaker": "AGENT", "text": "We open at nine."},
-                ],
                 "recording_bytes": None,
             },
             job_id=f"call-finalization:{call_id}",
@@ -254,6 +264,8 @@ async def test_static_agent_token_is_rejected_outside_development(
 @pytest.mark.anyio
 async def test_dispatch_jwt_completes_call_without_static_token(
     monkeypatch: pytest.MonkeyPatch,
+    db_session,
+    active_user,
 ) -> None:
     dispatch_secret = "dispatch-test-secret-with-enough-entropy-for-tests"
     _configure_auth(
@@ -262,29 +274,35 @@ async def test_dispatch_jwt_completes_call_without_static_token(
         static_token="",
         dispatch_secret=dispatch_secret,
     )
-    call_id = uuid4()
-    user_id = uuid4()
-    agent_config_id = uuid4()
-    auth_session = FakeAuthSession(
-        call=SimpleNamespace(
-            id=call_id,
-            user_id=user_id,
-            agent_config_id=agent_config_id,
-        ),
-        agent_config=SimpleNamespace(id=agent_config_id, user_id=user_id),
+    config = AgentConfig(
+        user_id=active_user.id,
+        agent_name="JWT runtime",
+        system_prompt="Be helpful",
+        knowledge_base="",
+        is_enabled=True,
     )
-    fake_queue = FakeCallFinalizationQueue()
-    app = _build_completion_app(fake_queue, auth_session=auth_session)
+    db_session.add(config)
+    await db_session.flush()
+    call = Call(
+        id=uuid4(),
+        user_id=active_user.id,
+        agent_config_id=config.id,
+        status="connected",
+    )
+    db_session.add(call)
+    await db_session.commit()
+    fake_queue = FakeCallFinalizationQueue(session=db_session)
+    app = _build_completion_app(fake_queue, auth_session=db_session)
     token = create_dispatch_token(
-        call_id=str(call_id),
-        user_id=str(user_id),
-        agent_config_id=str(agent_config_id),
+        call_id=str(call.id),
+        user_id=str(active_user.id),
+        agent_config_id=str(config.id),
     )
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.post(
-            f"/api/agent/calls/{call_id}/complete",
+            f"/api/agent/calls/{call.id}/complete",
             headers={"x-agent-token": token},
             json={"duration_seconds": 1},
         )

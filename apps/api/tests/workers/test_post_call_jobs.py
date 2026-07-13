@@ -78,8 +78,149 @@ class FakeFailingSummaryService:
         return Result()
 
 
+class CapturingSummaryService(FakeStructuredSummaryService):
+    def __init__(self) -> None:
+        self.transcripts: list[list[dict]] = []
+
+    async def create_summary(self, payload: dict):
+        self.transcripts.append(payload.get("transcript") or [])
+        return await super().create_summary(payload)
+
+
 def build_structured_summary_service() -> FakeStructuredSummaryService:
     return FakeStructuredSummaryService()
+
+
+@pytest.mark.anyio
+async def test_call_completion_reconstructs_full_ordered_transcript_for_summary(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(id=uuid4(), user_id=active_user.id, status="connected")
+    db_session.add_all(
+        [
+            call,
+            UsageLedger(
+                user_id=active_user.id,
+                event_type="subscription_activated",
+                source_id="in_full_transcript_summary",
+                minutes_delta=10,
+                balance_after=10,
+            ),
+        ]
+    )
+    await db_session.flush()
+    db_session.add_all(
+        [
+            CallMessage(
+                call_id=call.id,
+                sequence_number=1,
+                speaker="CALLER",
+                text="First durable line",
+            ),
+            CallMessage(
+                call_id=call.id,
+                sequence_number=2,
+                speaker="AGENT",
+                text="Second durable line",
+            ),
+        ]
+    )
+    await db_session.commit()
+    summary = CapturingSummaryService()
+
+    await build_lifecycle_service(
+        db_session,
+        summary_service=summary,
+    ).finalize_call(
+        {
+            "call_id": str(call.id),
+            "duration_seconds": 10,
+            "transcript": [
+                {
+                    "sequence_number": 3,
+                    "speaker": "CALLER",
+                    "text": "Recovery tail",
+                }
+            ],
+        }
+    )
+
+    assert summary.transcripts == [
+        [
+            {
+                "sequence_number": 1,
+                "speaker": "CALLER",
+                "text": "First durable line",
+            },
+            {
+                "sequence_number": 2,
+                "speaker": "AGENT",
+                "text": "Second durable line",
+            },
+            {
+                "sequence_number": 3,
+                "speaker": "CALLER",
+                "text": "Recovery tail",
+            },
+        ]
+    ]
+
+
+@pytest.mark.anyio
+async def test_already_debited_retry_still_merges_late_recovery(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(id=uuid4(), user_id=active_user.id, status="connected")
+    db_session.add_all(
+        [
+            call,
+            UsageLedger(
+                user_id=active_user.id,
+                event_type="subscription_activated",
+                source_id="in_late_recovery",
+                minutes_delta=10,
+                balance_after=10,
+            ),
+        ]
+    )
+    await db_session.commit()
+    service = build_lifecycle_service(db_session)
+    await service.finalize_call(
+        {
+            "call_id": str(call.id),
+            "duration_seconds": 1,
+            "transcript": [
+                {"sequence_number": 1, "speaker": "CALLER", "text": "Initial"}
+            ],
+        }
+    )
+
+    retry = await service.finalize_call(
+        {
+            "call_id": str(call.id),
+            "duration_seconds": 1,
+            "transcript": [
+                {"sequence_number": 2, "speaker": "AGENT", "text": "Late recovery"}
+            ],
+        }
+    )
+
+    assert retry.already_completed is True
+    rows = list(
+        (
+            await db_session.execute(
+                select(CallMessage)
+                .where(CallMessage.call_id == call.id)
+                .order_by(CallMessage.sequence_number)
+            )
+        ).scalars()
+    )
+    assert [(row.sequence_number, row.text) for row in rows] == [
+        (1, "Initial"),
+        (2, "Late recovery"),
+    ]
 
 
 def build_lifecycle_service(

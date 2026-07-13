@@ -1,9 +1,11 @@
+import asyncio
 import logging
 from uuid import uuid4
 
 import pytest
 
-from agent.schemas import DispatchMetadata
+from agent.api_client import TranscriptAppendPermanentError
+from agent.schemas import CallTranscriptItem, DispatchMetadata
 from agent.session_runtime import SessionRuntime
 
 
@@ -31,7 +33,19 @@ class FakeApiClient:
 
     async def complete_call(self, payload: dict) -> dict:
         self.calls.append(payload)
-        return {"status": "accepted"}
+        return {
+            "status": "accepted",
+            "queued": True,
+            "job_id": f"call-finalization:{payload['call_id']}",
+        }
+
+    async def append_transcript(
+        self,
+        _call_id: str,
+        _dispatch_token: str,
+        item: CallTranscriptItem,
+    ) -> dict:
+        return {"status": "stored", "sequence_number": item.sequence_number}
 
 
 class FailingApiClient:
@@ -42,6 +56,16 @@ class FailingApiClient:
 class SecretBearingFailingApiClient:
     async def complete_call(self, payload: dict) -> dict:
         raise RuntimeError("AUTHORIZATION_SENTINEL_FROM_API_CLIENT")
+
+
+class PermanentlyFailingAppendClient(FakeApiClient):
+    async def append_transcript(
+        self,
+        _call_id: str,
+        _dispatch_token: str,
+        _item: CallTranscriptItem,
+    ) -> dict:
+        raise TranscriptAppendPermanentError("TRANSCRIPT_SENTINEL_FROM_APPEND")
 
 
 def make_metadata(**kwargs) -> DispatchMetadata:
@@ -204,3 +228,31 @@ async def test_finalize_empty_transcript() -> None:
     assert len(api_client.calls) == 1
     assert api_client.calls[0]["transcript"] == []
     assert any(e["type"] == "call_ended" for e in publisher.events)
+
+
+@pytest.mark.anyio
+async def test_permanent_append_failure_keeps_item_requests_shutdown_and_hides_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    shutdown_reasons: list[str] = []
+    runtime = SessionRuntime(
+        FakeEventPublisher(),
+        api_client=PermanentlyFailingAppendClient(),
+        fatal_shutdown=lambda reason: shutdown_reasons.append(reason),
+    )
+    metadata = make_metadata(dispatch_token="DISPATCH_TOKEN_SENTINEL")
+
+    with caplog.at_level(logging.ERROR):
+        await runtime.handle_caller_transcript(metadata, "TRANSCRIPT_TEXT_SENTINEL")
+        for _ in range(100):
+            if shutdown_reasons:
+                break
+            await asyncio.sleep(0)
+
+    assert shutdown_reasons == ["transcript_append_permanent_failure"]
+    assert [item.sequence_number for item in runtime.pending_transcript] == [1]
+    assert "TRANSCRIPT_SENTINEL_FROM_APPEND" not in caplog.text
+    assert "TRANSCRIPT_TEXT_SENTINEL" not in caplog.text
+    assert "DISPATCH_TOKEN_SENTINEL" not in caplog.text
+
+    await runtime.finalize(metadata, duration_seconds=1)
