@@ -24,7 +24,10 @@ from agent.providers import PipelineMode
 from agent.runtime_validation import validate_agent_runtime
 from agent.safe_logging import report_safe_exception
 from agent.schemas import DispatchMetadata
-from agent.session_runtime import SessionRuntime
+from agent.session_runtime import (
+    CALL_LIMIT_EXPIRY_MESSAGE,
+    SessionRuntime,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -143,6 +146,39 @@ async def _send_initial_greeting(session, metadata: DispatchMetadata) -> None:
         await result
 
 
+async def _play_call_limit_message(
+    session,
+    metadata: DispatchMetadata,
+    message: str,
+) -> None:
+    if metadata.pipeline_mode == PipelineMode.STS.value:
+        result = session.generate_reply(
+            instructions=f'Say exactly in French: "{message}"',
+            allow_interruptions=False,
+        )
+    else:
+        result = session.say(message, allow_interruptions=False)
+
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _disconnect_at_call_limit(
+    session,
+    metadata: DispatchMetadata,
+) -> None:
+    try:
+        await session.interrupt(force=True)
+        session.input.set_audio_enabled(False)
+        await _play_call_limit_message(
+            session,
+            metadata,
+            CALL_LIMIT_EXPIRY_MESSAGE,
+        )
+    finally:
+        session.shutdown(drain=True)
+
+
 async def handle_job_request(request: JobRequest) -> None:
     try:
         metadata_dict = json.loads(request.job.metadata or "{}")
@@ -180,6 +216,12 @@ async def entrypoint(context: JobContext) -> None:
         EventPublisher(),
         api_client=AgentApiClient(),
         fatal_shutdown=context.shutdown,
+        call_limit_started_at=started_at,
+        warning_callback=lambda message: _play_call_limit_message(
+            session,
+            metadata,
+            message,
+        ),
     )
     _register_session_handlers(session, runtime, metadata)
     context.add_shutdown_callback(
@@ -194,8 +236,18 @@ async def entrypoint(context: JobContext) -> None:
         room_options=room_io.RoomOptions(
             participant_identity=sip_participant.identity,
             participant_kinds=[SIP_PARTICIPANT_KIND],
+            close_on_disconnect=True,
+            delete_room_on_close=True,
         ),
     )
+    runtime.enforce_call_limit(
+        metadata,
+        lambda: _disconnect_at_call_limit(session, metadata),
+    )
+    if runtime.call_limit_expired_on_start:
+        if runtime.call_limit_task is not None:
+            await runtime.call_limit_task
+        return
     await _send_initial_greeting(session, metadata)
 
 

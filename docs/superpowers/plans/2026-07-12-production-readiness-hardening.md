@@ -1155,11 +1155,19 @@ git commit -m "feat: reconcile calls through a durable state machine"
 - Modify: `apps/api/app/core/config.py`
 - Modify: `apps/api/app/schemas/livekit.py`
 - Modify: `apps/api/app/services/livekit_dispatch_service.py`
+- Modify: `apps/api/app/workers/jobs/outbox_topics.py`
 - Modify: `apps/agent/agent/schemas.py`
 - Modify: `apps/agent/agent/session_runtime.py`
 - Modify: `apps/agent/agent/main.py`
 - Modify: `apps/api/tests/livekit/test_dispatch_service.py`
+- Modify: `apps/api/tests/test_reconciliation_settings.py`
+- Modify: `apps/api/tests/workers/test_livekit_dispatch_outbox.py`
+- Modify: `apps/api/tests/integration/test_agent_runtime_transcript_durability.py`
+- Modify: `apps/agent/tests/test_main.py`
+- Modify: `apps/agent/tests/test_session_runtime.py`
+- Modify: `apps/agent/tests/test_session_runtime_errors.py`
 - Create: `apps/agent/tests/test_call_limits.py`
+- Modify: `docs/superpowers/plans/2026-07-12-production-readiness-hardening.md`
 
 **Interfaces:**
 - Adds `max_call_duration_seconds` with a production default of `3600`.
@@ -1174,7 +1182,7 @@ assert calculate_allowed_duration(minutes_remaining=1, maximum=3600) == 60
 assert calculate_allowed_duration(minutes_remaining=120, maximum=3600) == 3600
 ```
 
-Add agent tests that warn at 60 seconds remaining when the total allowance exceeds 90 seconds, end at the limit, and cancel the timer on normal disconnection.
+Add agent tests that warn at 60 seconds remaining when the total allowance exceeds 90 seconds, end at the limit, cancel the timer on normal disconnection, and preserve pipeline-native speech routing for both STS and STT→LLM→TTS agents.
 
 - [ ] **Step 2: Run tests and verify failure**
 
@@ -1184,14 +1192,33 @@ Expected: limit enforcement does not exist.
 
 - [ ] **Step 3: Implement server-derived limits**
 
-Calculate the limit at dispatch from authoritative balance. The agent must not accept a larger duration from caller-controlled SIP attributes. At expiry, play the configured French closing message and disconnect the room participant.
+Keep `calculate_allowed_duration(...)` as a pure server-side policy helper in `livekit_dispatch_service.py`, but assemble authoritative dispatch metadata in `outbox_topics._dispatch_snapshot` from the balance read after the user serialization boundary. The webhook transaction continues to enqueue only the opaque call ID and must not perform provider I/O. The agent must not accept a larger duration from caller-controlled SIP attributes. Anchor the agent deadline to the entrypoint start timestamp so connect/wait/build setup time cannot extend the allowance.
+
+Treat the module-level French warning and expiry constants as the exact speech inputs while preserving the configured pipeline. For STT→LLM→TTS agents, pass each constant verbatim to `session.say(..., allow_interruptions=False)` so the configured TTS provider speaks it. For STS agents, pass the same constant in `generate_reply(..., allow_interruptions=False)` instructions so the configured direct speech model speaks it; exact word-for-word STS output is explicitly best-effort because that model is generative. Do not add a separate TTS or half-cascade path. At expiry, await the pipeline-native closing speech and disconnect the room participant.
 
 - [ ] **Step 4: Run API and agent tests, then commit**
 
 ```bash
-cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/livekit/test_dispatch_service.py -v
-cd ../agent && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
-git add apps/api/app/core/config.py apps/api/app/schemas/livekit.py apps/api/app/services/livekit_dispatch_service.py apps/api/tests/livekit/test_dispatch_service.py apps/agent/agent/schemas.py apps/agent/agent/session_runtime.py apps/agent/agent/main.py apps/agent/tests/test_call_limits.py
+cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/livekit/test_dispatch_service.py tests/test_reconciliation_settings.py tests/workers/test_livekit_dispatch_outbox.py tests/integration/test_agent_runtime_transcript_durability.py -v
+cd ../agent && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/test_call_limits.py tests/test_main.py tests/test_session_runtime.py tests/test_session_runtime_errors.py -v
+cd ../..
+git add -- \
+  apps/api/app/core/config.py \
+  apps/api/app/schemas/livekit.py \
+  apps/api/app/services/livekit_dispatch_service.py \
+  apps/api/app/workers/jobs/outbox_topics.py \
+  apps/api/tests/livekit/test_dispatch_service.py \
+  apps/api/tests/test_reconciliation_settings.py \
+  apps/api/tests/workers/test_livekit_dispatch_outbox.py \
+  apps/api/tests/integration/test_agent_runtime_transcript_durability.py \
+  apps/agent/agent/schemas.py \
+  apps/agent/agent/session_runtime.py \
+  apps/agent/agent/main.py \
+  apps/agent/tests/test_call_limits.py \
+  apps/agent/tests/test_main.py \
+  apps/agent/tests/test_session_runtime.py \
+  apps/agent/tests/test_session_runtime_errors.py \
+  docs/superpowers/plans/2026-07-12-production-readiness-hardening.md
 git commit -m "feat: enforce per-call minute and duration limits"
 ```
 

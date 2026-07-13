@@ -11,7 +11,9 @@ import agent.main as agent_main
 from agent.main import build_worker_options
 from agent.main import entrypoint
 from agent.main import _safe_task
+from agent.main import _disconnect_at_call_limit
 from agent.main import _send_initial_greeting
+from agent.main import _play_call_limit_message
 from agent.main import _register_standard_session_handlers
 from agent.main import _register_sts_session_handlers
 from agent.main import prewarm_assets
@@ -33,6 +35,7 @@ def make_metadata(**overrides) -> DispatchMetadata:
         "knowledge_base": "Open weekdays.",
         "pipeline_mode": "stt_llm_tts",
         "minutes_remaining": 10,
+        "allowed_duration_seconds": 600,
         "dispatch_token": "dispatch-token",
     }
     defaults.update(overrides)
@@ -119,10 +122,12 @@ class FakeConversationEvent:
 class FakeGreetingSession:
     def __init__(self) -> None:
         self.say_calls: list[str] = []
+        self.say_kwargs: list[dict] = []
         self.generate_reply_calls: list[dict] = []
 
-    async def say(self, text: str):
+    async def say(self, text: str, **kwargs):
         self.say_calls.append(text)
+        self.say_kwargs.append(kwargs)
 
     async def generate_reply(self, **kwargs):
         self.generate_reply_calls.append(kwargs)
@@ -197,6 +202,43 @@ def test_send_initial_greeting_uses_generate_reply_for_sts_mode() -> None:
     assert session.say_calls == []
     assert len(session.generate_reply_calls) == 1
     assert "Hello, I'm Assistant, an AI assistant representing Sam." in session.generate_reply_calls[0]["instructions"]
+
+
+def test_call_limit_message_uses_generate_reply_for_sts_mode() -> None:
+    session = FakeGreetingSession()
+    message = "Attention, il vous reste une minute avant la fin de cet appel."
+
+    asyncio.run(
+        _play_call_limit_message(
+            session,
+            make_metadata(pipeline_mode="sts"),
+            message,
+        )
+    )
+
+    assert session.say_calls == []
+    assert session.generate_reply_calls == [
+        {
+            "instructions": f'Say exactly in French: "{message}"',
+            "allow_interruptions": False,
+        }
+    ]
+
+
+def test_call_limit_message_disables_interruptions_for_standard_mode() -> None:
+    session = FakeGreetingSession()
+    message = "Attention, il vous reste une minute avant la fin de cet appel."
+
+    asyncio.run(
+        _play_call_limit_message(
+            session,
+            make_metadata(pipeline_mode="stt_llm_tts"),
+            message,
+        )
+    )
+
+    assert session.say_calls == [message]
+    assert session.say_kwargs == [{"allow_interruptions": False}]
 
 
 def test_background_task_failure_does_not_render_exception_message(caplog) -> None:
@@ -304,13 +346,49 @@ class FakeEntrypointSession(FakeSession):
         self.started = False
         self.start_kwargs: dict = {}
         self.say_calls: list[str] = []
+        self.shutdown_calls: list[dict] = []
+        self.events: list[tuple[str, object]] = []
+        self.input = SimpleNamespace(set_audio_enabled=self._set_audio_enabled)
 
     async def start(self, **kwargs) -> None:
         self.started = True
         self.start_kwargs = kwargs
+        self.events.append(("start", None))
 
-    async def say(self, text: str) -> None:
+    async def say(self, text: str, **kwargs) -> None:
         self.say_calls.append(text)
+        self.events.append(("say", {"text": text, **kwargs}))
+
+    async def interrupt(self, **kwargs) -> None:
+        self.events.append(("interrupt", kwargs))
+
+    def _set_audio_enabled(self, enabled: bool) -> None:
+        self.events.append(("set_audio_enabled", enabled))
+
+    def shutdown(self, **kwargs) -> None:
+        self.shutdown_calls.append(kwargs)
+        self.events.append(("shutdown", kwargs))
+
+
+@pytest.mark.anyio
+async def test_expiry_interrupts_input_and_speech_before_noninterruptible_close() -> None:
+    session = FakeEntrypointSession()
+    metadata = make_metadata()
+
+    await _disconnect_at_call_limit(session, metadata)
+
+    assert session.events == [
+        ("interrupt", {"force": True}),
+        ("set_audio_enabled", False),
+        (
+            "say",
+            {
+                "text": "La durée maximale de cet appel est atteinte. Merci de votre appel. Au revoir.",
+                "allow_interruptions": False,
+            },
+        ),
+        ("shutdown", {"drain": True}),
+    ]
 
 
 @pytest.mark.anyio
@@ -331,6 +409,89 @@ async def test_entrypoint_connects_then_waits_only_for_sip_participant(
     assert session.started is True
     assert session.start_kwargs["room_options"].participant_identity == "sip-caller"
     assert session.start_kwargs["room_options"].participant_kinds == [3]
+    assert session.start_kwargs["room_options"].close_on_disconnect is True
+    assert session.start_kwargs["room_options"].delete_room_on_close is True
+
+
+@pytest.mark.anyio
+async def test_entrypoint_arms_call_limit_only_after_session_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    context = FakeJobContext(metadata)
+    session = FakeEntrypointSession()
+
+    class OrderingRuntime:
+        call_limit_expired_on_start = False
+        call_limit_task = None
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            return None
+
+        def enforce_call_limit(self, _metadata, _disconnect) -> None:
+            session.events.append(("enforce_call_limit", session.started))
+
+        async def finalize(self, *_args, **_kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "agent.main.build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+    monkeypatch.setattr("agent.main.SessionRuntime", OrderingRuntime)
+
+    await entrypoint(context)
+
+    assert session.events[0:2] == [
+        ("start", None),
+        ("enforce_call_limit", True),
+    ]
+
+
+@pytest.mark.anyio
+async def test_entrypoint_awaits_immediate_expiry_without_initial_greeting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata(allowed_duration_seconds=1)
+    context = FakeJobContext(metadata)
+    session = FakeEntrypointSession()
+    captured: dict[str, object] = {}
+
+    class ExpiredRuntime:
+        call_limit_expired_on_start = True
+        call_limit_task = None
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            captured["runtime"] = self
+
+        def enforce_call_limit(self, _metadata, disconnect) -> None:
+            session.events.append(("enforce_call_limit", session.started))
+            self.call_limit_task = asyncio.create_task(disconnect())
+
+        async def finalize(self, *_args, **_kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "agent.main.build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+    monkeypatch.setattr("agent.main.SessionRuntime", ExpiredRuntime)
+
+    await entrypoint(context)
+    runtime = captured["runtime"]
+    if runtime.call_limit_task is not None:
+        await runtime.call_limit_task
+
+    greeting = (
+        "Hello, I'm Agent, an AI assistant representing Owner. "
+        "This call may be recorded. How can I help you?"
+    )
+    assert greeting not in session.say_calls
+    assert session.events[:2] == [
+        ("start", None),
+        ("enforce_call_limit", True),
+    ]
+    assert session.events[-1] == ("shutdown", {"drain": True})
 
 
 @pytest.mark.anyio
@@ -345,9 +506,15 @@ async def test_entrypoint_injects_job_shutdown_into_session_runtime(
     class CapturingRuntime:
         def __init__(self, *_args, **kwargs) -> None:
             captured.update(kwargs)
+            self.call_limit_expired_on_start = False
+            self.call_limit_task = None
 
         def create_handler_task(self, _factory) -> bool:
             return True
+
+        def enforce_call_limit(self, limit_metadata, disconnect) -> None:
+            captured["limit_metadata"] = limit_metadata
+            captured["disconnect"] = disconnect
 
         async def finalize(self, *_args, **_kwargs) -> None:
             return None
@@ -357,11 +524,39 @@ async def test_entrypoint_injects_job_shutdown_into_session_runtime(
         lambda *_args, **_kwargs: (object(), session),
     )
     monkeypatch.setattr("agent.main.SessionRuntime", CapturingRuntime)
+    monkeypatch.setattr("agent.main.time.monotonic", lambda: 100.0)
 
     await entrypoint(context)
     captured["fatal_shutdown"]("transcript_buffer_overflow")
 
     assert context.shutdown_reasons == ["transcript_buffer_overflow"]
+    assert captured["limit_metadata"] == metadata
+    assert captured["call_limit_started_at"] == 100.0
+
+    await captured["warning_callback"](
+        "Attention, il vous reste une minute avant la fin de cet appel."
+    )
+    await captured["disconnect"]()
+
+    assert session.events[-5:] == [
+        (
+            "say",
+            {
+                "text": "Attention, il vous reste une minute avant la fin de cet appel.",
+                "allow_interruptions": False,
+            },
+        ),
+        ("interrupt", {"force": True}),
+        ("set_audio_enabled", False),
+        (
+            "say",
+            {
+                "text": "La durée maximale de cet appel est atteinte. Merci de votre appel. Au revoir.",
+                "allow_interruptions": False,
+            },
+        ),
+        ("shutdown", {"drain": True}),
+    ]
 
 
 def test_silero_prewarm_failure_does_not_render_exception_message(

@@ -7,12 +7,33 @@ from uuid import uuid4
 
 import pytest
 
+from app.services import livekit_dispatch_service as dispatch_service_module
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 
 
 ROOM_NAME_SENTINEL = "room_TRANSCRIPT_SENTINEL_+33612345678"
 RECORDING_START_SENTINEL = "RECORDING_START_AUTHORIZATION_SENTINEL"
 RECORDING_STOP_SENTINEL = "RECORDING_STOP_TRANSCRIPT_SENTINEL"
+
+
+def test_allowed_duration_uses_authoritative_remaining_minutes() -> None:
+    assert (
+        dispatch_service_module.calculate_allowed_duration(
+            minutes_remaining=1,
+            maximum=3600,
+        )
+        == 60
+    )
+
+
+def test_allowed_duration_never_exceeds_configured_maximum() -> None:
+    assert (
+        dispatch_service_module.calculate_allowed_duration(
+            minutes_remaining=120,
+            maximum=3600,
+        )
+        == 3600
+    )
 
 
 class FakeDispatchClient:

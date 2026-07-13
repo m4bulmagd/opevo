@@ -138,6 +138,7 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
     call, event, _subscription = await _seed_dispatch(db_session)
     provider = _Provider()
     monkeypatch.setenv("LIVEKIT_AGENT_NAME", "configured-worker")
+    monkeypatch.setenv("MAX_CALL_DURATION_SECONDS", "900")
     from app.core.config import get_settings
 
     get_settings.cache_clear()
@@ -162,6 +163,8 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
     assert metadata["call_id"] == str(call.id)
     assert metadata["agent_identity"] == f"agent-call-{call.id}"
     assert metadata["dispatch_token"] == "dispatch-jwt"
+    assert metadata["minutes_remaining"] == 60
+    assert metadata["allowed_duration_seconds"] == 900
     assert set(metadata) == {
         "call_id",
         "user_id",
@@ -174,6 +177,7 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
         "knowledge_base",
         "pipeline_mode",
         "minutes_remaining",
+        "allowed_duration_seconds",
         "dispatch_token",
     }
     assert "+33999888777" not in provider.create_calls[0]["metadata"]

@@ -17,6 +17,7 @@ class DispatchMetadata(BaseModel):
     knowledge_base: str
     pipeline_mode: str = Field(min_length=1)
     minutes_remaining: int = Field(ge=0)
+    allowed_duration_seconds: int = Field(gt=0)
     dispatch_token: str = Field(min_length=1)
 
 

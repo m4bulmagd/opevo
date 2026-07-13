@@ -34,6 +34,10 @@ class DispatchJoinResult:
     call_id: str | None = None
 
 
+def calculate_allowed_duration(*, minutes_remaining: int, maximum: int) -> int:
+    return min(minutes_remaining * 60, maximum)
+
+
 def expected_agent_identity(call_id) -> str:
     return f"agent-call-{call_id}"
 

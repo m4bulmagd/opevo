@@ -1,5 +1,7 @@
 import asyncio
+import inspect
 import logging
+import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
@@ -19,7 +21,14 @@ logger = logging.getLogger(__name__)
 MAX_PENDING_TRANSCRIPT_ITEMS = 200
 MAX_TRANSCRIPT_ITEMS = 2000
 DEFAULT_FINALIZE_TIMEOUT_SECONDS = 5.0
+DEFAULT_CALL_LIMIT_CLEANUP_TIMEOUT_SECONDS = 0.01
 MAX_RETRY_DELAY_SECONDS = 10
+CALL_LIMIT_WARNING_MESSAGE = (
+    "Attention, il vous reste une minute avant la fin de cet appel."
+)
+CALL_LIMIT_EXPIRY_MESSAGE = (
+    "La durée maximale de cet appel est atteinte. Merci de votre appel. Au revoir."
+)
 
 
 class TranscriptBufferOverflow(RuntimeError):
@@ -35,6 +44,13 @@ class SessionRuntime:
         fatal_shutdown: Callable[[str], object] | None = None,
         retry_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         finalize_timeout_seconds: float = DEFAULT_FINALIZE_TIMEOUT_SECONDS,
+        warning_callback: Callable[[str], object] | None = None,
+        call_limit_started_at: float | None = None,
+        call_limit_clock: Callable[[], float] = time.monotonic,
+        call_limit_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        call_limit_cleanup_timeout_seconds: float = (
+            DEFAULT_CALL_LIMIT_CLEANUP_TIMEOUT_SECONDS
+        ),
     ) -> None:
         self.event_publisher = event_publisher
         self.api_client = api_client
@@ -60,6 +76,16 @@ class SessionRuntime:
         self._closing = False
         self._finalized = False
         self._call_ended_publish_attempted = False
+        self._warning_callback = warning_callback
+        self._call_limit_started_at = call_limit_started_at
+        self._call_limit_clock = call_limit_clock
+        self._call_limit_sleep = call_limit_sleep
+        self._call_limit_cleanup_timeout_seconds = (
+            call_limit_cleanup_timeout_seconds
+        )
+        self._call_limit_task: asyncio.Task[None] | None = None
+        self._call_limit_expired_on_start = False
+        self._detached_call_limit_tasks: set[asyncio.Task[Any]] = set()
 
     @property
     def pending_transcript(self) -> tuple[CallTranscriptItem, ...]:
@@ -72,6 +98,18 @@ class SessionRuntime:
     @property
     def handler_tasks(self) -> tuple[asyncio.Task[Any], ...]:
         return tuple(self._handler_tasks)
+
+    @property
+    def call_limit_task(self) -> asyncio.Task[None] | None:
+        return self._call_limit_task
+
+    @property
+    def call_limit_expired_on_start(self) -> bool:
+        return self._call_limit_expired_on_start
+
+    @property
+    def detached_call_limit_tasks(self) -> tuple[asyncio.Task[Any], ...]:
+        return tuple(self._detached_call_limit_tasks)
 
     @property
     def is_closing(self) -> bool:
@@ -89,6 +127,191 @@ class SessionRuntime:
         self._handler_tasks.add(task)
         task.add_done_callback(self._handler_tasks.discard)
         return True
+
+    def enforce_call_limit(
+        self,
+        metadata: DispatchMetadata,
+        disconnect: Callable[[], object],
+    ) -> None:
+        self._bind_metadata(metadata)
+        if self._closing or self._call_limit_task is not None:
+            return
+
+        now = self._call_limit_clock()
+        started_at = self._call_limit_started_at
+        if started_at is None:
+            started_at = now
+        deadline = started_at + metadata.allowed_duration_seconds
+        self._call_limit_expired_on_start = now >= deadline
+        self._call_limit_task = asyncio.create_task(
+            self._run_call_limit(metadata, deadline, disconnect)
+        )
+
+    async def _run_call_limit(
+        self,
+        metadata: DispatchMetadata,
+        deadline: float,
+        disconnect: Callable[[], object],
+    ) -> None:
+        warning_task: asyncio.Task[None] | None = None
+        deadline_task: asyncio.Task[None] | None = None
+        try:
+            now = self._call_limit_clock()
+            warning_at = deadline - 60
+            if (
+                metadata.allowed_duration_seconds > 90
+                and self._warning_callback is not None
+                and now <= warning_at
+            ):
+                warning_delay = warning_at - now
+                await self._call_limit_sleep(warning_delay)
+                if self._closing:
+                    return
+                if self._call_limit_clock() >= deadline:
+                    await self._invoke_call_limit_disconnect(disconnect)
+                    return
+
+                warning_task = asyncio.create_task(self._deliver_call_limit_warning())
+                await asyncio.sleep(0)
+                if not warning_task.done():
+                    remaining = max(0.0, deadline - self._call_limit_clock())
+                    deadline_task = asyncio.create_task(
+                        self._call_limit_sleep(remaining)
+                    )
+                    done, _pending = await asyncio.wait(
+                        {warning_task, deadline_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if deadline_task in done:
+                        await deadline_task
+                        deadline_task = None
+                        await self._invoke_call_limit_disconnect(disconnect)
+                        await self._cleanup_call_limit_child(
+                            warning_task,
+                            child_name="warning",
+                        )
+                        warning_task = None
+                        return
+                    else:
+                        await self._cleanup_call_limit_child(
+                            deadline_task,
+                            child_name="deadline",
+                        )
+                    deadline_task = None
+
+                await self._cleanup_call_limit_child(
+                    warning_task,
+                    child_name="warning",
+                )
+                warning_task = None
+
+            remaining = max(0.0, deadline - self._call_limit_clock())
+            if remaining:
+                await self._call_limit_sleep(remaining)
+            if self._closing:
+                return
+
+            await self._invoke_call_limit_disconnect(disconnect)
+        finally:
+            if deadline_task is not None:
+                await self._cleanup_call_limit_child(
+                    deadline_task,
+                    child_name="deadline",
+                )
+            if warning_task is not None:
+                await self._cleanup_call_limit_child(
+                    warning_task,
+                    child_name="warning",
+                )
+
+    async def _invoke_call_limit_disconnect(
+        self,
+        disconnect: Callable[[], object],
+    ) -> None:
+        try:
+            result = disconnect()
+            if inspect.isawaitable(result):
+                await result
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "call limit disconnect failed error_type=%s",
+                type(exc).__name__,
+            )
+            self._request_fatal_shutdown("call_limit_disconnect_failure")
+
+    async def _cleanup_call_limit_child(
+        self,
+        task: asyncio.Task[Any],
+        *,
+        child_name: str,
+    ) -> None:
+        if not task.done():
+            task.cancel()
+            done, _pending = await asyncio.wait(
+                {task},
+                timeout=self._call_limit_cleanup_timeout_seconds,
+            )
+            if task not in done:
+                logger.warning(
+                    "call limit child cleanup timed out child=%s",
+                    child_name,
+                )
+                self._request_fatal_shutdown(
+                    "call_limit_child_cleanup_timeout"
+                )
+                self._detached_call_limit_tasks.add(task)
+                task.add_done_callback(
+                    lambda completed: self._finish_detached_call_limit_task(
+                        completed,
+                        child_name=child_name,
+                    )
+                )
+                return
+
+        self._consume_call_limit_child_result(task, child_name=child_name)
+
+    def _finish_detached_call_limit_task(
+        self,
+        task: asyncio.Task[Any],
+        *,
+        child_name: str,
+    ) -> None:
+        self._detached_call_limit_tasks.discard(task)
+        self._consume_call_limit_child_result(task, child_name=child_name)
+
+    @staticmethod
+    def _consume_call_limit_child_result(
+        task: asyncio.Task[Any],
+        *,
+        child_name: str,
+    ) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.warning(
+                "call limit child failed child=%s error_type=%s",
+                child_name,
+                type(exc).__name__,
+            )
+
+    async def _deliver_call_limit_warning(self) -> None:
+        if self._warning_callback is None:
+            return
+        try:
+            result = self._warning_callback(CALL_LIMIT_WARNING_MESSAGE)
+            if inspect.isawaitable(result):
+                await result
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "call limit warning failed error_type=%s",
+                type(exc).__name__,
+            )
 
     async def handle_caller_transcript(
         self,
@@ -317,6 +540,7 @@ class SessionRuntime:
 
             self._closing = True
             self._bind_metadata(metadata)
+            await self._cancel_call_limit_timer()
             loop = asyncio.get_running_loop()
             deadline = loop.time() + self._finalize_timeout_seconds
 
@@ -359,6 +583,17 @@ class SessionRuntime:
                 if not self._pending:
                     self._drained.set()
                 self._finalized = True
+
+    async def _cancel_call_limit_timer(self) -> None:
+        timer = self._call_limit_task
+        if timer is None:
+            return
+        self._call_limit_task = None
+        if timer is asyncio.current_task():
+            return
+        if not timer.done():
+            timer.cancel()
+        await asyncio.gather(timer, return_exceptions=True)
 
     async def _complete_call(
         self,

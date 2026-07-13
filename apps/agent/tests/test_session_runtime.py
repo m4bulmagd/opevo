@@ -59,6 +59,7 @@ def make_metadata(**overrides) -> DispatchMetadata:
         "knowledge_base": "Open weekdays.",
         "pipeline_mode": "stt_llm_tts",
         "minutes_remaining": 10,
+        "allowed_duration_seconds": 600,
         "dispatch_token": "dispatch-token",
     }
     defaults.update(overrides)

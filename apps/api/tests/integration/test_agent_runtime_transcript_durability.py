@@ -156,6 +156,7 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
         knowledge_base="",
         pipeline_mode="stt_llm_tts",
         minutes_remaining=10,
+        allowed_duration_seconds=600,
         dispatch_token=token,
     )
 

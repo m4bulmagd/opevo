@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LiveKitDispatchMetadata(BaseModel):
@@ -9,6 +9,7 @@ class LiveKitDispatchMetadata(BaseModel):
     call_id: str
     agent_identity: str
     minutes_remaining: int
+    allowed_duration_seconds: int = Field(gt=0)
     agent_name: str
     owner_name: str
     owner_context: str | None = None

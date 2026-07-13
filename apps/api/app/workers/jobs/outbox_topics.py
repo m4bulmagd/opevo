@@ -24,6 +24,7 @@ from app.schemas.livekit import LiveKitDispatchMetadata
 from app.services.dispatch_eligibility_policy import DispatchEligibilityPolicy
 from app.services.livekit_dispatch_service import (
     _agent_setup_complete,
+    calculate_allowed_duration,
     expected_agent_identity,
 )
 from app.services.livekit_dispatch_lock import livekit_dispatch_lock
@@ -329,7 +330,8 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
             )
 
         try:
-            worker_name = get_settings().livekit_agent_name.strip()
+            settings = get_settings()
+            worker_name = settings.livekit_agent_name.strip()
             if not worker_name:
                 raise ValueError("LiveKit agent worker name is not configured")
             dispatch_token = create_dispatch_token(
@@ -343,6 +345,10 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
                 call_id=str(call.id),
                 agent_identity=expected_agent_identity(call.id),
                 minutes_remaining=balance,
+                allowed_duration_seconds=calculate_allowed_duration(
+                    minutes_remaining=balance,
+                    maximum=settings.max_call_duration_seconds,
+                ),
                 agent_name=agent_config.agent_name,
                 owner_name=user.full_name or user.email,
                 owner_context=agent_config.owner_context,

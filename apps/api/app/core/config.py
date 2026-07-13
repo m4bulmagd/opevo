@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,6 +41,7 @@ class Settings(BaseSettings):
     firebase_credentials_json: str | None = None
     agent_dispatch_jwt_secret: str | None = None
     agent_dispatch_jwt_ttl_seconds: int = 7200
+    max_call_duration_seconds: int = Field(default=3600, ge=1)
     call_reconciliation_pending_stale_seconds: int = Field(default=120, ge=1)
     call_reconciliation_connected_stale_seconds: int = Field(default=3720, ge=1)
     call_reconciliation_ending_grace_seconds: int = Field(default=60, ge=1)
@@ -47,6 +49,16 @@ class Settings(BaseSettings):
     call_reconciliation_max_attempts: int = Field(default=5, ge=1, le=5)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def validate_connected_reconciliation_timeout(self) -> Self:
+        minimum_timeout = self.max_call_duration_seconds + 120
+        if self.call_reconciliation_connected_stale_seconds < minimum_timeout:
+            raise ValueError(
+                "CALL_RECONCILIATION_CONNECTED_STALE_SECONDS must be at least "
+                "MAX_CALL_DURATION_SECONDS plus 120 seconds"
+            )
+        return self
 
 
 @lru_cache
