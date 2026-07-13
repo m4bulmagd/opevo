@@ -1,8 +1,10 @@
 import "server-only";
 
+import { selectFirstNonblank } from "@/lib/auth/clerk-config";
 import { getServerSessionState } from "@/lib/auth/server-session";
 
-const API_BASE_URL = process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE_URL =
+  selectFirstNonblank(process.env.API_BASE_URL, process.env.NEXT_PUBLIC_API_BASE_URL) ?? "http://localhost:8000";
 
 export class BackendApiError extends Error {
   status: number;
