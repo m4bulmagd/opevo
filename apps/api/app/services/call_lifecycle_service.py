@@ -6,11 +6,11 @@ from app.core.logging import report_safe_exception
 from app.repositories.call_repository import CallRepository
 from app.repositories.message_repository import MessageRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
-from app.repositories.usage_repository import UsageRepository
 from app.services.notification_service import NotificationService
 from app.services.recording_service import RecordingResult, RecordingService
 from app.services.summary_service import SummaryService
 from app.services.telephony_service import TelephonyService
+from app.services.usage_accounting_service import UsageAccountingService
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class CallLifecycleService:
         *,
         call_repository: CallRepository,
         message_repository: MessageRepository,
-        usage_repository: UsageRepository,
+        usage_accounting_service: UsageAccountingService,
         phone_number_repository: PhoneNumberRepository,
         telephony_service: TelephonyService,
         summary_service: SummaryService,
@@ -45,7 +45,7 @@ class CallLifecycleService:
         self.session = session
         self.call_repository = call_repository
         self.message_repository = message_repository
-        self.usage_repository = usage_repository
+        self.usage_accounting_service = usage_accounting_service
         self.phone_number_repository = phone_number_repository
         self.telephony_service = telephony_service
         self.summary_service = summary_service
@@ -55,15 +55,16 @@ class CallLifecycleService:
     async def finalize_call(self, payload: dict) -> CallFinalizationResult:
         call_id = UUID(payload["call_id"])
         duration_seconds = payload["duration_seconds"]
-        minutes_charged = max(1, (duration_seconds + 59) // 60)
-        minutes_remaining = payload["minutes_remaining"]
-        balance_after = max(0, minutes_remaining - minutes_charged)
+        debit = await self.usage_accounting_service.debit_call(
+            call_id=call_id,
+            duration_seconds=duration_seconds,
+        )
         call = await self.call_repository.get_by_id(call_id)
         if call is None:
             raise ValueError("Call not found")
-        if call.status == "completed":
+        if debit.already_debited:
             return CallFinalizationResult(
-                minutes_charged=call.minutes_charged or 0,
+                minutes_charged=debit.minutes_charged,
                 summary_job_enqueued=False,
                 recording_job_enqueued=False,
                 notification_job_enqueued=False,
@@ -73,10 +74,13 @@ class CallLifecycleService:
                 already_completed=True,
             )
 
-        summary_result = await self.summary_service.create_summary(payload)
+        internal_payload = {**payload, "user_id": debit.user_id}
+        summary_result = await self.summary_service.create_summary(internal_payload)
 
         try:
-            recording_result = await self.recording_service.store_recording(payload)
+            recording_result = await self.recording_service.store_recording(
+                internal_payload
+            )
         except Exception as exc:
             report_safe_exception(
                 logger,
@@ -84,47 +88,41 @@ class CallLifecycleService:
                 operation="store_recording",
                 error=exc,
                 call_id=call_id,
-                user_id=payload.get("user_id"),
+                user_id=debit.user_id,
                 status="failed",
             )
             recording_result = RecordingResult(object_key=None, url=None, job_enqueued=False)
 
         await self.message_repository.create_many(
             call_id=call.id,
-            transcript=payload.get("transcript") or [],
+            transcript=internal_payload.get("transcript") or [],
         )
 
         await self.call_repository.mark_completed(
             call,
             duration_seconds=duration_seconds,
-            minutes_charged=minutes_charged,
+            minutes_charged=debit.minutes_charged,
             summary_text=summary_result.text,
             summary_data=summary_result.data,
             recording_object_key=recording_result.object_key,
             recording_url=recording_result.url,
         )
 
-        await self.usage_repository.create(
-            user_id=payload["user_id"],
-            call_id=call.id,
-            event_type="call_completed",
-            minutes_delta=-minutes_charged,
-            balance_after=balance_after,
-        )
-
         notification_result = await self.notification_service.create_call_completed_notification(
-            user_id=payload["user_id"],
+            user_id=debit.user_id,
             call_id=call.id,
             summary_text=summary_result.text,
-            minutes_charged=minutes_charged,
+            minutes_charged=debit.minutes_charged,
         )
 
-        number_disabled = balance_after == 0
+        number_disabled = debit.balance_after == 0
         if number_disabled:
-            phone_number = await self.phone_number_repository.get_by_user_id(payload["user_id"])
+            phone_number = await self.phone_number_repository.get_by_user_id(
+                debit.user_id
+            )
             if phone_number is not None:
                 try:
-                    await self.telephony_service.disable_number(payload["user_id"])
+                    await self.telephony_service.disable_number(debit.user_id)
                 except Exception as exc:
                     report_safe_exception(
                         logger,
@@ -132,7 +130,7 @@ class CallLifecycleService:
                         operation="disable_phone_number",
                         error=exc,
                         call_id=call_id,
-                        user_id=payload.get("user_id"),
+                        user_id=debit.user_id,
                         provider_request_id=getattr(
                             phone_number,
                             "provider_number_id",
@@ -145,7 +143,7 @@ class CallLifecycleService:
         await self.session.commit()
 
         return CallFinalizationResult(
-            minutes_charged=minutes_charged,
+            minutes_charged=debit.minutes_charged,
             summary_job_enqueued=summary_result.job_enqueued,
             recording_job_enqueued=recording_result.job_enqueued,
             notification_job_enqueued=notification_result.job_enqueued,

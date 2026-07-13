@@ -24,10 +24,10 @@ class CallTranscriptItem(BaseModel):
 
 
 class CallCompletionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     call_id: str
-    user_id: str
-    duration_seconds: int
-    minutes_remaining: int
+    duration_seconds: int = Field(ge=0)
     caller_number: str | None = None
     transcript: list[CallTranscriptItem] = Field(default_factory=list)
     recording_bytes_base64: str | None = None

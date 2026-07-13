@@ -12,9 +12,7 @@ async def test_complete_call_sends_correct_payload() -> None:
     
     payload = {
         "call_id": "call_abc",
-        "user_id": "user_123",
         "duration_seconds": 120,
-        "minutes_remaining": 8,
         "transcript": [{"speaker": "CALLER", "text": "hello"}],
         "caller_number": "+1234567890",
     }
@@ -40,9 +38,9 @@ async def test_complete_call_sends_correct_payload() -> None:
     
     body = request_captured.read().decode("utf-8")
     data = json.loads(body)
-    assert data["user_id"] == "user_123"
     assert data["duration_seconds"] == 120
-    assert data["minutes_remaining"] == 8
+    assert "user_id" not in data
+    assert "minutes_remaining" not in data
     assert data["caller_number"] == "+1234567890"
     assert data["transcript"] == [{"speaker": "CALLER", "text": "hello"}]
 
@@ -53,9 +51,7 @@ async def test_complete_call_handles_missing_optional_fields() -> None:
     
     payload = {
         "call_id": "call_xyz",
-        "user_id": "user_456",
         "duration_seconds": 45,
-        "minutes_remaining": 10,
     }
     
     request_captured = None
@@ -86,4 +82,4 @@ async def test_complete_call_raises_without_token(monkeypatch) -> None:
     
     client = AgentApiClient(base_url="http://test", agent_token="")
     with pytest.raises(ValueError, match="AGENT_INTERNAL_API_TOKEN is required"):
-        await client.complete_call({"call_id": "call_1", "user_id": "u", "duration_seconds": 1, "minutes_remaining": 1})
+        await client.complete_call({"call_id": "call_1", "duration_seconds": 1})

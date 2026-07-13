@@ -138,9 +138,7 @@ async def complete_call(
     job_id = await queue.enqueue(
         {
             "call_id": str(call_id),
-            "user_id": str(payload.user_id),
             "duration_seconds": payload.duration_seconds,
-            "minutes_remaining": payload.minutes_remaining,
             "caller_number": payload.caller_number,
             "transcript": [line.model_dump() for line in payload.transcript],
             "recording_bytes": recording_bytes,

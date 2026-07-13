@@ -11,11 +11,11 @@ from app.repositories.subscription_repository import (
     StripeSubscriptionDataError,
     SubscriptionRepository,
 )
-from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
 from app.services.outbox_service import OutboxService
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
+from app.services.usage_accounting_service import UsageAccountingService
 
 
 PLAN_MINUTES = {
@@ -63,7 +63,7 @@ class BillingService:
         self.user_repository = UserRepository(session)
         self.subscription_repository = SubscriptionRepository(session)
         self.phone_number_repository = PhoneNumberRepository(session)
-        self.usage_repository = UsageRepository(session)
+        self.usage_accounting_service = UsageAccountingService(session)
         self.webhook_event_repository = WebhookEventRepository(session)
         self.outbox_service = OutboxService(session)
         self.arq_pool = arq_pool
@@ -221,29 +221,24 @@ class BillingService:
             event_created_at,
         )
 
-        latest_entries = await self.usage_repository.list_recent_by_user_id(user_id=subscription.user_id, limit=1)
-        is_first_activation = len(latest_entries) == 0
+        grant = await self.usage_accounting_service.grant_invoice(
+            user_id=subscription.user_id,
+            invoice_id=event_object["id"],
+            minutes=allocated_minutes,
+        )
 
-        if is_first_activation:
-            await self.usage_repository.create(
-                user_id=subscription.user_id,
-                event_type="subscription_activated",
-                minutes_delta=allocated_minutes,
-                balance_after=allocated_minutes,
-            )
-            if self.arq_pool and await self.phone_number_repository.get_by_user_id(subscription.user_id) is None:
+        if grant.first_activation and not grant.already_granted:
+            if (
+                self.arq_pool
+                and await self.phone_number_repository.get_by_user_id(
+                    subscription.user_id
+                )
+                is None
+            ):
                 await self.arq_pool.enqueue_job(
                     "phone_provisioning_job",
                     {"user_id": str(subscription.user_id)},
                 )
-            return
-
-        await self.usage_repository.create(
-            user_id=subscription.user_id,
-            event_type="invoice_paid_reset",
-            minutes_delta=allocated_minutes,
-            balance_after=allocated_minutes,
-        )
 
     async def _handle_invoice_payment_failed(
         self,

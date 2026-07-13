@@ -64,9 +64,7 @@ class SessionRuntime:
         if self.api_client is not None:
             payload = CallCompletionPayload(
                 call_id=metadata.call_id,
-                user_id=metadata.user_id,
                 duration_seconds=duration_seconds,
-                minutes_remaining=metadata.minutes_remaining,
                 caller_number=metadata.caller_number,
                 transcript=self.transcript,
             )

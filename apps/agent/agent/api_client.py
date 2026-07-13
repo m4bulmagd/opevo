@@ -36,9 +36,7 @@ class AgentApiClient:
         token = payload.get("dispatch_token") or self.agent_token
         headers = {"x-agent-token": token}
         body = {
-            "user_id": payload["user_id"],
             "duration_seconds": payload["duration_seconds"],
-            "minutes_remaining": payload["minutes_remaining"],
             "transcript": payload.get("transcript") or [],
             "caller_number": payload.get("caller_number"),
         }

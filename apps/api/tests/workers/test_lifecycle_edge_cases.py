@@ -3,6 +3,7 @@ import pytest
 from uuid import uuid4
 
 from app.models.call import Call
+from app.models.usage_ledger import UsageLedger
 from app.services.call_lifecycle_service import CallFinalizationResult
 from app.services.recording_service import RecordingResult, RecordingService
 
@@ -51,10 +52,8 @@ async def test_recording_upload_failure_call_still_completes(
     with caplog.at_level(logging.ERROR):
         result = await service.finalize_call(
             {
-                "user_id": active_user.id,
                 "call_id": str(call.id),
                 "duration_seconds": 61,
-                "minutes_remaining": 10,
                 "caller_number": "+33111111111",
                 "transcript": [{"speaker": "CALLER", "text": "Hello"}],
                 "recording_bytes": b"fake-audio",
@@ -95,10 +94,8 @@ async def test_outer_recording_failure_does_not_render_provider_exception(
     with caplog.at_level(logging.ERROR):
         result = await service.finalize_call(
             {
-                "user_id": active_user.id,
                 "call_id": str(call.id),
                 "duration_seconds": 61,
-                "minutes_remaining": 10,
                 "caller_number": "+33111111111",
                 "transcript": [{"speaker": "CALLER", "text": "Hello"}],
             }
@@ -132,10 +129,8 @@ async def test_empty_transcript_completes_with_no_messages(db_session, active_us
 
     result = await service.finalize_call(
         {
-            "user_id": active_user.id,
             "call_id": str(call.id),
             "duration_seconds": 61,
-            "minutes_remaining": 10,
             "caller_number": "+33111111111",
             "transcript": [],
         }
@@ -161,17 +156,26 @@ async def test_zero_duration_call_charges_one_minute(db_session, active_user) ->
         caller_number="+33111111111",
         status="pending",
     )
-    db_session.add(call)
+    db_session.add_all(
+        [
+            call,
+            UsageLedger(
+                user_id=active_user.id,
+                event_type="subscription_activated",
+                source_id="in_zero_duration",
+                minutes_delta=5,
+                balance_after=5,
+            ),
+        ]
+    )
     await db_session.commit()
 
     service = build_lifecycle_service(db_session)
 
     result = await service.finalize_call(
         {
-            "user_id": active_user.id,
             "call_id": str(call.id),
             "duration_seconds": 0,
-            "minutes_remaining": 5,
             "caller_number": "+33111111111",
             "transcript": [],
         }
@@ -191,10 +195,8 @@ async def test_call_not_found_raises_value_error(db_session, active_user) -> Non
     with pytest.raises(ValueError, match="Call not found"):
         await service.finalize_call(
             {
-                "user_id": active_user.id,
                 "call_id": str(uuid4()),
                 "duration_seconds": 60,
-                "minutes_remaining": 5,
                 "caller_number": "+33111111111",
                 "transcript": [],
             }
@@ -222,10 +224,8 @@ async def test_already_completed_call_returns_early(db_session, active_user) -> 
 
     result = await service.finalize_call(
         {
-            "user_id": active_user.id,
             "call_id": str(call.id),
             "duration_seconds": 120,
-            "minutes_remaining": 5,
             "caller_number": "+33111111111",
             "transcript": [{"speaker": "CALLER", "text": "Should not be saved"}],
         }

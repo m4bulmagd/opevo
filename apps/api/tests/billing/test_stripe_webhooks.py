@@ -404,6 +404,69 @@ async def test_invoice_paid_bootstraps_subscription_activation_and_enqueues_prov
 
 
 @pytest.mark.anyio
+async def test_distinct_webhook_events_for_one_invoice_grant_and_provision_once(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_invoice_paid_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(User(clerk_user_id="user_123", email="invoice-once@example.com"))
+        await session.commit()
+    await engine.dispose()
+
+    first_payload = deepcopy(stripe_invoice_paid_payload)
+    first_payload["data"]["object"]["lines"]["data"][0]["price"] = {
+        "lookup_key": "starter"
+    }
+    first_payload["data"]["object"]["parent"]["subscription_details"][
+        "metadata"
+    ] = {
+        "clerk_user_id": "user_123",
+        "plan_tier": "starter",
+    }
+    second_payload = deepcopy(first_payload)
+    second_payload["id"] = "evt_invoice_paid_duplicate_delivery"
+    second_payload["created"] += 1
+
+    from app.main import app
+
+    pool = MockArqPool()
+    app.state.arq_pool = pool
+
+    first_response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        first_payload,
+    )
+    second_response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        second_payload,
+    )
+
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        ledgers = list(
+            (
+                await session.execute(
+                    select(UsageLedger).order_by(UsageLedger.created_at.asc())
+                )
+            ).scalars()
+        )
+    await engine.dispose()
+
+    assert first_response.status_code == second_response.status_code == 202
+    assert len(ledgers) == 1
+    assert ledgers[0].event_type == "subscription_activated"
+    assert ledgers[0].source_id == first_payload["data"]["object"]["id"]
+    assert [job[0] for job in pool.enqueued_jobs] == ["phone_provisioning_job"]
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("event_type", "expected_status", "expected_outbox", "expected_ledger"),
     [

@@ -9,15 +9,17 @@ from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.notification import Notification
 from app.models.phone_number import PhoneNumber
+from app.models.usage_ledger import UsageLedger
 from app.repositories.call_repository import CallRepository
 from app.repositories.message_repository import MessageRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
-from app.repositories.usage_repository import UsageRepository
+from app.repositories.user_repository import UserRepository
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.notification_service import NotificationService
 from app.services.recording_service import RecordingService
 from app.services.telephony_service import TelephonyService
+from app.services.usage_accounting_service import UsageAccountingService
 
 
 class FakeTelephonyProvider:
@@ -92,7 +94,7 @@ def build_lifecycle_service(
         session,
         call_repository=CallRepository(session),
         message_repository=MessageRepository(session),
-        usage_repository=UsageRepository(session),
+        usage_accounting_service=UsageAccountingService(session),
         phone_number_repository=PhoneNumberRepository(session),
         telephony_service=telephony_service or TelephonyService(session, provider=FakeTelephonyProvider()),
         summary_service=summary_service or build_structured_summary_service(),
@@ -112,17 +114,26 @@ async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, acti
         caller_number="+33111111111",
         status="pending",
     )
-    db_session.add(call)
+    db_session.add_all(
+        [
+            call,
+            UsageLedger(
+                user_id=active_user.id,
+                event_type="subscription_activated",
+                source_id="in_post_call_jobs",
+                minutes_delta=10,
+                balance_after=10,
+            ),
+        ]
+    )
     await db_session.commit()
 
     service = build_lifecycle_service(db_session)
 
     result = await service.finalize_call(
         {
-            "user_id": active_user.id,
             "call_id": str(call.id),
             "duration_seconds": 61,
-            "minutes_remaining": 10,
             "caller_number": "+33111111111",
             "transcript": [
                 {"speaker": "CALLER", "text": "I want to know your opening hours."},
@@ -164,6 +175,78 @@ async def test_call_completion_persists_usage_and_enqueues_jobs(db_session, acti
 
 
 @pytest.mark.anyio
+async def test_call_completion_uses_persisted_owner_and_balance(
+    db_session,
+    active_user,
+) -> None:
+    other_user = await UserRepository(db_session).create(
+        clerk_user_id="user_other_accounting",
+        email="other-accounting@example.com",
+    )
+    call = Call(
+        id=uuid4(),
+        user_id=active_user.id,
+        caller_number="+33111111111",
+        status="awaiting_accounting",
+    )
+    phone_number = PhoneNumber(
+        user_id=active_user.id,
+        e164="+33999888770",
+        country_code="FR",
+        provider="telnyx",
+        provider_number_id="pn_authoritative_owner",
+        provider_connection_name="app-active",
+        is_active=True,
+    )
+    db_session.add_all(
+        [
+            call,
+            phone_number,
+            UsageLedger(
+                user_id=active_user.id,
+                event_type="subscription_activated",
+                source_id="in_authoritative_owner",
+                minutes_delta=1,
+                balance_after=1,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    result = await build_lifecycle_service(db_session).finalize_call(
+        {
+            "call_id": str(call.id),
+            "user_id": other_user.id,
+            "minutes_remaining": 999,
+            "duration_seconds": 61,
+            "caller_number": "+33111111111",
+            "transcript": [{"speaker": "CALLER", "text": "Who owns this call?"}],
+            "recording_bytes": b"fake-audio",
+        }
+    )
+
+    debit = await db_session.scalar(
+        select(UsageLedger).where(
+            UsageLedger.call_id == call.id,
+            UsageLedger.event_type == "call_completed",
+        )
+    )
+    notification = await db_session.scalar(
+        select(Notification).where(Notification.call_id == call.id)
+    )
+
+    assert result.minutes_charged == 1
+    assert result.number_disabled is True
+    assert debit is not None
+    assert debit.user_id == active_user.id
+    assert debit.minutes_delta == -1
+    assert debit.balance_after == 0
+    assert notification is not None
+    assert notification.user_id == active_user.id
+    assert result.recording_key == f"calls/{active_user.id}/{call.id}.mp3"
+
+
+@pytest.mark.anyio
 async def test_call_completion_persists_structured_summary_data(
     db_session, active_user
 ) -> None:
@@ -180,10 +263,8 @@ async def test_call_completion_persists_structured_summary_data(
 
     result = await service.finalize_call(
         {
-            "user_id": active_user.id,
             "call_id": str(call.id),
             "duration_seconds": 61,
-            "minutes_remaining": 10,
             "caller_number": "+33111111111",
             "transcript": [{"speaker": "CALLER", "text": "What are your opening hours?"}],
         }
@@ -220,10 +301,8 @@ async def test_call_completion_records_failed_notification_but_still_completes(
 
     result = await service.finalize_call(
         {
-            "user_id": active_user.id,
             "call_id": str(call.id),
             "duration_seconds": 61,
-            "minutes_remaining": 10,
             "caller_number": "+33111111111",
             "transcript": [{"speaker": "CALLER", "text": "Call me back."}],
         }
@@ -262,10 +341,8 @@ async def test_call_completion_continues_when_summary_generation_fails(
 
     result = await service.finalize_call(
         {
-            "user_id": active_user.id,
             "call_id": str(call.id),
             "duration_seconds": 61,
-            "minutes_remaining": 10,
             "caller_number": "+33111111111",
             "transcript": [{"speaker": "CALLER", "text": "What are your opening hours?"}],
         }
@@ -304,10 +381,8 @@ async def test_call_finalization_job_skips_duplicate_completed_call(
     )
 
     payload = {
-        "user_id": str(active_user.id),
         "call_id": str(call.id),
         "duration_seconds": 61,
-        "minutes_remaining": 10,
         "caller_number": "+33111111111",
         "transcript": [{"speaker": "CALLER", "text": "Call me back."}],
     }
@@ -355,23 +430,33 @@ async def test_minute_exhaustion_disables_number(db_session, active_user) -> Non
         provider_connection_name="app-active",
         is_active=True,
     )
-    db_session.add(call)
-    db_session.add(phone_number)
+    db_session.add_all(
+        [
+            call,
+            phone_number,
+            UsageLedger(
+                user_id=active_user.id,
+                event_type="subscription_activated",
+                source_id="in_minute_exhaustion",
+                minutes_delta=1,
+                balance_after=1,
+            ),
+        ]
+    )
     await db_session.commit()
 
     service = build_lifecycle_service(db_session)
 
     result = await service.finalize_call(
         {
-            "user_id": active_user.id,
             "call_id": str(call.id),
             "duration_seconds": 61,
-            "minutes_remaining": 1,
             "caller_number": "+33222222222",
             "transcript": [{"speaker": "CALLER", "text": "Call me back."}],
         }
     )
 
+    assert result.minutes_charged == 1
     assert result.number_disabled is True
     refreshed_number = await db_session.get(PhoneNumber, phone_number.id)
     assert refreshed_number.provider_connection_name == "app-disabled"
@@ -398,8 +483,19 @@ async def test_disable_number_failure_does_not_render_provider_exception(
         provider_connection_name="app-active",
         is_active=True,
     )
-    db_session.add(call)
-    db_session.add(phone_number)
+    db_session.add_all(
+        [
+            call,
+            phone_number,
+            UsageLedger(
+                user_id=active_user.id,
+                event_type="subscription_activated",
+                source_id="in_disable_failure",
+                minutes_delta=1,
+                balance_after=1,
+            ),
+        ]
+    )
     await db_session.commit()
     service = build_lifecycle_service(
         db_session,
@@ -412,10 +508,8 @@ async def test_disable_number_failure_does_not_render_provider_exception(
     with caplog.at_level(logging.ERROR):
         result = await service.finalize_call(
             {
-                "user_id": active_user.id,
                 "call_id": str(call.id),
                 "duration_seconds": 61,
-                "minutes_remaining": 1,
                 "caller_number": "+33222222222",
                 "transcript": [{"speaker": "CALLER", "text": "Call me back."}],
             }

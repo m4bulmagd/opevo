@@ -57,9 +57,7 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
     assert api_client.calls == [
         {
             "call_id": "call_123",
-            "user_id": "user_123",
             "duration_seconds": 61,
-            "minutes_remaining": 10,
             "caller_number": None,
             "transcript": [
                 {"speaker": "AGENT", "text": "Bonjour"},

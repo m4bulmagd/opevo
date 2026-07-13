@@ -498,19 +498,29 @@ git commit -m "fix: enforce complete subscription access lifecycle"
 - Modify: `apps/api/app/services/call_lifecycle_service.py`
 - Modify: `apps/api/app/schemas/calls.py`
 - Modify: `apps/api/app/routers/agent.py`
+- Modify: `apps/api/app/workers/jobs/call_finalization.py`
 - Create: `apps/api/tests/integration/test_usage_concurrency.py`
 - Modify: `apps/api/tests/calls/test_call_lifecycle.py`
 - Modify: `apps/api/tests/agent/test_call_completion.py`
+- Modify: `apps/api/tests/services/test_safe_service_exceptions.py`
+- Modify: `apps/api/tests/workers/test_lifecycle_edge_cases.py`
+- Modify: `apps/api/tests/workers/test_post_call_jobs.py`
+- Modify: `apps/agent/agent/api_client.py`
+- Modify: `apps/agent/agent/schemas.py`
+- Modify: `apps/agent/agent/session_runtime.py`
+- Modify: `apps/agent/tests/test_api_client.py`
+- Modify: `apps/agent/tests/test_session_runtime.py`
 
 **Interfaces:**
-- Produces: `UsageAccountingService.grant_invoice(user_id: UUID, invoice_id: str, minutes: int) -> UsageLedger`, persisting `source_id=invoice_id`.
+- Produces: `UsageAccountingService.grant_invoice(user_id: UUID, invoice_id: str, minutes: int) -> UsageGrantResult`, persisting `source_id=invoice_id`.
 - Produces: `UsageAccountingService.debit_call(call_id: UUID, duration_seconds: int) -> UsageDebitResult`.
+- `UsageGrantResult` contains the ledger row plus `already_granted` and `first_activation`, so duplicate invoice deliveries cannot repeat provisioning side effects.
 - `UsageDebitResult` contains `user_id`, `minutes_charged`, `balance_before`, `balance_after`, and `already_debited`.
 - Completion requests contain `duration_seconds`, transcript metadata, and recording metadata; they do not contain authoritative `user_id` or `minutes_remaining`.
 
 - [ ] **Step 1: Write ownership and concurrent-debit tests**
 
-Create one customer with two simultaneous calls and a two-minute balance. Finalize both in independent PostgreSQL transactions and assert:
+Create one customer with two independently finalizable call rows and a two-minute balance. Use non-active legacy/test statuses so this accounting test does not conflict with the Task 4 one-active-call guard. Finalize both in independent PostgreSQL transactions and assert:
 
 ```python
 assert sorted([first.balance_after, second.balance_after]) == [0, 1]
@@ -520,7 +530,7 @@ assert await count_call_debits(call_ids=[call_a.id, call_b.id]) == 2
 
 Add a test that submits another customer’s `user_id`; the field must be rejected by the schema or ignored, and the call owner must be charged.
 
-Add a grant test that processes two distinct Stripe events for the same invoice ID and asserts one ledger grant through `uq_usage_ledgers_event_source`.
+Add a grant test that processes two distinct Stripe events for the same Stripe invoice object ID and asserts one ledger grant. Serialize the invoice identity with a PostgreSQL transaction-scoped advisory lock before the cross-event-type `source_id` lookup, then lock the user accounting scope; `uq_usage_ledgers_event_source` remains the database backstop. Add an adversarial test in which the same invoice races across different users and different grant event types.
 
 - [ ] **Step 2: Run against PostgreSQL and verify failure**
 
@@ -530,7 +540,9 @@ Expected: stale-balance or ownership assertions fail.
 
 - [ ] **Step 3: Implement locked balance access**
 
-Add repository methods using `with_for_update()` and deterministic ordering by `created_at DESC, id DESC`. Lock the subscription/user accounting scope before reading the latest balance and writing the next ledger entry.
+Add repository methods using `with_for_update()` and deterministic ordering by `created_at DESC, id DESC`. Lock the stable `users` row before reading the latest ledger balance and writing the next entry; locking only the current ledger row is insufficient because a waiter can retain a snapshot that does not include a newly inserted ledger row.
+
+Do not rely on the shared `now()` server default for authoritative ledger ordering: PostgreSQL evaluates it at transaction start, so a transaction that waited for the user lock can insert later with an earlier timestamp. After the user lock, assign `created_at` from `clock_timestamp()` and force it above the user's latest ledger timestamp by at least one microsecond.
 
 - [ ] **Step 4: Implement idempotent debit behavior**
 
@@ -538,7 +550,7 @@ Within one transaction:
 
 1. Lock the call.
 2. Return its existing debit when `call_completed` already exists.
-3. Derive `user_id` from the call.
+3. Derive `user_id` from the call and reject an existing debit whose owner differs from the persisted call owner.
 4. Calculate `max(1, ceil(duration_seconds / 60))`.
 5. Cap the debit at the available balance.
 6. Insert the ledger row.
@@ -546,7 +558,7 @@ Within one transaction:
 
 - [ ] **Step 5: Remove agent-supplied accounting fields**
 
-Change `AgentCallCompletionRequest` and `AgentApiClient.complete_call()` so the JSON body no longer includes `user_id` or `minutes_remaining`. Retain the metadata balance snapshot only for in-call messaging.
+Change `AgentCallCompletionRequest`, the call-finalization queue payload, `CallCompletionPayload`, `SessionRuntime.finalize()`, and `AgentApiClient.complete_call()` so the JSON body and worker job no longer include `user_id` or `minutes_remaining`. Derive `user_id` only after locking the persisted call, then enrich the internal lifecycle payload for recording paths and notifications. Retain the dispatch metadata balance snapshot only for in-call messaging.
 
 - [ ] **Step 6: Run concurrency tests ten times**
 
@@ -560,7 +572,7 @@ Expected: all ten runs pass with identical ledger totals.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/api/app/services/usage_accounting_service.py apps/api/app/repositories/usage_repository.py apps/api/app/repositories/call_repository.py apps/api/app/services/billing_service.py apps/api/app/services/call_lifecycle_service.py apps/api/app/schemas/calls.py apps/api/app/routers/agent.py apps/api/tests/integration/test_usage_concurrency.py apps/api/tests/calls/test_call_lifecycle.py apps/api/tests/agent/test_call_completion.py
+git add apps/api/app/services/usage_accounting_service.py apps/api/app/repositories/usage_repository.py apps/api/app/repositories/call_repository.py apps/api/app/services/billing_service.py apps/api/app/services/call_lifecycle_service.py apps/api/app/schemas/calls.py apps/api/app/routers/agent.py apps/api/app/workers/jobs/call_finalization.py apps/api/tests/integration/test_usage_concurrency.py apps/api/tests/calls/test_call_lifecycle.py apps/api/tests/agent/test_call_completion.py apps/api/tests/services/test_safe_service_exceptions.py apps/api/tests/workers/test_lifecycle_edge_cases.py apps/api/tests/workers/test_post_call_jobs.py apps/agent/agent/api_client.py apps/agent/agent/schemas.py apps/agent/agent/session_runtime.py apps/agent/tests/test_api_client.py apps/agent/tests/test_session_runtime.py
 git commit -m "fix: make usage accounting authoritative and concurrency safe"
 ```
 

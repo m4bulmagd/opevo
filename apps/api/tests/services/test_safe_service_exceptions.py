@@ -7,6 +7,7 @@ import pytest
 
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.recording_service import RecordingResult, RecordingService
+from app.services.usage_accounting_service import UsageDebitResult
 
 
 class SecretBearingStorageProvider:
@@ -32,7 +33,17 @@ def build_lifecycle_service(*, recording_service, telephony_service, phone_numbe
         session,
         call_repository=call_repository,
         message_repository=SimpleNamespace(create_many=AsyncMock()),
-        usage_repository=SimpleNamespace(create=AsyncMock()),
+        usage_accounting_service=SimpleNamespace(
+            debit_call=AsyncMock(
+                return_value=UsageDebitResult(
+                    user_id=user_id,
+                    minutes_charged=2,
+                    balance_before=10,
+                    balance_after=0 if phone_number is not None else 8,
+                    already_debited=False,
+                )
+            )
+        ),
         phone_number_repository=SimpleNamespace(
             get_by_user_id=AsyncMock(return_value=phone_number)
         ),
@@ -54,13 +65,11 @@ def build_lifecycle_service(*, recording_service, telephony_service, phone_numbe
         ),
     )
     payload = {
-        "user_id": user_id,
         "call_id": str(call_id),
         "duration_seconds": 61,
-        "minutes_remaining": 10,
         "transcript": [],
     }
-    return service, payload
+    return service, payload, user_id
 
 
 @pytest.mark.anyio
@@ -94,7 +103,7 @@ async def test_outer_recording_failure_does_not_render_provider_exception(caplog
             side_effect=RuntimeError("OUTER_RECORDING_TRANSCRIPT_SENTINEL")
         )
     )
-    service, payload = build_lifecycle_service(
+    service, payload, user_id = build_lifecycle_service(
         recording_service=recording_service,
         telephony_service=SimpleNamespace(disable_number=AsyncMock()),
     )
@@ -107,7 +116,7 @@ async def test_outer_recording_failure_does_not_render_provider_exception(caplog
     assert "event=call_recording_upload_failed" in caplog.text
     assert "operation=store_recording" in caplog.text
     assert f"call_id={payload['call_id']}" in caplog.text
-    assert f"user_id={payload['user_id']}" in caplog.text
+    assert f"user_id={user_id}" in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
 
 
@@ -118,7 +127,7 @@ async def test_disable_number_failure_does_not_render_provider_exception(caplog)
             side_effect=RuntimeError("TELNYX_AUTHORIZATION_SENTINEL_FROM_DISABLE")
         )
     )
-    service, payload = build_lifecycle_service(
+    service, payload, user_id = build_lifecycle_service(
         recording_service=SimpleNamespace(
             store_recording=AsyncMock(
                 return_value=RecordingResult(
@@ -131,8 +140,6 @@ async def test_disable_number_failure_does_not_render_provider_exception(caplog)
         telephony_service=telephony_service,
         phone_number=SimpleNamespace(id=uuid4()),
     )
-    payload["minutes_remaining"] = 1
-
     with caplog.at_level(logging.ERROR):
         result = await service.finalize_call(payload)
 
@@ -141,5 +148,5 @@ async def test_disable_number_failure_does_not_render_provider_exception(caplog)
     assert "event=phone_number_disable_failed" in caplog.text
     assert "operation=disable_phone_number" in caplog.text
     assert f"call_id={payload['call_id']}" in caplog.text
-    assert f"user_id={payload['user_id']}" in caplog.text
+    assert f"user_id={user_id}" in caplog.text
     assert all(record.exc_info is None for record in caplog.records)

@@ -14,6 +14,15 @@ class CallRepository:
     async def get_by_id(self, call_id: UUID) -> Call | None:
         return await self.session.get(Call, call_id)
 
+    async def get_by_id_for_update(self, call_id: UUID) -> Call | None:
+        result = await self.session.execute(
+            select(Call)
+            .where(Call.id == call_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
     async def list_visible_by_user_id(
         self, user_id: UUID, *, limit: int = 100, offset: int = 0
     ) -> list[Call]:
