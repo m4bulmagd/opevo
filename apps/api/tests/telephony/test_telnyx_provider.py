@@ -57,6 +57,16 @@ class FakePhoneNumberResource:
         return SimpleNamespace(id=sid, connection_id=params.get("connection_id"))
 
 
+class EmptyPhoneNumberResource:
+    @classmethod
+    def list(cls, api_key=None, **params):
+        return SimpleNamespace(data=[])
+
+    @classmethod
+    def modify(cls, sid, **params):
+        raise AssertionError("modify should not be called")
+
+
 @pytest.mark.anyio
 async def test_provision_number_assigns_e164_to_user(db_session, active_user) -> None:
     service = TelephonyService(db_session, provider=FakeTelephonyProvider())
@@ -172,7 +182,39 @@ async def test_telnyx_provider_logs_selected_candidate_before_review_required(ca
         with pytest.raises(TelephonyProvisioningReviewRequired):
             await provider.provision_number(country_code="FR")
 
-    assert "Selected Telnyx number +33111111111 for provisioning (country_code=FR)" in caplog.text
+    assert "Selected Telnyx number +33******11 for provisioning (country_code=FR)" in caplog.text
+    assert "+33111111111" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_telnyx_provider_error_does_not_expose_selected_number() -> None:
+    selected_number = "+33111111111"
+    FakeAvailablePhoneNumberResource.responses = [
+        [
+            SimpleNamespace(
+                phone_number=selected_number,
+                cost_information={
+                    "currency": "USD",
+                    "upfront_cost": "1.00000",
+                    "monthly_cost": "0.50000",
+                },
+            )
+        ],
+    ]
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        active_connection_id="conn_active",
+        disabled_connection_id="conn_disabled",
+        ordering_enabled=True,
+        available_phone_number_resource=FakeAvailablePhoneNumberResource,
+        phone_number_order_resource=FakePhoneNumberOrderResource,
+        phone_number_resource=EmptyPhoneNumberResource,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        await provider.provision_number(country_code="FR")
+
+    assert selected_number not in str(exc_info.value)
 
 
 @pytest.mark.anyio

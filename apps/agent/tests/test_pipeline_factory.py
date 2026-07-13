@@ -153,6 +153,36 @@ def test_pipeline_factory_builds_agent_runtime_with_live_providers() -> None:
     assert session.kwargs["turn_detection"].plugin == "turn_detector"
 
 
+def test_pipeline_factory_does_not_print_prompt_content(capsys) -> None:
+    prompt_sentinel = "SYSTEM_PROMPT_SENTINEL_SECRET"
+    knowledge_sentinel = "KNOWLEDGE_BASE_SENTINEL_SECRET"
+
+    build_agent_runtime(
+        {
+            "agent_name": "Ava",
+            "owner_name": "Sam",
+            "system_prompt": prompt_sentinel,
+            "knowledge_base": knowledge_sentinel,
+            "pipeline_mode": "stt_llm_tts",
+            "stt_provider": "speechmatics",
+            "llm_provider": "gemini",
+            "tts_provider": "speechmatics",
+        },
+        plugin_modules={
+            "google": FakeGooglePlugin,
+            "speechmatics": FakeSpeechmaticsPlugin,
+            "silero": FakeSileroPlugin,
+            "turn_detector_multilingual": FakeTurnDetectorModule.multilingual,
+        },
+        agent_cls=FakeAgent,
+        session_cls=FakeSession,
+    )
+
+    captured = capsys.readouterr()
+    assert prompt_sentinel not in captured.out
+    assert knowledge_sentinel not in captured.out
+
+
 def test_pipeline_factory_binds_turn_detector_executor_when_provided() -> None:
     _agent, session = build_agent_runtime(
         {

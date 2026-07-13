@@ -95,12 +95,10 @@ async def handle_livekit_webhook(
         }
 
     logger.info(
-        "livekit webhook received event=%s room=%s identity=%s kind=%s attributes=%s",
+        "livekit webhook received event=%s room=%s participant_kind=%s",
         event_payload.get("event"),
         event_payload.get("room", {}).get("name"),
-        event_payload.get("participant", {}).get("identity"),
         event_payload.get("participant", {}).get("kind"),
-        event_payload.get("participant", {}).get("attributes", {}),
     )
 
     if event_payload["event"] in ("participant_joined", "participant_left"):

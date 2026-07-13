@@ -32,8 +32,12 @@ class SessionRuntime:
                     "text": text,
                 }
             )
-        except Exception:
-            logger.exception("failed to publish caller transcript event")
+        except Exception as exc:
+            logger.error(
+                "failed to publish caller transcript event call_id=%s error_type=%s",
+                metadata.call_id,
+                type(exc).__name__,
+            )
 
     async def handle_agent_utterance(self, metadata: DispatchMetadata, text: str) -> None:
         line = CallTranscriptItem(speaker="AGENT", text=text)
@@ -49,8 +53,12 @@ class SessionRuntime:
                     "text": text,
                 }
             )
-        except Exception:
-            logger.exception("failed to publish agent utterance event")
+        except Exception as exc:
+            logger.error(
+                "failed to publish agent utterance event call_id=%s error_type=%s",
+                metadata.call_id,
+                type(exc).__name__,
+            )
 
     async def finalize(self, metadata: DispatchMetadata, *, duration_seconds: int) -> None:
         if self.api_client is not None:
@@ -67,9 +75,11 @@ class SessionRuntime:
                 call_payload["dispatch_token"] = metadata.dispatch_token
             try:
                 await self.api_client.complete_call(call_payload)
-            except Exception:
-                logger.exception(
-                    "failed to complete call %s after retries", metadata.call_id,
+            except Exception as exc:
+                logger.error(
+                    "failed to complete call %s after retries error_type=%s",
+                    metadata.call_id,
+                    type(exc).__name__,
                 )
 
         try:
@@ -81,5 +91,9 @@ class SessionRuntime:
                     "duration_seconds": duration_seconds,
                 }
             )
-        except Exception:
-            logger.exception("failed to publish call_ended event for %s", metadata.call_id)
+        except Exception as exc:
+            logger.error(
+                "failed to publish call_ended event for %s error_type=%s",
+                metadata.call_id,
+                type(exc).__name__,
+            )

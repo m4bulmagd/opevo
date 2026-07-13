@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from agent.schemas import DispatchMetadata
@@ -15,6 +17,11 @@ class FakeEventPublisher:
 class FailingEventPublisher:
     async def publish(self, payload: dict) -> None:
         raise RuntimeError("Redis connection refused")
+
+
+class SecretBearingFailingEventPublisher:
+    async def publish(self, payload: dict) -> None:
+        raise RuntimeError("TRANSCRIPT_SENTINEL_FROM_PROVIDER_ERROR")
 
 
 class FakeApiClient:
@@ -95,6 +102,18 @@ async def test_handle_caller_transcript_publish_failure_does_not_crash() -> None
     assert len(runtime.transcript) == 1
     assert runtime.transcript[0].speaker == "CALLER"
     assert runtime.transcript[0].text == "What are your opening hours?"
+
+
+@pytest.mark.anyio
+async def test_transcript_publish_failure_does_not_log_provider_error_content(caplog) -> None:
+    runtime = SessionRuntime(SecretBearingFailingEventPublisher())
+    metadata = make_metadata()
+
+    with caplog.at_level(logging.ERROR):
+        await runtime.handle_caller_transcript(metadata, "caller transcript")
+
+    assert "TRANSCRIPT_SENTINEL_FROM_PROVIDER_ERROR" not in caplog.text
+    assert "call_123" in caplog.text
 
 
 # T4-5: handle_agent_utterance deduplication — same utterance twice should only append once

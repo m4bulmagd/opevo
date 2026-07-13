@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 import telnyx
 
 from app.core.config import get_settings
+from app.core.redaction import redact_phone
 from app.providers.telephony.base import TelephonyProvider, TelephonyProvisioningReviewRequired
 
 
@@ -80,7 +81,11 @@ class TelephonyTelnyx(TelephonyProvider):
             )
 
         selected_number = selected_candidate["e164"]
-        logger.info("Selected Telnyx number %s for provisioning (country_code=%s)", selected_number, country_code)
+        logger.info(
+            "Selected Telnyx number %s for provisioning (country_code=%s)",
+            redact_phone(selected_number),
+            country_code,
+        )
         if not self.ordering_enabled:
             raise TelephonyProvisioningReviewRequired(
                 reason="ordering_disabled",
@@ -104,7 +109,7 @@ class TelephonyTelnyx(TelephonyProvider):
             **{"filter[phone_number]": selected_number},
         )
         if not getattr(phone_numbers, "data", None):
-            raise ValueError(f"Ordered Telnyx number {selected_number} was not retrievable")
+            raise ValueError("Ordered Telnyx number was not retrievable")
 
         provider_number = phone_numbers.data[0]
         self.phone_number_resource.modify(

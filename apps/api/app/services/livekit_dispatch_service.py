@@ -4,6 +4,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dispatch_token import create_dispatch_token
+from app.core.redaction import redact_phone
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository, normalize_phone_number
@@ -93,11 +94,9 @@ class LiveKitDispatchService:
         raw_caller_number = attributes.get("sip.phoneNumber")
         if not raw_called_number:
             logger.info(
-                "livekit dispatch skipped: missing called number room=%s identity=%s kind=%s attributes=%s",
+                "livekit dispatch skipped event=missing_called_number room=%s participant_kind=%s",
                 event.get("room", {}).get("name"),
-                participant.get("identity"),
                 participant.get("kind"),
-                attributes,
             )
             await self.session.commit()
             return
@@ -105,10 +104,13 @@ class LiveKitDispatchService:
         phone_number = await self.phone_number_repository.get_by_any_format(raw_called_number)
         if phone_number is None:
             logger.info(
-                "livekit dispatch skipped: phone number not found called=%s normalized=%s caller=%s",
-                raw_called_number,
-                normalize_phone_number(raw_called_number),
-                raw_caller_number,
+                "livekit dispatch skipped event=phone_number_not_found called=%s caller=%s",
+                redact_phone(normalize_phone_number(raw_called_number)),
+                (
+                    redact_phone(normalize_phone_number(raw_caller_number))
+                    if raw_caller_number
+                    else None
+                ),
             )
             await self.session.commit()
             return
@@ -119,7 +121,7 @@ class LiveKitDispatchService:
         if agent_config is None:
             logger.info(
                 "livekit dispatch skipped: agent config missing called=%s user_id=%s",
-                called_number,
+                redact_phone(called_number),
                 str(phone_number.user_id),
             )
             await self.session.commit()
@@ -128,7 +130,7 @@ class LiveKitDispatchService:
         if user is None:
             logger.info(
                 "livekit dispatch skipped: user missing called=%s user_id=%s",
-                called_number,
+                redact_phone(called_number),
                 str(phone_number.user_id),
             )
             await self.session.commit()
@@ -168,8 +170,8 @@ class LiveKitDispatchService:
         logger.info(
             "livekit dispatch created room=%s called=%s caller=%s call_id=%s user_id=%s",
             room_name,
-            called_number,
-            caller_number,
+            redact_phone(called_number),
+            redact_phone(caller_number),
             str(call.id),
             str(phone_number.user_id),
         )

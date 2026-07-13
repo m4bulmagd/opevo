@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -20,6 +21,7 @@ class FakeLiveKitReceiver:
                 "attributes": {
                     "sip.phoneNumber": "+33123456789",
                     "sip.trunkPhoneNumber": "+33999888777",
+                    "sip.authorization": "SIP_ATTRIBUTE_SENTINEL_SECRET",
                 },
             },
         }
@@ -63,6 +65,7 @@ class FakeRealtimeService:
 async def test_participant_joined_dispatches_agent_and_creates_pending_call(
     async_client,
     client_database_url,
+    caplog,
 ) -> None:
     async def seed() -> None:
         engine = create_async_engine(client_database_url, future=True)
@@ -111,11 +114,12 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
     app.dependency_overrides[get_realtime_service] = lambda: realtime_service
 
     try:
-        response = await async_client.post(
-            "/webhooks/livekit",
-            content=json.dumps({"ignored": True}).encode("utf-8"),
-            headers={"authorization": "Bearer test"},
-        )
+        with caplog.at_level(logging.INFO):
+            response = await async_client.post(
+                "/webhooks/livekit",
+                content=json.dumps({"ignored": True}).encode("utf-8"),
+                headers={"authorization": "Bearer test"},
+            )
     finally:
         app.dependency_overrides.pop(get_webhook_receiver, None)
         app.dependency_overrides.pop(get_dispatch_client, None)
@@ -127,6 +131,11 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
     assert realtime_service.call_started_events[0]["user_id"] == metadata["user_id"]
     assert realtime_service.call_started_events[0]["call_id"] == metadata["call_id"]
     assert realtime_service.call_started_events[0]["room_name"] == "room_123"
+    assert "SIP_ATTRIBUTE_SENTINEL_SECRET" not in caplog.text
+    assert "+33123456789" not in caplog.text
+    assert "+33999888777" not in caplog.text
+    assert "+33******89" in caplog.text
+    assert "+33******77" in caplog.text
 
 
 @pytest.mark.anyio

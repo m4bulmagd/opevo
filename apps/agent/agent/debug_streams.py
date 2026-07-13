@@ -30,12 +30,6 @@ async def _iterate_node_output(value: Any) -> AsyncIterator[Any]:
     yield value
 
 
-def _truncate_text(text: str, limit: int = 160) -> str:
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit]}..."
-
-
 class StreamDebugLogger:
     def __init__(self, *, enabled: bool, call_id: str | None = None, user_id: str | None = None) -> None:
         self.enabled = enabled
@@ -63,11 +57,7 @@ class StreamDebugLogger:
 
     def log_stt_event(self, event: Any) -> None:
         event_type = str(getattr(event, "type", "unknown"))
-        alternatives = getattr(event, "alternatives", []) or []
-        text = ""
-        if alternatives:
-            text = getattr(alternatives[0], "text", "") or ""
-        self._log(f"stt.{event_type}", 'text="%s"', _truncate_text(text))
+        self._log(f"stt.{event_type}", "received=true")
 
     def log_llm_start(self) -> None:
         self._log("llm.start", "started=true")
@@ -75,13 +65,13 @@ class StreamDebugLogger:
     def log_llm_delta(self, text: str) -> None:
         if not text:
             return
-        self._log("llm.delta", 'text="%s"', _truncate_text(text))
+        self._log("llm.delta", "characters=%s", len(text))
 
     def log_llm_complete(self, text: str, *, elapsed_ms: int) -> None:
-        self._log("llm.complete", 'elapsed_ms=%s text="%s"', elapsed_ms, _truncate_text(text))
+        self._log("llm.complete", "elapsed_ms=%s characters=%s", elapsed_ms, len(text))
 
     def log_tts_start(self, text: str) -> None:
-        self._log("tts.start", 'text="%s"', _truncate_text(text))
+        self._log("tts.start", "characters=%s", len(text))
 
     def log_tts_first_frame(self, *, elapsed_ms: int) -> None:
         self._log("tts.first_frame", "elapsed_ms=%s", elapsed_ms)
@@ -89,15 +79,20 @@ class StreamDebugLogger:
     def log_tts_complete(self, text: str, *, frame_count: int, elapsed_ms: int, audio_seconds: float) -> None:
         self._log(
             "tts.complete",
-            'elapsed_ms=%s frame_count=%s audio_seconds=%.3f text="%s"',
+            "elapsed_ms=%s frame_count=%s audio_seconds=%.3f characters=%s",
             elapsed_ms,
             frame_count,
             audio_seconds,
-            _truncate_text(text),
+            len(text),
         )
 
     def log_tts_error(self, text: str, *, error: Exception) -> None:
-        self._log("tts.error", 'text="%s" error="%s"', _truncate_text(text), str(error))
+        self._log(
+            "tts.error",
+            "characters=%s error_type=%s",
+            len(text),
+            type(error).__name__,
+        )
 
 
 class InstrumentedAgent(Agent):

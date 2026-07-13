@@ -181,7 +181,6 @@ def build_agent_runtime(
         knowledge_base=dispatch_metadata.get("knowledge_base", ""),
         owner_context=dispatch_metadata.get("owner_context", ""),
     )
-    print(f"Built instructions: {instructions}")
 
     if config["pipeline_mode"] == PipelineMode.STS.value:
         session = _build_sts_session(config, plugins, instructions, session_cls)
