@@ -50,7 +50,11 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
     await runtime.handle_agent_utterance(dispatch_payload, "Bonjour")
     await runtime.handle_caller_transcript(dispatch_payload, "What time do you open?")
 
-    await runtime.finalize(dispatch_payload, duration_seconds=61)
+    await runtime.finalize(
+        dispatch_payload,
+        duration_seconds=61,
+        recording_bytes_base64="cmVjb3JkaW5nLWJ5dGVz",
+    )
 
     assert fake_event_publisher.events[-1]["type"] == "call_ended"
     assert fake_event_publisher.events[-1]["user_id"] == "user_123"
@@ -63,7 +67,7 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
                 {"speaker": "AGENT", "text": "Bonjour"},
                 {"speaker": "CALLER", "text": "What time do you open?"},
             ],
-            "recording_bytes_base64": None,
+            "recording_bytes_base64": "cmVjb3JkaW5nLWJ5dGVz",
         }
     ]
 

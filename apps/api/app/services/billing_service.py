@@ -191,6 +191,10 @@ class BillingService:
         if not subscription_id:
             return
 
+        invoice_id = event_object.get("id")
+        await self.usage_accounting_service.acquire_invoice_grant_lock(
+            invoice_id=invoice_id
+        )
         user_id = await self._invoice_user_id(event_object)
         subscription, should_apply = (
             await self.subscription_repository.resolve_invoice_target_for_update(
@@ -223,7 +227,7 @@ class BillingService:
 
         grant = await self.usage_accounting_service.grant_invoice(
             user_id=subscription.user_id,
-            invoice_id=event_object["id"],
+            invoice_id=invoice_id,
             minutes=allocated_minutes,
         )
 

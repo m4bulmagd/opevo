@@ -39,6 +39,7 @@ class AgentApiClient:
             "duration_seconds": payload["duration_seconds"],
             "transcript": payload.get("transcript") or [],
             "caller_number": payload.get("caller_number"),
+            "recording_bytes_base64": payload.get("recording_bytes_base64"),
         }
 
         last_exc: Exception | None = None

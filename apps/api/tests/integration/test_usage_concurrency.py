@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.models import Base
 from app.models.call import Call
+from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.repositories.usage_repository import UsageRepository
+from app.services.billing_service import BillingService
 from app.services.usage_accounting_service import UsageAccountingService
 
 
@@ -409,3 +411,115 @@ async def test_invoice_source_lock_serializes_transactions_globally(
             await second_session.commit()
         finally:
             await second_session.__aexit__(None, None, None)
+
+
+@pytest.mark.anyio
+async def test_invoice_grant_lock_rejects_empty_invoice_id(
+    usage_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with usage_session_factory() as session:
+        with pytest.raises(ValueError, match="invoice"):
+            await UsageAccountingService(session).acquire_invoice_grant_lock(
+                invoice_id="   "
+            )
+
+
+@pytest.mark.anyio
+async def test_billing_acquires_invoice_lock_before_user_scope(
+    usage_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    user = await _seed_user(usage_session_factory, suffix="billing_lock_order")
+    invoice_id = f"in_mixed_path_{uuid4().hex}"
+    subscription_id = f"sub_mixed_path_{uuid4().hex}"
+    event_created_at = datetime(2026, 2, 2, tzinfo=UTC)
+
+    async with usage_session_factory() as session:
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id=f"cus_{uuid4().hex}",
+                stripe_subscription_id=subscription_id,
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                last_stripe_event_created_at=datetime(2026, 2, 1, tzinfo=UTC),
+            )
+        )
+        await session.commit()
+
+    event_object = {
+        "id": invoice_id,
+        "customer": f"cus_{uuid4().hex}",
+        "status": "paid",
+        "paid": True,
+        "parent": {
+            "subscription_details": {"subscription": subscription_id}
+        },
+        "lines": {"data": []},
+    }
+
+    async with usage_session_factory() as direct_session:
+        direct_service = UsageAccountingService(direct_session)
+        await direct_service.acquire_invoice_grant_lock(invoice_id=invoice_id)
+
+        async with usage_session_factory() as billing_session:
+            billing_pid = await billing_session.scalar(
+                select(func.pg_backend_pid())
+            )
+            billing_service = BillingService(billing_session)
+            billing_task = asyncio.create_task(
+                billing_service._handle_invoice_paid(
+                    event_object,
+                    "evt_mixed_path",
+                    "invoice.paid",
+                    event_created_at,
+                )
+            )
+
+            async with usage_session_factory() as observer_session:
+                for _ in range(100):
+                    wait_state = (
+                        await observer_session.execute(
+                            text(
+                                "SELECT wait_event_type, wait_event "
+                                "FROM pg_stat_activity WHERE pid = :pid"
+                            ),
+                            {"pid": billing_pid},
+                        )
+                    ).one()
+                    if wait_state == ("Lock", "advisory"):
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    pytest.fail("Billing never waited on the invoice advisory lock")
+
+            await direct_session.execute(
+                text("SET LOCAL lock_timeout = '250ms'")
+            )
+            locked_user = await UsageRepository(direct_session).lock_user(
+                user_id=user.id
+            )
+            assert locked_user is not None
+
+            direct_grant = await direct_service.grant_invoice(
+                user_id=user.id,
+                invoice_id=invoice_id,
+                minutes=60,
+            )
+            await direct_session.commit()
+
+            await asyncio.wait_for(billing_task, timeout=2)
+            await billing_session.commit()
+
+    assert direct_grant.already_granted is False
+    async with usage_session_factory() as session:
+        matching_grants = list(
+            (
+                await session.execute(
+                    select(UsageLedger).where(
+                        UsageLedger.source_id == invoice_id
+                    )
+                )
+            ).scalars()
+        )
+    assert len(matching_grants) == 1

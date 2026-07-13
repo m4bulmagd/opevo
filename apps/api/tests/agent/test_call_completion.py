@@ -1,3 +1,4 @@
+import base64
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -117,6 +118,44 @@ async def test_agent_completion_endpoint_rejects_accounting_authority_fields() -
 
     assert response.status_code == 422
     assert fake_queue.calls == []
+
+
+@pytest.mark.anyio
+async def test_agent_completion_endpoint_decodes_recording_for_queue() -> None:
+    call_id = uuid4()
+    fake_queue = FakeCallFinalizationQueue()
+
+    from app.routers.agent import get_call_finalization_queue
+    from app.routers.agent import router as agent_router
+
+    async def override_get_call_finalization_queue():
+        return fake_queue
+
+    app = FastAPI()
+    app.include_router(agent_router)
+    app.dependency_overrides[get_call_finalization_queue] = (
+        override_get_call_finalization_queue
+    )
+    recording_bytes = b"recording-bytes"
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/agent/calls/{call_id}/complete",
+            headers={"x-agent-token": "test-agent-token"},
+            json={
+                "duration_seconds": 61,
+                "recording_bytes_base64": base64.b64encode(
+                    recording_bytes
+                ).decode("ascii"),
+            },
+        )
+
+    assert response.status_code == 202
+    assert fake_queue.calls[0].payload["recording_bytes"] == recording_bytes
 
 
 @pytest.mark.anyio

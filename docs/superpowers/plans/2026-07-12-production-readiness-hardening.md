@@ -513,6 +513,7 @@ git commit -m "fix: enforce complete subscription access lifecycle"
 
 **Interfaces:**
 - Produces: `UsageAccountingService.grant_invoice(user_id: UUID, invoice_id: str, minutes: int) -> UsageGrantResult`, persisting `source_id=invoice_id`.
+- Produces: `UsageAccountingService.acquire_invoice_grant_lock(invoice_id: str)`, validating the Stripe invoice object ID and establishing the global invoice-before-user lock order for every entry path.
 - Produces: `UsageAccountingService.debit_call(call_id: UUID, duration_seconds: int) -> UsageDebitResult`.
 - `UsageGrantResult` contains the ledger row plus `already_granted` and `first_activation`, so duplicate invoice deliveries cannot repeat provisioning side effects.
 - `UsageDebitResult` contains `user_id`, `minutes_charged`, `balance_before`, `balance_after`, and `already_debited`.
@@ -531,6 +532,8 @@ assert await count_call_debits(call_ids=[call_a.id, call_b.id]) == 2
 Add a test that submits another customer’s `user_id`; the field must be rejected by the schema or ignored, and the call owner must be charged.
 
 Add a grant test that processes two distinct Stripe events for the same Stripe invoice object ID and asserts one ledger grant. Serialize the invoice identity with a PostgreSQL transaction-scoped advisory lock before the cross-event-type `source_id` lookup, then lock the user accounting scope; `uq_usage_ledgers_event_source` remains the database backstop. Add an adversarial test in which the same invoice races across different users and different grant event types.
+
+The production Billing path must acquire that same invoice advisory lock before resolving or locking any user/subscription row. Add a mixed direct-service/Billing regression proving Billing waits on the invoice lock without holding the user row.
 
 - [ ] **Step 2: Run against PostgreSQL and verify failure**
 
@@ -559,6 +562,8 @@ Within one transaction:
 - [ ] **Step 5: Remove agent-supplied accounting fields**
 
 Change `AgentCallCompletionRequest`, the call-finalization queue payload, `CallCompletionPayload`, `SessionRuntime.finalize()`, and `AgentApiClient.complete_call()` so the JSON body and worker job no longer include `user_id` or `minutes_remaining`. Derive `user_id` only after locking the persisted call, then enrich the internal lifecycle payload for recording paths and notifications. Retain the dispatch metadata balance snapshot only for in-call messaging.
+
+Preserve optional recording transport: when `SessionRuntime.finalize()` receives `recording_bytes_base64`, carry it through `CallCompletionPayload` and `AgentApiClient` so the API router can decode the bytes into the finalization queue payload. Existing LiveKit egress callers may omit it.
 
 - [ ] **Step 6: Run concurrency tests ten times**
 

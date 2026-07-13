@@ -60,13 +60,20 @@ class SessionRuntime:
                 type(exc).__name__,
             )
 
-    async def finalize(self, metadata: DispatchMetadata, *, duration_seconds: int) -> None:
+    async def finalize(
+        self,
+        metadata: DispatchMetadata,
+        *,
+        duration_seconds: int,
+        recording_bytes_base64: str | None = None,
+    ) -> None:
         if self.api_client is not None:
             payload = CallCompletionPayload(
                 call_id=metadata.call_id,
                 duration_seconds=duration_seconds,
                 caller_number=metadata.caller_number,
                 transcript=self.transcript,
+                recording_bytes_base64=recording_bytes_base64,
             )
             call_payload = payload.model_dump()
             if metadata.dispatch_token:

@@ -15,6 +15,7 @@ async def test_complete_call_sends_correct_payload() -> None:
         "duration_seconds": 120,
         "transcript": [{"speaker": "CALLER", "text": "hello"}],
         "caller_number": "+1234567890",
+        "recording_bytes_base64": "cmVjb3JkaW5nLWJ5dGVz",
     }
     
     request_captured = None
@@ -43,6 +44,7 @@ async def test_complete_call_sends_correct_payload() -> None:
     assert "minutes_remaining" not in data
     assert data["caller_number"] == "+1234567890"
     assert data["transcript"] == [{"speaker": "CALLER", "text": "hello"}]
+    assert data["recording_bytes_base64"] == "cmVjb3JkaW5nLWJ5dGVz"
 
 
 @pytest.mark.anyio

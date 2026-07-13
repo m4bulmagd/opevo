@@ -35,6 +35,11 @@ class UsageAccountingService:
         self.usage_repository = usage_repository or UsageRepository(session)
         self.call_repository = call_repository or CallRepository(session)
 
+    async def acquire_invoice_grant_lock(self, *, invoice_id: str) -> None:
+        if not isinstance(invoice_id, str) or not invoice_id.strip():
+            raise ValueError("Stripe invoice object ID is required")
+        await self.usage_repository.lock_invoice_source(source_id=invoice_id)
+
     async def grant_invoice(
         self,
         *,
@@ -45,7 +50,7 @@ class UsageAccountingService:
         if minutes < 0:
             raise ValueError("Invoice grant minutes must be nonnegative")
 
-        await self.usage_repository.lock_invoice_source(source_id=invoice_id)
+        await self.acquire_invoice_grant_lock(invoice_id=invoice_id)
         user = await self.usage_repository.lock_user(user_id=user_id)
         if user is None:
             raise ValueError("User not found")
