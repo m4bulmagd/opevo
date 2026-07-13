@@ -135,6 +135,9 @@ class UsageAccountingService:
                 already_debited=True,
             )
 
+        if call.status != "finalizing":
+            raise ValueError("Call must be finalizing before usage debit")
+
         user = await self.usage_repository.lock_user(user_id=call.user_id)
         if user is None:
             raise ValueError("Call owner not found")

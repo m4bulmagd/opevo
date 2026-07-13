@@ -13,8 +13,8 @@ SUPPORTED_OUTBOX_TOPICS = frozenset(
         "phone.enable",
         "phone.disable",
         "livekit.dispatch",
-        "recording.start",
-        "notification.send",
+        "summary.generate",
+        "recording.stop",
     }
 )
 
@@ -23,8 +23,8 @@ REFERENCE_PAYLOAD_FIELDS = {
     "phone.enable": frozenset({"user_id"}),
     "phone.disable": frozenset({"user_id"}),
     "livekit.dispatch": frozenset({"call_id"}),
-    "recording.start": frozenset({"call_id"}),
-    "notification.send": frozenset({"notification_id"}),
+    "summary.generate": frozenset({"call_id"}),
+    "recording.stop": frozenset({"call_id"}),
 }
 
 

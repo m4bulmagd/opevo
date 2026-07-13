@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import sys
-from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -33,12 +32,11 @@ from app.core.dispatch_token import create_dispatch_token  # noqa: E402
 from app.models.agent_config import AgentConfig  # noqa: E402
 from app.models.call import Call  # noqa: E402
 from app.models.call_message import CallMessage  # noqa: E402
+from app.models.outbox_event import OutboxEvent  # noqa: E402
 from app.models.usage_ledger import UsageLedger  # noqa: E402
-from app.repositories.call_repository import CallRepository  # noqa: E402
-from app.repositories.message_repository import MessageRepository  # noqa: E402
+from app.providers.summaries.base import StructuredSummary  # noqa: E402
 from app.services.call_lifecycle_service import CallLifecycleService  # noqa: E402
-from app.services.recording_service import RecordingResult  # noqa: E402
-from app.services.usage_accounting_service import UsageAccountingService  # noqa: E402
+from app.workers.jobs.outbox_topics import deliver_summary_generate  # noqa: E402
 
 
 class NoopEventPublisher:
@@ -46,43 +44,19 @@ class NoopEventPublisher:
         return None
 
 
-class CapturingSummaryService:
+class CapturingSummaryProvider:
     def __init__(self) -> None:
         self.transcripts: list[list[dict]] = []
 
-    async def create_summary(self, payload: dict):
-        self.transcripts.append(payload["transcript"])
-        return SimpleNamespace(
-            text="Complete summary",
-            data={
-                "summary_text": "Complete summary",
-                "caller_intent": "Test durability",
-                "action_items": [],
-                "sentiment": "neutral",
-                "follow_up_required": False,
-            },
-            job_enqueued=True,
+    async def generate_summary(self, transcript: list[dict]):
+        self.transcripts.append(transcript)
+        return StructuredSummary(
+            summary_text="Complete summary",
+            caller_intent="Test durability",
+            action_items=[],
+            sentiment="neutral",
+            follow_up_required=False,
         )
-
-
-class NoopRecordingService:
-    async def store_recording(self, _payload: dict) -> RecordingResult:
-        return RecordingResult(object_key=None, url=None, job_enqueued=False)
-
-
-class NoopNotificationService:
-    async def create_call_completed_notification(self, **_kwargs):
-        return SimpleNamespace(job_enqueued=False)
-
-
-class NoopPhoneRepository:
-    async def get_by_user_id(self, _user_id):
-        return None
-
-
-class NoopTelephonyService:
-    async def disable_number(self, _user_id):
-        return None
 
 
 class CapturingFinalizationQueue:
@@ -152,7 +126,7 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
     )
     await db_session.commit()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    summary_service = CapturingSummaryService()
+    summary_provider = CapturingSummaryProvider()
 
     from app.routers.agent import router
 
@@ -228,18 +202,30 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
         await runtime.finalize(metadata, duration_seconds=3)
 
     assert len(finalization_queue.payloads) == 1
+    assert finalization_queue.payloads == [{"call_id": str(call.id)}]
     async with session_factory() as session:
-        await CallLifecycleService(
-            session,
-            call_repository=CallRepository(session),
-            message_repository=MessageRepository(session),
-            usage_accounting_service=UsageAccountingService(session),
-            phone_number_repository=NoopPhoneRepository(),
-            telephony_service=NoopTelephonyService(),
-            summary_service=summary_service,
-            recording_service=NoopRecordingService(),
-            notification_service=NoopNotificationService(),
-        ).finalize_call(finalization_queue.payloads[0])
+        lifecycle = CallLifecycleService(session)
+        claim = await lifecycle.claim_finalization(call.id)
+        await lifecycle.complete_finalization(
+            call.id,
+            generation=claim.generation,
+        )
+
+    async with session_factory() as session:
+        summary_event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.topic == "summary.generate",
+                OutboxEvent.aggregate_id == call.id,
+            )
+        )
+        assert summary_event is not None
+    await deliver_summary_generate(
+        {
+            "session_factory": session_factory,
+            "summary_provider": summary_provider,
+        },
+        summary_event,
+    )
 
     async with session_factory() as session:
         durable = list(
@@ -256,10 +242,10 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
         (2, "AGENT", "second"),
         (3, "CALLER", "third"),
     ]
-    assert summary_service.transcripts == [
+    assert summary_provider.transcripts == [
         [
-            {"sequence_number": 1, "speaker": "CALLER", "text": "first"},
-            {"sequence_number": 2, "speaker": "AGENT", "text": "second"},
-            {"sequence_number": 3, "speaker": "CALLER", "text": "third"},
+            {"speaker": "CALLER", "text": "first"},
+            {"speaker": "AGENT", "text": "second"},
+            {"speaker": "CALLER", "text": "third"},
         ]
     ]

@@ -1,7 +1,6 @@
 """
 Unit tests for individual ARQ worker jobs:
   - summary_job     (app/workers/jobs/summary.py)
-  - recording_job   (app/workers/jobs/recording.py)
   - notifications_job (app/workers/jobs/notifications.py)
   - transcript_flush_job (app/workers/jobs/transcript_flush.py)
 
@@ -126,96 +125,6 @@ async def test_summary_job_empty_transcript(monkeypatch: pytest.MonkeyPatch) -> 
     payload: dict = {"call_id": str(uuid4()), "user_id": str(uuid4())}
 
     result = await summary_module.summary_job(CTX, payload)
-
-    assert result["job_enqueued"] is False
-
-
-# ===========================================================================
-# recording_job tests
-# ===========================================================================
-
-
-@dataclass(frozen=True)
-class FakeRecordingResult:
-    object_key: str | None
-    url: str | None
-    job_enqueued: bool
-
-
-class FakeRecordingService:
-    """RecordingService replacement that simulates a successful upload."""
-
-    async def store_recording(self, payload: dict) -> FakeRecordingResult:
-        call_id = payload.get("call_id", "unknown")
-        user_id = payload.get("user_id", "unknown")
-        key = f"calls/{user_id}/{call_id}.mp3"
-        return FakeRecordingResult(
-            object_key=key,
-            url=f"s3://recordings/{key}",
-            job_enqueued=True,
-        )
-
-
-class FakeFailingRecordingService:
-    """RecordingService replacement that simulates a storage failure."""
-
-    async def store_recording(self, payload: dict) -> FakeRecordingResult:
-        return FakeRecordingResult(object_key=None, url=None, job_enqueued=False)
-
-
-@pytest.mark.anyio
-async def test_recording_job_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """recording_job returns object key and URL when storage succeeds."""
-    from app.workers.jobs import recording as recording_module
-
-    monkeypatch.setattr(recording_module, "RecordingService", lambda provider=None: FakeRecordingService())
-
-    call_id = str(uuid4())
-    user_id = str(uuid4())
-    payload = {
-        "call_id": call_id,
-        "user_id": user_id,
-        "recording_bytes": b"fake-audio-bytes",
-    }
-
-    result = await recording_module.recording_job(CTX, payload)
-
-    assert result["recording_key"] == f"calls/{user_id}/{call_id}.mp3"
-    assert result["recording_url"].endswith(f"{call_id}.mp3")
-    assert result["job_enqueued"] is True
-
-
-@pytest.mark.anyio
-async def test_recording_job_storage_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """recording_job returns empty result when the storage provider fails."""
-    from app.workers.jobs import recording as recording_module
-
-    monkeypatch.setattr(recording_module, "RecordingService", lambda provider=None: FakeFailingRecordingService())
-
-    payload = {
-        "call_id": str(uuid4()),
-        "user_id": str(uuid4()),
-        "recording_bytes": b"bad-data",
-    }
-
-    result = await recording_module.recording_job(CTX, payload)
-
-    assert result["recording_key"] is None
-    assert result["recording_url"] is None
-    assert result["job_enqueued"] is False
-
-
-@pytest.mark.anyio
-async def test_recording_job_missing_recording_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """recording_job handles payload missing recording_bytes gracefully."""
-    from app.workers.jobs import recording as recording_module
-
-    monkeypatch.setattr(recording_module, "RecordingService", lambda provider=None: FakeFailingRecordingService())
-
-    # recording_bytes key is absent
-    payload: dict = {"call_id": str(uuid4()), "user_id": str(uuid4())}
-
-    result = await recording_module.recording_job(CTX, payload)
 
     assert result["job_enqueued"] is False
 

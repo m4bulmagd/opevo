@@ -16,6 +16,7 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.services.dispatch_eligibility_policy import DispatchEligibilityPolicy
+from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.livekit_recording_service import LiveKitRecordingService
 from app.services.outbox_service import OutboxService
 from app.services.realtime_service import RealtimeService
@@ -101,6 +102,7 @@ class LiveKitDispatchService:
         outbox_service: OutboxService | None = None,
         realtime_service: RealtimeService,
         recording_service: LiveKitRecordingService,
+        call_lifecycle_service: CallLifecycleService | None = None,
         arq_pool=None,
         now_provider=None,
     ) -> None:
@@ -117,6 +119,10 @@ class LiveKitDispatchService:
         self.outbox_service = outbox_service or OutboxService(session)
         self.realtime_service = realtime_service
         self.recording_service = recording_service
+        self.call_lifecycle_service = call_lifecycle_service or CallLifecycleService(
+            session,
+            call_repository=self.call_repository,
+        )
         self.arq_pool = arq_pool
         self.now_provider = now_provider or (lambda: datetime.now(UTC))
 
@@ -141,30 +147,32 @@ class LiveKitDispatchService:
             await self.session.commit()
             return DispatchJoinResult("ignored")
 
-        call = await self.call_repository.get_active_by_room_with_recording(
+        call = await self.call_repository.get_active_by_room_for_update(
             room_name=room_name
         )
         if call is None:
             await self.session.commit()
             return DispatchJoinResult("ignored")
 
-        try:
-            await self.recording_service.stop_room_recording(
-                egress_id=call.recording_egress_id
-            )
-        except Exception as exc:
-            report_safe_exception(
-                logger,
-                event="livekit_recording_stop_failed",
-                operation="stop_room_recording",
-                error=exc,
-                call_id=call.id,
-                provider_request_id=call.recording_egress_id,
-                status="failed",
-            )
-
+        ended = await self.call_lifecycle_service.end_from_sip(
+            call_id=call.id,
+            ended_at=self.now_provider(),
+        )
         await self.session.commit()
-        return DispatchJoinResult("stopped", str(call.id))
+        if ended.status == "ending" and self.arq_pool is not None:
+            try:
+                await self.arq_pool.enqueue_job(
+                    "call_finalization_job",
+                    {"call_id": str(call.id)},
+                    _job_id=f"call-finalization:{call.id}",
+                )
+            except Exception:
+                logger.warning(
+                    "call finalization wakeup failed operation=sip_leave "
+                    "call_id=%s error_type=enqueue_failed",
+                    call.id,
+                )
+        return DispatchJoinResult(ended.status, str(call.id))
 
     async def _handle_sip_participant_joined(
         self,
@@ -338,6 +346,40 @@ class LiveKitDispatchService:
                     recording_url=recording.url,
                 )
             await self.session.commit()
+            if fresh_call is None:
+                try:
+                    await self.recording_service.ensure_stopped(recording.egress_id)
+                except Exception as exc:
+                    cleanup_call = await self.call_repository.get_by_id_for_update(
+                        call_id
+                    )
+                    if cleanup_call is not None:
+                        await self.call_repository.set_recording_metadata(
+                            cleanup_call,
+                            recording_object_key=recording.object_key,
+                            recording_egress_id=recording.egress_id,
+                            recording_url=recording.url,
+                        )
+                        await self.outbox_service.add(
+                            topic="recording.stop",
+                            aggregate_type="call-recording",
+                            aggregate_id=call_id,
+                            idempotency_key=(
+                                f"recording.stop:{call_id}:egress:"
+                                f"{recording.egress_id}"
+                            ),
+                            payload={"call_id": str(call_id)},
+                        )
+                    await self.session.commit()
+                    report_safe_exception(
+                        logger,
+                        event="livekit_orphan_recording_stop_failed",
+                        operation="ensure_recording_stopped",
+                        error=exc,
+                        call_id=call_id,
+                        user_id=user_id,
+                        status="failed",
+                    )
 
         return DispatchJoinResult("connected", str(call_id))
 

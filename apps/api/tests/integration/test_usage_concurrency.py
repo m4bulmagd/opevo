@@ -117,14 +117,13 @@ async def test_invoice_grant_is_idempotent_by_invoice_object_id(
 
 
 @pytest.mark.anyio
-async def test_two_call_debits_serialize_on_stable_user_scope(
+async def test_duplicate_call_debits_serialize_on_stable_user_scope(
     usage_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     user = await _seed_user(usage_session_factory, suffix="debit")
 
     async with usage_session_factory() as session:
-        call_a = Call(user_id=user.id, status="awaiting_accounting")
-        call_b = Call(user_id=user.id, status="awaiting_accounting")
+        call = Call(user_id=user.id, status="finalizing")
         session.add_all(
             [
                 UsageLedger(
@@ -134,12 +133,11 @@ async def test_two_call_debits_serialize_on_stable_user_scope(
                     minutes_delta=2,
                     balance_after=2,
                 ),
-                call_a,
-                call_b,
+                call,
             ]
         )
         await session.commit()
-        call_ids = (call_a.id, call_b.id)
+        call_id = call.id
 
     async def debit(call_id: UUID):
         async with usage_session_factory() as session:
@@ -150,24 +148,26 @@ async def test_two_call_debits_serialize_on_stable_user_scope(
             await session.commit()
             return result
 
-    first, second = await asyncio.gather(*(debit(call_id) for call_id in call_ids))
+    first, second = await asyncio.gather(debit(call_id), debit(call_id))
 
-    assert sorted([first.balance_after, second.balance_after]) == [0, 1]
+    assert [first.already_debited, second.already_debited].count(False) == 1
+    assert [first.already_debited, second.already_debited].count(True) == 1
+    assert first.balance_after == second.balance_after == 1
     assert {first.user_id, second.user_id} == {user.id}
     assert first.minutes_charged == second.minutes_charged == 1
 
     async with usage_session_factory() as session:
         repository = UsageRepository(session)
-        assert await repository.get_current_balance(user_id=user.id) == 0
+        assert await repository.get_current_balance(user_id=user.id) == 1
         debit_count = await session.scalar(
             select(func.count())
             .select_from(UsageLedger)
             .where(
-                UsageLedger.call_id.in_(call_ids),
+                UsageLedger.call_id == call_id,
                 UsageLedger.event_type == "call_completed",
             )
         )
-    assert debit_count == 2
+    assert debit_count == 1
 
 
 @pytest.mark.anyio
@@ -177,7 +177,7 @@ async def test_call_debit_is_idempotent_and_capped_at_available_balance(
     user = await _seed_user(usage_session_factory, suffix="capped")
 
     async with usage_session_factory() as session:
-        call = Call(user_id=user.id, status="awaiting_accounting")
+        call = Call(user_id=user.id, status="finalizing")
         session.add_all(
             [
                 UsageLedger(
@@ -255,13 +255,12 @@ async def test_latest_balance_uses_id_to_break_created_at_ties(
 
 
 @pytest.mark.anyio
-async def test_balance_order_follows_insert_order_not_transaction_start_order(
+async def test_duplicate_debit_follows_commit_order_not_transaction_start_order(
     usage_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     user = await _seed_user(usage_session_factory, suffix="causal_order")
     async with usage_session_factory() as session:
-        call_started_early = Call(user_id=user.id, status="awaiting_accounting")
-        call_started_late = Call(user_id=user.id, status="awaiting_accounting")
+        call = Call(user_id=user.id, status="finalizing")
         session.add_all(
             [
                 UsageLedger(
@@ -271,34 +270,33 @@ async def test_balance_order_follows_insert_order_not_transaction_start_order(
                     minutes_delta=2,
                     balance_after=2,
                 ),
-                call_started_early,
-                call_started_late,
+                call,
             ]
         )
         await session.commit()
-        early_call_id = call_started_early.id
-        late_call_id = call_started_late.id
+        call_id = call.id
 
     async with usage_session_factory() as early_session:
         await early_session.execute(text("SELECT 1"))
 
         async with usage_session_factory() as late_session:
             late = await UsageAccountingService(late_session).debit_call(
-                call_id=late_call_id,
+                call_id=call_id,
                 duration_seconds=60,
             )
             await late_session.commit()
 
         early = await UsageAccountingService(early_session).debit_call(
-            call_id=early_call_id,
+            call_id=call_id,
             duration_seconds=60,
         )
         await early_session.commit()
 
-    assert late.balance_after == 1
-    assert early.balance_after == 0
+    assert late.already_debited is False
+    assert early.already_debited is True
+    assert late.balance_after == early.balance_after == 1
     async with usage_session_factory() as session:
-        assert await UsageRepository(session).get_current_balance(user_id=user.id) == 0
+        assert await UsageRepository(session).get_current_balance(user_id=user.id) == 1
 
 
 @pytest.mark.anyio

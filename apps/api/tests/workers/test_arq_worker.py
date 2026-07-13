@@ -38,6 +38,11 @@ def test_worker_registers_outbox_wakeup_and_reconciliation() -> None:
     }
 
     assert "outbox_delivery_job" in function_names
+    assert "summary_job" not in function_names
+    assert "recording_job" not in function_names
+    assert "notifications_job" not in function_names
+    assert "call_finalization_job" in function_names
+    assert "call_reconciliation_job" in function_names
     assert any(
         getattr(job, "name", None) == "outbox_reconciliation_job"
         for job in arq_worker.WorkerSettings.cron_jobs

@@ -35,6 +35,7 @@ SAFE_OUTBOX_ERROR_CODES = frozenset(
         "dispatch_ineligible",
         "dispatch_conflict",
         "dispatch_configuration",
+        "summary_stale",
     }
 )
 

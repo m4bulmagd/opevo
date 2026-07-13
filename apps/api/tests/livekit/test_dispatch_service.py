@@ -136,6 +136,14 @@ class FakeCallRepository:
             return None
         return self.call
 
+    async def get_active_by_room_for_update(self, *, room_name: str):
+        self.active_by_room_calls.append(room_name)
+        if self.call.livekit_room_id != room_name:
+            return None
+        if self.call.status not in {"pending", "connected", "ending", "finalizing"}:
+            return None
+        return self.call
+
     async def set_recording_metadata(
         self,
         call,
@@ -212,6 +220,22 @@ class FakeSession:
         self.commits += 1
 
 
+class FakeCallLifecycleService:
+    def __init__(self, call_repository: FakeCallRepository) -> None:
+        self.call_repository = call_repository
+        self.end_calls: list[UUID] = []
+
+    async def end_from_sip(self, *, call_id: UUID, ended_at):
+        self.end_calls.append(call_id)
+        call = self.call_repository.call
+        if call.status == "pending":
+            call.status = "failed"
+            call.failure_code = "caller_left_before_connect"
+        elif call.status == "connected":
+            call.status = "ending"
+        return call
+
+
 def build_dispatch_service(
     session,
     dispatch_client,
@@ -223,17 +247,23 @@ def build_dispatch_service(
     usage_repository=None,
     realtime_service=None,
     recording_service=None,
+    call_lifecycle_service=None,
 ) -> LiveKitDispatchService:
+    resolved_call_repository = call_repository or FakeCallRepository(call_id=uuid4())
     return LiveKitDispatchService(
         session,
         dispatch_client,
         phone_number_repository=phone_number_repository or FakePhoneNumberRepository(FakePhoneNumber(id=uuid4(), user_id=uuid4(), e164="+33000000000")),
         agent_config_repository=agent_config_repository or FakeAgentConfigRepository(FakeAgentConfig(id=uuid4(), agent_name="A", owner_context=None, system_prompt="", knowledge_base="", pipeline_mode="stt_llm_tts")),
-        call_repository=call_repository or FakeCallRepository(call_id=uuid4()),
+        call_repository=resolved_call_repository,
         user_repository=user_repository or FakeUserRepository(FakeUser(id=uuid4(), full_name=None, email="x@x.com")),
         usage_repository=usage_repository or FakeUsageRepository(),
         realtime_service=realtime_service or FakeRealtimeService(),
         recording_service=recording_service or FakeRecordingService(),
+        call_lifecycle_service=(
+            call_lifecycle_service
+            or FakeCallLifecycleService(resolved_call_repository)
+        ),
     )
 
 
@@ -343,10 +373,11 @@ async def test_dispatch_service_skips_agent_join_when_recording_already_started(
 
 
 @pytest.mark.anyio
-async def test_dispatch_service_stops_recording_when_sip_participant_leaves() -> None:
+async def test_dispatch_service_ends_call_without_direct_provider_stop_on_sip_leave() -> None:
     recording_service = FakeRecordingService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
+    call_repository.call.status = "connected"
     call_repository.call.recording_egress_id = "egress_123"
     service = build_dispatch_service(
         session,
@@ -355,7 +386,7 @@ async def test_dispatch_service_stops_recording_when_sip_participant_leaves() ->
         recording_service=recording_service,
     )
 
-    await service.handle_participant_left(
+    result = await service.handle_participant_left(
         {
             "event": "participant_left",
             "room": {"name": "room_123"},
@@ -369,14 +400,16 @@ async def test_dispatch_service_stops_recording_when_sip_participant_leaves() ->
         }
     )
 
-    assert recording_service.stop_calls == ["egress_123"]
+    assert result.status == "ending"
+    assert recording_service.stop_calls == []
     assert call_repository.active_by_room_calls == ["room_123"]
 
 
 @pytest.mark.anyio
-async def test_dispatch_service_continues_when_recording_stop_fails(caplog) -> None:
+async def test_dispatch_service_does_not_call_recording_provider_during_sip_leave(caplog) -> None:
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
+    call_repository.call.status = "connected"
     call_repository.call.livekit_room_id = ROOM_NAME_SENTINEL
     call_repository.call.recording_egress_id = "egress_123"
     service = build_dispatch_service(
@@ -405,10 +438,7 @@ async def test_dispatch_service_continues_when_recording_stop_fails(caplog) -> N
     assert session.commits == 1
     assert RECORDING_STOP_SENTINEL not in caplog.text
     assert ROOM_NAME_SENTINEL not in caplog.text
-    assert "event=livekit_recording_stop_failed" in caplog.text
-    assert "operation=stop_room_recording" in caplog.text
-    assert f"call_id={call_repository.call.id}" in caplog.text
-    assert "provider_request_id=egress_123" in caplog.text
+    assert "livekit_recording_stop_failed" not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
 
 

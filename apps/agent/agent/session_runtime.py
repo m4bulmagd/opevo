@@ -310,7 +310,6 @@ class SessionRuntime:
         metadata: DispatchMetadata,
         *,
         duration_seconds: int,
-        recording_bytes_base64: str | None = None,
     ) -> None:
         async with self._finalize_lock:
             if self._finalized:
@@ -329,7 +328,6 @@ class SessionRuntime:
             completion = self._complete_call(
                 metadata,
                 duration_seconds=duration_seconds,
-                recording_bytes_base64=recording_bytes_base64,
                 recovery_items=recovery_items,
             )
             if self._call_ended_publish_attempted:
@@ -367,7 +365,6 @@ class SessionRuntime:
         metadata: DispatchMetadata,
         *,
         duration_seconds: int,
-        recording_bytes_base64: str | None,
         recovery_items: tuple[CallTranscriptItem, ...],
     ) -> bool:
         if self.api_client is None:
@@ -377,7 +374,6 @@ class SessionRuntime:
             call_id=metadata.call_id,
             duration_seconds=duration_seconds,
             transcript=list(recovery_items),
-            recording_bytes_base64=recording_bytes_base64,
         )
         call_payload = payload.model_dump()
         call_payload["dispatch_token"] = metadata.dispatch_token

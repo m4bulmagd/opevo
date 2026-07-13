@@ -1,4 +1,3 @@
-import base64
 import hmac
 from uuid import UUID
 
@@ -26,6 +25,10 @@ from app.services.agent_config_service import (
     AgentConfigService,
     AgentConfigTelephonySyncError,
 )
+from app.repositories.call_repository import CallTransitionError
+from app.repositories.message_repository import MessageRepository
+from app.services.call_lifecycle_service import CallLifecycleService
+from app.services.outbox_service import OutboxService
 from app.services.onboarding_service import OnboardingService
 from app.services.transcript_service import (
     TranscriptCallNotFoundError,
@@ -223,12 +226,31 @@ async def complete_call(
 ) -> AgentCallCompletionResponse:
     transcript_service = TranscriptService(session)
     try:
-        await transcript_service.merge_recovery(
+        recovery_results = await transcript_service.merge_recovery(
             call_id=call_id,
             transcript=payload.transcript,
             expected_user_id=identity.user_id,
             expected_agent_config_id=identity.agent_config_id,
         )
+        ended_call = await CallLifecycleService(session).end_from_agent(
+            call_id=call_id,
+            duration_seconds=payload.duration_seconds,
+        )
+        if ended_call.status == "completed" and any(
+            result.status == "stored" for result in recovery_results
+        ):
+            transcript_version = await MessageRepository(
+                session
+            ).max_sequence_by_call_id(call_id)
+            await OutboxService(session).add(
+                topic="summary.generate",
+                aggregate_type="call-summary",
+                aggregate_id=call_id,
+                idempotency_key=(
+                    f"summary.generate:{call_id}:v{transcript_version}"
+                ),
+                payload={"call_id": str(call_id)},
+            )
         await session.commit()
     except (
         TranscriptCallNotFoundError,
@@ -246,22 +268,30 @@ async def complete_call(
             ),
             detail=exc.code,
         ) from None
+    except CallTransitionError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="call_not_accepting_completion",
+        ) from None
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=(
+                status.HTTP_404_NOT_FOUND
+                if str(exc) == "Call not found"
+                else status.HTTP_409_CONFLICT
+            ),
+            detail=(
+                "call_not_found"
+                if str(exc) == "Call not found"
+                else "call_not_accepting_completion"
+            ),
+        ) from None
 
-    recording_bytes = (
-        base64.b64decode(payload.recording_bytes_base64.encode("utf-8"))
-        if payload.recording_bytes_base64
-        else None
-    )
     queue = get_call_finalization_queue(request)
     try:
-        job_id = await queue.enqueue(
-            {
-                "call_id": str(call_id),
-                "duration_seconds": payload.duration_seconds,
-                "caller_number": payload.caller_number,
-                "recording_bytes": recording_bytes,
-            }
-        )
+        job_id = await queue.enqueue({"call_id": str(call_id)})
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

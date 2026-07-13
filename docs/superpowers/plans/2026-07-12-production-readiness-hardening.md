@@ -563,7 +563,7 @@ Within one transaction:
 
 Change `AgentCallCompletionRequest`, the call-finalization queue payload, `CallCompletionPayload`, `SessionRuntime.finalize()`, and `AgentApiClient.complete_call()` so the JSON body and worker job no longer include `user_id` or `minutes_remaining`. Derive `user_id` only after locking the persisted call, then enrich the internal lifecycle payload for recording paths and notifications. Retain the dispatch metadata balance snapshot only for in-call messaging.
 
-Preserve optional recording transport: when `SessionRuntime.finalize()` receives `recording_bytes_base64`, carry it through `CallCompletionPayload` and `AgentApiClient` so the API router can decode the bytes into the finalization queue payload. Existing LiveKit egress callers may omit it.
+Keep the optional recording transport only as temporary compatibility through Task 9. Task 10 removes it in favor of the approved direct LiveKit egress lifecycle; raw audio blobs cannot satisfy the reference-only transactional-outbox contract.
 
 - [ ] **Step 6: Run concurrency tests ten times**
 
@@ -616,9 +616,9 @@ git commit -m "fix: make usage accounting authoritative and concurrency safe"
 **Interfaces:**
 - Produces: `OutboxService.add(topic: str, aggregate_type: str, aggregate_id: UUID, idempotency_key: str, payload: dict) -> OutboxEvent`.
 - Produces: `OutboxRepository.claim_batch(limit: int, now: datetime) -> list[OutboxEvent]` using `FOR UPDATE SKIP LOCKED`.
-- Supported launch topics: `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `recording.start`, `notification.send`.
+- Task 7 launch topics: `phone.provision`, `phone.enable`, `phone.disable`, and `livekit.dispatch`. Task 10 adds replay-safe `summary.generate` and `recording.stop` topics. Task 12 may add `notification.send` only after private server-owned device-token registration exists.
 - Telephony events all use `aggregate_type="user"` and the internal user UUID as `aggregate_id`; this single namespace preserves provisioning/routing order.
-- Payloads contain internal references only. Task 8 activates the `livekit.dispatch` producer and Task 10 activates recording/notification producers after their replay contracts are implemented.
+- Payloads contain internal references only. Task 8 activates the `livekit.dispatch` producer. Task 10 activates summary generation and recording stop; it persists dashboard notifications locally and deliberately leaves push delivery disabled until Task 12.
 
 - [ ] **Step 1: Write rollback and duplicate-delivery tests**
 
@@ -674,7 +674,7 @@ Only earlier `pending` or `processing` events block a later event for the same a
 
 Write `phone.provision`, `phone.enable`, and `phone.disable` events inside Stripe, onboarding-retry, and agent-configuration transactions. Schedule only the generic delivery job after commit; enqueue failure is nonfatal because PostgreSQL is authoritative. The minute reconciliation poller also claims due/expired events, so a process crash between commit and enqueue does not lose work.
 
-Telnyx provisioning stores the first outbox idempotency key in nullable, uniquely constrained `phone_number_provisionings.provider_operation_key` before provider I/O and passes that stable value as `customer_reference`. Provider replay and a later customer-created retry event reuse the stored key. Reconcile an existing order by that reference before creating one, attach every newly ordered or reconciled number to the disabled connection, and do not mark the outbox event delivered until the `PhoneNumber` exists durably. Pending/in-progress orders remain automatic outbox retries with customer retry disabled; conflicts, malformed orders, missing keys, and manual-review states fail terminally with customer retry disabled, while safe no-purchase and unexpected transient failures may expose retry. Routing delivery alone may enable the number after re-deriving current eligibility, so a stale enable intent cannot override a later cancellation. LiveKit dispatch remains owned by Task 8; post-call recording and notification production remains owned by Task 10.
+Telnyx provisioning stores the first outbox idempotency key in nullable, uniquely constrained `phone_number_provisionings.provider_operation_key` before provider I/O and passes that stable value as `customer_reference`. Provider replay and a later customer-created retry event reuse the stored key. Reconcile an existing order by that reference before creating one, attach every newly ordered or reconciled number to the disabled connection, and do not mark the outbox event delivered until the `PhoneNumber` exists durably. Pending/in-progress orders remain automatic outbox retries with customer retry disabled; conflicts, malformed orders, missing keys, and manual-review states fail terminally with customer retry disabled, while safe no-purchase and unexpected transient failures may expose retry. Routing delivery alone may enable the number after re-deriving current eligibility, so a stale enable intent cannot override a later cancellation. LiveKit dispatch remains owned by Task 8; replay-safe post-call summary and recording-stop work remains owned by Task 10.
 
 Routing delivery always reapplies the authoritative absolute enable/disable provider operation, even when the database projection already matches, then validates the returned connection name before persisting the projection. Provisioning commits its short `running` transition before Telnyx I/O. Terminal-failure logs use the redaction filter's preserved `event`, `operation`, `status`, and `count` fields.
 
@@ -976,21 +976,64 @@ git commit -m "feat: persist live transcripts incrementally"
 
 **Files:**
 - Create: `apps/api/alembic/versions/0011_add_call_state_machine.py`
+- Modify: `apps/api/app/core/config.py`
 - Modify: `apps/api/app/models/call.py`
+- Modify: `apps/api/app/models/notification.py`
+- Modify: `apps/api/app/providers/livekit_recording/base.py`
+- Modify: `apps/api/app/providers/livekit_recording/livekit.py`
 - Modify: `apps/api/app/repositories/call_repository.py`
+- Modify: `apps/api/app/repositories/notification_repository.py`
+- Modify: `apps/api/app/routers/agent.py`
+- Modify: `apps/api/app/schemas/calls.py`
 - Create: `apps/api/app/services/call_reconciliation_service.py`
+- Create: `apps/api/app/services/livekit_dispatch_lock.py`
 - Create: `apps/api/app/workers/jobs/call_reconciliation.py`
 - Modify: `apps/api/app/workers/arq_worker.py`
+- Modify: `apps/api/app/workers/call_finalization_queue.py`
+- Modify: `apps/api/app/workers/jobs/call_finalization.py`
+- Modify: `apps/api/app/workers/jobs/outbox_delivery.py`
+- Modify: `apps/api/app/workers/jobs/outbox_topics.py`
 - Modify: `apps/api/app/services/call_lifecycle_service.py`
 - Modify: `apps/api/app/services/livekit_dispatch_service.py`
-- Create: `apps/api/tests/services/test_call_reconciliation_service.py`
-- Modify: `apps/api/tests/workers/test_lifecycle_edge_cases.py`
+- Modify: `apps/api/app/services/livekit_recording_service.py`
+- Modify: `apps/api/app/services/outbox_service.py`
+- Modify: `apps/api/app/services/usage_accounting_service.py`
+- Modify: `apps/agent/agent/api_client.py`
+- Modify: `apps/agent/agent/schemas.py`
+- Modify: `apps/agent/agent/session_runtime.py`
+- Modify: `docs/architecture/integration-endpoints.md`
+- Modify: `docs/superpowers/specs/2026-03-28-recording-lifecycle-design.md`
+- Create: `apps/api/tests/integration/test_call_state_machine_concurrency.py`
+- Modify: `apps/api/tests/integration/test_outbox_delivery.py`
+- Modify: `apps/api/tests/integration/test_usage_concurrency.py`
+- Modify: `apps/api/tests/agent/test_call_completion.py`
 - Modify: `apps/api/tests/calls/test_call_lifecycle.py`
+- Modify: `apps/api/tests/livekit/test_dispatch_service.py`
+- Modify: `apps/api/tests/livekit/test_durable_dispatch_service.py`
+- Create: `apps/api/tests/providers/test_livekit_recording_provider.py`
+- Create: `apps/api/tests/services/test_call_reconciliation_service.py`
+- Modify: `apps/api/tests/services/test_outbox_service.py`
+- Modify: `apps/api/tests/services/test_safe_service_exceptions.py`
+- Create: `apps/api/tests/test_call_state_machine_migration.py`
+- Modify: `apps/api/tests/test_integrity_models.py`
+- Modify: `apps/api/tests/workers/test_arq_worker.py`
+- Modify: `apps/api/tests/workers/test_lifecycle_edge_cases.py`
+- Modify: `apps/api/tests/workers/test_post_call_jobs.py`
+- Modify: `apps/agent/tests/test_api_client.py`
+- Modify: `apps/agent/tests/test_session_runtime.py`
 
 **Interfaces:**
 - Call states: `pending`, `connected`, `ending`, `finalizing`, `completed`, `failed`.
 - Produces: `CallRepository.transition(call_id, from_states: set[str], to_state: str, failure_code: str | None = None) -> Call` with a locked row.
+- `from_states` is an optimistic precondition, not authority to bypass the legal graph: `pending -> connected|failed`, `connected -> ending`, `ending -> finalizing`, `finalizing -> completed|failed`; terminal states never regress.
+- Produces idempotent lifecycle operations that freeze the first durable end facts, claim a generation before finalization work, and complete only when the caller presents the current attempt generation.
 - Produces: `CallReconciliationService.reconcile(now: datetime, limit: int = 100) -> ReconciliationResult`.
+- Reconciliation uses `call_reconciliation_connected_stale_seconds=3720` as an operational stuck-call fail-safe. Task 11 later adds the enforced customer call limit and validates that the stale timeout remains at least 120 seconds larger.
+- Adds reference-only outbox topics `summary.generate` on aggregate `call-summary` and `recording.stop` on aggregate `call-recording`; separate aggregates prevent a retrying summary from delaying recording stop.
+- Supported topics after Task 10 are `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, and `recording.stop`; remove the undeliverable `recording.start` and `notification.send` placeholders.
+- `completed` means usage, call facts, one opaque dashboard notification, and required provider intents committed atomically. It does not mean Gemini or LiveKit delivery already succeeded.
+- Removes `recording_bytes_base64` and raw Redis recording bytes. Direct LiveKit room-composite egress is the only launch recording path.
+- Firebase push stays disabled here. Task 12 owns private device-token registration and any future `notification.send` producer.
 
 - [ ] **Step 1: Write legal-transition tests**
 
@@ -1017,33 +1060,92 @@ async def test_legal_call_transition(session, user, source: str, target: str):
 
 Assert `completed -> finalizing` and `failed -> connected` are rejected.
 
-- [ ] **Step 2: Write stale-state reconciliation tests**
+Also assert every actual transition updates `state_changed_at`, `failed` requires an allowlisted `failure_code`, terminal states have no outgoing edges, and `from_states` cannot authorize an illegal graph edge.
 
-Cover pending dispatch older than two minutes, connected call without participant older than maximum duration plus two minutes, finalizing call older than five minutes, and completed call. Assert retries for recoverable states, explicit failure for terminal states, and no mutation of completed calls.
+- [ ] **Step 2: Write migration and PostgreSQL transition tests**
 
-- [ ] **Step 3: Run tests and verify failure**
+Migration `0011` preflights unknown statuses and duplicate call-notification identities, then adds `state_changed_at`, `finalization_attempt_count`, `last_reconciled_at`, the exact six-state check, a nonnegative-attempt check, failure/status consistency, a partial stale-work index, and uniqueness for `(notifications.call_id, notifications.notification_type)`. Backfill all six states from `started_at`, `ended_at`, `updated_at`, and `created_at` without editing applied migration `0008`.
 
-Run: `cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/services/test_call_reconciliation_service.py tests/workers/test_lifecycle_edge_cases.py -v`
+Prove a blank-to-head PostgreSQL upgrade, all six backfills, constraint rejection, and two-worker transition/claim races. Replace obsolete `awaiting_accounting` fixtures with real `finalizing` calls and never weaken the domain constraint to preserve a test-only state.
+
+- [ ] **Step 3: Write durable end/finalization tests**
+
+Agent completion must merge recovery, freeze the first duration/end time, apply `connected -> ending`, commit before Redis, and enqueue only `{ "call_id": "..." }`. A queue outage returns `503` with transcript and end facts still durable. A valid call-scoped completion may repair a missing agent-join webhook by establishing bounded connection timestamps before ending; generic repository callers may not use an illegal `pending -> ending` edge.
+
+SIP leave applies the same end invariant for every matching connected call, including calls without recording metadata, and commits before any best-effort provider wakeup. Duplicate leave/completion cannot overwrite the first frozen end facts.
+
+Finalization phase A commits `ending -> finalizing`, increments the attempt generation, and releases all locks. Phase B accepts only that generation and atomically creates one debit, one opaque dashboard notification, `summary.generate`, conditional `phone.disable`, a `recording.stop` backstop when an egress ID exists, and `finalizing -> completed`. A forced rollback leaves no debit or partial intent. Remove the Redis correctness lock.
+
+- [ ] **Step 4: Write stale-state reconciliation tests**
+
+Cover pending dispatch older than two minutes, connected hard-age timeout at 3,720 seconds, ending grace at one minute, finalizing lease expiry at five minutes, attempt generation races, five-attempt exhaustion, and completed/failed calls. Assert pending becomes `failed/dispatch_timeout`; connected becomes ending; ending/finalizing are claimed once with `SKIP LOCKED`; charged legacy rows repair to completed instead of failing; terminal calls never mutate.
+
+Pending timeout must acquire the same `livekit.dispatch:{call_id}` advisory lock before locking and failing the call, so it cannot race an in-flight provider create or reverse lock order. The reconciliation worker invokes provider-free finalization directly after releasing its claim transaction.
+
+- [ ] **Step 5: Write post-call outbox replay tests**
+
+`summary.generate` loads the complete ordered PostgreSQL transcript and maximum sequence in a short snapshot transaction, calls Gemini with no open business transaction, then rechecks the maximum sequence and persists structured summary data plus its coverage watermark under a fresh call lock. Empty transcript records watermark `0`; provider failure and a transcript change during provider I/O are retryable. An existing summary is idempotent only when its watermark covers the current durable maximum. Completed-call recovery that stores a new sequence writes a new versioned summary intent without placing transcript text in the payload.
+
+`recording.stop` uses an adapter-level `ensure_stopped(egress_id)` contract: missing or terminal egress is already successful; active/starting/ending egress is stopped and rechecked; uncertain provider failures retry. It performs no I/O with an ORM transaction open. A retrying summary must not block recording stop. `phone.disable` continues to re-derive current routing eligibility. No push notification is sent.
+
+- [ ] **Step 6: Run tests and verify failure**
+
+Run: `cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/services/test_call_reconciliation_service.py tests/calls/test_call_lifecycle.py tests/workers/test_lifecycle_edge_cases.py tests/providers/test_livekit_recording_provider.py -v`
 
 Expected: state transitions and reconciliation do not exist.
 
-- [ ] **Step 4: Add lifecycle fields**
+- [ ] **Step 7: Add lifecycle fields and the transition module**
 
-Add `state_changed_at`, `finalization_attempt_count`, and `last_reconciled_at`; reuse the `failure_code` introduced by Task 8. Backfill existing `pending`, `connected`, `completed`, and `failed` rows from their timestamps. A validated SIP leave drives `connected -> ending` before finalization is queued.
+Implement migration `0011`, model-aligned constraints/indexes, the nullable nonnegative summary transcript watermark, graph-enforcing locked transitions, state timestamp updates in every direct atomic mutator, notification get-or-create semantics, and positively constrained operational reconciliation settings. New usage debits require `finalizing`; an existing idempotent debit remains readable for repair.
 
-- [ ] **Step 5: Make finalization a short database transaction**
+- [ ] **Step 8: Persist end facts before Redis and make finalization provider-free**
 
-Transition to `finalizing`, debit usage, persist transcript recovery items, and enqueue summary/recording/notification outbox work. Do not hold a database or Redis lock while calling Gemini, S3, Firebase, Telnyx, or LiveKit.
+Make completion and SIP leave persist `ending`, `ended_at`, and duration before queue handoff. The queue and job carry only call ID. Claim a durable finalization generation in one short transaction, then complete accounting, dashboard notification, provider intents, and state in a second short transaction. Do not hold a database or Redis lock while calling Gemini, storage, Firebase, Telnyx, or LiveKit. Remove the legacy recording-blob transport from API and agent contracts.
 
-- [ ] **Step 6: Register periodic reconciliation**
+- [ ] **Step 9: Implement replay-safe summary and recording-stop handlers**
 
-Run the job every minute. Claim at most 100 calls per execution with `SKIP LOCKED`, record metrics for recovered and failed calls, and cap per-call automated recovery at five attempts.
+Replace the two undeliverable placeholder topics with the reference-only topics and provider adapters described above. Keep recording start on the existing Task 8 commit-before-provider path because recording failure is explicitly nonblocking. If start returns after the call leaves `connected`, reconcile the egress immediately; if immediate cleanup is uncertain, attach only the late provider references without changing terminal state/end/accounting and persist a versioned `recording.stop` intent. Persist dashboard notification data as `{ "event": "call_completed", "call_id": "..." }` only.
 
-- [ ] **Step 7: Run API tests and commit**
+- [ ] **Step 10: Register periodic reconciliation**
+
+Run the job every minute. Claim at most 100 calls per execution with `SKIP LOCKED`, record safe structured metrics for recovered and failed calls, and cap total finalization attempts at five. A committed claim updates its lease/attempt generation before work, so crashes are visible and stale workers cannot overwrite newer claims.
+
+- [ ] **Step 11: Run migrations, all affected suites, and commit**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
-git add apps/api/alembic/versions/0008_add_outbox_and_call_lifecycle.py apps/api/app/models/call.py apps/api/app/repositories/call_repository.py apps/api/app/services/call_reconciliation_service.py apps/api/app/workers/jobs/call_reconciliation.py apps/api/app/workers/arq_worker.py apps/api/app/services/call_lifecycle_service.py apps/api/tests/services/test_call_reconciliation_service.py apps/api/tests/workers/test_lifecycle_edge_cases.py apps/api/tests/calls/test_call_lifecycle.py
+cd ../..
+# Generate the complete tracked Task 10 path set from its fixed base. This
+# includes every modified/deleted API and agent path plus only the three named
+# tracked docs; notably it stages deletion of the obsolete recording worker.
+git diff --name-only --diff-filter=ACDMRTUXB -z c3f8fa6 -- \
+  apps/api apps/agent \
+  docs/architecture/integration-endpoints.md \
+  docs/superpowers/specs/2026-03-28-recording-lifecycle-design.md \
+  docs/superpowers/plans/2026-07-12-production-readiness-hardening.md \
+  | xargs -0 -r git add --
+
+# Untracked Task 10 additions are explicit so unrelated workspace files cannot
+# enter the commit.
+git add -- \
+  apps/api/alembic/versions/0011_add_call_state_machine.py \
+  apps/api/app/services/call_reconciliation_service.py \
+  apps/api/app/services/livekit_dispatch_lock.py \
+  apps/api/app/workers/jobs/call_reconciliation.py \
+  apps/api/tests/calls/test_call_finalization_state_machine.py \
+  apps/api/tests/calls/test_call_state_machine.py \
+  apps/api/tests/integration/test_call_state_machine_concurrency.py \
+  apps/api/tests/services/test_call_reconciliation_service.py \
+  apps/api/tests/test_call_state_machine_migration.py \
+  apps/api/tests/test_reconciliation_settings.py \
+  apps/api/tests/workers/test_call_finalization_worker.py \
+  apps/api/tests/workers/test_post_call_outbox_handlers.py
+
+# Never stage these user-owned files:
+# docs/Verdict.md
+# docs/landing_page.png
+# docs/landing_page.webp
+git diff --cached --name-status
 git commit -m "feat: reconcile calls through a durable state machine"
 ```
 
@@ -1061,6 +1163,7 @@ git commit -m "feat: reconcile calls through a durable state machine"
 
 **Interfaces:**
 - Adds `max_call_duration_seconds` with a production default of `3600`.
+- Validates `call_reconciliation_connected_stale_seconds >= max_call_duration_seconds + 120`.
 - Dispatch metadata contains `allowed_duration_seconds`, calculated as `min(max_call_duration_seconds, minutes_remaining * 60)`.
 - Produces: `SessionRuntime.enforce_call_limit(metadata, disconnect) -> None`.
 

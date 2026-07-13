@@ -36,7 +36,6 @@ async def test_complete_call_prefers_dispatch_token_and_excludes_auth_and_phone_
         "duration_seconds": 120,
         "transcript": [{"speaker": "CALLER", "text": "hello"}],
         "caller_number": "+1234567890",
-        "recording_bytes_base64": "cmVjb3JkaW5nLWJ5dGVz",
         "dispatch_token": dispatch_token,
     }
 
@@ -78,7 +77,7 @@ async def test_complete_call_prefers_dispatch_token_and_excludes_auth_and_phone_
     assert "user_id" not in data
     assert "minutes_remaining" not in data
     assert data["transcript"] == [{"speaker": "CALLER", "text": "hello"}]
-    assert data["recording_bytes_base64"] == "cmVjb3JkaW5nLWJ5dGVz"
+    assert "recording_bytes_base64" not in data
 
 
 @pytest.mark.anyio

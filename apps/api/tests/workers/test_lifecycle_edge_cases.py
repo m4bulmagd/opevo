@@ -1,160 +1,26 @@
-import logging
-import pytest
+"""Edge cases for the durable two-phase call lifecycle."""
+
+from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
+from sqlalchemy import select
+
 from app.models.call import Call
+from app.models.outbox_event import OutboxEvent
 from app.models.usage_ledger import UsageLedger
-from app.services.call_lifecycle_service import CallFinalizationResult
-from app.services.recording_service import RecordingResult, RecordingService
-
-import sys
-import importlib.util
-from pathlib import Path
-
-_post_call_jobs_path = Path(__file__).parent / "test_post_call_jobs.py"
-_spec = importlib.util.spec_from_file_location("test_post_call_jobs", _post_call_jobs_path)
-_module = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_module)
-build_lifecycle_service = _module.build_lifecycle_service
+from app.repositories.call_repository import CallTransitionError
+from app.services.call_lifecycle_service import CallLifecycleService
 
 
-class FakeFailingStorageProvider:
-    async def upload_bytes(self, *, object_key: str, data: bytes, content_type: str):
-        raise OSError("STORAGE_AUTHORIZATION_SENTINEL")
-
-
-class FakeExplodingRecordingService:
-    async def store_recording(self, payload: dict):
-        raise RuntimeError("OUTER_RECORDING_TRANSCRIPT_SENTINEL")
-
-
-# T5-1: Recording upload failure (provider raises) — call should still complete
-@pytest.mark.anyio
-async def test_recording_upload_failure_call_still_completes(
-    db_session,
-    active_user,
-    caplog,
-) -> None:
-    call = Call(
-        id=uuid4(),
-        user_id=active_user.id,
-        caller_number="+33111111111",
-        status="pending",
-    )
-    db_session.add(call)
-    await db_session.commit()
-
-    service = build_lifecycle_service(
-        db_session,
-        recording_service=RecordingService(provider=FakeFailingStorageProvider()),
-    )
-
-    with caplog.at_level(logging.ERROR):
-        result = await service.finalize_call(
-            {
-                "call_id": str(call.id),
-                "duration_seconds": 61,
-                "caller_number": "+33111111111",
-                "transcript": [{"speaker": "CALLER", "text": "Hello"}],
-                "recording_bytes": b"fake-audio",
-            }
-        )
-
-    refreshed_call = await db_session.get(Call, call.id)
-    assert refreshed_call.status == "completed"
-    assert result.recording_job_enqueued is False
-    assert result.recording_key is None
-    assert "STORAGE_AUTHORIZATION_SENTINEL" not in caplog.text
-    assert "event=recording_storage_failed" in caplog.text
-    assert "operation=upload_recording" in caplog.text
-    assert f"call_id={call.id}" in caplog.text
-    assert f"user_id={active_user.id}" in caplog.text
-    assert all(record.exc_info is None for record in caplog.records)
-
-
-@pytest.mark.anyio
-async def test_outer_recording_failure_does_not_render_provider_exception(
-    db_session,
-    active_user,
-    caplog,
-) -> None:
-    call = Call(
-        id=uuid4(),
-        user_id=active_user.id,
-        caller_number="+33111111111",
-        status="pending",
-    )
-    db_session.add(call)
-    await db_session.commit()
-    service = build_lifecycle_service(
-        db_session,
-        recording_service=FakeExplodingRecordingService(),
-    )
-
-    with caplog.at_level(logging.ERROR):
-        result = await service.finalize_call(
-            {
-                "call_id": str(call.id),
-                "duration_seconds": 61,
-                "caller_number": "+33111111111",
-                "transcript": [{"speaker": "CALLER", "text": "Hello"}],
-            }
-        )
-
-    assert result.recording_job_enqueued is False
-    assert "OUTER_RECORDING_TRANSCRIPT_SENTINEL" not in caplog.text
-    assert "event=call_recording_upload_failed" in caplog.text
-    assert "operation=store_recording" in caplog.text
-    assert f"call_id={call.id}" in caplog.text
-    assert f"user_id={active_user.id}" in caplog.text
-    assert all(record.exc_info is None for record in caplog.records)
-
-
-# T5-2: Empty transcript — should complete with no messages
-@pytest.mark.anyio
-async def test_empty_transcript_completes_with_no_messages(db_session, active_user) -> None:
-    from sqlalchemy import select
-    from app.models.call_message import CallMessage
-
-    call = Call(
-        id=uuid4(),
-        user_id=active_user.id,
-        caller_number="+33111111111",
-        status="pending",
-    )
-    db_session.add(call)
-    await db_session.commit()
-
-    service = build_lifecycle_service(db_session)
-
-    result = await service.finalize_call(
-        {
-            "call_id": str(call.id),
-            "duration_seconds": 61,
-            "caller_number": "+33111111111",
-            "transcript": [],
-        }
-    )
-
-    refreshed_call = await db_session.get(Call, call.id)
-    assert refreshed_call.status == "completed"
-
-    messages = (
-        await db_session.execute(
-            select(CallMessage).where(CallMessage.call_id == call.id)
-        )
-    ).scalars().all()
-    assert messages == []
-
-
-# T5-3: Zero duration call (duration_seconds=0) — minutes_charged should be 1
 @pytest.mark.anyio
 async def test_zero_duration_call_charges_one_minute(db_session, active_user) -> None:
     call = Call(
-        id=uuid4(),
         user_id=active_user.id,
-        caller_number="+33111111111",
-        status="pending",
+        status="ending",
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC),
+        duration_seconds=0,
     )
     db_session.add_all(
         [
@@ -169,86 +35,76 @@ async def test_zero_duration_call_charges_one_minute(db_session, active_user) ->
         ]
     )
     await db_session.commit()
+    lifecycle = CallLifecycleService(db_session)
 
-    service = build_lifecycle_service(db_session)
-
-    result = await service.finalize_call(
-        {
-            "call_id": str(call.id),
-            "duration_seconds": 0,
-            "caller_number": "+33111111111",
-            "transcript": [],
-        }
+    claim = await lifecycle.claim_finalization(call.id)
+    result = await lifecycle.complete_finalization(
+        call.id,
+        generation=claim.generation,
     )
 
     assert result.minutes_charged == 1
-    refreshed_call = await db_session.get(Call, call.id)
-    assert refreshed_call.minutes_charged == 1
-    assert refreshed_call.status == "completed"
+    assert (await db_session.get(Call, call.id)).status == "completed"
 
 
-# T5-4: Call not found (bad call_id) — should raise ValueError
 @pytest.mark.anyio
-async def test_call_not_found_raises_value_error(db_session, active_user) -> None:
-    service = build_lifecycle_service(db_session)
+async def test_missing_call_fails_without_partial_work(db_session) -> None:
+    call_id = uuid4()
+    lifecycle = CallLifecycleService(db_session)
 
     with pytest.raises(ValueError, match="Call not found"):
-        await service.finalize_call(
-            {
-                "call_id": str(uuid4()),
-                "duration_seconds": 60,
-                "caller_number": "+33111111111",
-                "transcript": [],
-            }
+        await lifecycle.claim_finalization(call_id)
+
+    assert await db_session.scalar(
+        select(OutboxEvent).where(OutboxEvent.aggregate_id == call_id)
+    ) is None
+
+
+@pytest.mark.anyio
+async def test_failed_call_cannot_accept_late_agent_completion(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(
+        user_id=active_user.id,
+        status="failed",
+        failure_code="dispatch_timeout",
+    )
+    db_session.add(call)
+    await db_session.commit()
+    call_id = call.id
+
+    with pytest.raises(CallTransitionError, match="Failed call"):
+        await CallLifecycleService(db_session).end_from_agent(
+            call_id=call_id,
+            duration_seconds=12,
         )
 
+    await db_session.rollback()
+    stored = await db_session.get(Call, call_id)
+    assert stored.status == "failed"
+    assert stored.ended_at is None
 
-# T5-5: Already-completed retries still preserve late transcript recovery.
+
 @pytest.mark.anyio
-async def test_already_completed_call_returns_early(db_session, active_user) -> None:
-    from sqlalchemy import select
-    from app.models.call_message import CallMessage
-
+async def test_completed_call_retry_returns_existing_charge(
+    db_session,
+    active_user,
+) -> None:
     call = Call(
-        id=uuid4(),
         user_id=active_user.id,
-        caller_number="+33111111111",
         status="completed",
+        duration_seconds=61,
         minutes_charged=2,
-        summary_text="Previous summary",
+        finalization_attempt_count=1,
     )
     db_session.add(call)
     await db_session.commit()
 
-    service = build_lifecycle_service(db_session)
-
-    result = await service.finalize_call(
-        {
-            "call_id": str(call.id),
-            "duration_seconds": 120,
-            "caller_number": "+33111111111",
-            "transcript": [
-                {
-                    "sequence_number": 1,
-                    "speaker": "CALLER",
-                    "text": "Late recovery must be saved",
-                }
-            ],
-        }
+    result = await CallLifecycleService(db_session).complete_finalization(
+        call.id,
+        generation=1,
     )
 
     assert result.already_completed is True
     assert result.minutes_charged == 2
-    assert result.summary_job_enqueued is False
-    assert result.recording_job_enqueued is False
-    assert result.notification_job_enqueued is False
-    assert result.summary_text == "Previous summary"
-
-    messages = (
-        await db_session.execute(
-            select(CallMessage).where(CallMessage.call_id == call.id)
-        )
-    ).scalars().all()
-    assert [(message.sequence_number, message.text) for message in messages] == [
-        (1, "Late recovery must be saved")
-    ]

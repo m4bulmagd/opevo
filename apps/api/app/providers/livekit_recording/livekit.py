@@ -9,6 +9,21 @@ class LiveKitRecordingProviderError(Exception):
 
 
 class LiveKitRecordingProvider(RecordingProvider):
+    _TERMINAL_STATUSES = frozenset(
+        {
+            api.EgressStatus.EGRESS_COMPLETE,
+            api.EgressStatus.EGRESS_FAILED,
+            api.EgressStatus.EGRESS_ABORTED,
+            api.EgressStatus.EGRESS_LIMIT_REACHED,
+        }
+    )
+    _STOPPABLE_STATUSES = frozenset(
+        {
+            api.EgressStatus.EGRESS_STARTING,
+            api.EgressStatus.EGRESS_ACTIVE,
+            api.EgressStatus.EGRESS_ENDING,
+        }
+    )
     def __init__(
         self,
         *,
@@ -68,3 +83,34 @@ class LiveKitRecordingProvider(RecordingProvider):
             await self.egress_client.stop_egress(request)
         except Exception as exc:  # pragma: no cover - exercised by tests via wrapping
             raise LiveKitRecordingProviderError(str(exc)) from exc
+
+    async def ensure_stopped(self, egress_id: str) -> None:
+        info = await self._get_egress(egress_id)
+        if info is None or info.status in self._TERMINAL_STATUSES:
+            return
+        if info.status not in self._STOPPABLE_STATUSES:
+            raise LiveKitRecordingProviderError("Egress status is not stoppable")
+
+        await self.stop_room_recording(egress_id=egress_id)
+        refreshed = await self._get_egress(egress_id)
+        if refreshed is None or refreshed.status in self._TERMINAL_STATUSES:
+            return
+        raise LiveKitRecordingProviderError("Egress stop is not terminal")
+
+    async def _get_egress(self, egress_id: str):
+        try:
+            response = await self.egress_client.list_egress(
+                api.ListEgressRequest(egress_id=egress_id)
+            )
+        except Exception as exc:
+            raise LiveKitRecordingProviderError(str(exc)) from exc
+        matches = [
+            item
+            for item in response.items
+            if getattr(item, "egress_id", None) == egress_id
+        ]
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise LiveKitRecordingProviderError("Egress identity is ambiguous")
+        return matches[0]

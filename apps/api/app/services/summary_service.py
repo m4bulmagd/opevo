@@ -27,7 +27,7 @@ class SummaryService:
 
         try:
             structured = await self.provider.generate_summary(transcript)
-            data = self._validate_structured_summary(structured)
+            data = self.validate_structured_summary(structured)
         except Exception as exc:
             report_safe_exception(
                 logger,
@@ -59,7 +59,7 @@ class SummaryService:
         ]
 
     @staticmethod
-    def _validate_structured_summary(summary: StructuredSummary | dict) -> dict | None:
+    def validate_structured_summary(summary: StructuredSummary | dict) -> dict | None:
         if isinstance(summary, StructuredSummary):
             data = {
                 "summary_text": summary.summary_text,

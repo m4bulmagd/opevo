@@ -12,6 +12,7 @@ from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.services.livekit_dispatch_service import LiveKitDispatchService
+from app.workers.jobs.outbox_topics import deliver_recording_stop
 
 
 class _ForbiddenDirectDispatch:
@@ -51,6 +52,9 @@ class _Recording:
     async def stop_room_recording(self, *, egress_id: str) -> None:
         self.stops.append(egress_id)
 
+    async def ensure_stopped(self, egress_id: str) -> None:
+        self.stops.append(egress_id)
+
 
 class _CommitAwareRecording(_Recording):
     def __init__(self, session) -> None:
@@ -81,8 +85,17 @@ class _CompletingRecording(_Recording):
             call = await session.get(Call, call_id)
             assert call is not None
             call.status = "completed"
+            call.ended_at = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
+            call.duration_seconds = 17
+            call.minutes_charged = 1
             await session.commit()
         return recording
+
+
+class _FailingCleanupRecording(_CompletingRecording):
+    async def ensure_stopped(self, egress_id: str) -> None:
+        self.stops.append(egress_id)
+        raise RuntimeError("cleanup unavailable")
 
 
 class _Pool:
@@ -388,4 +401,74 @@ async def test_recording_metadata_is_not_orphaned_when_completion_races_provider
     await db_session.refresh(call)
     assert result.status == "connected"
     assert call.status == "completed"
-    assert call.recording_egress_id == "egress-1"
+    assert call.recording_egress_id is None
+    assert recording.stops == ["egress-1"]
+
+
+@pytest.mark.anyio
+async def test_failed_immediate_orphan_cleanup_persists_reference_only_retry(
+    db_session,
+) -> None:
+    await _seed_eligible_user(db_session)
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    recording = _FailingCleanupRecording(session_factory)
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=_Realtime(),
+        recording_service=recording,
+    )
+    await service.handle_participant_joined(_sip_join())
+    call = await db_session.scalar(select(Call))
+    assert call is not None
+    call_id = call.id
+
+    result = await service.handle_participant_joined(
+        {
+            "event": "participant_joined",
+            "room": {"name": "room-1"},
+            "participant": {
+                "identity": f"agent-call-{call_id}",
+                "kind": "AGENT",
+                "attributes": {},
+            },
+        }
+    )
+
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert result.status == "connected"
+    assert stored.status == "completed"
+    assert stored.ended_at.replace(tzinfo=UTC) == datetime(
+        2026, 7, 13, 12, 0, tzinfo=UTC
+    )
+    assert stored.duration_seconds == 17
+    assert stored.minutes_charged == 1
+    assert stored.recording_egress_id == "egress-1"
+    assert stored.recording_object_key.endswith(f"/{call_id}.ogg")
+    intent = await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.topic == "recording.stop",
+            OutboxEvent.aggregate_id == call_id,
+        )
+    )
+    assert intent is not None
+    assert intent.aggregate_type == "call-recording"
+    assert intent.payload == {"call_id": str(call_id)}
+
+    class RetryRecordingProvider:
+        def __init__(self) -> None:
+            self.stops: list[str] = []
+
+        async def ensure_stopped(self, egress_id: str) -> None:
+            self.stops.append(egress_id)
+
+    retry_provider = RetryRecordingProvider()
+    await deliver_recording_stop(
+        {
+            "session_factory": session_factory,
+            "livekit_recording_provider": retry_provider,
+        },
+        intent,
+    )
+    assert retry_provider.stops == ["egress-1"]

@@ -42,6 +42,12 @@ def test_models_expose_exact_integrity_constraint_names() -> None:
     assert "ck_subscriptions_plan_tier_allowed" in _constraint_names(Subscription)
     assert "ck_calls_duration_seconds_nonnegative" in _constraint_names(Call)
     assert "ck_calls_minutes_charged_nonnegative" in _constraint_names(Call)
+    assert "ck_calls_status_allowed" in _constraint_names(Call)
+    assert (
+        "ck_calls_finalization_attempt_count_nonnegative"
+        in _constraint_names(Call)
+    )
+    assert "ck_calls_failure_status_consistent" in _constraint_names(Call)
     assert "ck_phone_number_provisionings_status_allowed" in _constraint_names(
         PhoneNumberProvisioning
     )

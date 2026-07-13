@@ -1,151 +1,109 @@
 # Recording Lifecycle Design
 
 **Date:** 2026-03-28
+**Updated:** 2026-07-13
 
-**Goal:** Finish the backend recording lifecycle for MVP by replacing the unused API-side recording blob path with LiveKit-managed mixed-call recording, while keeping retention entirely in the S3 bucket lifecycle and returning `recording_url = null` when recordings have expired.
+**Goal:** Use LiveKit-managed mixed-call recording as the only launch recording path, keep raw media out of the agent/API/Redis boundary, and make stop delivery recoverable through durable reference-only intent.
 
-## Problem
+## Decision
 
-The backend can currently store recording bytes sent through `POST /api/agent/calls/{call_id}/complete`, but the live agent path never sends any recording bytes. As a result:
+Use LiveKit Room Composite Egress with `audio_only=true` and direct S3-compatible file output.
 
-- real calls persist transcripts and summaries but not audio recordings
-- the bucket remains empty for old calls
-- the current recording path is only exercised in tests with synthetic `recording_bytes`
+The application does not upload audio from the agent. There is no recording blob in the completion request, no raw recording payload in Redis or the outbox, and no direct recording-upload worker. The API stores only provider references and mints short-lived customer access URLs at read time.
 
-For MVP, we want one mixed recording per call, not per-speaker tracks, and we do not want the app to own retention cleanup.
+This produces one mixed recording per call, avoids large application payloads, and leaves object retention with the bucket lifecycle policy.
 
-## Requirements
+## Lifecycle
 
-- Record one full mixed call audio file per LiveKit room.
-- Do not capture or persist separate caller/agent tracks.
-- Do not relay large base64 audio blobs through the agent completion API for live calls.
-- Store recordings in the existing S3-compatible bucket.
-- Treat the bucket lifecycle policy as the only 30-day retention mechanism.
-- Keep calls and transcripts after recording expiry.
-- Return `recording_url = null` if the object no longer exists or access cannot be minted.
+### Start
 
-## Recommended Approach
+After the expected dispatched agent participant connects, the API first commits `pending -> connected`. With no business transaction open, it starts Room Composite Egress and requests direct output to the recordings bucket.
 
-Use LiveKit Room Composite Egress with `audio_only=true` and direct file output to the recordings bucket.
+On provider success, a fresh locked lookup persists metadata only if the call is still `connected` and has no recording attached:
 
-Why this approach:
-
-- It matches the desired output: one mixed call recording.
-- It avoids moving large audio payloads through the agent/API boundary.
-- It aligns naturally with room lifecycle and existing LiveKit infrastructure.
-- It keeps retention where you want it: on the bucket, not in app jobs.
-
-## Architecture
-
-### Call Start
-
-When the call session starts, the backend starts a LiveKit Room Composite Egress for the room:
-
-- egress type: `RoomComposite`
-- mode: `audio_only=true`
-- output: direct file output to the configured S3-compatible recordings bucket
-
-The backend persists enough metadata on the call row to find the recording later:
-
-- `recording_url`
 - `recording_object_key`
 - `recording_egress_id`
+- `recording_url` when supplied by the provider
 
-`recording_url` remains useful as a stored reference, but user-facing access still comes from fresh signed URLs minted at read time.
+If the call became non-connected while start was in flight, the returned egress is reconciled immediately through `ensure_stopped(egress_id)`. When that succeeds, recording metadata may remain absent. When immediate cleanup is uncertain, the backend attaches the late egress/object references only for cleanup and commits a versioned `recording.stop` intent. This never regresses or rewrites terminal state, end facts, usage accounting, or finalization generation. Start and cleanup failures are reported with safe metadata and do not block the conversation.
 
-### Call End
+### End facts and stop intent
 
-No recording bytes are sent from the agent to the API for normal live calls.
+Agent completion and SIP leave share the durable end invariant:
 
-The existing queue-backed call finalization flow continues to own:
+- the first accepted `ended_at` and `duration_seconds` win
+- the call commits `ending` before any Redis wakeup
+- if an egress ID is known, the same transaction creates a reference-only `recording.stop` event on aggregate `call-recording`
 
-- transcript persistence
-- summary generation
-- usage deduction
-- notification creation
+Finalization phase B creates the same idempotent stop intent as a backstop. The event payload is only:
 
-Recording persistence for live calls is handled through egress metadata rather than uploaded call-completion payload bytes.
+```json
+{"call_id":"<internal-call-uuid>"}
+```
 
-### Call Detail Read
+It never contains an egress credential, object URL, transcript, customer data, or audio bytes.
 
-`GET /api/calls/{call_id}` continues to mint a fresh signed URL from the object key.
+### Stop delivery
 
-If the object is gone because the bucket lifecycle has expired it, or the storage provider cannot mint access for an object-not-found style reason:
+The `recording.stop` handler:
 
-- the API returns `recording_url = null`
-- the call and transcript still remain available
+1. validates that the event topic, aggregate type, aggregate ID, and payload call ID are identical;
+2. loads the current egress ID in a short PostgreSQL snapshot and closes the transaction;
+3. calls `ensure_stopped(egress_id)` with no ORM transaction open.
 
-## Data Model
+`ensure_stopped` lists the egress and treats missing or terminal state as success. For starting, active, or ending state it requests stop and rechecks. Uncertain provider outcomes remain retryable through the transactional outbox.
 
-Extend `calls` with:
+Summary and recording stop use separate aggregate namespaces (`call-summary` and `call-recording`), so a retrying summary cannot delay recording cleanup.
 
-- `recording_object_key: nullable string`
-- `recording_egress_id: nullable string`
+## Call finalization boundary
 
-Keep existing:
+`CallLifecycleService` is provider-free. Its two phases are:
 
-- `recording_url: nullable string`
+1. commit `ending -> finalizing` with a new attempt generation;
+2. for that generation, atomically commit debit, normalized end facts, one opaque dashboard notification, required outbox intents, and `completed`.
 
-No recording status column is needed for MVP.
+It does not call LiveKit, Gemini, storage, Firebase, Telnyx, or Redis inside the transaction. `completed` therefore means the database facts and provider intents are durable, not that provider delivery has already finished.
 
-## Backend Structure
+The one-minute call reconciler recovers stale ending/finalizing rows using committed attempt leases. A charged row is repaired to `completed` rather than failed because its post-call attempt budget was exhausted.
 
-- `LiveKitRecordingService`
-  - starts room composite egress
-  - returns egress id and object key/url metadata
-- `CallLifecycleService`
-  - no longer depends on live-call `recording_bytes`
-  - remains responsible for non-recording finalization concerns
-- `RecordingService`
-  - mints fresh signed URLs from `recording_object_key`
-  - returns `None` when the object is expired/missing
-- call creation / dispatch flow
-  - starts recording egress when a call session is created or dispatched
+## Customer read path and retention
 
-## API Contract
+`GET /api/calls/{call_id}` mints a fresh signed URL from `recording_object_key`. Stored `recording_url` is provider metadata, not the customer authorization mechanism.
 
-User-facing call history API stays the same:
+If the object has expired or is missing, the API returns `recording_url = null`. The call row, transcript, usage facts, and summary remain available according to their own retention rules.
 
-- `GET /api/calls`
-- `GET /api/calls/{call_id}`
-- `DELETE /api/calls/{call_id}`
+The recordings bucket owns the approved 30-day object lifecycle. The application does not run a duplicate recording-expiry deletion job.
 
-Behavior change:
+## Failure behavior
 
-- `recording_url` is available only while the object still exists in storage
-- expired recordings appear as `recording_url = null`
+- Egress start failure does not block the live call.
+- A start/completion race first invokes `ensure_stopped` for the newly returned egress. If cleanup is uncertain, late provider references and a retry intent may attach to the terminal row, but state, accounting, end facts, and generation remain unchanged.
+- SIP leave and completion commit stop intent before queue wakeup.
+- Missing/terminal egress is an idempotent stop success.
+- Uncertain stop and list failures are safe retryable outbox failures.
+- Missing recording objects degrade call detail to `recording_url = null`.
+- Raw recording input is schema-invalid and cannot enter Redis or the worker system.
 
-Internal change:
+## Verification
 
-- `POST /api/agent/calls/{call_id}/complete` no longer needs live-call recording bytes for the main recording flow
+Automated coverage proves:
 
-## Error Handling
+- connected state commits before recording provider I/O
+- only the expected agent identity can start recording
+- successful metadata persistence is revalidated under a fresh lock
+- a terminal start race calls `ensure_stopped`; failed immediate cleanup durably retains only cleanup references/intent without regressing call state or facts
+- recording stop performs no provider I/O with an ORM transaction open
+- active/missing/terminal egress states are handled idempotently
+- uncertain provider results are retried
+- summary retries do not block the recording aggregate
+- completion and worker payloads contain internal references only
+- the legacy blob worker is not registered and no raw media contract remains
 
-- If egress start fails when a call begins, the call should still proceed.
-- Recording failure must not block the live conversation.
-- Missing or expired recording objects must not break call detail responses.
-- Signed URL mint failures caused by missing objects should degrade to `recording_url = null`.
+Manual staging verification should place one real call, confirm one mixed object and persisted egress metadata, confirm a durable `recording.stop` event is delivered, verify signed playback, and verify lifecycle expiry later returns `recording_url = null` without breaking call detail.
 
-## Testing
+## Non-goals
 
-Add tests for:
-
-- recording egress metadata is persisted when call/dispatch recording setup succeeds
-- call flow remains usable when egress start fails
-- call detail mints fresh signed URL from `recording_object_key`
-- call detail returns `recording_url = null` when the object has expired or the provider reports it missing
-- existing soft-delete and transcript behavior remains unchanged
-
-## Non-Goals
-
-- App-managed 30-day deletion jobs
-- deleting call rows when recordings expire
 - separate-channel or per-participant recordings
-- admin recovery APIs in this slice
-
-## Manual Verification
-
-- place one real call and confirm one mixed audio object lands in the recordings bucket
-- verify `calls.recording_object_key` and `calls.recording_egress_id` are populated
-- verify `GET /api/calls/{call_id}` returns a fresh signed URL
-- verify bucket lifecycle expiry later results in `recording_url = null` without breaking call detail
+- raw agent-side audio upload compatibility
+- app-managed 30-day recording expiry jobs
+- claiming recording delivery is complete merely because call state is `completed`

@@ -1,16 +1,21 @@
-import base64
 from dataclasses import dataclass
 from types import SimpleNamespace
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import select
 
 from app.core.database import get_session
 from app.core.dispatch_token import create_dispatch_token
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
+from app.models.call_message import CallMessage
+from app.models.outbox_event import OutboxEvent
+from app.services.call_lifecycle_service import CallLifecycleService
+from app.services.outbox_service import OutboxService
 
 
 @dataclass
@@ -42,6 +47,11 @@ class FakeCallFinalizationQueue:
         return job_id
 
 
+class FailingCallFinalizationQueue:
+    async def enqueue(self, _payload: dict) -> str:
+        raise RuntimeError("redis unavailable")
+
+
 class FakeAuthSession:
     def __init__(self, *, call=None, agent_config=None) -> None:
         self.call = call
@@ -66,6 +76,12 @@ class FakeAuthSession:
 
     async def commit(self) -> None:
         self.commits += 1
+
+    async def flush(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        return None
 
 
 def _configure_auth(
@@ -100,8 +116,21 @@ def _build_completion_app(fake_queue, *, auth_session=None):
     app.dependency_overrides[get_call_finalization_queue] = (
         override_get_call_finalization_queue
     )
+    call_id = uuid4()
     session = auth_session or FakeAuthSession(
-        call=SimpleNamespace(status="pending"),
+        call=SimpleNamespace(
+            id=call_id,
+            user_id=uuid4(),
+            agent_config_id=None,
+            status="pending",
+            ended_at=None,
+            duration_seconds=None,
+            started_at=None,
+            created_at=datetime.now(UTC),
+            failure_code=None,
+            state_changed_at=datetime.now(UTC),
+            recording_egress_id=None,
+        ),
     )
 
     async def override_get_session():
@@ -142,9 +171,6 @@ async def test_agent_completion_endpoint_enqueues_call_finalization_job(
             job_name="call_finalization_job",
             payload={
                 "call_id": str(call_id),
-                "duration_seconds": 61,
-                "caller_number": None,
-                "recording_bytes": None,
             },
             job_id=f"call-finalization:{call_id}",
         )
@@ -182,7 +208,7 @@ async def test_agent_completion_endpoint_rejects_accounting_authority_fields(
 
 
 @pytest.mark.anyio
-async def test_agent_completion_endpoint_decodes_recording_for_queue(
+async def test_agent_completion_endpoint_rejects_raw_recording_blob(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_auth(monkeypatch, app_env="development")
@@ -190,8 +216,6 @@ async def test_agent_completion_endpoint_decodes_recording_for_queue(
     fake_queue = FakeCallFinalizationQueue()
 
     app = _build_completion_app(fake_queue)
-    recording_bytes = b"recording-bytes"
-
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport,
@@ -202,14 +226,12 @@ async def test_agent_completion_endpoint_decodes_recording_for_queue(
             headers={"x-agent-token": "test-agent-token"},
             json={
                 "duration_seconds": 61,
-                "recording_bytes_base64": base64.b64encode(
-                    recording_bytes
-                ).decode("ascii"),
+                "recording_bytes_base64": "cmVjb3JkaW5nLWJ5dGVz",
             },
         )
 
-    assert response.status_code == 202
-    assert fake_queue.calls[0].payload["recording_bytes"] == recording_bytes
+    assert response.status_code == 422
+    assert fake_queue.calls == []
 
 
 @pytest.mark.anyio
@@ -309,6 +331,288 @@ async def test_dispatch_jwt_completes_call_without_static_token(
 
     assert response.status_code == 202
     assert len(fake_queue.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_queue_outage_preserves_end_facts_recovery_and_recording_stop_intent(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session,
+    active_user,
+) -> None:
+    _configure_auth(
+        monkeypatch,
+        app_env="test",
+        static_token="",
+        dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
+    )
+    config = AgentConfig(
+        user_id=active_user.id,
+        agent_name="Durable completion",
+        system_prompt="Be helpful",
+        knowledge_base="",
+        is_enabled=True,
+    )
+    db_session.add(config)
+    await db_session.flush()
+    call = Call(
+        user_id=active_user.id,
+        agent_config_id=config.id,
+        status="connected",
+        started_at=datetime.now(UTC),
+        recording_egress_id="egress-durable-stop",
+    )
+    db_session.add(call)
+    await db_session.commit()
+    call_id = call.id
+    app = _build_completion_app(
+        FailingCallFinalizationQueue(),
+        auth_session=db_session,
+    )
+    token = create_dispatch_token(
+        call_id=str(call_id),
+        user_id=str(active_user.id),
+        agent_config_id=str(config.id),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/agent/calls/{call_id}/complete",
+            headers={"x-agent-token": token},
+            json={
+                "duration_seconds": 7,
+                "transcript": [
+                    {
+                        "sequence_number": 1,
+                        "speaker": "CALLER",
+                        "text": "Durable recovery tail",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 503
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert stored.status == "ending"
+    assert stored.duration_seconds == 7
+    assert stored.ended_at is not None
+    stop_intent = await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.topic == "recording.stop",
+            OutboxEvent.aggregate_id == call_id,
+        )
+    )
+    assert stop_intent is not None
+    assert stop_intent.aggregate_type == "call-recording"
+    assert stop_intent.payload == {"call_id": str(call_id)}
+    recovery_rows = list(
+        (
+            await db_session.execute(
+                select(CallMessage)
+                .where(CallMessage.call_id == call_id)
+                .order_by(CallMessage.sequence_number)
+            )
+        ).scalars()
+    )
+    assert [
+        (row.sequence_number, row.speaker, row.text) for row in recovery_rows
+    ] == [(1, "CALLER", "Durable recovery tail")]
+
+
+@pytest.mark.anyio
+async def test_failed_call_completion_is_conflict_and_does_not_enqueue(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session,
+    active_user,
+) -> None:
+    _configure_auth(
+        monkeypatch,
+        app_env="test",
+        static_token="",
+        dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
+    )
+    config = AgentConfig(
+        user_id=active_user.id,
+        agent_name="Failed completion",
+        system_prompt="Be helpful",
+        knowledge_base="",
+        is_enabled=True,
+    )
+    db_session.add(config)
+    await db_session.flush()
+    call = Call(
+        user_id=active_user.id,
+        agent_config_id=config.id,
+        status="failed",
+        failure_code="dispatch_timeout",
+    )
+    db_session.add(call)
+    await db_session.commit()
+    fake_queue = FakeCallFinalizationQueue()
+    app = _build_completion_app(fake_queue, auth_session=db_session)
+    token = create_dispatch_token(
+        call_id=str(call.id),
+        user_id=str(active_user.id),
+        agent_config_id=str(config.id),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/agent/calls/{call.id}/complete",
+            headers={"x-agent-token": token},
+            json={"duration_seconds": 1},
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "call_not_accepting_completion"}
+    assert fake_queue.calls == []
+
+
+@pytest.mark.anyio
+async def test_completed_call_accepts_scoped_recovery_tail_then_finalizes_idempotently(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session,
+    active_user,
+) -> None:
+    _configure_auth(
+        monkeypatch,
+        app_env="test",
+        static_token="",
+        dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
+    )
+    config = AgentConfig(
+        user_id=active_user.id,
+        agent_name="Terminal recovery",
+        system_prompt="Be helpful",
+        knowledge_base="",
+        is_enabled=True,
+    )
+    db_session.add(config)
+    await db_session.flush()
+    call = Call(
+        user_id=active_user.id,
+        agent_config_id=config.id,
+        status="completed",
+        duration_seconds=10,
+        minutes_charged=1,
+        finalization_attempt_count=1,
+        summary_text="Summary through sequence one",
+        summary_data={"summary_text": "Summary through sequence one"},
+    )
+    call.summary_transcript_max_sequence = 1
+    db_session.add(call)
+    await db_session.flush()
+    db_session.add(
+        CallMessage(
+            call_id=call.id,
+            sequence_number=1,
+            speaker="CALLER",
+            text="Already durable",
+        )
+    )
+    await OutboxService(db_session).add(
+        topic="summary.generate",
+        aggregate_type="call-summary",
+        aggregate_id=call.id,
+        idempotency_key=f"summary.generate:{call.id}:v1",
+        payload={"call_id": str(call.id)},
+    )
+    await db_session.commit()
+    queue = FakeCallFinalizationQueue(session=db_session)
+    app = _build_completion_app(queue, auth_session=db_session)
+    token = create_dispatch_token(
+        call_id=str(call.id),
+        user_id=str(active_user.id),
+        agent_config_id=str(config.id),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/agent/calls/{call.id}/complete",
+            headers={"x-agent-token": token},
+            json={
+                "duration_seconds": 999,
+                "transcript": [
+                    {
+                        "sequence_number": 2,
+                        "speaker": "AGENT",
+                        "text": "Late recovery tail",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 202
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        duplicate = await client.post(
+            f"/api/agent/calls/{call.id}/complete",
+            headers={"x-agent-token": token},
+            json={
+                "duration_seconds": 999,
+                "transcript": [
+                    {
+                        "sequence_number": 2,
+                        "speaker": "AGENT",
+                        "text": "Late recovery tail",
+                    }
+                ],
+            },
+        )
+    assert duplicate.status_code == 202
+    messages = list(
+        (
+            await db_session.execute(
+                select(CallMessage)
+                .where(CallMessage.call_id == call.id)
+                .order_by(CallMessage.sequence_number)
+            )
+        ).scalars()
+    )
+    assert [(message.sequence_number, message.text) for message in messages] == [
+        (1, "Already durable"),
+        (2, "Late recovery tail"),
+    ]
+    summary_intents = list(
+        (
+            await db_session.execute(
+                select(OutboxEvent)
+                .where(
+                    OutboxEvent.topic == "summary.generate",
+                    OutboxEvent.aggregate_id == call.id,
+                )
+                .order_by(OutboxEvent.idempotency_key)
+            )
+        ).scalars()
+    )
+    assert [intent.idempotency_key for intent in summary_intents] == [
+        f"summary.generate:{call.id}:v1",
+        f"summary.generate:{call.id}:v2",
+    ]
+    assert all(
+        intent.payload == {"call_id": str(call.id)} for intent in summary_intents
+    )
+    result = await CallLifecycleService(db_session).complete_finalization(
+        call.id,
+        generation=1,
+    )
+    assert result.already_completed is True
+    assert result.minutes_charged == 1
 
 
 @pytest.mark.anyio

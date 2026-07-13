@@ -1,10 +1,37 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.call import Call
+
+
+CALL_STATE_GRAPH: dict[str, frozenset[str]] = {
+    "pending": frozenset({"connected", "failed"}),
+    "connected": frozenset({"ending"}),
+    "ending": frozenset({"finalizing"}),
+    "finalizing": frozenset({"completed", "failed"}),
+    "completed": frozenset(),
+    "failed": frozenset(),
+}
+
+CALL_FAILURE_CODES = frozenset(
+    {
+        "dispatch_ineligible",
+        "dispatch_conflict",
+        "dispatch_configuration",
+        "dispatch_provider_exhausted",
+        "dispatch_timeout",
+        "caller_left_before_connect",
+        "finalization_exhausted",
+        "legacy_failure",
+    }
+)
+
+
+class CallTransitionError(ValueError):
+    pass
 
 
 class CallRepository:
@@ -22,6 +49,77 @@ class CallRepository:
             .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
+
+    async def list_stale_pending_ids(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int,
+    ) -> list[UUID]:
+        result = await self.session.execute(
+            select(Call.id)
+            .where(
+                Call.status == "pending",
+                Call.state_changed_at <= stale_before,
+            )
+            .order_by(Call.state_changed_at, Call.id)
+            .limit(limit)
+        )
+        return list(result.scalars())
+
+    async def claim_stale_reconciliation_rows(
+        self,
+        *,
+        connected_before: datetime,
+        ending_before: datetime,
+        finalizing_before: datetime,
+        limit: int,
+    ) -> list[Call]:
+        result = await self.session.execute(
+            select(Call)
+            .where(
+                or_(
+                    (Call.status == "connected")
+                    & (Call.state_changed_at <= connected_before),
+                    (Call.status == "ending")
+                    & (Call.state_changed_at <= ending_before),
+                    (Call.status == "finalizing")
+                    & (Call.state_changed_at <= finalizing_before),
+                )
+            )
+            .order_by(Call.state_changed_at, Call.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+        return list(result.scalars())
+
+    async def transition(
+        self,
+        call_id: UUID,
+        *,
+        from_states: set[str],
+        to_state: str,
+        failure_code: str | None = None,
+    ) -> Call:
+        call = await self.get_by_id_for_update(call_id)
+        if call is None:
+            raise CallTransitionError("Call not found")
+        if call.status not in from_states:
+            raise CallTransitionError("Call state transition precondition failed")
+        if to_state not in CALL_STATE_GRAPH.get(call.status, frozenset()):
+            raise CallTransitionError("Illegal call state transition")
+        if to_state == "failed":
+            if failure_code not in CALL_FAILURE_CODES:
+                raise CallTransitionError("Invalid call failure code")
+        elif failure_code is not None:
+            raise CallTransitionError("Call failure code requires failed state")
+
+        call.status = to_state
+        call.failure_code = failure_code
+        call.state_changed_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return call
 
     async def list_visible_by_user_id(
         self, user_id: UUID, *, limit: int = 100, offset: int = 0
@@ -83,10 +181,16 @@ class CallRepository:
         return result.scalar_one_or_none()
 
     async def connect_if_pending(self, *, call_id: UUID) -> Call | None:
+        now = datetime.now(timezone.utc)
         result = await self.session.execute(
             update(Call)
             .where(Call.id == call_id, Call.status == "pending")
-            .values(status="connected", started_at=datetime.now(timezone.utc))
+            .values(
+                status="connected",
+                started_at=now,
+                state_changed_at=now,
+                failure_code=None,
+            )
             .returning(Call)
             .execution_options(populate_existing=True)
         )
@@ -102,6 +206,7 @@ class CallRepository:
             .where(
                 Call.id == call_id,
                 Call.recording_egress_id.is_(None),
+                Call.status == "connected",
             )
             .with_for_update()
             .execution_options(populate_existing=True)
@@ -119,11 +224,15 @@ class CallRepository:
         return call
 
     async def mark_dispatch_failed(self, call: Call, *, failure_code: str) -> Call:
-        call.status = "failed"
-        call.failure_code = failure_code
-        call.ended_at = call.ended_at or datetime.now(timezone.utc)
+        transitioned = await self.transition(
+            call.id,
+            from_states={"pending"},
+            to_state="failed",
+            failure_code=failure_code,
+        )
+        transitioned.ended_at = transitioned.ended_at or datetime.now(timezone.utc)
         await self.session.flush()
-        return call
+        return transitioned
 
     async def get_active_by_room_with_recording(self, *, room_name: str) -> Call | None:
         result = await self.session.execute(
@@ -135,29 +244,18 @@ class CallRepository:
         )
         return result.scalar_one_or_none()
 
-    async def mark_completed(
-        self,
-        call: Call,
-        *,
-        duration_seconds: int,
-        minutes_charged: int,
-        summary_text: str | None,
-        summary_data: dict | None,
-        recording_object_key: str | None,
-        recording_url: str | None,
-    ) -> Call:
-        call.status = "completed"
-        call.ended_at = datetime.now(timezone.utc)
-        call.duration_seconds = duration_seconds
-        call.minutes_charged = minutes_charged
-        call.summary_text = summary_text
-        call.summary_data = summary_data
-        if recording_object_key is not None:
-            call.recording_object_key = recording_object_key
-        if recording_url is not None:
-            call.recording_url = recording_url
-        await self.session.flush()
-        return call
+    async def get_active_by_room_for_update(self, *, room_name: str) -> Call | None:
+        result = await self.session.execute(
+            select(Call)
+            .where(
+                Call.livekit_room_id == room_name,
+                Call.status.in_(("pending", "connected", "ending", "finalizing")),
+                Call.deleted_at.is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
 
     async def set_recording_metadata(
         self,

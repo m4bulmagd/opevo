@@ -37,7 +37,7 @@ class GeminiSummaryProvider(SummaryProvider):
     async def generate_summary(self, transcript: list[dict]) -> StructuredSummary:
         client = self._get_client()
         prompt = self._build_prompt(transcript)
-        response = client.models.generate_content(
+        response = await client.aio.models.generate_content(
             model=self.model,
             contents=prompt,
         )

@@ -41,4 +41,3 @@ class CallCompletionPayload(BaseModel):
     call_id: str
     duration_seconds: int = Field(ge=0)
     transcript: list[CallTranscriptItem] = Field(default_factory=list)
-    recording_bytes_base64: str | None = None

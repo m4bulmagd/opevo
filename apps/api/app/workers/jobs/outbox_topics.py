@@ -1,10 +1,7 @@
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import json
 from typing import Any
 from uuid import UUID
-
-from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.core.dispatch_token import create_dispatch_token
@@ -21,6 +18,7 @@ from app.repositories.phone_number_provisioning_repository import (
 )
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.message_repository import MessageRepository
 from app.repositories.usage_repository import UsageRepository
 from app.schemas.livekit import LiveKitDispatchMetadata
 from app.services.dispatch_eligibility_policy import DispatchEligibilityPolicy
@@ -28,10 +26,14 @@ from app.services.livekit_dispatch_service import (
     _agent_setup_complete,
     expected_agent_identity,
 )
+from app.services.livekit_dispatch_lock import livekit_dispatch_lock
 from app.services.onboarding_service import OnboardingService
+from app.services.livekit_recording_service import LiveKitRecordingService
+from app.services.summary_service import SummaryService
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
+from app.providers.summaries.gemini import GeminiSummaryProvider
 
 
 @dataclass(frozen=True)
@@ -173,10 +175,7 @@ async def deliver_livekit_dispatch(
     call_id = _validated_dispatch_call_id(event)
     session_factory = ctx.get("session_factory") or get_session_factory()
 
-    async with _dispatch_advisory_lock(
-        session_factory,
-        event.idempotency_key,
-    ):
+    async with livekit_dispatch_lock(session_factory, call_id):
         snapshot = await _dispatch_snapshot(session_factory, call_id)
         provider = ctx.get("livekit_dispatch_provider")
         if provider is None:
@@ -258,24 +257,6 @@ def _validated_dispatch_call_id(event: OutboxEvent) -> UUID:
             retryable=False,
         )
     return call_id
-
-
-@asynccontextmanager
-async def _dispatch_advisory_lock(session_factory, idempotency_key: str):
-    async with session_factory() as lock_session:
-        if lock_session.get_bind().dialect.name != "postgresql":
-            yield
-            return
-        async with lock_session.begin():
-            await lock_session.execute(
-                text(
-                    "SELECT pg_advisory_xact_lock("
-                    "hashtextextended(:idempotency_key, 0)"
-                    ")"
-                ),
-                {"idempotency_key": idempotency_key},
-            )
-            yield
 
 
 async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapshot:
@@ -458,13 +439,120 @@ async def _persist_dispatch_identity(
         await session.commit()
 
 
-async def deliver_future_topic(
-    _ctx: dict[str, Any],
-    _event: OutboxEvent,
+async def deliver_summary_generate(
+    ctx: dict[str, Any],
+    event: OutboxEvent,
 ) -> None:
-    # Task 8 activates LiveKit dispatch. Task 10 activates recording and
-    # notification producers once their provider replay contracts are complete.
-    raise OutboxDeliveryError("handler_configuration", retryable=False)
+    call_id = _validated_post_call_reference(
+        event,
+        topic="summary.generate",
+        aggregate_type="call-summary",
+    )
+    session_factory = ctx.get("session_factory") or get_session_factory()
+    async with session_factory() as session:
+        call = await CallRepository(session).get_by_id(call_id)
+        if call is None:
+            await session.rollback()
+            raise OutboxDeliveryError("provider_terminal", retryable=False)
+        messages = await MessageRepository(session).list_by_call_id(call_id)
+        transcript_max_sequence = (
+            messages[-1].sequence_number if messages else 0
+        )
+        if (
+            call.summary_transcript_max_sequence is not None
+            and call.summary_transcript_max_sequence >= transcript_max_sequence
+            and (transcript_max_sequence == 0 or call.summary_data is not None)
+        ):
+            await session.commit()
+            return
+        transcript = [
+            {"speaker": message.speaker, "text": message.text}
+            for message in messages
+        ]
+        await session.commit()
+
+    summary_data = None
+    if transcript:
+        provider = ctx.get("summary_provider") or GeminiSummaryProvider()
+        try:
+            structured = await provider.generate_summary(transcript)
+            summary_data = SummaryService.validate_structured_summary(structured)
+        except Exception:
+            raise OutboxDeliveryError("provider_retryable", retryable=True) from None
+        if summary_data is None:
+            raise OutboxDeliveryError("provider_retryable", retryable=True)
+
+    async with session_factory() as session:
+        call = await CallRepository(session).get_by_id_for_update(call_id)
+        if call is None:
+            await session.rollback()
+            raise OutboxDeliveryError("provider_terminal", retryable=False)
+        durable_max_sequence = await MessageRepository(
+            session
+        ).max_sequence_by_call_id(call_id)
+        if durable_max_sequence != transcript_max_sequence:
+            await session.rollback()
+            raise OutboxDeliveryError("summary_stale", retryable=True)
+        if (
+            call.summary_transcript_max_sequence is not None
+            and call.summary_transcript_max_sequence >= durable_max_sequence
+            and (durable_max_sequence == 0 or call.summary_data is not None)
+        ):
+            await session.commit()
+            return
+        if summary_data is not None:
+            call.summary_text = summary_data["summary_text"]
+            call.summary_data = summary_data
+        call.summary_transcript_max_sequence = durable_max_sequence
+        await session.flush()
+        await session.commit()
+
+
+async def deliver_recording_stop(
+    ctx: dict[str, Any],
+    event: OutboxEvent,
+) -> None:
+    call_id = _validated_post_call_reference(
+        event,
+        topic="recording.stop",
+        aggregate_type="call-recording",
+    )
+    session_factory = ctx.get("session_factory") or get_session_factory()
+    async with session_factory() as session:
+        call = await CallRepository(session).get_by_id(call_id)
+        if call is None:
+            await session.rollback()
+            raise OutboxDeliveryError("provider_terminal", retryable=False)
+        egress_id = call.recording_egress_id
+        await session.commit()
+    if not egress_id:
+        return
+
+    provider = ctx.get("livekit_recording_provider")
+    provider = provider or LiveKitRecordingService()
+    try:
+        await provider.ensure_stopped(egress_id)
+    except Exception:
+        raise OutboxDeliveryError("provider_retryable", retryable=True) from None
+
+
+def _validated_post_call_reference(
+    event: OutboxEvent,
+    *,
+    topic: str,
+    aggregate_type: str,
+) -> UUID:
+    try:
+        call_id = UUID(event.payload["call_id"])
+    except (KeyError, TypeError, ValueError):
+        raise OutboxDeliveryError("invalid_payload", retryable=False) from None
+    if (
+        event.topic != topic
+        or event.aggregate_type != aggregate_type
+        or event.aggregate_id != call_id
+    ):
+        raise OutboxDeliveryError("invalid_payload", retryable=False)
+    return call_id
 
 
 DEFAULT_OUTBOX_HANDLERS = {
@@ -472,6 +560,6 @@ DEFAULT_OUTBOX_HANDLERS = {
     "phone.enable": deliver_phone_routing,
     "phone.disable": deliver_phone_routing,
     "livekit.dispatch": deliver_livekit_dispatch,
-    "recording.start": deliver_future_topic,
-    "notification.send": deliver_future_topic,
+    "summary.generate": deliver_summary_generate,
+    "recording.stop": deliver_recording_stop,
 }

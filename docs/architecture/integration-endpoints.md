@@ -114,8 +114,7 @@ Request body:
       "speaker": "CALLER",
       "text": "Hello"
     }
-  ],
-  "recording_bytes_base64": null
+  ]
 }
 ```
 
@@ -132,12 +131,40 @@ Response:
 Behavior:
 
 - returns `202 Accepted`
-- idempotently commits the sequence-bearing recovery tail before touching Redis
-- enqueues queue-backed finalization instead of doing full call persistence inline
-- returns `503` when the queue is unavailable, after any valid recovery rows are durable
-- finalization reconstructs the complete ordered transcript from PostgreSQL for summary generation
+- idempotently commits the sequence-bearing recovery tail and the first durable end facts before touching Redis
+- freezes the first accepted `ended_at` and `duration_seconds`; duplicate completion cannot overwrite them
+- transitions an accepted call to `ending`, then enqueues only `{ "call_id": "..." }`
+- returns `503` when the queue is unavailable, after recovery rows, end facts, and any recording-stop intent are durable
+- rejects raw recording fields and agent-supplied accounting or ownership fields
 - requires the same call-scoped JWT ownership checks as transcript append
 - the static `AGENT_INTERNAL_API_TOKEN` fallback exists only in development
+
+### Durable finalization and reconciliation
+
+Call state is constrained to:
+
+```text
+pending -> connected -> ending -> finalizing -> completed
+   |                                      |
+   +---------------> failed <------------+
+```
+
+Generic transitions cannot skip graph edges and terminal states never regress. A scoped completion may repair a missing agent-join webhook while establishing bounded start/end facts, but this is not exposed as a generic `pending -> ending` transition.
+
+Finalization uses two short PostgreSQL transactions:
+
+1. claim `ending -> finalizing`, increment and commit an attempt generation;
+2. for that exact generation, atomically commit the usage debit, call facts, one opaque dashboard notification, reference-only outbox intents, and `completed`.
+
+The second transaction performs no Gemini, LiveKit, Firebase, Telnyx, storage, or Redis provider I/O. `completed` means the durable local state and required intents committed; provider work may still be pending.
+
+Post-call provider work is delivered from reference-only outbox events:
+
+- `summary.generate` uses aggregate type `call-summary`, snapshots the ordered PostgreSQL transcript and maximum sequence, and persists structured summary data plus its coverage watermark only after revalidating that maximum under a fresh lock; terminal recovery stores a new versioned intent when it adds a sequence
+- `recording.stop` uses aggregate type `call-recording` and reconciles LiveKit egress through `ensure_stopped(egress_id)`
+- `phone.disable` re-derives current routing eligibility before changing provider state
+
+The worker runs call reconciliation every minute. It recovers stale pending, connected, ending, and finalizing calls in bounded batches with PostgreSQL locking, shared LiveKit dispatch advisory locks for pending timeouts, and committed attempt-generation leases. Charged calls are repaired to `completed`; they are never failed solely because retry attempts were exhausted.
 
 ## Provider Webhooks
 
@@ -184,14 +211,15 @@ Behavior:
 - verifies the LiveKit webhook authorization
 - on SIP `participant_joined`, atomically records the matched call and a durable LiveKit dispatch outbox intent after subscription, balance, phone, configuration, and exact-trunk eligibility checks
 - on agent `participant_joined`, attempts to start one mixed room recording through LiveKit room composite egress with `audio_only=true`
-- on SIP `participant_left`, attempts to stop the active room recording early so the mixed file better matches the conversation window
-- recording start/stop failures remain non-blocking
+- on SIP `participant_left`, commits the durable end transition and recording-stop intent before a best-effort finalization wakeup
+- recording start failure remains non-blocking; if start succeeds after the call already became terminal, the new egress is immediately reconciled through `ensure_stopped`; an uncertain cleanup durably attaches only provider references and a retry intent without changing terminal state, end facts, or accounting
 - returns `202 Accepted`
 
 ## Notes
 
 - These endpoints are operational/integration surfaces, not frontend product APIs.
-- Live call recordings are started through LiveKit egress and written directly to the recordings bucket; the internal completion endpoint no longer needs recording bytes for the primary live-call recording path.
+- Live call recordings are started through LiveKit egress and written directly to the recordings bucket. Raw audio blobs are rejected by the completion schema, are never placed in Redis, and have no legacy recording-upload worker.
+- Firebase push delivery is intentionally absent from the launch post-call path. The authenticated dashboard reads the opaque local notification; private device-token delivery belongs to a later workstream.
 - User-facing API docs live separately in:
   - [agent-config-api.md](agent-config-api.md)
   - [billing-usage-api.md](billing-usage-api.md)

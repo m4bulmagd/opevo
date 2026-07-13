@@ -90,7 +90,6 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
     await runtime.finalize(
         dispatch_payload,
         duration_seconds=61,
-        recording_bytes_base64="cmVjb3JkaW5nLWJ5dGVz",
     )
 
     assert fake_event_publisher.events[-1]["type"] == "call_ended"
@@ -108,7 +107,6 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
             "call_id": "call_123",
             "duration_seconds": 61,
             "transcript": [],
-            "recording_bytes_base64": "cmVjb3JkaW5nLWJ5dGVz",
             "dispatch_token": "dispatch-token",
         }
     ]

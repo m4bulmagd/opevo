@@ -154,7 +154,6 @@ class AgentApiClient:
         body = {
             "duration_seconds": payload["duration_seconds"],
             "transcript": payload.get("transcript") or [],
-            "recording_bytes_base64": payload.get("recording_bytes_base64"),
         }
 
         call_id = payload["call_id"]

@@ -15,7 +15,6 @@ class AgentCallCompletionRequest(BaseModel):
         max_length=2000,
     )
     caller_number: str | None = None
-    recording_bytes_base64: str | None = None
 
 
 class AgentCallCompletionResponse(BaseModel):

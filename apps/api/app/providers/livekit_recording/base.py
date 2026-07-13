@@ -14,3 +14,6 @@ class RecordingProvider:
 
     async def stop_room_recording(self, *, egress_id: str) -> None:
         raise NotImplementedError
+
+    async def ensure_stopped(self, egress_id: str) -> None:
+        raise NotImplementedError

@@ -70,3 +70,32 @@ class LiveKitRecordingService:
             await provider.stop_room_recording(egress_id=egress_id)
         finally:
             await lkapi.aclose()
+
+    async def ensure_stopped(self, egress_id: str) -> None:
+        if self.provider is not None:
+            await self.provider.ensure_stopped(egress_id)
+            return
+
+        from livekit import api
+
+        settings = get_settings()
+        if not settings.livekit_url or not settings.livekit_api_key or not settings.livekit_api_secret:
+            raise ValueError("LiveKit settings are not configured")
+
+        lkapi = api.LiveKitAPI(
+            url=settings.livekit_url,
+            api_key=settings.livekit_api_key,
+            api_secret=settings.livekit_api_secret,
+        )
+        try:
+            provider = LiveKitRecordingProvider(
+                egress_client=lkapi.egress,
+                bucket_name=settings.storage_bucket_name,
+                endpoint_url=settings.s3_endpoint_url or "http://minio:9000",
+                access_key=settings.s3_access_key,
+                secret_key=settings.s3_secret_key,
+                region=settings.s3_region,
+            )
+            await provider.ensure_stopped(egress_id)
+        finally:
+            await lkapi.aclose()

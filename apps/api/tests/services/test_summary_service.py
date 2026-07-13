@@ -21,6 +21,18 @@ class ExplodingSummaryProvider:
         )
 
 
+def test_structured_summary_validator_is_public() -> None:
+    expected = {
+        "summary_text": "Summary",
+        "caller_intent": "Ask",
+        "action_items": ["Reply"],
+        "sentiment": "neutral",
+        "follow_up_required": False,
+    }
+
+    assert SummaryService.validate_structured_summary(expected) == expected
+
+
 @pytest.mark.anyio
 async def test_summary_service_returns_structured_summary() -> None:
     service = SummaryService(

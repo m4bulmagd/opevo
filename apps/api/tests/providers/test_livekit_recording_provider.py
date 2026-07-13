@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from livekit import api
 
 from app.providers.livekit_recording.livekit import (
     LiveKitRecordingProvider,
@@ -9,114 +10,180 @@ from app.providers.livekit_recording.livekit import (
 
 
 class FakeEgressClient:
-    def __init__(self) -> None:
-        self.requests: list[object] = []
-        self.stop_requests: list[str] = []
+    def __init__(self, status_sequences: list[list[int]]) -> None:
+        self.status_sequences = list(status_sequences)
+        self.list_requests = []
+        self.stop_requests = []
 
-    async def start_room_composite_egress(self, request) -> object:
-        self.requests.append(request)
-        return SimpleNamespace(egress_id="egress_123")
+    async def list_egress(self, request):
+        self.list_requests.append(request)
+        statuses = self.status_sequences.pop(0)
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(egress_id="egress-1", status=status)
+                for status in statuses
+            ]
+        )
 
-    async def stop_egress(self, request) -> object:
-        self.stop_requests.append(request.egress_id)
-        return SimpleNamespace()
+    async def stop_egress(self, request):
+        self.stop_requests.append(request)
+
+
+class FakeStartEgressClient(FakeEgressClient):
+    def __init__(self, *, failure: Exception | None = None) -> None:
+        super().__init__([])
+        self.failure = failure
+        self.start_requests = []
+
+    async def start_room_composite_egress(self, request):
+        self.start_requests.append(request)
+        if self.failure is not None:
+            raise self.failure
+        return SimpleNamespace(egress_id="egress-started")
+
+
+def build_provider(client: FakeEgressClient) -> LiveKitRecordingProvider:
+    return LiveKitRecordingProvider(
+        egress_client=client,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+        access_key="key",
+        secret_key="secret",
+        region="us-east-1",
+    )
+
+
+async def ensure_stopped(provider: LiveKitRecordingProvider, egress_id: str) -> None:
+    method = getattr(provider, "ensure_stopped", None)
+    assert method is not None, "recording provider must expose ensure_stopped"
+    await method(egress_id)
 
 
 @pytest.mark.anyio
-async def test_start_room_recording_uses_audio_only_room_composite() -> None:
-    egress_client = FakeEgressClient()
+@pytest.mark.parametrize(
+    "terminal_status",
+    [
+        api.EgressStatus.EGRESS_COMPLETE,
+        api.EgressStatus.EGRESS_FAILED,
+        api.EgressStatus.EGRESS_ABORTED,
+        api.EgressStatus.EGRESS_LIMIT_REACHED,
+    ],
+)
+async def test_ensure_stopped_accepts_missing_or_terminal_egress(
+    terminal_status: int,
+) -> None:
+    missing = FakeEgressClient([[]])
+    terminal = FakeEgressClient([[terminal_status]])
+
+    await ensure_stopped(build_provider(missing), "egress-1")
+    await ensure_stopped(build_provider(terminal), "egress-1")
+
+    assert missing.stop_requests == []
+    assert terminal.stop_requests == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "active_status",
+    [
+        api.EgressStatus.EGRESS_STARTING,
+        api.EgressStatus.EGRESS_ACTIVE,
+        api.EgressStatus.EGRESS_ENDING,
+    ],
+)
+async def test_ensure_stopped_stops_and_rechecks_active_egress(
+    active_status: int,
+) -> None:
+    client = FakeEgressClient(
+        [[active_status], [api.EgressStatus.EGRESS_COMPLETE]]
+    )
+
+    await ensure_stopped(build_provider(client), "egress-1")
+
+    assert len(client.stop_requests) == 1
+    assert client.stop_requests[0].egress_id == "egress-1"
+    assert len(client.list_requests) == 2
+
+
+@pytest.mark.anyio
+async def test_ensure_stopped_retries_when_recheck_is_still_active() -> None:
+    client = FakeEgressClient(
+        [
+            [api.EgressStatus.EGRESS_ACTIVE],
+            [api.EgressStatus.EGRESS_ENDING],
+        ]
+    )
+
+    with pytest.raises(Exception, match="not terminal"):
+        await ensure_stopped(build_provider(client), "egress-1")
+
+
+@pytest.mark.anyio
+async def test_start_room_recording_uses_audio_only_direct_minio_output() -> None:
+    client = FakeStartEgressClient()
     provider = LiveKitRecordingProvider(
-        egress_client=egress_client,
+        egress_client=client,
         bucket_name="recordings",
-        endpoint_url="http://minio:9000",
-        access_key="minioadmin",
-        secret_key="minioadmin",
+        endpoint_url="http://minio:9000/",
+        access_key="minio-key",
+        secret_key="minio-secret",
         region="us-east-1",
     )
 
     result = await provider.start_room_recording(
-        room_name="room_123",
-        user_id="user_123",
-        call_id="call_456",
+        room_name="room-1",
+        user_id="user-1",
+        call_id="call-1",
     )
 
-    request = egress_client.requests[0]
-    assert request.room_name == "room_123"
+    assert result.egress_id == "egress-started"
+    assert result.object_key == "calls/user-1/call-1.ogg"
+    request = client.start_requests[0]
+    assert request.room_name == "room-1"
     assert request.audio_only is True
-    assert request.file.filepath == "calls/user_123/call_456.ogg"
+    assert request.file.filepath == "calls/user-1/call-1.ogg"
     assert request.file.s3.bucket == "recordings"
     assert request.file.s3.endpoint == "http://minio:9000"
-    assert request.file.s3.access_key == "minioadmin"
-    assert request.file.s3.secret == "minioadmin"
+    assert request.file.s3.access_key == "minio-key"
+    assert request.file.s3.secret == "minio-secret"
     assert request.file.s3.region == "us-east-1"
     assert request.file.s3.force_path_style is True
-    assert result.egress_id == "egress_123"
-    assert result.object_key == "calls/user_123/call_456.ogg"
-    assert result.url == "http://minio:9000/recordings/calls/user_123/call_456.ogg"
-
-
-@pytest.mark.anyio
-async def test_start_room_recording_wraps_provider_failures() -> None:
-    class FailingEgressClient:
-        async def start_room_composite_egress(self, request) -> object:
-            raise RuntimeError("egress unavailable")
-
-    provider = LiveKitRecordingProvider(
-        egress_client=FailingEgressClient(),
-        bucket_name="recordings",
-        endpoint_url="http://minio:9000",
-        access_key="minioadmin",
-        secret_key="minioadmin",
-        region="us-east-1",
-    )
-
-    with pytest.raises(LiveKitRecordingProviderError, match="egress unavailable"):
-        await provider.start_room_recording(
-            room_name="room_123",
-            user_id="user_123",
-            call_id="call_456",
-        )
 
 
 @pytest.mark.anyio
 async def test_start_room_recording_uses_aws_native_s3_shape() -> None:
-    egress_client = FakeEgressClient()
+    client = FakeStartEgressClient()
     provider = LiveKitRecordingProvider(
-        egress_client=egress_client,
+        egress_client=client,
         bucket_name="recordings",
         endpoint_url="https://s3.eu-west-3.amazonaws.com",
-        access_key="aws-access",
+        access_key="aws-key",
         secret_key="aws-secret",
         region="eu-west-3",
     )
 
     await provider.start_room_recording(
-        room_name="room_123",
-        user_id="user_123",
-        call_id="call_456",
+        room_name="room-aws",
+        user_id="user-aws",
+        call_id="call-aws",
     )
 
-    request = egress_client.requests[0]
-    assert request.file.s3.bucket == "recordings"
-    assert request.file.s3.region == "eu-west-3"
-    assert request.file.s3.access_key == "aws-access"
-    assert request.file.s3.secret == "aws-secret"
-    assert request.file.s3.force_path_style is False
-    assert request.file.s3.endpoint == ""
+    upload = client.start_requests[0].file.s3
+    assert upload.bucket == "recordings"
+    assert upload.region == "eu-west-3"
+    assert upload.force_path_style is False
+    assert upload.endpoint == ""
 
 
 @pytest.mark.anyio
-async def test_stop_room_recording_stops_egress() -> None:
-    egress_client = FakeEgressClient()
-    provider = LiveKitRecordingProvider(
-        egress_client=egress_client,
-        bucket_name="recordings",
-        endpoint_url="http://minio:9000",
-        access_key="minioadmin",
-        secret_key="minioadmin",
-        region="us-east-1",
-    )
+async def test_start_room_recording_wraps_provider_failures() -> None:
+    client = FakeStartEgressClient(failure=RuntimeError("provider unavailable"))
 
-    await provider.stop_room_recording(egress_id="egress_123")
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await build_provider(client).start_room_recording(
+            room_name="room-1",
+            user_id="user-1",
+            call_id="call-1",
+        )
 
-    assert egress_client.stop_requests == ["egress_123"]
+    assert isinstance(exc_info.value.__cause__, RuntimeError)

@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,3 +60,11 @@ class MessageRepository:
             .order_by(CallMessage.sequence_number.asc(), CallMessage.created_at.asc())
         )
         return list(result.scalars())
+
+    async def max_sequence_by_call_id(self, call_id: UUID) -> int:
+        value = await self.session.scalar(
+            select(func.max(CallMessage.sequence_number)).where(
+                CallMessage.call_id == call_id
+            )
+        )
+        return int(value or 0)

@@ -1,0 +1,549 @@
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.models.call import Call
+from app.models.call_message import CallMessage
+from app.models.outbox_event import OutboxEvent
+from app.providers.summaries.base import StructuredSummary
+from app.repositories.outbox_repository import OutboxRepository
+from app.services.outbox_service import OutboxService, SUPPORTED_OUTBOX_TOPICS
+from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
+from app.workers.jobs import outbox_topics
+
+
+async def _missing_handler(*_args, **_kwargs):
+    pytest.fail("post-call outbox handler is not implemented")
+
+
+deliver_recording_stop = getattr(
+    outbox_topics,
+    "deliver_recording_stop",
+    _missing_handler,
+)
+deliver_summary_generate = getattr(
+    outbox_topics,
+    "deliver_summary_generate",
+    _missing_handler,
+)
+
+
+class ExplodingNotificationProvider:
+    async def send_notification(self, **_kwargs):
+        raise AssertionError("Firebase push must remain disabled")
+
+
+class TrackingSessionFactory:
+    def __init__(self, base_factory) -> None:
+        self.base_factory = base_factory
+        self.open_contexts = 0
+
+    @asynccontextmanager
+    async def __call__(self):
+        async with self.base_factory() as session:
+            self.open_contexts += 1
+            try:
+                yield session
+            finally:
+                self.open_contexts -= 1
+
+
+class FakeSummaryProvider:
+    def __init__(self, factory: TrackingSessionFactory, *, fail=False) -> None:
+        self.factory = factory
+        self.fail = fail
+        self.transcripts: list[list[dict]] = []
+
+    async def generate_summary(self, transcript: list[dict]):
+        assert self.factory.open_contexts == 0
+        self.transcripts.append(transcript)
+        if self.fail:
+            raise RuntimeError("gemini unavailable")
+        return StructuredSummary(
+            summary_text="A durable summary",
+            caller_intent="Ask a question",
+            action_items=["Reply"],
+            sentiment="neutral",
+            follow_up_required=True,
+        )
+
+
+class FakeRecordingProvider:
+    def __init__(self, factory: TrackingSessionFactory, *, fail=False) -> None:
+        self.factory = factory
+        self.fail = fail
+        self.calls: list[str] = []
+
+    async def ensure_stopped(self, egress_id: str) -> None:
+        assert self.factory.open_contexts == 0
+        self.calls.append(egress_id)
+        if self.fail:
+            raise RuntimeError("livekit unavailable")
+
+
+def event(*, call_id, topic: str, aggregate_type: str) -> OutboxEvent:
+    return OutboxEvent(
+        id=uuid4(),
+        idempotency_key=f"{topic}:{call_id}",
+        topic=topic,
+        aggregate_type=aggregate_type,
+        aggregate_id=call_id,
+        payload={"call_id": str(call_id)},
+        status="processing",
+        attempt_count=1,
+        next_attempt_at=datetime.now(UTC),
+    )
+
+
+@pytest.mark.anyio
+async def test_summary_handler_snapshots_then_persists_in_fresh_transaction(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(user_id=active_user.id, status="completed", duration_seconds=1)
+    db_session.add(call)
+    await db_session.flush()
+    call_id = call.id
+    db_session.add_all(
+        [
+            CallMessage(
+                call_id=call.id,
+                sequence_number=2,
+                speaker="AGENT",
+                text="Second",
+            ),
+            CallMessage(
+                call_id=call.id,
+                sequence_number=1,
+                speaker="CALLER",
+                text="First",
+            ),
+        ]
+    )
+    await db_session.commit()
+    call_id = call.id
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+    provider = FakeSummaryProvider(factory)
+
+    await deliver_summary_generate(
+        {
+            "session_factory": factory,
+            "summary_provider": provider,
+            "notification_provider": ExplodingNotificationProvider(),
+        },
+        event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+    )
+
+    assert provider.transcripts == [
+        [
+            {"speaker": "CALLER", "text": "First"},
+            {"speaker": "AGENT", "text": "Second"},
+        ]
+    ]
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert stored.summary_text == "A durable summary"
+    assert stored.summary_data["follow_up_required"] is True
+
+
+@pytest.mark.anyio
+async def test_existing_summary_is_idempotent_without_provider_call(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(
+        user_id=active_user.id,
+        status="completed",
+        duration_seconds=1,
+        summary_text="First persisted summary",
+        summary_data={"summary_text": "First persisted summary"},
+    )
+    db_session.add(call)
+    await db_session.commit()
+    call_id = call.id
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+    provider = FakeSummaryProvider(factory)
+
+    await deliver_summary_generate(
+        {"session_factory": factory, "summary_provider": provider},
+        event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+    )
+
+    assert provider.transcripts == []
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert stored.summary_text == "First persisted summary"
+
+
+@pytest.mark.anyio
+async def test_existing_summary_regenerates_when_it_does_not_cover_current_transcript(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(
+        user_id=active_user.id,
+        status="completed",
+        duration_seconds=1,
+        summary_text="Stale summary",
+        summary_data={"summary_text": "Stale summary"},
+    )
+    call.summary_transcript_max_sequence = 0
+    db_session.add(call)
+    await db_session.flush()
+    call_id = call.id
+    db_session.add(
+        CallMessage(
+            call_id=call.id,
+            sequence_number=1,
+            speaker="CALLER",
+            text="Late durable line",
+        )
+    )
+    await db_session.commit()
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+    provider = FakeSummaryProvider(factory)
+
+    await deliver_summary_generate(
+        {"session_factory": factory, "summary_provider": provider},
+        event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+    )
+
+    assert provider.transcripts == [
+        [{"speaker": "CALLER", "text": "Late durable line"}]
+    ]
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert stored.summary_text == "A durable summary"
+    assert stored.summary_transcript_max_sequence == 1
+
+
+@pytest.mark.anyio
+async def test_fresh_lock_race_preserves_first_persisted_summary(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(user_id=active_user.id, status="completed", duration_seconds=1)
+    db_session.add(call)
+    await db_session.flush()
+    db_session.add(
+        CallMessage(
+            call_id=call.id,
+            sequence_number=1,
+            speaker="CALLER",
+            text="Race",
+        )
+    )
+    await db_session.commit()
+    call_id = call.id
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+
+    class RacingProvider(FakeSummaryProvider):
+        async def generate_summary(self, transcript):
+            result = await super().generate_summary(transcript)
+            async with self.factory.base_factory() as session:
+                racing_call = await session.get(Call, call_id, with_for_update=True)
+                racing_call.summary_text = "Winner from another worker"
+                racing_call.summary_data = {"summary_text": "Winner from another worker"}
+                racing_call.summary_transcript_max_sequence = 1
+                await session.commit()
+            return result
+
+    await deliver_summary_generate(
+        {
+            "session_factory": factory,
+            "summary_provider": RacingProvider(factory),
+        },
+        event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+    )
+
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert stored.summary_text == "Winner from another worker"
+
+
+@pytest.mark.anyio
+async def test_summary_handler_retries_when_transcript_changes_during_provider_io(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(user_id=active_user.id, status="completed", duration_seconds=1)
+    db_session.add(call)
+    await db_session.flush()
+    db_session.add(
+        CallMessage(
+            call_id=call.id,
+            sequence_number=1,
+            speaker="CALLER",
+            text="Snapshot line",
+        )
+    )
+    await db_session.commit()
+    call_id = call.id
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+
+    class LateTranscriptProvider(FakeSummaryProvider):
+        async def generate_summary(self, transcript):
+            result = await super().generate_summary(transcript)
+            async with self.factory.base_factory() as session:
+                session.add(
+                    CallMessage(
+                        call_id=call_id,
+                        sequence_number=2,
+                        speaker="AGENT",
+                        text="Arrived during provider I/O",
+                    )
+                )
+                await session.commit()
+            return result
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_summary_generate(
+            {
+                "session_factory": factory,
+                "summary_provider": LateTranscriptProvider(factory),
+            },
+            event(
+                call_id=call_id,
+                topic="summary.generate",
+                aggregate_type="call-summary",
+            ),
+        )
+
+    assert exc_info.value.retryable is True
+    assert exc_info.value.error_code == "summary_stale"
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert stored.summary_data is None
+
+
+@pytest.mark.anyio
+async def test_summary_handler_empty_transcript_is_successful_noop(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(user_id=active_user.id, status="completed", duration_seconds=1)
+    db_session.add(call)
+    await db_session.commit()
+    call_id = call.id
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+    provider = FakeSummaryProvider(factory)
+
+    await deliver_summary_generate(
+        {"session_factory": factory, "summary_provider": provider},
+        event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+    )
+
+    assert provider.transcripts == []
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert stored.summary_transcript_max_sequence == 0
+
+    async with factory.base_factory() as session:
+        session.add(
+            CallMessage(
+                call_id=call_id,
+                sequence_number=1,
+                speaker="CALLER",
+                text="Recovered after empty delivery",
+            )
+        )
+        await session.commit()
+
+    await deliver_summary_generate(
+        {"session_factory": factory, "summary_provider": provider},
+        event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+    )
+    assert provider.transcripts == [
+        [{"speaker": "CALLER", "text": "Recovered after empty delivery"}]
+    ]
+
+
+@pytest.mark.anyio
+async def test_summary_handler_provider_failure_is_retryable(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(user_id=active_user.id, status="completed", duration_seconds=1)
+    db_session.add(call)
+    await db_session.flush()
+    db_session.add(
+        CallMessage(
+            call_id=call.id,
+            sequence_number=1,
+            speaker="CALLER",
+            text="First",
+        )
+    )
+    await db_session.commit()
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_summary_generate(
+            {
+                "session_factory": factory,
+                "summary_provider": FakeSummaryProvider(factory, fail=True),
+            },
+            event(
+                call_id=call.id,
+                topic="summary.generate",
+                aggregate_type="call-summary",
+            ),
+        )
+
+    assert exc_info.value.retryable is True
+
+
+@pytest.mark.anyio
+async def test_recording_stop_handler_performs_no_io_with_session_open(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(
+        user_id=active_user.id,
+        status="completed",
+        duration_seconds=1,
+        recording_egress_id="egress-1",
+    )
+    db_session.add(call)
+    await db_session.commit()
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+    provider = FakeRecordingProvider(factory)
+
+    await deliver_recording_stop(
+        {"session_factory": factory, "livekit_recording_provider": provider},
+        event(call_id=call.id, topic="recording.stop", aggregate_type="call-recording"),
+    )
+
+    assert provider.calls == ["egress-1"]
+
+
+@pytest.mark.anyio
+async def test_recording_stop_uncertainty_is_retryable(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(
+        user_id=active_user.id,
+        status="completed",
+        duration_seconds=1,
+        recording_egress_id="egress-1",
+    )
+    db_session.add(call)
+    await db_session.commit()
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_recording_stop(
+            {
+                "session_factory": factory,
+                "livekit_recording_provider": FakeRecordingProvider(factory, fail=True),
+            },
+            event(call_id=call.id, topic="recording.stop", aggregate_type="call-recording"),
+        )
+
+    assert exc_info.value.retryable is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("handler", "topic", "aggregate_type"),
+    [
+        (deliver_summary_generate, "summary.generate", "call-summary"),
+        (deliver_recording_stop, "recording.stop", "call-recording"),
+    ],
+)
+async def test_post_call_handlers_validate_exact_aggregate_identity(
+    handler,
+    topic: str,
+    aggregate_type: str,
+) -> None:
+    call_id = uuid4()
+    malformed = event(
+        call_id=call_id,
+        topic=topic,
+        aggregate_type=aggregate_type,
+    )
+    malformed.aggregate_type = "call"
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await handler({}, malformed)
+
+    assert exc_info.value.retryable is False
+    assert exc_info.value.error_code == "invalid_payload"
+
+
+def test_default_handlers_exactly_match_supported_topics_without_placeholders() -> None:
+    assert set(outbox_topics.DEFAULT_OUTBOX_HANDLERS) == set(SUPPORTED_OUTBOX_TOPICS)
+    assert "summary.generate" in outbox_topics.DEFAULT_OUTBOX_HANDLERS
+    assert "recording.stop" in outbox_topics.DEFAULT_OUTBOX_HANDLERS
+    assert "recording.start" not in outbox_topics.DEFAULT_OUTBOX_HANDLERS
+    assert "notification.send" not in outbox_topics.DEFAULT_OUTBOX_HANDLERS
+
+
+@pytest.mark.anyio
+async def test_retrying_summary_does_not_block_recording_stop_aggregate(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(user_id=active_user.id, status="completed", duration_seconds=1)
+    db_session.add(call)
+    await db_session.flush()
+    outbox = OutboxService(db_session)
+    await outbox.add(
+        topic="summary.generate",
+        aggregate_type="call-summary",
+        aggregate_id=call.id,
+        idempotency_key=f"summary.generate:{call.id}",
+        payload={"call_id": str(call.id)},
+    )
+    await outbox.add(
+        topic="recording.stop",
+        aggregate_type="call-recording",
+        aggregate_id=call.id,
+        idempotency_key=f"recording.stop:{call.id}",
+        payload={"call_id": str(call.id)},
+    )
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    delivered: list[str] = []
+
+    async def failing_summary(_ctx, _event):
+        raise OutboxDeliveryError("provider_retryable", retryable=True)
+
+    async def successful_recording(_ctx, _event):
+        delivered.append("recording.stop")
+
+    result = await outbox_delivery_job(
+        {
+            "session_factory": factory,
+            "outbox_handlers": {
+                "summary.generate": failing_summary,
+                "recording.stop": successful_recording,
+            },
+            "outbox_now": lambda: datetime.now(UTC),
+        }
+    )
+
+    assert result == {"claimed": 2, "delivered": 1, "retried": 1, "failed": 0}
+    assert delivered == ["recording.stop"]

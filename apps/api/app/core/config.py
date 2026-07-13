@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +40,11 @@ class Settings(BaseSettings):
     firebase_credentials_json: str | None = None
     agent_dispatch_jwt_secret: str | None = None
     agent_dispatch_jwt_ttl_seconds: int = 7200
+    call_reconciliation_pending_stale_seconds: int = Field(default=120, ge=1)
+    call_reconciliation_connected_stale_seconds: int = Field(default=3720, ge=1)
+    call_reconciliation_ending_grace_seconds: int = Field(default=60, ge=1)
+    call_reconciliation_finalizing_lease_seconds: int = Field(default=300, ge=1)
+    call_reconciliation_max_attempts: int = Field(default=5, ge=1, le=5)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
