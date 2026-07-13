@@ -201,6 +201,17 @@ class BillingService:
             invoice_id=invoice_id
         )
         user_id = await self._invoice_user_id(event_object)
+        if user_id is None:
+            user_id = (
+                await self.subscription_repository.get_user_id_by_stripe_subscription_id(
+                    subscription_id
+                )
+            )
+        if user_id is None:
+            return
+        locked_user = await self.user_repository.get_by_id_for_update(user_id)
+        if locked_user is None:
+            return
         subscription, should_apply = (
             await self.subscription_repository.resolve_invoice_target_for_update(
                 stripe_subscription_id=subscription_id,

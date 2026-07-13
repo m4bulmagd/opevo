@@ -38,7 +38,7 @@ def base_settings() -> Settings:
         s3_access_key="storage-access-key",
         s3_secret_key="storage-secret-key",
         s3_region="eu-west-3",
-        agent_dispatch_jwt_secret="dispatch-jwt-secret",
+        agent_dispatch_jwt_secret="production-dispatch-jwt-secret-at-least-32-bytes",
         summary_provider="gemini",
         summary_model="gemini-2.5-flash",
         gemini_api_key="gemini-api-key",
@@ -96,6 +96,26 @@ def test_production_rejects_missing_clerk_verification_source(base_settings: Set
     message = str(exc_info.value)
     assert "CLERK_JWT_KEY" in message
     assert "CLERK_JWKS_URL" in message
+
+
+@pytest.mark.parametrize(
+    "unsafe_secret",
+    [
+        "too-short",
+        "replace-with-a-long-random-secret",
+        "CHANGE-ME-CHANGE-ME-CHANGE-ME-CHANGE-ME",
+    ],
+)
+def test_production_rejects_unsafe_dispatch_hmac_secret(
+    base_settings: Settings,
+    unsafe_secret: str,
+) -> None:
+    settings = base_settings.model_copy(
+        update={"agent_dispatch_jwt_secret": unsafe_secret}
+    )
+
+    with pytest.raises(RuntimeError, match="AGENT_DISPATCH_JWT_SECRET"):
+        validate_api_runtime(settings)
 
 
 @pytest.mark.parametrize("verification_field", ["clerk_jwt_key", "clerk_jwks_url"])
@@ -184,6 +204,46 @@ def test_development_accepts_fake_api_providers() -> None:
         app_env="development",
         database_url="sqlite+aiosqlite://",
         redis_url="redis://localhost:6379/0",
+    )
+
+    validate_api_runtime(settings)
+
+
+@pytest.mark.parametrize("app_env", ["test", "staging"])
+@pytest.mark.parametrize(
+    "unsafe_secret",
+    [
+        None,
+        "",
+        "too-short",
+        "replace-with-a-long-random-secret",
+        "CHANGE-ME-CHANGE-ME-CHANGE-ME-CHANGE-ME",
+    ],
+)
+def test_non_development_runtime_rejects_missing_or_unsafe_dispatch_secret(
+    app_env: str,
+    unsafe_secret: str | None,
+) -> None:
+    settings = Settings(
+        app_env=app_env,
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+        agent_dispatch_jwt_secret=unsafe_secret,
+    )
+
+    with pytest.raises(RuntimeError, match="AGENT_DISPATCH_JWT_SECRET"):
+        validate_api_runtime(settings)
+
+
+@pytest.mark.parametrize("app_env", ["test", "staging"])
+def test_non_development_runtime_accepts_strong_dispatch_secret_only(
+    app_env: str,
+) -> None:
+    settings = Settings(
+        app_env=app_env,
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+        agent_dispatch_jwt_secret="runtime-dispatch-secret-with-at-least-32-bytes",
     )
 
     validate_api_runtime(settings)

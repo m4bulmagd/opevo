@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.call import Call
@@ -50,12 +50,14 @@ class CallRepository:
         *,
         user_id: UUID,
         phone_number_id: UUID | None = None,
+        agent_config_id: UUID | None = None,
         livekit_room_id: str | None = None,
         caller_number: str | None = None,
     ) -> Call:
         call = Call(
             user_id=user_id,
             phone_number_id=phone_number_id,
+            agent_config_id=agent_config_id,
             livekit_room_id=livekit_room_id,
             caller_number=caller_number,
             status="pending",
@@ -63,6 +65,12 @@ class CallRepository:
         self.session.add(call)
         await self.session.flush()
         return call
+
+    async def get_by_room(self, *, room_name: str) -> Call | None:
+        result = await self.session.execute(
+            select(Call).where(Call.livekit_room_id == room_name)
+        )
+        return result.scalar_one_or_none()
 
     async def get_pending_by_room_without_recording(self, *, room_name: str) -> Call | None:
         result = await self.session.execute(
@@ -73,6 +81,49 @@ class CallRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def connect_if_pending(self, *, call_id: UUID) -> Call | None:
+        result = await self.session.execute(
+            update(Call)
+            .where(Call.id == call_id, Call.status == "pending")
+            .values(status="connected", started_at=datetime.now(timezone.utc))
+            .returning(Call)
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_id_without_recording_for_update(
+        self,
+        *,
+        call_id: UUID,
+    ) -> Call | None:
+        result = await self.session.execute(
+            select(Call)
+            .where(
+                Call.id == call_id,
+                Call.recording_egress_id.is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    async def set_livekit_dispatch_id(
+        self,
+        call: Call,
+        *,
+        livekit_dispatch_id: str,
+    ) -> Call:
+        call.livekit_dispatch_id = livekit_dispatch_id
+        await self.session.flush()
+        return call
+
+    async def mark_dispatch_failed(self, call: Call, *, failure_code: str) -> Call:
+        call.status = "failed"
+        call.failure_code = failure_code
+        call.ended_at = call.ended_at or datetime.now(timezone.utc)
+        await self.session.flush()
+        return call
 
     async def get_active_by_room_with_recording(self, *, room_name: str) -> Call | None:
         result = await self.session.execute(

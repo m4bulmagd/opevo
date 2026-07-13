@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 
 from app.core.config import Settings
+from app.core.dispatch_token import is_dispatch_secret_safe
 from app.core.http_origin import parse_http_origin
 
 
@@ -43,7 +44,17 @@ def _require(settings: Settings, names: Sequence[str]) -> list[str]:
 
 
 def validate_api_runtime(settings: Settings) -> None:
-    if settings.app_env.strip().lower() != "production":
+    environment = settings.app_env.strip().lower()
+    if environment == "development":
+        return
+
+    if not is_dispatch_secret_safe(settings.agent_dispatch_jwt_secret):
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: "
+            "AGENT_DISPATCH_JWT_SECRET"
+        )
+
+    if environment != "production":
         return
 
     missing = _require(settings, PRODUCTION_REQUIRED_SETTINGS)

@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import UserIdentity, require_user_identity
 from app.core.config import get_settings
 from app.core.database import get_session
-from app.core.dispatch_token import verify_dispatch_token
+from app.core.dispatch_token import DispatchTokenError, verify_dispatch_token
+from app.models.agent_config import AgentConfig
+from app.models.call import Call
 from app.schemas.agent import AgentConfigPatchRequest, AgentConfigResponse
 from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionResponse
 from app.repositories.agent_config_repository import AgentConfigRepository
@@ -27,23 +29,55 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 
 async def require_agent_auth(
-    call_id: UUID | None = None,
-    x_agent_token: str = Header(...),
+    call_id: UUID,
+    x_agent_token: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),
 ) -> None:
     settings = get_settings()
 
-    # Try dispatch JWT first (scoped to call_id)
-    if call_id is not None and settings.agent_dispatch_jwt_secret:
-        try:
-            verify_dispatch_token(x_agent_token, expected_call_id=str(call_id))
+    if settings.app_env.strip().lower() == "development":
+        expected_token = settings.agent_internal_api_token
+        if (
+            isinstance(x_agent_token, str)
+            and isinstance(expected_token, str)
+            and expected_token
+            and hmac.compare_digest(x_agent_token, expected_token)
+        ):
             return
-        except Exception:
-            pass
 
-    # Fallback to static token
-    expected_token = settings.agent_internal_api_token
-    if not expected_token or not hmac.compare_digest(x_agent_token, expected_token):
+    if not isinstance(x_agent_token, str) or not x_agent_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
+
+    try:
+        claims = verify_dispatch_token(
+            x_agent_token,
+            expected_call_id=str(call_id),
+        )
+        signed_user_id = UUID(claims["user_id"])
+        signed_agent_config_id = UUID(claims["agent_config_id"])
+    except (DispatchTokenError, KeyError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid agent token",
+        ) from None
+
+    call = await session.get(Call, call_id)
+    if (
+        call is None
+        or call.user_id != signed_user_id
+        or getattr(call, "agent_config_id", None) != signed_agent_config_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid agent token",
+        )
+
+    agent_config = await session.get(AgentConfig, signed_agent_config_id)
+    if agent_config is None or agent_config.user_id != signed_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid agent token",
+        )
 
 
 def get_call_finalization_queue(request: Request) -> CallFinalizationQueue:

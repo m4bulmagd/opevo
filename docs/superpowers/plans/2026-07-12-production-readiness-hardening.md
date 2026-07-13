@@ -722,26 +722,70 @@ git commit -m "feat: deliver provider operations through transactional outbox"
 ### Task 8: Enforce dispatch eligibility and call-scoped agent authentication
 
 **Files:**
+- Create: `apps/api/alembic/versions/0010_add_durable_livekit_dispatch.py`
+- Create: `apps/api/app/providers/livekit_dispatch/base.py`
+- Create: `apps/api/app/providers/livekit_dispatch/livekit.py`
 - Create: `apps/api/app/services/dispatch_eligibility_policy.py`
+- Modify: `apps/api/.env.example`
+- Modify: `apps/api/app/core/config.py`
+- Modify: `apps/api/app/core/runtime_validation.py`
+- Modify: `apps/api/app/main.py`
+- Modify: `apps/api/app/models/call.py`
+- Modify: `apps/api/app/repositories/agent_config_repository.py`
+- Modify: `apps/api/app/repositories/call_repository.py`
+- Modify: `apps/api/app/repositories/phone_number_repository.py`
+- Modify: `apps/api/app/repositories/subscription_repository.py`
+- Modify: `apps/api/app/repositories/user_repository.py`
 - Modify: `apps/api/app/core/dispatch_token.py`
+- Modify: `apps/api/app/services/billing_service.py`
 - Modify: `apps/api/app/services/livekit_dispatch_service.py`
+- Modify: `apps/api/app/webhooks/livekit.py`
+- Modify: `apps/api/app/workers/jobs/outbox_topics.py`
+- Modify: `apps/api/app/workers/jobs/outbox_delivery.py`
 - Modify: `apps/api/app/routers/agent.py`
 - Modify: `apps/api/app/schemas/livekit.py`
 - Modify: `apps/agent/agent/api_client.py`
+- Modify: `apps/agent/agent/main.py`
 - Modify: `apps/agent/agent/schemas.py`
+- Modify: `apps/agent/agent/session_runtime.py`
+- Modify: `apps/agent/.env.example`
+- Modify: `apps/agent/agent/runtime_validation.py`
 - Modify: `apps/api/tests/livekit/test_dispatch_service.py`
+- Modify: `apps/api/tests/livekit/test_dispatch_webhook.py`
+- Create: `apps/api/tests/livekit/test_durable_dispatch_service.py`
+- Create: `apps/api/tests/livekit/test_durable_dispatch_webhook.py`
+- Modify: `apps/api/tests/integration/test_outbox_delivery.py`
+- Create: `apps/api/tests/integration/test_livekit_dispatch_concurrency.py`
+- Create: `apps/api/tests/test_livekit_dispatch_migration.py`
+- Create: `apps/api/tests/providers/test_livekit_dispatch_provider.py`
+- Create: `apps/api/tests/workers/test_livekit_dispatch_outbox.py`
 - Create: `apps/api/tests/services/test_dispatch_eligibility_policy.py`
 - Modify: `apps/api/tests/auth/test_jwt_auth.py`
 - Modify: `apps/api/tests/agent/test_call_completion.py`
+- Modify: `apps/api/tests/conftest.py`
+- Modify: `apps/api/tests/billing/test_stripe_webhooks.py`
+- Create: `apps/api/tests/billing/test_billing_lock_order.py`
+- Modify: `apps/api/tests/test_deployment_readiness.py`
 - Modify: `apps/agent/tests/test_api_client.py`
+- Modify: `apps/agent/tests/test_main.py`
+- Modify: `apps/agent/tests/test_runtime_validation.py`
+- Modify: `apps/agent/tests/test_session_runtime.py`
+- Modify: `apps/agent/tests/test_session_runtime_errors.py`
 
 **Interfaces:**
-- Produces: `DispatchEligibilityPolicy.can_dispatch(subscription_status: str, balance: int, phone_active: bool, agent_enabled: bool, setup_complete: bool) -> bool`.
+- Produces: `DispatchEligibilityPolicy.can_dispatch(subscription_status: str, period_start: datetime | None, period_end: datetime | None, now: datetime, balance: int, phone_active: bool, agent_enabled: bool, setup_complete: bool, called_number_matches: bool) -> bool`.
 - Produces: `create_dispatch_token(call_id: str, user_id: str, agent_config_id: str) -> str`.
 - Produces: `verify_dispatch_token(token: str, expected_call_id: str, expected_user_id: str | None = None) -> dict`.
-- Dispatch eligibility requires active subscription, balance greater than zero, active assigned phone number, enabled and complete agent configuration, and matching called number.
-- Dispatch rejects a second active call for the same user with a controlled busy response; the database partial unique index is the final race-safe guard.
+- Adds nullable legacy-compatible `calls.agent_config_id`, unique nullable `calls.livekit_dispatch_id`, and nullable `calls.failure_code`; every new dispatched call records its agent configuration.
+- Dispatch eligibility requires an active or trialing subscription inside `period_start <= now < period_end`, balance greater than zero, an active assigned phone number, an enabled and complete agent configuration, and an exact `sip.trunkPhoneNumber` match. Missing period or trunk data fails closed.
+- Dispatch rejects a second active call for the same user without creating a call or dispatch intent; the database partial unique index is the final race-safe guard. A caller-facing busy announcement or durable hangup remains a launch requirement because an internal `202` rejection alone leaves the SIP caller in a silent room.
 - Recording starts only for the expected dispatched agent participant, never for an arbitrary non-SIP observer.
+- The expected participant identity is deterministic: `agent-call-{call_id}`. Only LiveKit server kind `AGENT` with that exact identity may connect the call or start recording; only server kind `SIP` may create inbound dispatch intent.
+- LiveKit webhook UUID deduplication, the pending call, and the reference-only `livekit.dispatch` outbox intent commit in one transaction. Raw webhook attributes and dispatch metadata are never stored in `webhook_events` or logs.
+- LiveKit dispatch delivery reconciles the provider by room, agent name, and metadata call reference before create, persists the returned dispatch ID, and projects terminal/exhausted delivery into `calls.status = 'failed'` with an allowlisted failure code.
+- Provider routing always uses the configured `LIVEKIT_AGENT_NAME`; the customer-facing agent name remains display metadata only. Provider responses with missing or malformed dispatch identity fields fail closed instead of coercing values such as `None` into strings.
+- The pending-to-connected transition is a conditional database update. It commits before recording provider I/O, and recording metadata is revalidated and persisted in a fresh short transaction so a stale webhook cannot resurrect a failed call or hold a row lock over the network.
+- Every dispatch, renewal, and eligibility path uses a user-first business-row lock order. A terminal `livekit.dispatch` failure releases the trusted aggregate call even when its untrusted payload is malformed, while never selecting a different call from that payload.
 
 - [ ] **Step 1: Write a dispatch eligibility matrix**
 
@@ -760,23 +804,28 @@ def test_dispatch_requires_all_gates(
     agent_enabled: bool,
     allowed: bool,
 ):
+    now = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
     result = DispatchEligibilityPolicy.can_dispatch(
         subscription_status=subscription,
+        period_start=now - timedelta(days=1),
+        period_end=now + timedelta(days=1),
+        now=now,
         balance=balance,
         phone_active=phone_active,
         agent_enabled=agent_enabled,
         setup_complete=True,
+        called_number_matches=True,
     )
     assert result is allowed
 ```
 
 Implement the test with repository fakes already used by `test_dispatch_service.py`; assert no call or outbox dispatch intent is created when denied.
 
-Add a PostgreSQL race test that handles two inbound joins for the same user concurrently and asserts one pending call plus one controlled rejection. Add a webhook test proving an observer participant cannot start recording.
+Cover null and boundary subscription periods, missing and mismatched trunk numbers, disabled or incomplete configuration, and inactive phones. Add a PostgreSQL race test that handles two inbound joins for the same user concurrently and asserts one pending call, one outbox event, and one controlled internal rejection. Add webhook tests proving numeric participant kinds are normalized, forged SIP attributes do not dispatch, and an observer or wrong agent identity cannot start recording.
 
 - [ ] **Step 2: Write JWT claim and fallback tests**
 
-Assert that staging/production rejects the static token, a token for call A cannot complete call B, and a token with user B cannot append transcript or complete a call owned by user A.
+Assert that test/staging/production reject the static token, a token for call A cannot complete call B, and a token with user or configuration B cannot complete a call owned by user A. Keep the authorization dependency reusable; Task 9 applies the same ownership checks to transcript append.
 
 - [ ] **Step 3: Run targeted tests and verify failure**
 
@@ -798,20 +847,48 @@ payload = {
 }
 ```
 
-Use `hmac.compare_digest` only for development static-token compatibility. In staging and production, require JWT configuration and reject fallback authentication.
+Use `hmac.compare_digest` only for development static-token compatibility. Test, staging, and production require a valid dispatch JWT and reject fallback authentication. Require at least 32 UTF-8 bytes of signing secret and reject documented placeholder values at startup and token use. The JWT TTL must exceed dispatch delay plus the maximum call duration and finalization grace; use a 7,200-second default for the future 3,600-second maximum call.
 
 - [ ] **Step 5: Commit dispatch intent after the call row**
 
-Create the pending call and `livekit.dispatch` outbox event in one transaction. If delivery fails, set the call failure code through the outbox handler; never leave a silent pending call.
+Record the LiveKit event UUID first, then create the pending call and `livekit.dispatch` outbox event in the same transaction. Commit before best-effort wakeup of the generic outbox worker. The webhook never calls the dispatch provider directly.
 
-Record LiveKit event IDs in `webhook_events` before dispatch or recording logic. Identify the agent from the expected dispatch/participant identity and LiveKit participant kind, not merely from “not SIP.”
+The worker takes a dedicated PostgreSQL advisory lock by the stable outbox operation key, revalidates current eligibility, lists room dispatches, reconciles an existing matching dispatch, and creates only when no dispatch exists. Reconciliation and creation target `LIVEKIT_AGENT_NAME`, never the customer display name. After an uncertain create failure it lists once more before retrying. No business-row lock is held during provider I/O. Terminal or retry-exhausted delivery uses the trusted outbox aggregate ID to set the call failure code and release the active-call uniqueness slot, even when the reference-only payload is malformed.
+
+Record only allowlisted webhook metadata in `webhook_events`. Identify SIP and agent participants from LiveKit's server-assigned kind, not custom attributes. The agent request handler validates job metadata, accepts the deterministic identity, and the runtime waits specifically for a SIP participant. A valid agent join atomically changes only a pending call to connected, commits `started_at` before recording I/O, and persists provider recording metadata in a later short transaction; SIP leave transition ownership is completed in Task 10.
 
 - [ ] **Step 6: Run API and agent suites, then commit**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
 cd ../agent && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
-git add apps/api/app/services/dispatch_eligibility_policy.py apps/api/app/core/dispatch_token.py apps/api/app/services/livekit_dispatch_service.py apps/api/app/routers/agent.py apps/api/app/schemas/livekit.py apps/api/tests/services/test_dispatch_eligibility_policy.py apps/api/tests/livekit/test_dispatch_service.py apps/api/tests/auth/test_jwt_auth.py apps/api/tests/agent/test_call_completion.py apps/agent/agent/api_client.py apps/agent/agent/schemas.py apps/agent/tests/test_api_client.py
+git add \
+  apps/api/.env.example \
+  apps/api/alembic/versions/0010_add_durable_livekit_dispatch.py \
+  apps/api/app/core/config.py apps/api/app/core/dispatch_token.py \
+  apps/api/app/core/runtime_validation.py apps/api/app/main.py \
+  apps/api/app/models/call.py apps/api/app/providers/livekit_dispatch \
+  apps/api/app/repositories/agent_config_repository.py \
+  apps/api/app/repositories/call_repository.py \
+  apps/api/app/repositories/phone_number_repository.py \
+  apps/api/app/repositories/subscription_repository.py \
+  apps/api/app/repositories/user_repository.py \
+  apps/api/app/routers/agent.py apps/api/app/schemas/livekit.py \
+  apps/api/app/services/billing_service.py \
+  apps/api/app/services/dispatch_eligibility_policy.py \
+  apps/api/app/services/livekit_dispatch_service.py apps/api/app/webhooks/livekit.py \
+  apps/api/app/workers/jobs/outbox_delivery.py apps/api/app/workers/jobs/outbox_topics.py \
+  apps/api/tests/agent/test_call_completion.py apps/api/tests/auth/test_jwt_auth.py \
+  apps/api/tests/billing/test_billing_lock_order.py \
+  apps/api/tests/conftest.py \
+  apps/api/tests/integration/test_livekit_dispatch_concurrency.py \
+  apps/api/tests/livekit apps/api/tests/providers/test_livekit_dispatch_provider.py \
+  apps/api/tests/services/test_dispatch_eligibility_policy.py \
+  apps/api/tests/test_livekit_dispatch_migration.py \
+  apps/api/tests/test_deployment_readiness.py \
+  apps/api/tests/workers/test_livekit_dispatch_outbox.py \
+  apps/agent/.env.example apps/agent/agent apps/agent/tests \
+  docs/superpowers/plans/2026-07-12-production-readiness-hardening.md
 git commit -m "security: scope agent access and enforce call dispatch gates"
 ```
 
@@ -875,13 +952,14 @@ git commit -m "feat: persist live transcripts incrementally"
 ### Task 10: Introduce a durable call state machine and reconciliation worker
 
 **Files:**
-- Modify: `apps/api/alembic/versions/0008_add_outbox_and_call_lifecycle.py`
+- Create: `apps/api/alembic/versions/0011_add_call_state_machine.py`
 - Modify: `apps/api/app/models/call.py`
 - Modify: `apps/api/app/repositories/call_repository.py`
 - Create: `apps/api/app/services/call_reconciliation_service.py`
 - Create: `apps/api/app/workers/jobs/call_reconciliation.py`
 - Modify: `apps/api/app/workers/arq_worker.py`
 - Modify: `apps/api/app/services/call_lifecycle_service.py`
+- Modify: `apps/api/app/services/livekit_dispatch_service.py`
 - Create: `apps/api/tests/services/test_call_reconciliation_service.py`
 - Modify: `apps/api/tests/workers/test_lifecycle_edge_cases.py`
 - Modify: `apps/api/tests/calls/test_call_lifecycle.py`
@@ -928,7 +1006,7 @@ Expected: state transitions and reconciliation do not exist.
 
 - [ ] **Step 4: Add lifecycle fields**
 
-Add `state_changed_at`, `finalization_attempt_count`, `last_reconciled_at`, and `failure_code`. Backfill existing `pending` and `completed` rows from their timestamps.
+Add `state_changed_at`, `finalization_attempt_count`, and `last_reconciled_at`; reuse the `failure_code` introduced by Task 8. Backfill existing `pending`, `connected`, `completed`, and `failed` rows from their timestamps. A validated SIP leave drives `connected -> ending` before finalization is queued.
 
 - [ ] **Step 5: Make finalization a short database transaction**
 

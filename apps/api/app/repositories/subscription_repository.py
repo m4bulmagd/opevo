@@ -29,6 +29,15 @@ class SubscriptionRepository:
         result = await self.session.execute(select(Subscription).where(Subscription.user_id == user_id))
         return result.scalar_one_or_none()
 
+    async def get_by_user_id_for_update(self, user_id) -> Subscription | None:
+        result = await self.session.execute(
+            select(Subscription)
+            .where(Subscription.user_id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
     async def get_user_id_by_stripe_subscription_id(
         self,
         stripe_subscription_id: str,

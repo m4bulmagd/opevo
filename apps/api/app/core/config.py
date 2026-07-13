@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     firebase_credentials_json: str | None = None
     agent_dispatch_jwt_secret: str | None = None
-    agent_dispatch_jwt_ttl_seconds: int = 3600
+    agent_dispatch_jwt_ttl_seconds: int = 7200
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

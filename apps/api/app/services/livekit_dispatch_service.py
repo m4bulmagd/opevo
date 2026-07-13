@@ -1,74 +1,157 @@
-import json
 import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dispatch_token import create_dispatch_token
 from app.core.logging import report_safe_exception
-from app.core.redaction import redact_phone
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
-from app.repositories.phone_number_repository import PhoneNumberRepository, normalize_phone_number
-from app.repositories.user_repository import UserRepository
+from app.repositories.phone_number_repository import (
+    PhoneNumberRepository,
+    normalize_phone_number,
+)
+from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
-from app.schemas.livekit import LiveKitDispatchMetadata
+from app.repositories.user_repository import UserRepository
+from app.services.dispatch_eligibility_policy import DispatchEligibilityPolicy
 from app.services.livekit_recording_service import LiveKitRecordingService
+from app.services.outbox_service import OutboxService
 from app.services.realtime_service import RealtimeService
 
 
 logger = logging.getLogger(__name__)
+
+ACTIVE_CALL_CONSTRAINT = "uq_calls_user_active"
+ROOM_IDENTITY_CONSTRAINT = "uq_calls_livekit_room_id"
+
+
+@dataclass(frozen=True)
+class DispatchJoinResult:
+    status: str
+    call_id: str | None = None
+
+
+def expected_agent_identity(call_id) -> str:
+    return f"agent-call-{call_id}"
+
+
+def normalize_participant_kind(kind) -> str:
+    numeric_value = getattr(kind, "value", kind)
+    if numeric_value in (3, "3"):
+        return "SIP"
+    if numeric_value in (4, "4"):
+        return "AGENT"
+    name = getattr(kind, "name", numeric_value)
+    normalized = str(name or "").upper()
+    for prefix in ("PARTICIPANT_KIND_", "KIND_"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix) :]
+    return normalized
+
+
+def _constraint_name(error: IntegrityError) -> str | None:
+    original = error.orig
+    for candidate in (original, getattr(original, "__cause__", None)):
+        if candidate is None:
+            continue
+        diagnostic = getattr(candidate, "diag", None)
+        name = getattr(diagnostic, "constraint_name", None)
+        if name:
+            return str(name)
+        name = getattr(candidate, "constraint_name", None)
+        if name:
+            return str(name)
+    message = str(original)
+    if message == "UNIQUE constraint failed: calls.user_id":
+        return ACTIVE_CALL_CONSTRAINT
+    if message == "UNIQUE constraint failed: calls.livekit_room_id":
+        return ROOM_IDENTITY_CONSTRAINT
+    return None
+
+
+def _agent_setup_complete(config) -> bool:
+    if config is None:
+        return False
+    agent_name = (config.agent_name or "").strip()
+    owner_context = (config.owner_context or "").strip()
+    system_prompt = (config.system_prompt or "").strip()
+    knowledge_base = (config.knowledge_base or "").strip()
+    return bool(
+        agent_name
+        and agent_name != "Assistant"
+        and owner_context
+        and (system_prompt or knowledge_base)
+    )
 
 
 class LiveKitDispatchService:
     def __init__(
         self,
         session: AsyncSession,
-        dispatch_client,
+        dispatch_client=None,
         *,
-        phone_number_repository: PhoneNumberRepository,
-        agent_config_repository: AgentConfigRepository,
-        call_repository: CallRepository,
-        user_repository: UserRepository,
-        usage_repository: UsageRepository,
+        phone_number_repository: PhoneNumberRepository | None = None,
+        agent_config_repository: AgentConfigRepository | None = None,
+        call_repository: CallRepository | None = None,
+        user_repository: UserRepository | None = None,
+        usage_repository: UsageRepository | None = None,
+        subscription_repository: SubscriptionRepository | None = None,
+        outbox_service: OutboxService | None = None,
         realtime_service: RealtimeService,
         recording_service: LiveKitRecordingService,
+        arq_pool=None,
+        now_provider=None,
     ) -> None:
         self.session = session
+        # Kept as a compatibility argument for callers while intentionally unused:
+        # webhook handling records provider intent and never dispatches directly.
         self.dispatch_client = dispatch_client
-        self.phone_number_repository = phone_number_repository
-        self.agent_config_repository = agent_config_repository
-        self.call_repository = call_repository
-        self.user_repository = user_repository
-        self.usage_repository = usage_repository
+        self.phone_number_repository = phone_number_repository or PhoneNumberRepository(session)
+        self.agent_config_repository = agent_config_repository or AgentConfigRepository(session)
+        self.call_repository = call_repository or CallRepository(session)
+        self.user_repository = user_repository or UserRepository(session)
+        self.usage_repository = usage_repository or UsageRepository(session)
+        self.subscription_repository = subscription_repository or SubscriptionRepository(session)
+        self.outbox_service = outbox_service or OutboxService(session)
         self.realtime_service = realtime_service
         self.recording_service = recording_service
+        self.arq_pool = arq_pool
+        self.now_provider = now_provider or (lambda: datetime.now(UTC))
 
-    async def handle_participant_joined(self, event: dict) -> None:
+    async def handle_participant_joined(self, event: dict) -> DispatchJoinResult:
         participant = event.get("participant", {})
-        if self._is_sip_participant(participant):
-            await self._handle_sip_participant_joined(event)
-            return
+        kind = normalize_participant_kind(participant.get("kind"))
+        if kind == "SIP":
+            return await self._handle_sip_participant_joined(event)
+        if kind == "AGENT":
+            return await self._handle_agent_participant_joined(event)
+        await self.session.commit()
+        return DispatchJoinResult("ignored")
 
-        await self._handle_agent_participant_joined(event)
-
-    async def handle_participant_left(self, event: dict) -> None:
+    async def handle_participant_left(self, event: dict) -> DispatchJoinResult:
         participant = event.get("participant", {})
-        if not self._is_sip_participant(participant):
+        if normalize_participant_kind(participant.get("kind")) != "SIP":
             await self.session.commit()
-            return
+            return DispatchJoinResult("ignored")
 
         room_name = event.get("room", {}).get("name")
         if not room_name:
             await self.session.commit()
-            return
+            return DispatchJoinResult("ignored")
 
-        call = await self.call_repository.get_active_by_room_with_recording(room_name=room_name)
+        call = await self.call_repository.get_active_by_room_with_recording(
+            room_name=room_name
+        )
         if call is None:
             await self.session.commit()
-            return
+            return DispatchJoinResult("ignored")
 
         try:
-            await self.recording_service.stop_room_recording(egress_id=call.recording_egress_id)
+            await self.recording_service.stop_room_recording(
+                egress_id=call.recording_egress_id
+            )
         except Exception as exc:
             report_safe_exception(
                 logger,
@@ -81,125 +164,155 @@ class LiveKitDispatchService:
             )
 
         await self.session.commit()
+        return DispatchJoinResult("stopped", str(call.id))
 
-    def _is_sip_participant(self, participant: dict) -> bool:
-        if participant.get("kind") == "SIP":
-            return True
-        attributes = participant.get("attributes", {})
-        return any(key.startswith("sip.") for key in attributes)
-
-    async def _handle_sip_participant_joined(self, event: dict) -> None:
-        participant = event.get("participant", {})
-        attributes = participant.get("attributes", {})
-
-        # LiveKit SIP participant docs map inbound caller ID to sip.phoneNumber and
-        # the dialed trunk number to sip.trunkPhoneNumber.
-        raw_called_number = attributes.get("sip.trunkPhoneNumber") or attributes.get("sip.phoneNumber")
-        raw_caller_number = attributes.get("sip.phoneNumber")
-        if not raw_called_number:
-            logger.info(
-                "livekit dispatch skipped event=missing_called_number participant_kind=%s",
-                participant.get("kind"),
-            )
-            await self.session.commit()
-            return
-
-        phone_number = await self.phone_number_repository.get_by_any_format(raw_called_number)
-        if phone_number is None:
-            logger.info(
-                "livekit dispatch skipped event=phone_number_not_found called=%s caller=%s",
-                redact_phone(normalize_phone_number(raw_called_number)),
-                (
-                    redact_phone(normalize_phone_number(raw_caller_number))
-                    if raw_caller_number
-                    else None
-                ),
-            )
-            await self.session.commit()
-            return
-        called_number = phone_number.e164
-        caller_number = normalize_phone_number(raw_caller_number) if raw_caller_number else None
-
-        agent_config = await self.agent_config_repository.get_by_user_id(phone_number.user_id)
-        if agent_config is None:
-            logger.info(
-                "livekit dispatch skipped: agent config missing called=%s user_id=%s",
-                redact_phone(called_number),
-                str(phone_number.user_id),
-            )
-            await self.session.commit()
-            return
-        user = await self.user_repository.get_by_id(phone_number.user_id)
-        if user is None:
-            logger.info(
-                "livekit dispatch skipped: user missing called=%s user_id=%s",
-                redact_phone(called_number),
-                str(phone_number.user_id),
-            )
-            await self.session.commit()
-            return
-
-        room_name = event["room"]["name"]
-        minutes_remaining = await self.usage_repository.get_current_balance(user_id=phone_number.user_id)
-        call = await self.call_repository.create_pending(
-            user_id=phone_number.user_id,
-            phone_number_id=phone_number.id,
-            livekit_room_id=room_name,
-            caller_number=caller_number,
-        )
-        dispatch_token = create_dispatch_token(
-            call_id=str(call.id),
-            user_id=str(phone_number.user_id),
-        )
-        metadata = LiveKitDispatchMetadata(
-            user_id=str(phone_number.user_id),
-            agent_config_id=str(agent_config.id),
-            call_id=str(call.id),
-            minutes_remaining=minutes_remaining,
-            called_number=called_number,
-            caller_number=caller_number,
-            agent_name=agent_config.agent_name,
-            owner_name=user.full_name or user.email,
-            owner_context=agent_config.owner_context,
-            system_prompt=agent_config.system_prompt,
-            knowledge_base=agent_config.knowledge_base,
-            pipeline_mode=agent_config.pipeline_mode,
-            dispatch_token=dispatch_token,
-        )
-        await self.dispatch_client.create_dispatch(
-            room_name=room_name,
-            metadata=metadata.model_dump_json(),
-        )
-        logger.info(
-            "livekit dispatch created called=%s caller=%s call_id=%s user_id=%s",
-            redact_phone(called_number),
-            redact_phone(caller_number),
-            str(call.id),
-            str(phone_number.user_id),
-        )
-        await self.session.commit()
-        await self.realtime_service.publish_call_started(
-            str(phone_number.user_id),
-            room_name=room_name,
-            call_id=str(call.id),
-        )
-
-    async def _handle_agent_participant_joined(self, event: dict) -> None:
+    async def _handle_sip_participant_joined(
+        self,
+        event: dict,
+    ) -> DispatchJoinResult:
         room_name = event.get("room", {}).get("name")
-        if not room_name:
+        participant = event.get("participant", {})
+        attributes = participant.get("attributes", {}) or {}
+        raw_called_number = attributes.get("sip.trunkPhoneNumber")
+        if not room_name or not raw_called_number:
             await self.session.commit()
-            return
+            return DispatchJoinResult("ignored")
 
-        call = await self.call_repository.get_pending_by_room_without_recording(room_name=room_name)
-        if call is None:
+        existing = await self.call_repository.get_by_room(room_name=room_name)
+        if existing is not None:
             await self.session.commit()
-            return
+            return DispatchJoinResult("idempotent", str(existing.id))
 
+        normalized_called_number = normalize_phone_number(raw_called_number)
+        initial_phone = await self.phone_number_repository.get_by_e164(
+            normalized_called_number
+        )
+        if initial_phone is None:
+            await self.session.commit()
+            return DispatchJoinResult("denied")
+
+        # This user lock is the ordering boundary. Every eligibility-bearing read
+        # happens only after it, preventing stale routing decisions from racing
+        # subscription/config/number changes.
+        user = await self.user_repository.get_by_id_for_update(initial_phone.user_id)
+        if user is None or user.status != "active":
+            await self.session.commit()
+            return DispatchJoinResult("denied")
+
+        existing = await self.call_repository.get_by_room(room_name=room_name)
+        if existing is not None:
+            await self.session.commit()
+            return DispatchJoinResult("idempotent", str(existing.id))
+
+        phone_number = await self.phone_number_repository.get_by_e164_for_update(
+            normalized_called_number
+        )
+        subscription = await self.subscription_repository.get_by_user_id_for_update(
+            user.id
+        )
+        agent_config = await self.agent_config_repository.get_by_user_id_for_update(
+            user.id
+        )
+        balance = await self.usage_repository.get_current_balance(user_id=user.id)
+        called_number_matches = bool(
+            phone_number is not None
+            and phone_number.id == initial_phone.id
+            and phone_number.user_id == user.id
+            and phone_number.e164 == normalized_called_number
+        )
+        eligible = bool(
+            phone_number is not None
+            and agent_config is not None
+            and subscription is not None
+            and DispatchEligibilityPolicy.can_dispatch(
+                subscription_status=subscription.status,
+                current_period_start=subscription.current_period_start,
+                current_period_end=subscription.current_period_end,
+                balance=balance,
+                phone_active=phone_number.is_active,
+                agent_enabled=agent_config.is_enabled,
+                setup_complete=_agent_setup_complete(agent_config),
+                called_number_matches=called_number_matches,
+                now=self.now_provider(),
+            )
+        )
+        if not eligible:
+            await self.session.commit()
+            return DispatchJoinResult("denied")
+
+        raw_caller_number = attributes.get("sip.phoneNumber")
+        caller_number = (
+            normalize_phone_number(raw_caller_number) if raw_caller_number else None
+        )
+        try:
+            async with self.session.begin_nested():
+                call = await self.call_repository.create_pending(
+                    user_id=user.id,
+                    phone_number_id=phone_number.id,
+                    agent_config_id=agent_config.id,
+                    livekit_room_id=room_name,
+                    caller_number=caller_number,
+                )
+                await self.outbox_service.add(
+                    topic="livekit.dispatch",
+                    aggregate_type="call",
+                    aggregate_id=call.id,
+                    idempotency_key=f"livekit.dispatch:{call.id}",
+                    payload={"call_id": str(call.id)},
+                )
+        except IntegrityError as error:
+            constraint = _constraint_name(error)
+            if constraint == ROOM_IDENTITY_CONSTRAINT:
+                existing = await self.call_repository.get_by_room(room_name=room_name)
+                await self.session.commit()
+                return DispatchJoinResult(
+                    "idempotent",
+                    str(existing.id) if existing is not None else None,
+                )
+            if constraint == ACTIVE_CALL_CONSTRAINT:
+                await self.session.commit()
+                return DispatchJoinResult("busy")
+            raise
+
+        await self.session.commit()
+        await self._best_effort_outbox_wakeup()
+        await self.realtime_service.publish_call_started(
+            str(user.id),
+            room_name=room_name,
+            call_id=str(call.id),
+        )
+        return DispatchJoinResult("accepted", str(call.id))
+
+    async def _handle_agent_participant_joined(
+        self,
+        event: dict,
+    ) -> DispatchJoinResult:
+        room_name = event.get("room", {}).get("name")
+        identity = event.get("participant", {}).get("identity")
+        if not room_name or not identity:
+            await self.session.commit()
+            return DispatchJoinResult("ignored")
+
+        call = await self.call_repository.get_pending_by_room_without_recording(
+            room_name=room_name
+        )
+        if call is None or identity != expected_agent_identity(call.id):
+            await self.session.commit()
+            return DispatchJoinResult("ignored")
+
+        connected_call = await self.call_repository.connect_if_pending(call_id=call.id)
+        if connected_call is None:
+            await self.session.commit()
+            return DispatchJoinResult("ignored")
+
+        call_id = connected_call.id
+        user_id = connected_call.user_id
+        await self.session.commit()
         try:
             recording = await self.recording_service.start_room_recording(
                 room_name=room_name,
-                user_id=call.user_id,
-                call_id=call.id,
+                user_id=user_id,
+                call_id=call_id,
             )
         except Exception as exc:
             report_safe_exception(
@@ -207,16 +320,35 @@ class LiveKitDispatchService:
                 event="livekit_recording_start_failed",
                 operation="start_room_recording",
                 error=exc,
-                call_id=call.id,
-                user_id=call.user_id,
+                call_id=call_id,
+                user_id=user_id,
                 status="failed",
             )
         else:
-            await self.call_repository.set_recording_metadata(
-                call,
-                recording_object_key=recording.object_key,
-                recording_egress_id=recording.egress_id,
-                recording_url=recording.url,
+            fresh_call = (
+                await self.call_repository.get_by_id_without_recording_for_update(
+                    call_id=call_id
+                )
             )
+            if fresh_call is not None:
+                await self.call_repository.set_recording_metadata(
+                    fresh_call,
+                    recording_object_key=recording.object_key,
+                    recording_egress_id=recording.egress_id,
+                    recording_url=recording.url,
+                )
+            await self.session.commit()
 
-        await self.session.commit()
+        return DispatchJoinResult("connected", str(call_id))
+
+    async def _best_effort_outbox_wakeup(self) -> None:
+        if self.arq_pool is None:
+            return
+        try:
+            await self.arq_pool.enqueue_job("outbox_delivery_job", {})
+        except Exception as error:
+            logger.warning(
+                "outbox wakeup enqueue failed operation=livekit_dispatch "
+                "error_type=%s",
+                type(error).__name__,
+            )

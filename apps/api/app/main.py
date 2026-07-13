@@ -39,7 +39,6 @@ async def lifespan(app: FastAPI):
         websocket_manager=websocket_manager,
     )
     app.state.call_finalization_queue = None
-    app.state.livekit_api = None
     app.state.livekit_webhook_receiver = None
     relay_task = None
     call_finalization_pool = None
@@ -51,11 +50,6 @@ async def lifespan(app: FastAPI):
         if settings.livekit_url and settings.livekit_api_key and settings.livekit_api_secret:
             from livekit import api as livekit_api_module
 
-            app.state.livekit_api = livekit_api_module.LiveKitAPI(
-                url=settings.livekit_url,
-                api_key=settings.livekit_api_key,
-                api_secret=settings.livekit_api_secret,
-            )
             verifier = livekit_api_module.TokenVerifier(settings.livekit_api_key, settings.livekit_api_secret)
             app.state.livekit_webhook_receiver = livekit_api_module.WebhookReceiver(verifier)
 
@@ -68,8 +62,6 @@ async def lifespan(app: FastAPI):
                 await relay_task
             except asyncio.CancelledError:
                 pass
-        if app.state.livekit_api is not None:
-            await app.state.livekit_api.aclose()
         if call_finalization_pool is not None:
             close = getattr(call_finalization_pool, "aclose", None)
             if close is not None:

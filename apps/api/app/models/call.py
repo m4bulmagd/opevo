@@ -45,7 +45,19 @@ class Call(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False, index=True)
     phone_number_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("phone_numbers.id"), nullable=True, index=True)
+    agent_config_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("agent_configs.id"),
+        nullable=True,
+        index=True,
+    )
     livekit_room_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    livekit_dispatch_id: Mapped[str | None] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=True,
+    )
+    failure_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     caller_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

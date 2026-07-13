@@ -1,10 +1,16 @@
 import base64
 from dataclasses import dataclass
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
+
+from app.core.database import get_session
+from app.core.dispatch_token import create_dispatch_token
+from app.models.agent_config import AgentConfig
+from app.models.call import Call
 
 
 @dataclass
@@ -30,11 +36,45 @@ class FakeCallFinalizationQueue:
         return job_id
 
 
-@pytest.mark.anyio
-async def test_agent_completion_endpoint_enqueues_call_finalization_job() -> None:
-    call_id = uuid4()
-    fake_queue = FakeCallFinalizationQueue()
+class FakeAuthSession:
+    def __init__(self, *, call=None, agent_config=None) -> None:
+        self.call = call
+        self.agent_config = agent_config
+        self.lookups: list[tuple[type, object]] = []
 
+    async def get(self, model: type, object_id):
+        self.lookups.append((model, object_id))
+        if model is Call and self.call is not None and self.call.id == object_id:
+            return self.call
+        if (
+            model is AgentConfig
+            and self.agent_config is not None
+            and self.agent_config.id == object_id
+        ):
+            return self.agent_config
+        return None
+
+
+def _configure_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    app_env: str,
+    static_token: str = "test-agent-token",
+    dispatch_secret: str | None = None,
+) -> None:
+    monkeypatch.setenv("APP_ENV", app_env)
+    monkeypatch.setenv("AGENT_INTERNAL_API_TOKEN", static_token)
+    if dispatch_secret is None:
+        monkeypatch.delenv("AGENT_DISPATCH_JWT_SECRET", raising=False)
+    else:
+        monkeypatch.setenv("AGENT_DISPATCH_JWT_SECRET", dispatch_secret)
+
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+
+def _build_completion_app(fake_queue, *, auth_session=None):
     from app.routers.agent import get_call_finalization_queue
     from app.routers.agent import router as agent_router
 
@@ -43,7 +83,25 @@ async def test_agent_completion_endpoint_enqueues_call_finalization_job() -> Non
 
     app = FastAPI()
     app.include_router(agent_router)
-    app.dependency_overrides[get_call_finalization_queue] = override_get_call_finalization_queue
+    app.dependency_overrides[get_call_finalization_queue] = (
+        override_get_call_finalization_queue
+    )
+    if auth_session is not None:
+        async def override_get_session():
+            yield auth_session
+
+        app.dependency_overrides[get_session] = override_get_session
+    return app
+
+
+@pytest.mark.anyio
+async def test_agent_completion_endpoint_enqueues_call_finalization_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_auth(monkeypatch, app_env="development")
+    call_id = uuid4()
+    fake_queue = FakeCallFinalizationQueue()
+    app = _build_completion_app(fake_queue)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -84,21 +142,14 @@ async def test_agent_completion_endpoint_enqueues_call_finalization_job() -> Non
 
 
 @pytest.mark.anyio
-async def test_agent_completion_endpoint_rejects_accounting_authority_fields() -> None:
+async def test_agent_completion_endpoint_rejects_accounting_authority_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_auth(monkeypatch, app_env="development")
     call_id = uuid4()
     fake_queue = FakeCallFinalizationQueue()
 
-    from app.routers.agent import get_call_finalization_queue
-    from app.routers.agent import router as agent_router
-
-    async def override_get_call_finalization_queue():
-        return fake_queue
-
-    app = FastAPI()
-    app.include_router(agent_router)
-    app.dependency_overrides[get_call_finalization_queue] = (
-        override_get_call_finalization_queue
-    )
+    app = _build_completion_app(fake_queue)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -121,21 +172,14 @@ async def test_agent_completion_endpoint_rejects_accounting_authority_fields() -
 
 
 @pytest.mark.anyio
-async def test_agent_completion_endpoint_decodes_recording_for_queue() -> None:
+async def test_agent_completion_endpoint_decodes_recording_for_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_auth(monkeypatch, app_env="development")
     call_id = uuid4()
     fake_queue = FakeCallFinalizationQueue()
 
-    from app.routers.agent import get_call_finalization_queue
-    from app.routers.agent import router as agent_router
-
-    async def override_get_call_finalization_queue():
-        return fake_queue
-
-    app = FastAPI()
-    app.include_router(agent_router)
-    app.dependency_overrides[get_call_finalization_queue] = (
-        override_get_call_finalization_queue
-    )
+    app = _build_completion_app(fake_queue)
     recording_bytes = b"recording-bytes"
 
     transport = httpx.ASGITransport(app=app)
@@ -159,21 +203,14 @@ async def test_agent_completion_endpoint_decodes_recording_for_queue() -> None:
 
 
 @pytest.mark.anyio
-async def test_agent_completion_endpoint_rejects_negative_duration() -> None:
+async def test_agent_completion_endpoint_rejects_negative_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_auth(monkeypatch, app_env="development")
     call_id = uuid4()
     fake_queue = FakeCallFinalizationQueue()
 
-    from app.routers.agent import get_call_finalization_queue
-    from app.routers.agent import router as agent_router
-
-    async def override_get_call_finalization_queue():
-        return fake_queue
-
-    app = FastAPI()
-    app.include_router(agent_router)
-    app.dependency_overrides[get_call_finalization_queue] = (
-        override_get_call_finalization_queue
-    )
+    app = _build_completion_app(fake_queue)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -187,4 +224,166 @@ async def test_agent_completion_endpoint_rejects_negative_duration() -> None:
         )
 
     assert response.status_code == 422
+    assert fake_queue.calls == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("app_env", ["test", "staging", "production"])
+async def test_static_agent_token_is_rejected_outside_development(
+    monkeypatch: pytest.MonkeyPatch,
+    app_env: str,
+) -> None:
+    _configure_auth(monkeypatch, app_env=app_env)
+    call_id = uuid4()
+    fake_queue = FakeCallFinalizationQueue()
+    app = _build_completion_app(fake_queue)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            f"/api/agent/calls/{call_id}/complete",
+            headers={"x-agent-token": "test-agent-token"},
+            json={"duration_seconds": 1},
+        )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid agent token"}
+    assert fake_queue.calls == []
+
+
+@pytest.mark.anyio
+async def test_dispatch_jwt_completes_call_without_static_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatch_secret = "dispatch-test-secret-with-enough-entropy-for-tests"
+    _configure_auth(
+        monkeypatch,
+        app_env="test",
+        static_token="",
+        dispatch_secret=dispatch_secret,
+    )
+    call_id = uuid4()
+    user_id = uuid4()
+    agent_config_id = uuid4()
+    auth_session = FakeAuthSession(
+        call=SimpleNamespace(
+            id=call_id,
+            user_id=user_id,
+            agent_config_id=agent_config_id,
+        ),
+        agent_config=SimpleNamespace(id=agent_config_id, user_id=user_id),
+    )
+    fake_queue = FakeCallFinalizationQueue()
+    app = _build_completion_app(fake_queue, auth_session=auth_session)
+    token = create_dispatch_token(
+        call_id=str(call_id),
+        user_id=str(user_id),
+        agent_config_id=str(agent_config_id),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            f"/api/agent/calls/{call_id}/complete",
+            headers={"x-agent-token": token},
+            json={"duration_seconds": 1},
+        )
+
+    assert response.status_code == 202
+    assert len(fake_queue.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_dispatch_jwt_for_call_a_cannot_complete_call_b(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_auth(
+        monkeypatch,
+        app_env="test",
+        static_token="",
+        dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
+    )
+    call_a_id = uuid4()
+    call_b_id = uuid4()
+    user_id = uuid4()
+    agent_config_id = uuid4()
+    fake_queue = FakeCallFinalizationQueue()
+    app = _build_completion_app(fake_queue, auth_session=FakeAuthSession())
+    token = create_dispatch_token(
+        call_id=str(call_a_id),
+        user_id=str(user_id),
+        agent_config_id=str(agent_config_id),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            f"/api/agent/calls/{call_b_id}/complete",
+            headers={"x-agent-token": token},
+            json={"duration_seconds": 1},
+        )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid agent token"}
+    assert fake_queue.calls == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("call_user_matches", "call_config_matches", "config_user_matches"),
+    [
+        (False, True, True),
+        (True, False, True),
+        (True, True, False),
+    ],
+)
+async def test_dispatch_jwt_rejects_durable_ownership_or_config_mismatch_before_queue(
+    monkeypatch: pytest.MonkeyPatch,
+    call_user_matches: bool,
+    call_config_matches: bool,
+    config_user_matches: bool,
+) -> None:
+    _configure_auth(
+        monkeypatch,
+        app_env="test",
+        static_token="",
+        dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
+    )
+    call_id = uuid4()
+    signed_user_id = uuid4()
+    signed_agent_config_id = uuid4()
+    call_user_id = signed_user_id if call_user_matches else uuid4()
+    call_agent_config_id = (
+        signed_agent_config_id if call_config_matches else uuid4()
+    )
+    config_user_id = signed_user_id if config_user_matches else uuid4()
+    auth_session = FakeAuthSession(
+        call=SimpleNamespace(
+            id=call_id,
+            user_id=call_user_id,
+            agent_config_id=call_agent_config_id,
+        ),
+        agent_config=SimpleNamespace(
+            id=signed_agent_config_id,
+            user_id=config_user_id,
+        ),
+    )
+    fake_queue = FakeCallFinalizationQueue()
+    app = _build_completion_app(fake_queue, auth_session=auth_session)
+    token = create_dispatch_token(
+        call_id=str(call_id),
+        user_id=str(signed_user_id),
+        agent_config_id=str(signed_agent_config_id),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            f"/api/agent/calls/{call_id}/complete",
+            headers={"x-agent-token": token},
+            json={"duration_seconds": 1},
+        )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid agent token"}
     assert fake_queue.calls == []

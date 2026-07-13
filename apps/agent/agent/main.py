@@ -5,7 +5,16 @@ import logging
 import importlib
 import inspect
 
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
+from livekit import rtc
+from livekit.agents import (
+    AutoSubscribe,
+    JobContext,
+    JobRequest,
+    WorkerOptions,
+    cli,
+    room_io,
+)
+from pydantic import ValidationError
 
 from agent.api_client import AgentApiClient
 from agent.config import get_settings
@@ -20,6 +29,7 @@ from agent.session_runtime import SessionRuntime
 
 
 logger = logging.getLogger(__name__)
+SIP_PARTICIPANT_KIND = rtc.ParticipantKind.Value("PARTICIPANT_KIND_SIP")
 
 
 async def _safe_task(coro) -> None:
@@ -114,12 +124,32 @@ async def _send_initial_greeting(session, metadata: DispatchMetadata) -> None:
         await result
 
 
+async def handle_job_request(request: JobRequest) -> None:
+    try:
+        metadata_dict = json.loads(request.job.metadata or "{}")
+        metadata = DispatchMetadata.model_validate(metadata_dict)
+        if metadata.agent_identity != f"agent-call-{metadata.call_id}":
+            raise ValueError("invalid agent identity")
+    except (json.JSONDecodeError, ValidationError, TypeError, ValueError):
+        logger.warning("job_request_rejected reason=invalid_dispatch_metadata")
+        await request.reject(terminate=True)
+        return
+
+    await request.accept(
+        name=metadata.agent_name,
+        identity=metadata.agent_identity,
+    )
+
+
 async def entrypoint(context: JobContext) -> None:
     metadata_dict = json.loads(context.job.metadata or "{}")
     metadata = DispatchMetadata.model_validate(metadata_dict)
+    metadata_dict = metadata.model_dump()
     started_at = time.monotonic()
     await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
-    await context.wait_for_participant()
+    sip_participant = await context.wait_for_participant(
+        kind=SIP_PARTICIPANT_KIND
+    )
 
     prewarmed = getattr(context.proc, "userdata", {}) or {}
     agent, session = build_agent_runtime(
@@ -135,7 +165,14 @@ async def entrypoint(context: JobContext) -> None:
             duration_seconds=max(1, int(time.monotonic() - started_at)),
         )
     )
-    await session.start(agent=agent, room=context.room)
+    await session.start(
+        agent=agent,
+        room=context.room,
+        room_options=room_io.RoomOptions(
+            participant_identity=sip_participant.identity,
+            participant_kinds=[SIP_PARTICIPANT_KIND],
+        ),
+    )
     await _send_initial_greeting(session, metadata)
 
 
@@ -189,6 +226,7 @@ def build_worker_options() -> WorkerOptions:
     _register_inference_runners()
     return WorkerOptions(
         entrypoint_fnc=entrypoint,
+        request_fnc=handle_job_request,
         prewarm_fnc=prewarm_assets,
         agent_name=settings.livekit_agent_name,
         ws_url=settings.livekit_url,

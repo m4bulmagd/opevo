@@ -2,8 +2,14 @@ import asyncio
 import logging
 import sys
 from types import ModuleType, SimpleNamespace
+from uuid import uuid4
 
+import pytest
+from pydantic import ValidationError
+
+import agent.main as agent_main
 from agent.main import build_worker_options
+from agent.main import entrypoint
 from agent.main import _safe_task
 from agent.main import _send_initial_greeting
 from agent.main import _register_standard_session_handlers
@@ -13,11 +19,37 @@ from agent.schemas import DispatchMetadata
 from pathlib import Path
 
 
+def make_metadata(**overrides) -> DispatchMetadata:
+    call_id = overrides.pop("call_id", str(uuid4()))
+    defaults = {
+        "call_id": call_id,
+        "user_id": str(uuid4()),
+        "agent_config_id": str(uuid4()),
+        "agent_identity": f"agent-call-{call_id}",
+        "agent_name": "Agent",
+        "owner_name": "Owner",
+        "owner_context": None,
+        "system_prompt": "Be helpful.",
+        "knowledge_base": "Open weekdays.",
+        "pipeline_mode": "stt_llm_tts",
+        "minutes_remaining": 10,
+        "dispatch_token": "dispatch-token",
+    }
+    defaults.update(overrides)
+    return DispatchMetadata(**defaults)
+
+
 def test_build_worker_options_sets_prewarm_hook() -> None:
     options = build_worker_options()
 
     assert options.prewarm_fnc is not None
     assert options.prewarm_fnc.__name__ == "prewarm_assets"
+
+
+def test_build_worker_options_registers_job_request_handler() -> None:
+    options = build_worker_options()
+
+    assert options.request_fnc is agent_main.handle_job_request
 
 
 def test_build_worker_options_registers_inference_runners(monkeypatch) -> None:
@@ -104,7 +136,7 @@ def test_register_standard_session_handlers_forwards_final_caller_and_agent_text
     _run_scheduled_coroutine(monkeypatch)
     session = FakeSession()
     runtime = FakeRuntime()
-    metadata = DispatchMetadata(call_id="call-1", user_id="user-1", agent_name="Agent", owner_name="Owner")
+    metadata = make_metadata(call_id="call-1", user_id="user-1")
 
     _register_standard_session_handlers(session, runtime, metadata)
 
@@ -119,7 +151,7 @@ def test_register_sts_session_handlers_forwards_caller_and_agent_text(monkeypatc
     _run_scheduled_coroutine(monkeypatch)
     session = FakeSession()
     runtime = FakeRuntime()
-    metadata = DispatchMetadata(call_id="call-1", user_id="user-1", agent_name="Agent", owner_name="Owner")
+    metadata = make_metadata(call_id="call-1", user_id="user-1")
 
     _register_sts_session_handlers(session, runtime, metadata)
 
@@ -136,7 +168,7 @@ def test_send_initial_greeting_uses_say_for_standard_mode() -> None:
     asyncio.run(
         _send_initial_greeting(
             session,
-            DispatchMetadata(
+            make_metadata(
                 call_id="test",
                 user_id="test",
                 agent_name="Assistant",
@@ -158,7 +190,7 @@ def test_send_initial_greeting_uses_generate_reply_for_sts_mode() -> None:
     asyncio.run(
         _send_initial_greeting(
             session,
-            DispatchMetadata(
+            make_metadata(
                 call_id="test",
                 user_id="test",
                 agent_name="Assistant",
@@ -185,6 +217,122 @@ def test_background_task_failure_does_not_render_exception_message(caplog) -> No
     assert "operation=run_background_event_handler" in caplog.text
     assert "error_type=RuntimeError" in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
+
+
+class FakeJobRequest:
+    def __init__(self, metadata: str) -> None:
+        self.job = SimpleNamespace(metadata=metadata)
+        self.accepted: list[dict] = []
+        self.rejected: list[dict] = []
+
+    async def accept(self, **kwargs) -> None:
+        self.accepted.append(kwargs)
+
+    async def reject(self, **kwargs) -> None:
+        self.rejected.append(kwargs)
+
+
+@pytest.mark.anyio
+async def test_job_request_accepts_exact_deterministic_identity() -> None:
+    metadata = make_metadata()
+    request = FakeJobRequest(metadata.model_dump_json())
+
+    await agent_main.handle_job_request(request)
+
+    assert request.accepted == [
+        {"name": metadata.agent_name, "identity": metadata.agent_identity}
+    ]
+    assert request.rejected == []
+
+
+@pytest.mark.anyio
+async def test_job_request_rejects_mismatched_identity_without_logging_metadata(
+    caplog,
+) -> None:
+    metadata = make_metadata(agent_identity="metadata-secret-sentinel")
+    request = FakeJobRequest(metadata.model_dump_json())
+
+    with caplog.at_level(logging.WARNING):
+        await agent_main.handle_job_request(request)
+
+    assert request.accepted == []
+    assert request.rejected == [{"terminate": True}]
+    assert "metadata-secret-sentinel" not in caplog.text
+    assert metadata.dispatch_token not in caplog.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("raw_metadata", ["{", "null", "[]", "{}"])
+async def test_job_request_rejects_malformed_metadata(raw_metadata: str) -> None:
+    request = FakeJobRequest(raw_metadata)
+
+    await agent_main.handle_job_request(request)
+
+    assert request.accepted == []
+    assert request.rejected == [{"terminate": True}]
+
+
+def test_dispatch_metadata_forbids_extra_fields() -> None:
+    payload = make_metadata().model_dump()
+    payload["caller_number"] = "+33123456789"
+
+    with pytest.raises(ValidationError):
+        DispatchMetadata.model_validate(payload)
+
+
+class FakeJobContext:
+    def __init__(self, metadata: DispatchMetadata) -> None:
+        self.job = SimpleNamespace(metadata=metadata.model_dump_json())
+        self.proc = SimpleNamespace(userdata={})
+        self.inference_executor = object()
+        self.room = object()
+        self.events: list[object] = []
+        self.shutdown_callbacks: list[object] = []
+
+    async def connect(self, **_kwargs) -> None:
+        self.events.append("connect")
+
+    async def wait_for_participant(self, *, kind) -> object:
+        self.events.append(("wait_for_participant", kind))
+        return SimpleNamespace(identity="sip-caller")
+
+    def add_shutdown_callback(self, callback) -> None:
+        self.shutdown_callbacks.append(callback)
+
+
+class FakeEntrypointSession(FakeSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = False
+        self.start_kwargs: dict = {}
+        self.say_calls: list[str] = []
+
+    async def start(self, **kwargs) -> None:
+        self.started = True
+        self.start_kwargs = kwargs
+
+    async def say(self, text: str) -> None:
+        self.say_calls.append(text)
+
+
+@pytest.mark.anyio
+async def test_entrypoint_connects_then_waits_only_for_sip_participant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    context = FakeJobContext(metadata)
+    session = FakeEntrypointSession()
+    monkeypatch.setattr(
+        "agent.main.build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+
+    await entrypoint(context)
+
+    assert context.events == ["connect", ("wait_for_participant", 3)]
+    assert session.started is True
+    assert session.start_kwargs["room_options"].participant_identity == "sip-caller"
+    assert session.start_kwargs["room_options"].participant_kinds == [3]
 
 
 def test_silero_prewarm_failure_does_not_render_exception_message(

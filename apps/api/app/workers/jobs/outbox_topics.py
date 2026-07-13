@@ -1,17 +1,33 @@
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+import json
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import text
+
+from app.core.config import get_settings
+from app.core.dispatch_token import create_dispatch_token
 from app.core.database import get_session_factory
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.providers.livekit_dispatch.base import LiveKitDispatch
+from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
 from app.repositories.agent_config_repository import AgentConfigRepository
+from app.repositories.call_repository import CallRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
 )
 from app.repositories.subscription_repository import SubscriptionRepository
+from app.repositories.user_repository import UserRepository
 from app.repositories.usage_repository import UsageRepository
+from app.schemas.livekit import LiveKitDispatchMetadata
+from app.services.dispatch_eligibility_policy import DispatchEligibilityPolicy
+from app.services.livekit_dispatch_service import (
+    _agent_setup_complete,
+    expected_agent_identity,
+)
 from app.services.onboarding_service import OnboardingService
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
@@ -25,6 +41,17 @@ class _RoutingSnapshot:
     should_enable: bool
     is_active: bool
     provider_connection_name: str | None
+
+
+@dataclass(frozen=True)
+class _DispatchSnapshot:
+    call_id: UUID
+    user_id: UUID
+    agent_config_id: UUID
+    room_name: str
+    worker_name: str
+    metadata: str
+    persisted_dispatch_id: str | None
 
 
 async def deliver_phone_provision(
@@ -139,6 +166,298 @@ async def _routing_snapshot(session, user_id: UUID) -> _RoutingSnapshot | None:
     )
 
 
+async def deliver_livekit_dispatch(
+    ctx: dict[str, Any],
+    event: OutboxEvent,
+) -> None:
+    call_id = _validated_dispatch_call_id(event)
+    session_factory = ctx.get("session_factory") or get_session_factory()
+
+    async with _dispatch_advisory_lock(
+        session_factory,
+        event.idempotency_key,
+    ):
+        snapshot = await _dispatch_snapshot(session_factory, call_id)
+        provider = ctx.get("livekit_dispatch_provider")
+        if provider is None:
+            provider = LiveKitDispatchAPIProvider()
+
+        try:
+            dispatches = await provider.list_dispatches(
+                room_name=snapshot.room_name
+            )
+        except ValueError:
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            ) from None
+        except Exception:
+            raise OutboxDeliveryError(
+                "provider_retryable",
+                retryable=True,
+            ) from None
+
+        dispatch = _reconcile_dispatches(snapshot, dispatches)
+        if dispatch is None:
+            if snapshot.persisted_dispatch_id is not None:
+                raise OutboxDeliveryError(
+                    "dispatch_conflict",
+                    retryable=False,
+                )
+            try:
+                created_dispatch = await provider.create_dispatch(
+                    agent_name=snapshot.worker_name,
+                    room_name=snapshot.room_name,
+                    metadata=snapshot.metadata,
+                )
+            except ValueError:
+                raise OutboxDeliveryError(
+                    "dispatch_configuration",
+                    retryable=False,
+                ) from None
+            except Exception:
+                try:
+                    dispatches = await provider.list_dispatches(
+                        room_name=snapshot.room_name
+                    )
+                except Exception:
+                    raise OutboxDeliveryError(
+                        "provider_retryable",
+                        retryable=True,
+                    ) from None
+                dispatch = _reconcile_dispatches(snapshot, dispatches)
+                if dispatch is None:
+                    raise OutboxDeliveryError(
+                        "provider_retryable",
+                        retryable=True,
+                    ) from None
+            else:
+                dispatch = _reconcile_dispatches(
+                    snapshot,
+                    [created_dispatch],
+                )
+
+        await _persist_dispatch_identity(
+            session_factory,
+            call_id=call_id,
+            dispatch_id=dispatch.id,
+        )
+
+
+def _validated_dispatch_call_id(event: OutboxEvent) -> UUID:
+    try:
+        call_id = UUID(event.payload["call_id"])
+    except (KeyError, TypeError, ValueError):
+        raise OutboxDeliveryError(
+            "dispatch_configuration",
+            retryable=False,
+        ) from None
+    if event.aggregate_type != "call" or event.aggregate_id != call_id:
+        raise OutboxDeliveryError(
+            "dispatch_configuration",
+            retryable=False,
+        )
+    return call_id
+
+
+@asynccontextmanager
+async def _dispatch_advisory_lock(session_factory, idempotency_key: str):
+    async with session_factory() as lock_session:
+        if lock_session.get_bind().dialect.name != "postgresql":
+            yield
+            return
+        async with lock_session.begin():
+            await lock_session.execute(
+                text(
+                    "SELECT pg_advisory_xact_lock("
+                    "hashtextextended(:idempotency_key, 0)"
+                    ")"
+                ),
+                {"idempotency_key": idempotency_key},
+            )
+            yield
+
+
+async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapshot:
+    async with session_factory() as session:
+        call_repository = CallRepository(session)
+        call = await call_repository.get_by_id(call_id)
+        if call is None or call.agent_config_id is None or not call.livekit_room_id:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            )
+
+        user = await UserRepository(session).get_by_id_for_update(call.user_id)
+        if user is None:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            )
+        await session.refresh(call)
+
+        # Keep this order aligned with webhook admission: phone, subscription,
+        # then agent config after the User row serialization boundary.
+        phone = (
+            await PhoneNumberRepository(session).get_by_id_for_update(
+                call.phone_number_id
+            )
+            if call.phone_number_id is not None
+            else None
+        )
+        subscription = await SubscriptionRepository(
+            session
+        ).get_by_user_id_for_update(call.user_id)
+        agent_config = await AgentConfigRepository(
+            session
+        ).get_by_user_id_for_update(call.user_id)
+        balance = await UsageRepository(session).get_current_balance(
+            user_id=call.user_id
+        )
+
+        called_number_matches = bool(
+            phone is not None
+            and phone.id == call.phone_number_id
+            and phone.user_id == call.user_id
+            and bool(phone.e164)
+        )
+        eligible = bool(
+            user.status == "active"
+            and call.status in {"pending", "connected"}
+            and subscription is not None
+            and agent_config is not None
+            and agent_config.id == call.agent_config_id
+            and DispatchEligibilityPolicy.can_dispatch(
+                subscription_status=subscription.status,
+                current_period_start=subscription.current_period_start,
+                current_period_end=subscription.current_period_end,
+                balance=balance,
+                phone_active=bool(phone is not None and phone.is_active),
+                agent_enabled=agent_config.is_enabled,
+                setup_complete=_agent_setup_complete(agent_config),
+                called_number_matches=called_number_matches,
+            )
+        )
+        if not eligible:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_ineligible",
+                retryable=False,
+            )
+
+        try:
+            worker_name = get_settings().livekit_agent_name.strip()
+            if not worker_name:
+                raise ValueError("LiveKit agent worker name is not configured")
+            dispatch_token = create_dispatch_token(
+                call_id=str(call.id),
+                user_id=str(call.user_id),
+                agent_config_id=str(agent_config.id),
+            )
+            metadata = LiveKitDispatchMetadata(
+                user_id=str(call.user_id),
+                agent_config_id=str(agent_config.id),
+                call_id=str(call.id),
+                agent_identity=expected_agent_identity(call.id),
+                minutes_remaining=balance,
+                agent_name=agent_config.agent_name,
+                owner_name=user.full_name or user.email,
+                owner_context=agent_config.owner_context,
+                system_prompt=agent_config.system_prompt,
+                knowledge_base=agent_config.knowledge_base,
+                pipeline_mode=agent_config.pipeline_mode,
+                dispatch_token=dispatch_token,
+            ).model_dump_json()
+        except Exception:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            ) from None
+
+        snapshot = _DispatchSnapshot(
+            call_id=call.id,
+            user_id=call.user_id,
+            agent_config_id=agent_config.id,
+            room_name=call.livekit_room_id,
+            worker_name=worker_name,
+            metadata=metadata,
+            persisted_dispatch_id=call.livekit_dispatch_id,
+        )
+        await session.commit()
+        return snapshot
+
+
+def _reconcile_dispatches(
+    snapshot: _DispatchSnapshot,
+    dispatches: list[LiveKitDispatch],
+) -> LiveKitDispatch | None:
+    matches: list[LiveKitDispatch] = []
+    for dispatch in dispatches:
+        try:
+            metadata = json.loads(dispatch.metadata)
+        except (TypeError, ValueError):
+            metadata = None
+        if (
+            dispatch.agent_name == snapshot.worker_name
+            and dispatch.room == snapshot.room_name
+            and isinstance(metadata, dict)
+            and metadata.get("call_id") == str(snapshot.call_id)
+        ):
+            matches.append(dispatch)
+
+    if not dispatches:
+        return None
+    if len(dispatches) == 1 and len(matches) == 1 and matches[0].id:
+        if (
+            snapshot.persisted_dispatch_id is not None
+            and matches[0].id != snapshot.persisted_dispatch_id
+        ):
+            raise OutboxDeliveryError(
+                "dispatch_conflict",
+                retryable=False,
+            )
+        return matches[0]
+    raise OutboxDeliveryError(
+        "dispatch_conflict",
+        retryable=False,
+    )
+
+
+async def _persist_dispatch_identity(
+    session_factory,
+    *,
+    call_id: UUID,
+    dispatch_id: str,
+) -> None:
+    if not dispatch_id:
+        raise OutboxDeliveryError(
+            "dispatch_conflict",
+            retryable=False,
+        )
+    async with session_factory() as session:
+        call = await CallRepository(session).get_by_id_for_update(call_id)
+        if call is None:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            )
+        if call.livekit_dispatch_id not in (None, dispatch_id):
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_conflict",
+                retryable=False,
+            )
+        await CallRepository(session).set_livekit_dispatch_id(
+            call,
+            livekit_dispatch_id=dispatch_id,
+        )
+        await session.commit()
+
+
 async def deliver_future_topic(
     _ctx: dict[str, Any],
     _event: OutboxEvent,
@@ -152,7 +471,7 @@ DEFAULT_OUTBOX_HANDLERS = {
     "phone.provision": deliver_phone_provision,
     "phone.enable": deliver_phone_routing,
     "phone.disable": deliver_phone_routing,
-    "livekit.dispatch": deliver_future_topic,
+    "livekit.dispatch": deliver_livekit_dispatch,
     "recording.start": deliver_future_topic,
     "notification.send": deliver_future_topic,
 }

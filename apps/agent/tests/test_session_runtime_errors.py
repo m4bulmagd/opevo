@@ -1,4 +1,5 @@
 import logging
+from uuid import uuid4
 
 import pytest
 
@@ -44,7 +45,20 @@ class SecretBearingFailingApiClient:
 
 
 def make_metadata(**kwargs) -> DispatchMetadata:
-    defaults = dict(call_id="call_123", user_id="user_123", agent_name="A", owner_name="O")
+    defaults = dict(
+        call_id="call_123",
+        user_id="user_123",
+        agent_config_id=str(uuid4()),
+        agent_identity="agent-call-call_123",
+        agent_name="A",
+        owner_name="O",
+        owner_context=None,
+        system_prompt="Be helpful.",
+        knowledge_base="Open weekdays.",
+        pipeline_mode="stt_llm_tts",
+        minutes_remaining=10,
+        dispatch_token="dispatch-token",
+    )
     defaults.update(kwargs)
     return DispatchMetadata(**defaults)
 

@@ -1,4 +1,5 @@
 import pytest
+from uuid import uuid4
 
 from agent.event_publisher import EventPublisher
 from agent.schemas import DispatchMetadata
@@ -22,12 +23,32 @@ class FakeApiClient:
         return {"status": "accepted"}
 
 
+def make_metadata(**overrides) -> DispatchMetadata:
+    call_id = overrides.pop("call_id", "call_123")
+    defaults = {
+        "call_id": call_id,
+        "user_id": "user_123",
+        "agent_config_id": str(uuid4()),
+        "agent_identity": f"agent-call-{call_id}",
+        "agent_name": "A",
+        "owner_name": "O",
+        "owner_context": None,
+        "system_prompt": "Be helpful.",
+        "knowledge_base": "Open weekdays.",
+        "pipeline_mode": "stt_llm_tts",
+        "minutes_remaining": 10,
+        "dispatch_token": "dispatch-token",
+    }
+    defaults.update(overrides)
+    return DispatchMetadata(**defaults)
+
+
 @pytest.mark.anyio
 async def test_session_runtime_publishes_transcript_events() -> None:
     fake_event_publisher = FakeEventPublisher()
     runtime = SessionRuntime(fake_event_publisher)
 
-    metadata = DispatchMetadata(call_id="call_123", user_id="user_123", agent_name="A", owner_name="O")
+    metadata = make_metadata()
     await runtime.handle_agent_utterance(metadata, "Bonjour")
 
     assert fake_event_publisher.events[0]["type"] == "transcript"
@@ -40,13 +61,7 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
     api_client = FakeApiClient()
     runtime = SessionRuntime(fake_event_publisher, api_client=api_client)
 
-    dispatch_payload = DispatchMetadata(
-        call_id="call_123",
-        user_id="user_123",
-        minutes_remaining=10,
-        agent_name="A",
-        owner_name="O",
-    )
+    dispatch_payload = make_metadata()
     await runtime.handle_agent_utterance(dispatch_payload, "Bonjour")
     await runtime.handle_caller_transcript(dispatch_payload, "What time do you open?")
 
@@ -62,12 +77,12 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
         {
             "call_id": "call_123",
             "duration_seconds": 61,
-            "caller_number": None,
             "transcript": [
                 {"speaker": "AGENT", "text": "Bonjour"},
                 {"speaker": "CALLER", "text": "What time do you open?"},
             ],
             "recording_bytes_base64": "cmVjb3JkaW5nLWJ5dGVz",
+            "dispatch_token": "dispatch-token",
         }
     ]
 

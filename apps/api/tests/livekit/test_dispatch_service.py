@@ -110,6 +110,24 @@ class FakeCallRepository:
             return None
         return self.call
 
+    async def connect_if_pending(self, *, call_id: UUID):
+        if self.call.id != call_id or self.call.status != "pending":
+            return None
+        self.call.status = "connected"
+        return self.call
+
+    async def get_by_id_without_recording_for_update(
+        self,
+        *,
+        call_id: UUID,
+    ):
+        if (
+            self.call.id != call_id
+            or self.call.recording_egress_id is not None
+        ):
+            return None
+        return self.call
+
     async def get_active_by_room_with_recording(self, *, room_name: str):
         self.active_by_room_calls.append(room_name)
         if self.call.livekit_room_id != room_name:
@@ -220,104 +238,6 @@ def build_dispatch_service(
 
 
 @pytest.mark.anyio
-async def test_dispatch_service_includes_agent_runtime_configuration() -> None:
-    user_id = uuid4()
-    phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
-    agent_config = FakeAgentConfig(
-        id=uuid4(),
-        agent_name="Ava",
-        owner_context="Sam at Bakery",
-        system_prompt="Be helpful and concise.",
-        knowledge_base="Hours 9-5",
-        pipeline_mode="stt_llm_tts",
-    )
-    user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
-
-    dispatch_client = FakeDispatchClient()
-    realtime_service = FakeRealtimeService()
-    session = FakeSession()
-    service = build_dispatch_service(
-        session,
-        dispatch_client,
-        phone_number_repository=FakePhoneNumberRepository(phone_number),
-        agent_config_repository=FakeAgentConfigRepository(agent_config),
-        call_repository=FakeCallRepository(call_id=uuid4()),
-        user_repository=FakeUserRepository(user),
-        usage_repository=FakeUsageRepository(),
-        realtime_service=realtime_service,
-    )
-
-    await service.handle_participant_joined(
-        {
-            "event": "participant_joined",
-            "room": {"name": "room_123"},
-            "participant": {
-                "attributes": {
-                    "sip.phoneNumber": "+33123456789",
-                    "sip.trunkPhoneNumber": "+33999888777",
-                }
-            },
-        }
-    )
-
-    metadata = json.loads(dispatch_client.calls[0]["metadata"])
-    assert metadata["agent_name"] == "Ava"
-    assert metadata["owner_name"] == "Sam"
-    assert metadata["system_prompt"] == "Be helpful and concise."
-    assert metadata["knowledge_base"] == "Hours 9-5"
-    assert metadata["pipeline_mode"] == "stt_llm_tts"
-    assert metadata["minutes_remaining"] == 120
-    assert realtime_service.events[0]["room_name"] == "room_123"
-    assert session.commits == 1
-
-
-@pytest.mark.anyio
-async def test_dispatch_service_matches_called_number_with_formatting_variation() -> None:
-    user_id = uuid4()
-    phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33392091999")
-    agent_config = FakeAgentConfig(
-        id=uuid4(),
-        agent_name="Ava",
-        owner_context=None,
-        system_prompt="Be helpful and concise.",
-        knowledge_base="",
-        pipeline_mode="stt_llm_tts",
-    )
-    user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
-
-    dispatch_client = FakeDispatchClient()
-    realtime_service = FakeRealtimeService()
-    session = FakeSession()
-    service = build_dispatch_service(
-        session,
-        dispatch_client,
-        phone_number_repository=FakePhoneNumberRepository(phone_number),
-        agent_config_repository=FakeAgentConfigRepository(agent_config),
-        call_repository=FakeCallRepository(call_id=uuid4()),
-        user_repository=FakeUserRepository(user),
-        usage_repository=FakeUsageRepository(),
-        realtime_service=realtime_service,
-    )
-
-    await service.handle_participant_joined(
-        {
-            "event": "participant_joined",
-            "room": {"name": "room_123"},
-            "participant": {
-                "attributes": {
-                    "sip.phoneNumber": "+33123456789",
-                    "sip.trunkPhoneNumber": "33 392 091 999",
-                }
-            },
-        }
-    )
-
-    assert dispatch_client.calls
-    metadata = json.loads(dispatch_client.calls[0]["metadata"])
-    assert metadata["called_number"] == "+33392091999"
-
-
-@pytest.mark.anyio
 async def test_dispatch_service_persists_recording_metadata_when_egress_starts() -> None:
     user_id = uuid4()
     phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
@@ -351,8 +271,8 @@ async def test_dispatch_service_persists_recording_metadata_when_egress_starts()
             "event": "participant_joined",
             "room": {"name": "room_123"},
             "participant": {
-                "identity": "agent_123",
-                "kind": "STANDARD",
+                "identity": f"agent-call-{call_repository.call.id}",
+                "kind": "AGENT",
                 "attributes": {},
             },
         }
@@ -374,57 +294,6 @@ async def test_dispatch_service_persists_recording_metadata_when_egress_starts()
             "recording_url": f"http://minio:9000/recordings/calls/{user_id}/{call_repository.call.id}.ogg",
         }
     ]
-
-
-@pytest.mark.anyio
-async def test_dispatch_service_does_not_start_recording_for_sip_join() -> None:
-    user_id = uuid4()
-    phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
-    agent_config = FakeAgentConfig(
-        id=uuid4(),
-        agent_name="Ava",
-        owner_context="Sam at Bakery",
-        system_prompt="Be helpful and concise.",
-        knowledge_base="Hours 9-5",
-        pipeline_mode="stt_llm_tts",
-    )
-    user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
-
-    dispatch_client = FakeDispatchClient()
-    realtime_service = FakeRealtimeService()
-    recording_service = FakeRecordingService()
-    session = FakeSession()
-    call_repository = FakeCallRepository(call_id=uuid4())
-    service = build_dispatch_service(
-        session,
-        dispatch_client,
-        phone_number_repository=FakePhoneNumberRepository(phone_number),
-        agent_config_repository=FakeAgentConfigRepository(agent_config),
-        call_repository=call_repository,
-        user_repository=FakeUserRepository(user),
-        realtime_service=realtime_service,
-        recording_service=recording_service,
-    )
-
-    await service.handle_participant_joined(
-        {
-            "event": "participant_joined",
-            "room": {"name": "room_123"},
-            "participant": {
-                "identity": "sip_caller",
-                "kind": "SIP",
-                "attributes": {
-                    "sip.phoneNumber": "+33123456789",
-                    "sip.trunkPhoneNumber": "+33999888777",
-                }
-            },
-        }
-    )
-
-    assert recording_service.start_calls == []
-    assert dispatch_client.calls
-    assert realtime_service.events
-    assert call_repository.recording_metadata_calls == []
 
 
 @pytest.mark.anyio
@@ -461,8 +330,8 @@ async def test_dispatch_service_skips_agent_join_when_recording_already_started(
             "event": "participant_joined",
             "room": {"name": "room_123"},
             "participant": {
-                "identity": "agent_123",
-                "kind": "STANDARD",
+                "identity": f"agent-call-{call_repository.call.id}",
+                "kind": "AGENT",
                 "attributes": {},
             },
         }
@@ -578,8 +447,8 @@ async def test_dispatch_service_continues_when_recording_egress_fails(caplog) ->
                 "event": "participant_joined",
                 "room": {"name": ROOM_NAME_SENTINEL},
                 "participant": {
-                    "identity": "agent_123",
-                    "kind": "STANDARD",
+                    "identity": f"agent-call-{call_repository.call.id}",
+                    "kind": "AGENT",
                     "attributes": {},
                 },
             }

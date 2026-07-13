@@ -49,6 +49,10 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, clerk_key_material: dict[str, 
     monkeypatch.setenv("CLERK_WEBHOOK_SECRET", str(clerk_key_material["webhook_secret"]))
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "test-stripe-secret")
     monkeypatch.setenv("AGENT_INTERNAL_API_TOKEN", "test-agent-token")
+    monkeypatch.setenv(
+        "AGENT_DISPATCH_JWT_SECRET",
+        "shared-test-dispatch-secret-with-at-least-32-bytes",
+    )
 
     from app.core.config import get_settings
     from app.core.database import get_engine, get_session_factory

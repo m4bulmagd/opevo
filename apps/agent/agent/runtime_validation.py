@@ -8,7 +8,6 @@ PRODUCTION_REQUIRED_SETTINGS = (
     "livekit_api_key",
     "livekit_api_secret",
     "api_base_url",
-    "agent_internal_api_token",
     "redis_url",
     "speechmatics_api_key",
     "gemini_api_key",

@@ -6,6 +6,7 @@ from typing import Any
 
 from app.core.database import get_session_factory
 from app.models.outbox_event import OutboxEvent
+from app.repositories.call_repository import CallRepository
 from app.repositories.outbox_repository import OutboxRepository
 from app.services.outbox_service import OutboxPayloadError, validate_outbox_payload
 
@@ -31,6 +32,9 @@ SAFE_OUTBOX_ERROR_CODES = frozenset(
         "unsupported_topic",
         "invalid_payload",
         "handler_configuration",
+        "dispatch_ineligible",
+        "dispatch_conflict",
+        "dispatch_configuration",
     }
 )
 
@@ -114,6 +118,12 @@ async def outbox_delivery_job(ctx: dict[str, Any], _payload: dict | None = None)
                     retry_delays=OUTBOX_RETRY_DELAYS,
                     terminal=not retryable,
                 )
+                if stored is not None and stored.status == "failed":
+                    await _fail_livekit_dispatch_call(
+                        session,
+                        event=stored,
+                        error_code=error_code,
+                    )
                 await session.commit()
             if stored is None:
                 continue
@@ -140,6 +150,32 @@ async def outbox_delivery_job(ctx: dict[str, Any], _payload: dict | None = None)
             result["delivered"] += 1
 
     return result
+
+
+async def _fail_livekit_dispatch_call(
+    session,
+    *,
+    event: OutboxEvent,
+    error_code: str,
+) -> None:
+    if event.topic != "livekit.dispatch" or event.aggregate_type != "call":
+        return
+    call = await CallRepository(session).get_by_id_for_update(event.aggregate_id)
+    if call is None or call.status != "pending":
+        return
+    failure_code = {
+        "dispatch_ineligible": "dispatch_ineligible",
+        "dispatch_conflict": "dispatch_conflict",
+        "dispatch_configuration": "dispatch_configuration",
+        "invalid_payload": "dispatch_configuration",
+        "handler_configuration": "dispatch_configuration",
+        "provider_retryable": "dispatch_provider_exhausted",
+        "provider_terminal": "dispatch_provider_exhausted",
+    }.get(error_code, "dispatch_provider_exhausted")
+    await CallRepository(session).mark_dispatch_failed(
+        call,
+        failure_code=failure_code,
+    )
 
 
 async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:

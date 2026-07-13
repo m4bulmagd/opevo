@@ -71,7 +71,6 @@ class SessionRuntime:
             payload = CallCompletionPayload(
                 call_id=metadata.call_id,
                 duration_seconds=duration_seconds,
-                caller_number=metadata.caller_number,
                 transcript=self.transcript,
                 recording_bytes_base64=recording_bytes_base64,
             )

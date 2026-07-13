@@ -13,7 +13,7 @@ def agent_settings() -> AgentSettings:
         livekit_api_key="livekit-api-key",
         livekit_api_secret="livekit-api-secret",
         api_base_url="https://api.example.com",
-        agent_internal_api_token="agent-api-token",
+        agent_internal_api_token=None,
         redis_url="rediss://redis.example.com/0",
         speechmatics_api_key="speechmatics-api-key",
         gemini_api_key="gemini-api-key",
@@ -28,7 +28,6 @@ def agent_settings() -> AgentSettings:
         ("livekit_api_key", "LIVEKIT_API_KEY"),
         ("livekit_api_secret", "LIVEKIT_API_SECRET"),
         ("api_base_url", "API_BASE_URL"),
-        ("agent_internal_api_token", "AGENT_INTERNAL_API_TOKEN"),
         ("redis_url", "REDIS_URL"),
         ("speechmatics_api_key", "SPEECHMATICS_API_KEY"),
         ("gemini_api_key", "GEMINI_API_KEY"),
@@ -64,6 +63,14 @@ def test_agent_production_does_not_require_unused_optional_providers(
             "mistral_api_key": None,
         }
     )
+
+    validate_agent_runtime(settings)
+
+
+def test_agent_production_does_not_require_legacy_static_api_token(
+    agent_settings: AgentSettings,
+) -> None:
+    settings = agent_settings.model_copy(update={"agent_internal_api_token": None})
 
     validate_agent_runtime(settings)
 

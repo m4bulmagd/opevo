@@ -23,22 +23,34 @@ class AgentApiClient:
     ) -> None:
         settings = get_settings()
         self.base_url = (base_url or settings.api_base_url).rstrip("/")
-        self.agent_token = agent_token or settings.agent_internal_api_token
+        self.agent_token = (
+            agent_token
+            if agent_token is not None
+            else settings.agent_internal_api_token
+        )
+        self.app_env = settings.app_env.strip().lower()
         self.http_client = http_client
         self.timeout = timeout if timeout is not None else settings.api_timeout_seconds
         self.max_retries = max_retries if max_retries is not None else settings.api_max_retries
 
     async def complete_call(self, payload: dict) -> dict:
-        if not self.agent_token:
-            raise ValueError("AGENT_INTERNAL_API_TOKEN is required")
+        dispatch_token = payload.get("dispatch_token")
+        if isinstance(dispatch_token, str) and dispatch_token:
+            token = dispatch_token
+        elif (
+            self.app_env == "development"
+            and isinstance(self.agent_token, str)
+            and self.agent_token
+        ):
+            token = self.agent_token
+        else:
+            raise ValueError("Dispatch token is required")
 
         url = f"{self.base_url}/api/agent/calls/{payload['call_id']}/complete"
-        token = payload.get("dispatch_token") or self.agent_token
         headers = {"x-agent-token": token}
         body = {
             "duration_seconds": payload["duration_seconds"],
             "transcript": payload.get("transcript") or [],
-            "caller_number": payload.get("caller_number"),
             "recording_bytes_base64": payload.get("recording_bytes_base64"),
         }
 

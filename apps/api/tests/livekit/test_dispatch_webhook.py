@@ -1,12 +1,18 @@
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.agent_config import AgentConfig
+from app.models.call import Call
+from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.models.subscription import Subscription
 from app.models.user import User
+from app.models.usage_ledger import UsageLedger
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 
 
@@ -16,6 +22,7 @@ ROOM_NAME_SENTINEL = "room_TRANSCRIPT_SENTINEL_+33612345678"
 class FakeLiveKitReceiver:
     def receive(self, body: bytes, authorization: str | None) -> dict:
         return {
+            "id": "EV_joined",
             "event": "participant_joined",
             "room": {"name": ROOM_NAME_SENTINEL},
             "participant": {
@@ -33,6 +40,7 @@ class FakeLiveKitReceiver:
 class FakeParticipantLeftReceiver:
     def receive(self, body: bytes, authorization: str | None) -> dict:
         return {
+            "id": "EV_left",
             "event": "participant_left",
             "room": {"name": "room_123"},
             "participant": {
@@ -74,6 +82,7 @@ class FakeWebhookRequest:
 class FakeRoomSentinelReceiver:
     def receive(self, body: bytes, authorization: str | None) -> dict:
         return {
+            "id": "EV_room_finished",
             "event": "room_finished",
             "room": {"name": ROOM_NAME_SENTINEL},
             "participant": {"kind": "STANDARD", "attributes": {}},
@@ -89,21 +98,21 @@ class FakeWebhookSession:
 
 
 @pytest.mark.anyio
-async def test_webhook_log_does_not_render_provider_controlled_room_name(caplog) -> None:
+async def test_webhook_log_does_not_render_provider_controlled_room_name(
+    db_session,
+    caplog,
+) -> None:
     from app.webhooks.livekit import handle_livekit_webhook
 
-    session = FakeWebhookSession()
     with caplog.at_level(logging.INFO):
         response = await handle_livekit_webhook(
             FakeWebhookRequest(),
-            session=session,
+            session=db_session,
             webhook_receiver=FakeRoomSentinelReceiver(),
-            dispatch_client=FakeDispatchClient(),
             realtime_service=FakeRealtimeService(),
         )
 
     assert response.status_code == 202
-    assert session.commits == 1
     assert ROOM_NAME_SENTINEL not in caplog.text
     assert "livekit webhook received event=room_finished" in caplog.text
 
@@ -136,11 +145,34 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
                 AgentConfig(
                     user_id=user.id,
                     agent_name="Ava",
+                    owner_context="Sam at Bakery",
                     system_prompt="Be helpful",
                     knowledge_base="Hours 9-5",
                     pipeline_mode="stt_llm_tts",
                     is_enabled=True,
                 )
+            )
+            now = datetime.now(UTC)
+            session.add_all(
+                [
+                    Subscription(
+                        user_id=user.id,
+                        stripe_customer_id="cus-livekit",
+                        stripe_subscription_id="sub-livekit",
+                        plan_tier="starter",
+                        status="active",
+                        allocated_minutes=60,
+                        current_period_start=now - timedelta(days=1),
+                        current_period_end=now + timedelta(days=1),
+                    ),
+                    UsageLedger(
+                        user_id=user.id,
+                        event_type="invoice_paid_reset",
+                        source_id="invoice-livekit",
+                        minutes_delta=60,
+                        balance_after=60,
+                    ),
+                ]
             )
             await session.commit()
         await engine.dispose()
@@ -148,16 +180,10 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
     await seed()
 
     from app.main import app
-    from app.webhooks.livekit import (
-        get_dispatch_client,
-        get_realtime_service,
-        get_webhook_receiver,
-    )
+    from app.webhooks.livekit import get_realtime_service, get_webhook_receiver
 
-    dispatch_client = FakeDispatchClient()
     realtime_service = FakeRealtimeService()
     app.dependency_overrides[get_webhook_receiver] = lambda: FakeLiveKitReceiver()
-    app.dependency_overrides[get_dispatch_client] = lambda: dispatch_client
     app.dependency_overrides[get_realtime_service] = lambda: realtime_service
 
     try:
@@ -169,23 +195,25 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
             )
     finally:
         app.dependency_overrides.pop(get_webhook_receiver, None)
-        app.dependency_overrides.pop(get_dispatch_client, None)
         app.dependency_overrides.pop(get_realtime_service, None)
 
-    metadata = json.loads(dispatch_client.calls[0]["metadata"])
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        call = await session.scalar(select(Call))
+        outbox = await session.scalar(select(OutboxEvent))
+    await engine.dispose()
+    assert call is not None
+    assert outbox is not None
     assert response.status_code == 202
-    assert dispatch_client.calls[0]["room_name"] == ROOM_NAME_SENTINEL
-    assert realtime_service.call_started_events[0]["user_id"] == metadata["user_id"]
-    assert realtime_service.call_started_events[0]["call_id"] == metadata["call_id"]
+    assert outbox.payload == {"call_id": str(call.id)}
+    assert realtime_service.call_started_events[0]["user_id"] == str(call.user_id)
+    assert realtime_service.call_started_events[0]["call_id"] == str(call.id)
     assert realtime_service.call_started_events[0]["room_name"] == ROOM_NAME_SENTINEL
     assert ROOM_NAME_SENTINEL not in caplog.text
-    assert metadata["call_id"] in caplog.text
-    assert metadata["user_id"] in caplog.text
     assert "SIP_ATTRIBUTE_SENTINEL_SECRET" not in caplog.text
     assert "+33123456789" not in caplog.text
     assert "+33999888777" not in caplog.text
-    assert "+33******89" in caplog.text
-    assert "+33******77" in caplog.text
 
 
 @pytest.mark.anyio
@@ -194,13 +222,8 @@ async def test_participant_left_routes_to_leave_handler(
     monkeypatch,
 ) -> None:
     from app.main import app
-    from app.webhooks.livekit import (
-        get_dispatch_client,
-        get_realtime_service,
-        get_webhook_receiver,
-    )
+    from app.webhooks.livekit import get_realtime_service, get_webhook_receiver
 
-    dispatch_client = FakeDispatchClient()
     realtime_service = FakeRealtimeService()
     observed: list[dict] = []
 
@@ -216,7 +239,6 @@ async def test_participant_left_routes_to_leave_handler(
     )
 
     app.dependency_overrides[get_webhook_receiver] = lambda: FakeParticipantLeftReceiver()
-    app.dependency_overrides[get_dispatch_client] = lambda: dispatch_client
     app.dependency_overrides[get_realtime_service] = lambda: realtime_service
 
     try:
@@ -227,12 +249,12 @@ async def test_participant_left_routes_to_leave_handler(
         )
     finally:
         app.dependency_overrides.pop(get_webhook_receiver, None)
-        app.dependency_overrides.pop(get_dispatch_client, None)
         app.dependency_overrides.pop(get_realtime_service, None)
 
     assert response.status_code == 202
     assert observed == [
         {
+            "id": "EV_left",
             "event": "participant_left",
             "room": {"name": "room_123"},
             "participant": {

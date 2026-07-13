@@ -17,6 +17,24 @@ class PhoneNumberRepository:
         result = await self.session.execute(select(PhoneNumber).where(PhoneNumber.e164 == e164))
         return result.scalar_one_or_none()
 
+    async def get_by_e164_for_update(self, e164: str) -> PhoneNumber | None:
+        result = await self.session.execute(
+            select(PhoneNumber)
+            .where(PhoneNumber.e164 == e164)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_id_for_update(self, phone_number_id) -> PhoneNumber | None:
+        result = await self.session.execute(
+            select(PhoneNumber)
+            .where(PhoneNumber.id == phone_number_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_any_format(self, raw_number: str) -> PhoneNumber | None:
         normalized = normalize_phone_number(raw_number)
         if normalized == raw_number:
