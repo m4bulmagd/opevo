@@ -48,3 +48,20 @@ def test_stream_debug_logger_emits_structured_stage_logs(caplog) -> None:
     )
     for sentinel in transcript_sentinels:
         assert sentinel not in rendered_records
+
+
+def test_stream_debug_logger_tts_error_does_not_render_text_or_exception_message(caplog) -> None:
+    debug_logger = StreamDebugLogger(enabled=True, call_id="call_123", user_id="user_123")
+    transcript_sentinel = "TTS_ERROR_TRANSCRIPT_SENTINEL"
+    authorization_sentinel = "TTS_ERROR_AUTHORIZATION_SENTINEL"
+
+    with caplog.at_level(logging.INFO):
+        debug_logger.log_tts_error(
+            transcript_sentinel,
+            error=RuntimeError(authorization_sentinel),
+        )
+
+    assert transcript_sentinel not in caplog.text
+    assert authorization_sentinel not in caplog.text
+    assert "agent.debug tts.error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text

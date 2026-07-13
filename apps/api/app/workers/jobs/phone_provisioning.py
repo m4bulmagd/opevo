@@ -3,6 +3,7 @@ from typing import Any
 from uuid import UUID
 
 from app.core.database import get_session_factory
+from app.core.logging import report_safe_exception
 from app.providers.telephony.base import TelephonyProvisioningReviewRequired
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.phone_number_provisioning_repository import PhoneNumberProvisioningRepository
@@ -64,7 +65,15 @@ async def phone_provisioning_job(ctx: dict[str, Any], payload: dict[str, Any]) -
                 payload=exc.payload,
                 can_retry=True,
             )
-            logger.warning(f"Phone provisioning review required for user {user_id}: {exc}")
+            report_safe_exception(
+                logger,
+                event="phone_provisioning_review_required",
+                operation="provision_phone_number",
+                error=exc,
+                user_id=user_id,
+                status="review_required",
+                level=logging.WARNING,
+            )
             notification_repo = NotificationRepository(session)
             await notification_repo.create(
                 user_id=user_id,
@@ -75,13 +84,23 @@ async def phone_provisioning_job(ctx: dict[str, Any], payload: dict[str, Any]) -
             )
             await session.commit()
         except Exception as exc:
+            error_type = type(exc).__name__
             await provisioning_repo.mark_failed(
                 user_id=user_id,
                 target_country_code=country_code,
-                reason=type(exc).__name__,
-                payload={"message": str(exc)},
+                reason=error_type,
+                payload={"error_type": error_type},
                 can_retry=True,
             )
-            logger.exception(f"Unexpected error provisioning phone number for user {user_id}")
+            report_safe_exception(
+                logger,
+                event="phone_provisioning_failed",
+                operation="provision_phone_number",
+                error=exc,
+                user_id=user_id,
+                status="failed",
+            )
             await session.commit()
-            raise
+            raise RuntimeError(
+                f"phone_provisioning_failed error_type={error_type}"
+            ) from None

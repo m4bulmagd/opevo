@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from app.services.summary_service import SummaryService
@@ -13,7 +15,10 @@ class FakeSummaryProvider:
 
 class ExplodingSummaryProvider:
     async def generate_summary(self, transcript: list[dict]):
-        raise RuntimeError("provider unavailable")
+        raise RuntimeError(
+            "TRANSCRIPT_SENTINEL_FROM_SUMMARY_PROVIDER "
+            "AUTHORIZATION_SENTINEL_FROM_SUMMARY_PROVIDER"
+        )
 
 
 @pytest.mark.anyio
@@ -63,17 +68,26 @@ async def test_summary_service_rejects_malformed_provider_output() -> None:
 
 
 @pytest.mark.anyio
-async def test_summary_service_handles_provider_failure_non_blocking() -> None:
+async def test_summary_service_handles_provider_failure_non_blocking(caplog) -> None:
     service = SummaryService(provider=ExplodingSummaryProvider())
 
-    result = await service.create_summary(
-        {
-            "transcript": [
-                {"speaker": "CALLER", "text": "What are your opening hours?"},
-            ]
-        }
-    )
+    with caplog.at_level(logging.ERROR):
+        result = await service.create_summary(
+            {
+                "call_id": "call_summary_123",
+                "transcript": [
+                    {"speaker": "CALLER", "text": "What are your opening hours?"},
+                ],
+            }
+        )
 
     assert result.text is None
     assert result.data is None
     assert result.job_enqueued is False
+    assert "TRANSCRIPT_SENTINEL_FROM_SUMMARY_PROVIDER" not in caplog.text
+    assert "AUTHORIZATION_SENTINEL_FROM_SUMMARY_PROVIDER" not in caplog.text
+    assert "event=summary_generation_failed" in caplog.text
+    assert "operation=generate_summary" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "call_id=call_summary_123" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

@@ -13,6 +13,8 @@ factory with the in-memory SQLite session from the shared db_session fixture.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -545,6 +547,89 @@ class ReviewRequiredProvisioningProvider:
         return "app-disabled"
 
 
+class FakePhoneProvisioningSession:
+    def __init__(self) -> None:
+        self.commits = 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
+class FakePhoneProvisioningSessionContext:
+    def __init__(self, session: FakePhoneProvisioningSession) -> None:
+        self.session = session
+
+    async def __aenter__(self) -> FakePhoneProvisioningSession:
+        return self.session
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        return None
+
+
+class CapturingPhoneProvisioningRepository:
+    def __init__(self) -> None:
+        self.failed_calls: list[dict] = []
+
+    async def mark_running(self, **kwargs) -> None:
+        return None
+
+    async def mark_failed(self, **kwargs) -> None:
+        self.failed_calls.append(kwargs)
+
+
+class CapturingPhoneProvisioningNotificationRepository:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def create(self, **kwargs) -> None:
+        self.calls.append(kwargs)
+
+
+def install_phone_provisioning_job_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    error: Exception,
+) -> tuple[
+    FakePhoneProvisioningSession,
+    CapturingPhoneProvisioningRepository,
+    CapturingPhoneProvisioningNotificationRepository,
+]:
+    from app.workers.jobs import phone_provisioning as phone_provisioning_module
+
+    session = FakePhoneProvisioningSession()
+    provisioning_repository = CapturingPhoneProvisioningRepository()
+    notification_repository = CapturingPhoneProvisioningNotificationRepository()
+
+    class FakeUserRepository:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def get_by_id(self, user_id: UUID):
+            return SimpleNamespace(id=user_id, country_code="FR")
+
+    class FailingTelephonyService:
+        def __init__(self, _session, *, provider=None) -> None:
+            pass
+
+        async def provision_number(self, user_id: UUID, *, country_code: str):
+            raise error
+
+    monkeypatch.setattr(phone_provisioning_module, "UserRepository", FakeUserRepository)
+    monkeypatch.setattr(
+        phone_provisioning_module,
+        "PhoneNumberProvisioningRepository",
+        lambda _session: provisioning_repository,
+    )
+    monkeypatch.setattr(phone_provisioning_module, "TelephonyService", FailingTelephonyService)
+    monkeypatch.setattr(
+        phone_provisioning_module,
+        "NotificationRepository",
+        lambda _session: notification_repository,
+    )
+
+    return session, provisioning_repository, notification_repository
+
+
 @pytest.mark.anyio
 async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_default(
     db_session, active_user
@@ -622,3 +707,73 @@ async def test_phone_provisioning_job_persists_retryable_failure_state(
     assert provisionings[0].last_error_reason == "no_affordable_number"
     assert not phone_numbers
     assert notifications[0].notification_type == "phone_number_provisioning_review_required"
+
+
+@pytest.mark.anyio
+async def test_phone_provisioning_review_failure_does_not_log_exception_message(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    from app.providers.telephony.base import TelephonyProvisioningReviewRequired
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    error = TelephonyProvisioningReviewRequired(
+        reason="provider_review_required",
+        payload={"event": "phone_number_provisioning_review_required"},
+    )
+    error.args = ("AUTHORIZATION_SENTINEL_FROM_REVIEW_EXCEPTION",)
+    session, provisioning_repository, notification_repository = (
+        install_phone_provisioning_job_fakes(monkeypatch, error=error)
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await phone_provisioning_job(
+            {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+            {"user_id": "00000000-0000-0000-0000-000000000123"},
+        )
+
+    assert "AUTHORIZATION_SENTINEL_FROM_REVIEW_EXCEPTION" not in caplog.text
+    assert "event=phone_provisioning_review_required" in caplog.text
+    assert "operation=provision_phone_number" in caplog.text
+    assert "error_type=TelephonyProvisioningReviewRequired" in caplog.text
+    assert provisioning_repository.failed_calls[0]["reason"] == "provider_review_required"
+    assert notification_repository.calls
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_phone_provisioning_unexpected_failure_does_not_log_or_persist_exception_message(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    error_message = (
+        "PHONE_SENTINEL_+33612345678 "
+        "AUTHORIZATION_SENTINEL_FROM_PROVISIONING_PROVIDER"
+    )
+    session, provisioning_repository, _notification_repository = (
+        install_phone_provisioning_job_fakes(
+            monkeypatch,
+            error=RuntimeError(error_message),
+        )
+    )
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError) as exc_info:
+            await phone_provisioning_job(
+                {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+                {"user_id": "00000000-0000-0000-0000-000000000123"},
+            )
+
+    assert error_message not in str(exc_info.value)
+    assert error_message not in caplog.text
+    assert "+33612345678" not in caplog.text
+    assert "event=phone_provisioning_failed" in caplog.text
+    assert "operation=provision_phone_number" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert provisioning_repository.failed_calls[0]["reason"] == "RuntimeError"
+    assert provisioning_repository.failed_calls[0]["payload"] == {
+        "error_type": "RuntimeError",
+    }
+    assert all(record.exc_info is None for record in caplog.records)

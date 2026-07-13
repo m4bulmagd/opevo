@@ -1,6 +1,7 @@
 import importlib
 import inspect
 
+import pytest
 from arq.connections import RedisSettings
 
 from app.core.config import get_settings
@@ -26,3 +27,13 @@ def test_worker_job_functions_accept_arq_context() -> None:
         parameters = list(inspect.signature(function).parameters.values())
         assert parameters
         assert parameters[0].name == "ctx"
+
+
+@pytest.mark.anyio
+async def test_worker_startup_initializes_safe_logging(monkeypatch) -> None:
+    setup_calls: list[bool] = []
+    monkeypatch.setattr(arq_worker, "setup_logging", lambda: setup_calls.append(True), raising=False)
+
+    await arq_worker.WorkerSettings.on_startup({})
+
+    assert setup_calls == [True]

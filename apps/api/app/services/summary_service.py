@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import logging
 
 from app.core.config import get_settings
+from app.core.logging import report_safe_exception
 from app.providers.summaries.base import StructuredSummary, SummaryProvider
 from app.providers.summaries.gemini import GeminiSummaryProvider
 
@@ -27,8 +28,15 @@ class SummaryService:
         try:
             structured = await self.provider.generate_summary(transcript)
             data = self._validate_structured_summary(structured)
-        except Exception:
-            logger.exception("summary generation failed")
+        except Exception as exc:
+            report_safe_exception(
+                logger,
+                event="summary_generation_failed",
+                operation="generate_summary",
+                error=exc,
+                call_id=payload.get("call_id"),
+                status="failed",
+            )
             return SummaryResult(text=None, data=None, job_enqueued=False)
         if data is None:
             return SummaryResult(text=None, data=None, job_enqueued=False)

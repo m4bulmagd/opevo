@@ -38,6 +38,11 @@ class FailingApiClient:
         raise RuntimeError("API unreachable")
 
 
+class SecretBearingFailingApiClient:
+    async def complete_call(self, payload: dict) -> dict:
+        raise RuntimeError("AUTHORIZATION_SENTINEL_FROM_API_CLIENT")
+
+
 def make_metadata(**kwargs) -> DispatchMetadata:
     defaults = dict(call_id="call_123", user_id="user_123", agent_name="A", owner_name="O")
     defaults.update(kwargs)
@@ -111,6 +116,42 @@ async def test_transcript_publish_failure_does_not_log_provider_error_content(ca
 
     with caplog.at_level(logging.ERROR):
         await runtime.handle_caller_transcript(metadata, "caller transcript")
+
+    assert "TRANSCRIPT_SENTINEL_FROM_PROVIDER_ERROR" not in caplog.text
+    assert "call_123" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_agent_utterance_publish_failure_does_not_log_provider_error_content(caplog) -> None:
+    runtime = SessionRuntime(SecretBearingFailingEventPublisher())
+    metadata = make_metadata()
+
+    with caplog.at_level(logging.ERROR):
+        await runtime.handle_agent_utterance(metadata, "agent transcript")
+
+    assert "TRANSCRIPT_SENTINEL_FROM_PROVIDER_ERROR" not in caplog.text
+    assert "call_123" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_complete_call_failure_does_not_log_api_error_content(caplog) -> None:
+    runtime = SessionRuntime(FakeEventPublisher(), api_client=SecretBearingFailingApiClient())
+    metadata = make_metadata(dispatch_token="dispatch_secret")
+
+    with caplog.at_level(logging.ERROR):
+        await runtime.finalize(metadata, duration_seconds=60)
+
+    assert "AUTHORIZATION_SENTINEL_FROM_API_CLIENT" not in caplog.text
+    assert "call_123" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_call_ended_publish_failure_does_not_log_provider_error_content(caplog) -> None:
+    runtime = SessionRuntime(SecretBearingFailingEventPublisher())
+    metadata = make_metadata()
+
+    with caplog.at_level(logging.ERROR):
+        await runtime.finalize(metadata, duration_seconds=60)
 
     assert "TRANSCRIPT_SENTINEL_FROM_PROVIDER_ERROR" not in caplog.text
     assert "call_123" in caplog.text
