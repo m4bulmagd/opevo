@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.core.rate_limit import limiter
 from app.core.redis import RedisEventBus, create_arq_pool
+from app.core.runtime_validation import validate_api_runtime
 from app.routers.agent import router as agent_router
 from app.routers.billing import router as billing_router
 from app.routers.calls import router as calls_router
@@ -82,6 +83,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 settings = get_settings()
+validate_api_runtime(settings)
 if settings.cors_allowed_origins:
     origins = [origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()]
     app.add_middleware(

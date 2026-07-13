@@ -13,6 +13,7 @@ from agent.event_publisher import EventPublisher
 from agent.pipeline_factory import build_agent_runtime
 from agent.pipeline_factory import _resolve_speechmatics_turn_detection_mode
 from agent.providers import PipelineMode
+from agent.runtime_validation import validate_agent_runtime
 from agent.schemas import DispatchMetadata
 from agent.session_runtime import SessionRuntime
 
@@ -168,6 +169,7 @@ def prewarm_assets(proc) -> None:
 
 def build_worker_options() -> WorkerOptions:
     settings = get_settings()
+    validate_agent_runtime(settings)
     _register_inference_runners()
     return WorkerOptions(
         entrypoint_fnc=entrypoint,

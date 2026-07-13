@@ -1,7 +1,171 @@
+import os
 from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+
+from app.core.config import Settings
+from app.core.runtime_validation import validate_api_runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture
+def base_settings() -> Settings:
+    return Settings(
+        app_env="production",
+        database_url="postgresql+asyncpg://db/ai_call",
+        redis_url="rediss://redis/0",
+        clerk_issuer="https://clerk.example.com",
+        clerk_jwks_url="https://clerk.example.com/.well-known/jwks.json",
+        clerk_webhook_secret="clerk-webhook-secret",
+        stripe_webhook_secret="stripe-webhook-secret",
+        livekit_url="wss://livekit.example.com",
+        livekit_api_key="livekit-api-key",
+        livekit_api_secret="livekit-api-secret",
+        telnyx_api_key="telnyx-api-key",
+        telnyx_active_connection_id="telnyx-active-connection",
+        telnyx_disabled_connection_id="telnyx-disabled-connection",
+        storage_bucket_name="recordings",
+        s3_endpoint_url="https://storage.example.com",
+        s3_access_key="storage-access-key",
+        s3_secret_key="storage-secret-key",
+        s3_region="eu-west-3",
+        agent_dispatch_jwt_secret="dispatch-jwt-secret",
+        summary_provider="gemini",
+        summary_model="gemini-2.5-flash",
+        gemini_api_key="gemini-api-key",
+    )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "environment_name"),
+    [
+        ("database_url", "DATABASE_URL"),
+        ("redis_url", "REDIS_URL"),
+        ("clerk_issuer", "CLERK_ISSUER"),
+        ("clerk_webhook_secret", "CLERK_WEBHOOK_SECRET"),
+        ("stripe_webhook_secret", "STRIPE_WEBHOOK_SECRET"),
+        ("livekit_url", "LIVEKIT_URL"),
+        ("livekit_api_key", "LIVEKIT_API_KEY"),
+        ("livekit_api_secret", "LIVEKIT_API_SECRET"),
+        ("telnyx_api_key", "TELNYX_API_KEY"),
+        ("telnyx_active_connection_id", "TELNYX_ACTIVE_CONNECTION_ID"),
+        ("telnyx_disabled_connection_id", "TELNYX_DISABLED_CONNECTION_ID"),
+        ("storage_bucket_name", "STORAGE_BUCKET_NAME"),
+        ("s3_endpoint_url", "S3_ENDPOINT_URL"),
+        ("s3_access_key", "S3_ACCESS_KEY"),
+        ("s3_secret_key", "S3_SECRET_KEY"),
+        ("s3_region", "S3_REGION"),
+        ("agent_dispatch_jwt_secret", "AGENT_DISPATCH_JWT_SECRET"),
+        ("summary_provider", "SUMMARY_PROVIDER"),
+        ("summary_model", "SUMMARY_MODEL"),
+    ],
+)
+def test_production_rejects_missing_required_api_setting(
+    base_settings: Settings,
+    field_name: str,
+    environment_name: str,
+) -> None:
+    settings = base_settings.model_copy(update={field_name: ""})
+
+    with pytest.raises(RuntimeError, match=environment_name):
+        validate_api_runtime(settings)
+
+
+def test_production_rejects_missing_clerk_verification_source(base_settings: Settings) -> None:
+    settings = base_settings.model_copy(
+        update={"clerk_jwt_key": "", "clerk_jwks_url": ""}
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_api_runtime(settings)
+
+    message = str(exc_info.value)
+    assert "CLERK_JWT_KEY" in message
+    assert "CLERK_JWKS_URL" in message
+
+
+@pytest.mark.parametrize("verification_field", ["clerk_jwt_key", "clerk_jwks_url"])
+def test_production_accepts_either_clerk_verification_source(
+    base_settings: Settings,
+    verification_field: str,
+) -> None:
+    settings = base_settings.model_copy(
+        update={
+            "clerk_jwt_key": "",
+            "clerk_jwks_url": "",
+            verification_field: "usable-verification-source",
+        }
+    )
+
+    validate_api_runtime(settings)
+
+
+def test_production_requires_gemini_credentials_for_gemini_summaries(
+    base_settings: Settings,
+) -> None:
+    settings = base_settings.model_copy(update={"gemini_api_key": ""})
+
+    with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
+        validate_api_runtime(settings)
+
+
+def test_production_rejects_unsupported_summary_provider_without_echoing_it(
+    base_settings: Settings,
+) -> None:
+    provider_value = "private-provider-value"
+    settings = base_settings.model_copy(update={"summary_provider": provider_value})
+
+    with pytest.raises(RuntimeError, match="SUMMARY_PROVIDER") as exc_info:
+        validate_api_runtime(settings)
+
+    assert provider_value not in str(exc_info.value)
+
+
+def test_production_reports_every_missing_api_setting(base_settings: Settings) -> None:
+    settings = base_settings.model_copy(
+        update={"redis_url": "", "livekit_api_key": "", "s3_secret_key": ""}
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_api_runtime(settings)
+
+    message = str(exc_info.value)
+    assert "REDIS_URL" in message
+    assert "LIVEKIT_API_KEY" in message
+    assert "S3_SECRET_KEY" in message
+
+
+def test_development_accepts_fake_api_providers() -> None:
+    settings = Settings(
+        app_env="development",
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+    )
+
+    validate_api_runtime(settings)
+
+
+def test_api_import_rejects_invalid_production_settings_before_startup() -> None:
+    environment = {
+        **os.environ,
+        "APP_ENV": "production",
+        "AGENT_DISPATCH_JWT_SECRET": "",
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.main"],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "AGENT_DISPATCH_JWT_SECRET" in result.stderr
 
 
 def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:

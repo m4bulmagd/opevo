@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
-import { isClerkConfigured } from "@/lib/auth/clerk-config";
+import { isClerkConfigured, shouldUseClerkMiddleware } from "@/lib/auth/clerk-config";
 
 const isProtectedRoute = createRouteMatcher(["/dashboard(.*)"]);
 
@@ -12,7 +12,10 @@ const authProxy = clerkMiddleware(async (auth, request) => {
   }
 });
 
-export default isClerkConfigured
+export default shouldUseClerkMiddleware({
+  nodeEnv: process.env.NODE_ENV,
+  clerkConfigured: isClerkConfigured,
+})
   ? authProxy
   : () => {
       return NextResponse.next();

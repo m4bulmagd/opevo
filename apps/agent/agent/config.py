@@ -8,6 +8,8 @@ class AgentSettings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
+    app_env: str = "development"
+
     # LiveKit
     livekit_url: str | None = None
     livekit_api_key: str | None = None
