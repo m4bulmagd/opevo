@@ -29,6 +29,8 @@ async def test_call_repository_excludes_soft_deleted_calls(db_session, active_us
         user_id=active_user.id,
         caller_number="+33111111111",
     )
+    visible_call.status = "completed"
+    await db_session.flush()
     deleted_call = await repository.create_pending(
         user_id=active_user.id,
         caller_number="+33222222222",

@@ -1,14 +1,47 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    Uuid,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.schema import conv
 
 from app.models import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class Call(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "calls"
+    __table_args__ = (
+        Index(
+            "uq_calls_user_active",
+            "user_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('pending', 'connected', 'ending', 'finalizing')"
+            ),
+            sqlite_where=text(
+                "status IN ('pending', 'connected', 'ending', 'finalizing')"
+            ),
+        ),
+        CheckConstraint(
+            "duration_seconds IS NULL OR duration_seconds >= 0",
+            name=conv("ck_calls_duration_seconds_nonnegative"),
+        ),
+        CheckConstraint(
+            "minutes_charged IS NULL OR minutes_charged >= 0",
+            name=conv("ck_calls_minutes_charged_nonnegative"),
+        ),
+    )
 
     user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False, index=True)
     phone_number_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("phone_numbers.id"), nullable=True, index=True)

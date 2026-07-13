@@ -16,11 +16,13 @@ class UsageRepository:
         minutes_delta: int,
         balance_after: int | None = None,
         call_id=None,
+        source_id: str | None = None,
     ) -> UsageLedger:
         ledger = UsageLedger(
             user_id=user_id,
             call_id=call_id,
             event_type=event_type,
+            source_id=source_id,
             minutes_delta=minutes_delta,
             balance_after=balance_after,
         )

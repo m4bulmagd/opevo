@@ -1,7 +1,36 @@
-from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.webhook_event import WebhookEvent
+
+
+WEBHOOK_EVENT_IDENTITY_CONSTRAINT = "uq_webhook_events_provider_external_event_id"
+
+
+def _integrity_constraint_name(error: IntegrityError) -> str | None:
+    original = error.orig
+    for candidate in (original, getattr(original, "__cause__", None)):
+        if candidate is None:
+            continue
+        diagnostic = getattr(candidate, "diag", None)
+        constraint_name = getattr(diagnostic, "constraint_name", None)
+        if constraint_name:
+            return str(constraint_name)
+        constraint_name = getattr(candidate, "constraint_name", None)
+        if constraint_name:
+            return str(constraint_name)
+    return None
+
+
+def _is_webhook_identity_conflict(error: IntegrityError) -> bool:
+    constraint_name = _integrity_constraint_name(error)
+    if constraint_name is not None:
+        return constraint_name == WEBHOOK_EVENT_IDENTITY_CONSTRAINT
+
+    return str(error.orig) == (
+        "UNIQUE constraint failed: "
+        "webhook_events.provider, webhook_events.external_event_id"
+    )
 
 
 class WebhookEventRepository:
@@ -16,21 +45,19 @@ class WebhookEventRepository:
         event_type: str,
         payload: dict,
     ) -> bool:
-        existing = await self.session.execute(
-            select(WebhookEvent).where(
-                WebhookEvent.provider == provider,
-                WebhookEvent.external_event_id == external_event_id,
-            )
-        )
-        if existing.scalar_one_or_none() is not None:
-            return False
-
         event = WebhookEvent(
             provider=provider,
             external_event_id=external_event_id,
             event_type=event_type,
             payload=payload,
         )
-        self.session.add(event)
-        await self.session.flush()
+        try:
+            async with self.session.begin_nested():
+                self.session.add(event)
+                await self.session.flush()
+        except IntegrityError as error:
+            if _is_webhook_identity_conflict(error):
+                return False
+            raise
+
         return True
