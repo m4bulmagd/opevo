@@ -56,6 +56,13 @@ def test_models_expose_exact_integrity_constraint_names() -> None:
     )
 
 
+def test_subscription_persists_nullable_stripe_event_ordering_fields() -> None:
+    columns = Subscription.__table__.columns
+
+    assert columns["stripe_subscription_created_at"].nullable is True
+    assert columns["last_stripe_event_created_at"].nullable is True
+
+
 class _NamedIntegrityError(Exception):
     def __init__(self, constraint_name: str) -> None:
         self.constraint_name = constraint_name

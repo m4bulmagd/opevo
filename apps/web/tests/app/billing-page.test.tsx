@@ -83,11 +83,76 @@ describe("billing page", () => {
     expect(screen.getByRole("button", { name: /Manage billing/i })).toBeInTheDocument();
   });
 
+  it.each([
+    "trialing",
+    "past_due",
+    "unpaid",
+    "incomplete",
+    "paused",
+  ])("renders portal action instead of checkout for %s subscriptions", async (status) => {
+    getSubscriptionMock.mockResolvedValueOnce({
+      plan_tier: "starter",
+      status,
+      allocated_minutes: 60,
+      current_period_start: "2026-03-01T00:00:00Z",
+      current_period_end: "2026-03-31T23:59:59Z",
+      stripe_customer_id: "cus_123",
+      stripe_subscription_id: "sub_123",
+    });
+    getUsageSnapshotMock.mockResolvedValueOnce({
+      minutes_remaining: 60,
+      allocated_minutes: 60,
+      plan_tier: "starter",
+      subscription_status: status,
+      current_period_start: "2026-03-01T00:00:00Z",
+      current_period_end: "2026-03-31T23:59:59Z",
+    });
+    getUsageLedgerMock.mockResolvedValueOnce({ entries: [] });
+
+    const { default: Page } = await import("@/app/(app)/dashboard/billing/page");
+    render(await Page());
+
+    expect(screen.getByRole("button", { name: /Manage billing/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Start starter plan/i })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    "canceled",
+    "incomplete_expired",
+  ])("renders checkout action for terminal %s subscriptions", async (status) => {
+    getSubscriptionMock.mockResolvedValueOnce({
+      plan_tier: "starter",
+      status,
+      allocated_minutes: 60,
+      current_period_start: "2026-03-01T00:00:00Z",
+      current_period_end: "2026-03-31T23:59:59Z",
+      stripe_customer_id: "cus_123",
+      stripe_subscription_id: "sub_123",
+    });
+    getUsageSnapshotMock.mockResolvedValueOnce({
+      minutes_remaining: 60,
+      allocated_minutes: 60,
+      plan_tier: "starter",
+      subscription_status: status,
+      current_period_start: "2026-03-01T00:00:00Z",
+      current_period_end: "2026-03-31T23:59:59Z",
+    });
+    getUsageLedgerMock.mockResolvedValueOnce({ entries: [] });
+
+    const { default: Page } = await import("@/app/(app)/dashboard/billing/page");
+    render(await Page());
+
+    expect(screen.getByRole("button", { name: /Start starter plan/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Manage billing/i })).not.toBeInTheDocument();
+  });
+
   it("creates hosted billing sessions through the server actions", async () => {
     createCheckoutSessionMock.mockResolvedValueOnce({ url: "https://checkout.test" });
     createPortalSessionMock.mockResolvedValueOnce({ url: "https://portal.test" });
 
-    const { createCheckoutSessionAction, createPortalSessionAction } = await import("@/app/(app)/dashboard/billing/actions");
+    const { createCheckoutSessionAction, createPortalSessionAction } = await import(
+      "@/app/(app)/dashboard/billing/actions"
+    );
 
     const checkoutResult = await createCheckoutSessionAction("starter");
     const portalResult = await createPortalSessionAction();

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent_config import AgentConfig
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.services.onboarding_service import OnboardingService
+from app.services.subscription_access_policy import SubscriptionAccessPolicy
 from app.services.telephony_service import TelephonyService
 
 
@@ -79,7 +80,10 @@ class AgentConfigService:
 
     async def _ensure_ready_to_enable(self, user_id: UUID, config: AgentConfig) -> None:
         status = await self.onboarding_service.get_status(user_id)
-        if status.subscription_status != "active":
+        if not SubscriptionAccessPolicy.can_route(
+            status.subscription_status or "",
+            None,
+        ):
             raise AgentConfigReadinessError
         if status.phone_number_status != "ready":
             raise AgentConfigReadinessError

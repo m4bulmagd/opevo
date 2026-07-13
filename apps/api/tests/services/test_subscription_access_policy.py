@@ -49,3 +49,25 @@ def test_should_grant_invoice_requires_paid_status_and_paid_flag(
     should_grant: bool,
 ) -> None:
     assert SubscriptionAccessPolicy.should_grant_invoice(invoice_status, paid) is should_grant
+
+
+@pytest.mark.parametrize(
+    ("status", "allowed"),
+    [
+        (None, True),
+        ("canceled", True),
+        ("incomplete_expired", True),
+        ("trialing", False),
+        ("active", False),
+        ("past_due", False),
+        ("unpaid", False),
+        ("incomplete", False),
+        ("paused", False),
+        ("unknown", False),
+    ],
+)
+def test_can_start_checkout_only_without_subscription_or_after_terminal_status(
+    status: str | None,
+    allowed: bool,
+) -> None:
+    assert SubscriptionAccessPolicy.can_start_checkout(status) is allowed

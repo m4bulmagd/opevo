@@ -134,3 +134,36 @@ async def test_trialing_subscription_can_retry_failed_provisioning() -> None:
     status = await service.get_status("user-id")
 
     assert status.can_retry_provisioning is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("config_enabled", "phone_active"),
+    [(True, False), (False, True)],
+)
+async def test_onboarding_is_not_live_when_routing_flags_diverge(
+    config_enabled: bool,
+    phone_active: bool,
+) -> None:
+    subscription = SimpleNamespace(status="active", plan_tier="starter")
+    phone_number = SimpleNamespace(e164="+33123456789", is_active=phone_active)
+    provisioning = SimpleNamespace(status="succeeded", can_retry=False)
+    config = SimpleNamespace(
+        is_enabled=config_enabled,
+        agent_name="Presvo Front Desk",
+        owner_context="Dental office reception",
+        system_prompt="Handle inbound calls professionally.",
+        knowledge_base="Open weekdays.",
+    )
+    service = OnboardingService(
+        subscription_repository=UserLookupRepository(subscription),
+        usage_repository=UsageRepository(60),
+        phone_number_repository=UserLookupRepository(phone_number),
+        provisioning_repository=UserLookupRepository(provisioning),
+        agent_config_repository=UserLookupRepository(config),
+    )
+
+    status = await service.get_status("user-id")
+
+    assert status.routing_enabled is False
+    assert status.overall_status == "ready_to_enable"

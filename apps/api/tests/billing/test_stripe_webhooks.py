@@ -17,6 +17,14 @@ from app.models.webhook_event import WebhookEvent
 from tests.fakes import MockArqPool, ReviewRequiredTelephonyProvider
 
 
+async def _post_stripe_event(async_client, signed_stripe_headers_factory, payload: dict):
+    return await async_client.post(
+        "/webhooks/stripe",
+        content=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers=signed_stripe_headers_factory(payload),
+    )
+
+
 @pytest.mark.anyio
 async def test_invalid_signature_is_rejected(
     async_client,
@@ -616,3 +624,230 @@ async def test_unsupported_subscription_data_is_a_safe_bad_request(
         assert await session.scalar(select(Subscription)) is None
         assert await session.scalar(select(OutboxEvent)) is None
     await engine.dispose()
+
+
+def test_stripe_webhook_envelope_requires_top_level_created() -> None:
+    from pydantic import ValidationError
+
+    from app.schemas.billing import StripeWebhookEnvelope
+
+    with pytest.raises(ValidationError):
+        StripeWebhookEnvelope.model_validate(
+            {"id": "evt_missing_created", "type": "invoice.paid", "data": {}}
+        )
+
+
+@pytest.mark.anyio
+async def test_reverse_order_same_subscription_update_does_not_regress_status(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(User(clerk_user_id="user_123", email="reverse-order@example.com"))
+        await session.commit()
+    await engine.dispose()
+
+    newer = deepcopy(stripe_subscription_created_payload)
+    newer.update(id="evt_update_newer", created=300, type="customer.subscription.updated")
+    newer["data"]["object"].update(created=10, status="past_due")
+    older = deepcopy(newer)
+    older.update(id="evt_update_older", created=200)
+    older["data"]["object"]["status"] = "active"
+
+    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, newer)).status_code == 202
+    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, older)).status_code == 202
+
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.status == "past_due"
+    assert subscription.last_stripe_event_created_at is not None
+    assert subscription.last_stripe_event_created_at.replace(tzinfo=UTC) == datetime.fromtimestamp(300, UTC)
+    assert len(outbox_events) == 1
+
+
+@pytest.mark.anyio
+async def test_deleted_subscription_ignores_older_paid_invoice(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+    stripe_invoice_paid_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(User(clerk_user_id="user_123", email="deleted-invoice@example.com"))
+        await session.commit()
+    await engine.dispose()
+
+    created = deepcopy(stripe_subscription_created_payload)
+    created.update(id="evt_created_before_delete", created=100)
+    created["data"]["object"]["created"] = 10
+    deleted = deepcopy(created)
+    deleted.update(id="evt_delete_newer", created=300, type="customer.subscription.deleted")
+    deleted["data"]["object"]["status"] = "canceled"
+    invoice = deepcopy(stripe_invoice_paid_payload)
+    invoice.update(id="evt_invoice_older_than_delete", created=200)
+
+    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, created)).status_code == 202
+    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, deleted)).status_code == 202
+    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, invoice)).status_code == 202
+
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        ledgers = list((await session.execute(select(UsageLedger))).scalars())
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.status == "canceled"
+    assert ledgers == []
+    assert len(outbox_events) == 1
+
+
+@pytest.mark.anyio
+async def test_old_subscription_event_cannot_replace_new_resubscription(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(User(clerk_user_id="user_123", email="resubscribe-order@example.com"))
+        await session.commit()
+    await engine.dispose()
+
+    old_created = deepcopy(stripe_subscription_created_payload)
+    old_created.update(id="evt_old_created", created=100)
+    old_created["data"]["object"].update(id="sub_old", created=10)
+    old_deleted = deepcopy(old_created)
+    old_deleted.update(id="evt_old_deleted", created=150, type="customer.subscription.deleted")
+    old_deleted["data"]["object"]["status"] = "canceled"
+    new_created = deepcopy(stripe_subscription_created_payload)
+    new_created.update(id="evt_new_created", created=200)
+    new_created["data"]["object"].update(id="sub_new", created=20)
+    old_late = deepcopy(old_created)
+    old_late.update(id="evt_old_late", created=300, type="customer.subscription.updated")
+    old_late["data"]["object"]["status"] = "past_due"
+
+    for payload in (old_created, old_deleted, new_created, old_late):
+        assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, payload)).status_code == 202
+
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.stripe_subscription_id == "sub_new"
+    assert subscription.status == "active"
+    assert subscription.stripe_subscription_created_at is not None
+    assert subscription.stripe_subscription_created_at.replace(tzinfo=UTC) == datetime.fromtimestamp(20, UTC)
+    assert len(outbox_events) == 1
+
+
+@pytest.mark.anyio
+async def test_equal_second_routing_update_cannot_override_nonrouting_status(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(User(clerk_user_id="user_123", email="equal-second@example.com"))
+        await session.commit()
+    await engine.dispose()
+
+    created = deepcopy(stripe_subscription_created_payload)
+    created.update(id="evt_equal_created", created=100)
+    created["data"]["object"]["created"] = 10
+    deleted = deepcopy(created)
+    deleted.update(id="evt_equal_deleted", created=200, type="customer.subscription.deleted")
+    deleted["data"]["object"]["status"] = "canceled"
+    routing_update = deepcopy(created)
+    routing_update.update(id="evt_equal_routing", created=200, type="customer.subscription.updated")
+
+    for payload in (created, deleted, routing_update):
+        assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, payload)).status_code == 202
+
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.status == "canceled"
+
+
+@pytest.mark.anyio
+async def test_newer_mismatched_invoice_is_retryable_and_rolls_back(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+    stripe_invoice_paid_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(User(clerk_user_id="user_123", email="invoice-conflict@example.com"))
+        await session.commit()
+    await engine.dispose()
+
+    current = deepcopy(stripe_subscription_created_payload)
+    current.update(id="evt_current_subscription", created=300)
+    current["data"]["object"].update(id="sub_new", created=250)
+    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, current)).status_code == 202
+
+    conflicting_invoice = deepcopy(stripe_invoice_paid_payload)
+    conflicting_invoice.update(id="evt_newer_mismatched_invoice", created=400)
+    conflicting_invoice["data"]["object"]["parent"]["subscription_details"].update(
+        subscription="sub_unknown",
+        metadata={"clerk_user_id": "user_123", "plan_tier": "starter"},
+    )
+    conflicting_invoice["data"]["object"]["lines"]["data"][0]["parent"]["subscription_item_details"][
+        "subscription"
+    ] = "sub_unknown"
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        conflicting_invoice,
+    )
+
+    assert response.status_code == 503
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        conflict_event = await session.scalar(
+            select(WebhookEvent).where(
+                WebhookEvent.external_event_id == "evt_newer_mismatched_invoice"
+            )
+        )
+        ledgers = list((await session.execute(select(UsageLedger))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.stripe_subscription_id == "sub_new"
+    assert conflict_event is None
+    assert ledgers == []

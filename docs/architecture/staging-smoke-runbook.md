@@ -255,7 +255,7 @@ Portal session:
 curl -s http://localhost:8000/api/billing/portal-session \
   -H "Authorization: Bearer <clerk-session-token>" \
   -H "Content-Type: application/json" \
-  -d '{"return_url":"https://your-app.example.com/settings/billing"}'
+  -d '{"return_url":"https://your-app.example.com/dashboard/billing"}'
 ```
 
 Expected:

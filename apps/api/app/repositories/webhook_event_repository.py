@@ -45,6 +45,7 @@ class WebhookEventRepository:
         event_type: str,
         payload: dict,
     ) -> bool:
+        await self._ensure_sqlite_outer_transaction()
         event = WebhookEvent(
             provider=provider,
             external_event_id=external_event_id,
@@ -61,3 +62,13 @@ class WebhookEventRepository:
             raise
 
         return True
+
+    async def _ensure_sqlite_outer_transaction(self) -> None:
+        bind = getattr(self.session, "bind", None)
+        if bind is None or bind.dialect.name != "sqlite":
+            return
+
+        connection = await self.session.connection()
+        raw_connection = await connection.get_raw_connection()
+        if not raw_connection.driver_connection.in_transaction:
+            await connection.exec_driver_sql("BEGIN")

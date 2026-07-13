@@ -143,6 +143,15 @@ class FakeActiveSubscriptionQueryService:
         )
 
 
+class FakeStatusSubscriptionQueryService(FakeActiveSubscriptionQueryService):
+    def __init__(self, subscription_status: str) -> None:
+        self.subscription_status = subscription_status
+
+    async def get_subscription(self, user_id):
+        subscription = await super().get_subscription(user_id)
+        return subscription.model_copy(update={"status": self.subscription_status})
+
+
 @pytest.mark.anyio
 async def test_create_checkout_session_returns_url() -> None:
     from app.routers.billing import create_checkout_session
@@ -185,6 +194,47 @@ async def test_create_checkout_session_rejects_active_subscription() -> None:
         )
 
     assert exc_info.value.status_code == 409
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("subscription_status", "allowed"),
+    [
+        ("canceled", True),
+        ("incomplete_expired", True),
+        ("trialing", False),
+        ("active", False),
+        ("past_due", False),
+        ("unpaid", False),
+        ("incomplete", False),
+        ("paused", False),
+    ],
+)
+async def test_checkout_uses_central_subscription_eligibility(
+    subscription_status: str,
+    allowed: bool,
+) -> None:
+    from app.routers.billing import create_checkout_session
+    from app.schemas.billing_api import CheckoutSessionRequest
+
+    call = create_checkout_session(
+        request=_fake_request(),
+        payload=CheckoutSessionRequest(plan_tier="starter"),
+        identity=UserIdentity(
+            clerk_user_id="user_123",
+            internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+        ),
+        service=FakeBillingSessionService(),
+        query_service=FakeStatusSubscriptionQueryService(subscription_status),
+        user=type("User", (), {"email": "billing@example.com"})(),
+    )
+
+    if allowed:
+        assert (await call).url == "https://checkout.stripe.test/session"
+    else:
+        with pytest.raises(HTTPException) as exc_info:
+            await call
+        assert exc_info.value.status_code == 409
 
 
 @pytest.mark.anyio

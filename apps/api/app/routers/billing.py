@@ -25,6 +25,7 @@ from app.services.billing_session_service import (
     BillingSessionService,
     BillingSessionStateError,
 )
+from app.services.subscription_access_policy import SubscriptionAccessPolicy
 
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
@@ -84,10 +85,13 @@ async def create_checkout_session(
     user=Depends(get_current_user),
 ) -> HostedSessionResponse:
     existing_subscription = await query_service.get_subscription(identity.internal_user_id)
-    if existing_subscription is not None and existing_subscription.status == "active":
+    subscription_status = (
+        existing_subscription.status if existing_subscription is not None else None
+    )
+    if not SubscriptionAccessPolicy.can_start_checkout(subscription_status):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Subscription already active",
+            detail="Subscription is not eligible for checkout",
         )
 
     try:

@@ -81,10 +81,11 @@ class OnboardingService:
         agent_setup_complete = self._is_agent_setup_complete(config)
         routing_enabled = bool(
             subscription_access
-            and (
-                (config is not None and config.is_enabled)
-                or (phone_number is not None and phone_number.is_active)
-            )
+            and agent_setup_complete
+            and config is not None
+            and config.is_enabled
+            and phone_number is not None
+            and phone_number.is_active
         )
         can_retry_provisioning = bool(
             provisioning is not None

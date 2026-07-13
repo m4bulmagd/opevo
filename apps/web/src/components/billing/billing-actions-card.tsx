@@ -12,6 +12,8 @@ import type { Subscription } from "@/lib/types/billing";
 
 export function BillingActionsCard({ subscription }: { subscription: Subscription | null }) {
   const [isPending, startTransition] = useTransition();
+  const canStartCheckout =
+    subscription === null || subscription.status === "canceled" || subscription.status === "incomplete_expired";
 
   const handleCheckout = () => {
     startTransition(async () => {
@@ -45,18 +47,20 @@ export function BillingActionsCard({ subscription }: { subscription: Subscriptio
     <Card>
       <CardHeader>
         <CardTitle>Billing actions</CardTitle>
-        <CardDescription>France self-serve launch uses a single starter plan with hosted Stripe checkout.</CardDescription>
+        <CardDescription>
+          France self-serve launch uses a single starter plan with hosted Stripe checkout.
+        </CardDescription>
       </CardHeader>
       <CardContent>
-        {subscription?.status === "active" ? (
-          <Button onClick={handlePortal} disabled={isPending}>
-            {isPending ? <Spinner data-icon="inline-start" /> : null}
-            Manage billing
-          </Button>
-        ) : (
+        {canStartCheckout ? (
           <Button onClick={handleCheckout} disabled={isPending}>
             {isPending ? <Spinner data-icon="inline-start" /> : null}
             Start starter plan
+          </Button>
+        ) : (
+          <Button onClick={handlePortal} disabled={isPending}>
+            {isPending ? <Spinner data-icon="inline-start" /> : null}
+            Manage billing
           </Button>
         )}
       </CardContent>

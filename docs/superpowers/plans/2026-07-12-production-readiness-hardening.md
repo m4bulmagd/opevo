@@ -425,6 +425,7 @@ git commit -m "fix: enforce billing and webhook idempotency in postgres"
 **Interfaces:**
 - Produces: `SubscriptionAccessPolicy.can_route(status: str, period_end: datetime | None) -> bool`.
 - Produces: `SubscriptionAccessPolicy.should_grant_invoice(invoice_status: str, paid: bool) -> bool`.
+- Produces: `SubscriptionAccessPolicy.can_start_checkout(status: str | None) -> bool`; checkout is allowed only with no subscription or after `canceled`/`incomplete_expired`.
 - Recognized statuses: `trialing`, `active`, `past_due`, `unpaid`, `canceled`, `incomplete`, `incomplete_expired`, `paused`.
 
 - [ ] **Step 1: Write policy and webhook matrix tests**
@@ -446,6 +447,8 @@ def test_can_route_matrix(status, allowed):
 
 Add webhook tests for `customer.subscription.created`, `updated`, `deleted`, `invoice.paid`, `invoice.payment_failed`, and repeated delivery of every event ID.
 
+Persist the Stripe subscription generation time and the last applied Stripe event time. Add reverse-delivery tests proving stale events cannot regress one subscription, an old subscription cannot replace a newer resubscription, equal-second ambiguity remains fail-closed, and an unresolved newer invoice mismatch returns a retryable response without committing its webhook identity.
+
 Add signature tests for a valid event, a timestamp older than five minutes, a future timestamp beyond five minutes, a malformed signature component, and a wrong secret. Every invalid case returns `400`, never `500`.
 
 - [ ] **Step 2: Run tests and verify failure**
@@ -459,6 +462,8 @@ Expected: unsupported lifecycle events fail.
 Replace the two-branch handler with a constant handler map. Unknown Stripe events are recorded and acknowledged without changing state. Reject lookup keys other than `starter`; remove `standard` from `PLAN_MINUTES` and production examples.
 
 Use Stripe's SDK verifier for Stripe events and Svix's verifier for Clerk events. Keep LiveKit's SDK `WebhookReceiver`. Remove custom parsing after the provider verifiers cover every webhook.
+
+Serialize subscription lifecycle changes by locking the user and current subscription rows. Ignore provably stale events, permit replacement only after a terminal subscription, and reject ambiguous ownership or ordering as a retryable conflict so the entire webhook transaction rolls back.
 
 - [ ] **Step 4: Disable local access on non-routing statuses**
 

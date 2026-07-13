@@ -35,3 +35,11 @@ class Subscription(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     allocated_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stripe_subscription_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_stripe_event_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )

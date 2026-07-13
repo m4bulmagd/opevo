@@ -220,8 +220,12 @@ async def test_patch_agent_config_updates_prompt_fields_without_toggle(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("subscription_status", ["active", "trialing"])
 async def test_patch_agent_config_enables_number_when_is_enabled_changes(
-    async_client, client_database_url, rs256_clerk_token_for
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    subscription_status: str,
 ) -> None:
     class FakeTelephonyProvider:
         def __init__(self) -> None:
@@ -248,7 +252,11 @@ async def test_patch_agent_config_enables_number_when_is_enabled_changes(
         is_enabled=False,
     )
     await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
-    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_subscription(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        status=subscription_status,
+    )
     await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
 
     from app.main import app

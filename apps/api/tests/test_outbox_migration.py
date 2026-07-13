@@ -84,7 +84,7 @@ def test_upgrade_preflights_subscription_states_before_any_ddl(
 
     operation_names = [name for name, _details in operations.timeline]
     assert operation_names[:2] == ["preflight", "preflight"]
-    assert operation_names[2] == "create_table"
+    assert operation_names[2] == "add_column"
 
 
 def test_upgrade_creates_full_outbox_shape_and_subscription_checks(
@@ -145,6 +145,17 @@ def test_upgrade_creates_full_outbox_shape_and_subscription_checks(
         "ck_subscriptions_plan_tier_allowed": "plan_tier = 'starter'",
     }
 
+    subscription_columns = {
+        args[1].name: args[1]
+        for args, _kwargs in _ddl_calls(operations, "add_column")
+        if args[0] == "subscriptions"
+    }
+    assert set(subscription_columns) == {
+        "stripe_subscription_created_at",
+        "last_stripe_event_created_at",
+    }
+    assert all(column.nullable is True for column in subscription_columns.values())
+
 
 def test_preflight_failure_is_opaque_and_runs_no_ddl(
     monkeypatch: pytest.MonkeyPatch,
@@ -178,6 +189,8 @@ def test_downgrade_drops_checks_before_outbox_table(
 
     calls = [(name, details[0][0]) for name, details in operations.timeline]
     assert calls == [
+        ("drop_column", "subscriptions"),
+        ("drop_column", "subscriptions"),
         ("drop_constraint", "ck_subscriptions_plan_tier_allowed"),
         ("drop_constraint", "ck_subscriptions_status_allowed"),
         ("drop_index", "ix_outbox_events_status"),

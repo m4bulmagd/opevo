@@ -214,10 +214,12 @@ def valid_clerk_but_missing_local_user_token(rs256_clerk_token_for) -> str:
 def stripe_subscription_created_payload() -> dict:
     return {
         "id": "evt_sub_created_123",
+        "created": 1710000100,
         "type": "customer.subscription.created",
         "data": {
             "object": {
                 "id": "sub_123",
+                "created": 1709990000,
                 "customer": "cus_123",
                 "status": "active",
                 "metadata": {"clerk_user_id": "user_123"},
@@ -242,10 +244,12 @@ def stripe_subscription_created_payload() -> dict:
 def stripe_current_subscription_created_payload() -> dict:
     return {
         "id": "evt_sub_created_current_123",
+        "created": 1710000100,
         "type": "customer.subscription.created",
         "data": {
             "object": {
                 "id": "sub_123",
+                "created": 1709990000,
                 "customer": "cus_123",
                 "status": "active",
                 "metadata": {"clerk_user_id": "user_123"},
@@ -271,6 +275,7 @@ def stripe_current_subscription_created_payload() -> dict:
 def stripe_invoice_paid_payload() -> dict:
     return {
         "id": "evt_invoice_paid_123",
+        "created": 1710000200,
         "type": "invoice.paid",
         "data": {
             "object": {

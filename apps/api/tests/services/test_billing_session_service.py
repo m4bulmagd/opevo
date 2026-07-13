@@ -35,7 +35,7 @@ def test_create_checkout_session_uses_price_mapping() -> None:
         price_starter="price_starter_123",
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
-        billing_portal_return_url="https://app.example.com/settings/billing",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
     )
 
     result = service.create_checkout_session(
@@ -61,7 +61,7 @@ def test_create_checkout_session_rejects_standard_plan() -> None:
         price_starter="price_starter_123",
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
-        billing_portal_return_url="https://app.example.com/settings/billing",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
     )
 
     with pytest.raises(ValueError, match="Unsupported plan tier: standard"):
@@ -82,7 +82,7 @@ def test_create_portal_session_requires_customer_id() -> None:
         price_starter="price_starter_123",
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
-        billing_portal_return_url="https://app.example.com/settings/billing",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
     )
 
     with pytest.raises(ValueError, match="Stripe customer ID is required"):
@@ -99,7 +99,7 @@ def test_create_portal_session_always_uses_server_owned_return_url() -> None:
         price_starter="price_starter_123",
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
-        billing_portal_return_url="https://app.example.com/settings/billing",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
     )
 
     result = service.create_portal_session(
@@ -111,7 +111,7 @@ def test_create_portal_session_always_uses_server_owned_return_url() -> None:
     assert client.billing_portal.Session.calls == [
         {
             "customer": "cus_123",
-            "return_url": "https://app.example.com/settings/billing",
+            "return_url": "https://app.example.com/dashboard/billing",
         }
     ]
 
@@ -122,13 +122,13 @@ def test_create_portal_session_accepts_omitted_caller_return_url() -> None:
     client = FakeStripeClient()
     service = BillingSessionService(
         stripe_client=client,
-        billing_portal_return_url="https://app.example.com/settings/billing",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
     )
 
     service.create_portal_session(customer_id="cus_123", return_url=None)
 
     assert client.billing_portal.Session.calls[0]["return_url"] == (
-        "https://app.example.com/settings/billing"
+        "https://app.example.com/dashboard/billing"
     )
 
 
@@ -142,7 +142,7 @@ def test_create_portal_session_accepts_omitted_caller_return_url() -> None:
         "https://app.example.com:bad/settings",
         "https://app.example.com/has space",
         "ftp://app.example.com/settings",
-        "/settings/billing",
+        "/dashboard/billing",
         "not a url",
     ],
 )
@@ -156,7 +156,7 @@ def test_create_portal_session_rejects_unsafe_caller_return_url(
 
     service = BillingSessionService(
         stripe_client=FakeStripeClient(),
-        billing_portal_return_url="https://app.example.com/settings/billing",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
     )
 
     with pytest.raises(BillingPortalReturnUrlError):

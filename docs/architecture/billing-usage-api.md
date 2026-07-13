@@ -92,7 +92,7 @@ Request body:
 
 ```json
 {
-  "return_url": "https://your-app.example.com/settings/billing"
+  "return_url": "https://your-app.example.com/dashboard/billing"
 }
 ```
 
@@ -123,7 +123,7 @@ STRIPE_WEBHOOK_SECRET=replace-me
 STRIPE_PRICE_STARTER=price_replace_me
 STRIPE_CHECKOUT_SUCCESS_URL=https://your-app.example.com/billing/success
 STRIPE_CHECKOUT_CANCEL_URL=https://your-app.example.com/billing/cancel
-STRIPE_BILLING_PORTAL_RETURN_URL=https://your-app.example.com/settings/billing
+STRIPE_BILLING_PORTAL_RETURN_URL=https://your-app.example.com/dashboard/billing
 ```
 
 ## Notes

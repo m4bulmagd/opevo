@@ -65,6 +65,22 @@ def _run_preflight(connection) -> None:
 def upgrade() -> None:
     _run_preflight(op.get_bind())
 
+    op.add_column(
+        "subscriptions",
+        sa.Column(
+            "stripe_subscription_created_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
+    )
+    op.add_column(
+        "subscriptions",
+        sa.Column(
+            "last_stripe_event_created_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
+    )
     op.create_table(
         "outbox_events",
         sa.Column("idempotency_key", sa.String(length=255), nullable=False),
@@ -143,6 +159,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_column("subscriptions", "last_stripe_event_created_at")
+    op.drop_column("subscriptions", "stripe_subscription_created_at")
     op.drop_constraint(
         "ck_subscriptions_plan_tier_allowed",
         "subscriptions",

@@ -6,7 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.repositories.phone_number_repository import PhoneNumberRepository
-from app.repositories.subscription_repository import SubscriptionRepository
+from app.repositories.subscription_repository import (
+    StripeSubscriptionConflictError,
+    SubscriptionRepository,
+)
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
@@ -41,6 +44,10 @@ STRIPE_EVENT_HANDLER_MAP = {
 
 
 class UnsupportedStripeLifecycleError(ValueError):
+    pass
+
+
+class StripeLifecycleConflictError(RuntimeError):
     pass
 
 
@@ -89,7 +96,16 @@ class BillingService:
         handler_name = STRIPE_EVENT_HANDLER_MAP.get(event_type)
         if handler_name is not None:
             handler = getattr(self, handler_name)
-            await handler(event_object, envelope["id"], event_type)
+            event_created_at = self._stripe_timestamp(envelope["created"])
+            try:
+                await handler(
+                    event_object,
+                    envelope["id"],
+                    event_type,
+                    event_created_at,
+                )
+            except StripeSubscriptionConflictError as exc:
+                raise StripeLifecycleConflictError from exc
 
         await self.session.commit()
 
@@ -98,6 +114,7 @@ class BillingService:
         event_object: dict,
         event_id: str,
         event_type: str,
+        event_created_at: datetime,
     ) -> None:
         stripe_subscription_id = event_object["id"]
         existing = await self.subscription_repository.get_by_stripe_subscription_id(
@@ -122,6 +139,7 @@ class BillingService:
         if subscription_status is None and event_type == "customer.subscription.deleted":
             subscription_status = "canceled"
         subscription_status = self._require_subscription_status(subscription_status)
+        subscription_created_at = self._stripe_timestamp(event_object.get("created"))
 
         current_period_start, current_period_end = self._extract_subscription_period_bounds(event_object)
         if existing is not None:
@@ -145,7 +163,12 @@ class BillingService:
             allocated_minutes=allocated_minutes,
             current_period_start=current_period_start,
             current_period_end=current_period_end,
+            stripe_subscription_created_at=subscription_created_at,
+            last_stripe_event_created_at=event_created_at,
         )
+
+        if subscription is None:
+            return
 
         await self._add_disable_intent_if_needed(
             subscription=subscription,
@@ -158,6 +181,7 @@ class BillingService:
         event_object: dict,
         _event_id: str,
         _event_type: str,
+        event_created_at: datetime,
     ) -> None:
         if not SubscriptionAccessPolicy.should_grant_invoice(
             event_object.get("status", ""),
@@ -169,9 +193,23 @@ class BillingService:
         if not subscription_id:
             return
 
-        subscription = await self.subscription_repository.get_by_stripe_subscription_id(subscription_id)
+        user_id = await self._invoice_user_id(event_object)
+        subscription, should_apply = (
+            await self.subscription_repository.resolve_invoice_target_for_update(
+                stripe_subscription_id=subscription_id,
+                user_id=user_id,
+                incoming_status="active",
+                event_created_at=event_created_at,
+            )
+        )
+        if not should_apply:
+            return
         if subscription is None:
-            subscription = await self._bootstrap_subscription_from_invoice(subscription_id, event_object)
+            subscription = await self._bootstrap_subscription_from_invoice(
+                subscription_id,
+                event_object,
+                event_created_at=event_created_at,
+            )
             if subscription is None:
                 return
 
@@ -180,6 +218,7 @@ class BillingService:
         subscription.plan_tier = plan_tier
         subscription.allocated_minutes = allocated_minutes
         subscription.status = "active"
+        subscription.last_stripe_event_created_at = event_created_at
 
         latest_entries = await self.usage_repository.list_recent_by_user_id(user_id=subscription.user_id, limit=1)
         is_first_activation = len(latest_entries) == 0
@@ -210,24 +249,35 @@ class BillingService:
         event_object: dict,
         event_id: str,
         event_type: str,
+        event_created_at: datetime,
     ) -> None:
         subscription_id = self._extract_invoice_subscription_id(event_object)
         if not subscription_id:
             return
 
-        subscription = await self.subscription_repository.get_by_stripe_subscription_id(
-            subscription_id
+        user_id = await self._invoice_user_id(event_object)
+        subscription, should_apply = (
+            await self.subscription_repository.resolve_invoice_target_for_update(
+                stripe_subscription_id=subscription_id,
+                user_id=user_id,
+                incoming_status="past_due",
+                event_created_at=event_created_at,
+            )
         )
+        if not should_apply:
+            return
         if subscription is None:
             subscription = await self._bootstrap_subscription_from_invoice(
                 subscription_id,
                 event_object,
                 status="past_due",
+                event_created_at=event_created_at,
             )
             if subscription is None:
                 return
         else:
             subscription.status = "past_due"
+            subscription.last_stripe_event_created_at = event_created_at
 
         await self._add_disable_intent_if_needed(
             subscription=subscription,
@@ -241,6 +291,7 @@ class BillingService:
         event_object: dict,
         *,
         status: str = "active",
+        event_created_at: datetime,
     ):
         clerk_user_id = self._extract_invoice_clerk_user_id(event_object)
         if not clerk_user_id:
@@ -265,7 +316,16 @@ class BillingService:
             allocated_minutes=allocated_minutes,
             current_period_start=None,
             current_period_end=None,
+            stripe_subscription_created_at=None,
+            last_stripe_event_created_at=event_created_at,
         )
+
+    async def _invoice_user_id(self, event_object: dict):
+        clerk_user_id = self._extract_invoice_clerk_user_id(event_object)
+        if not clerk_user_id:
+            return None
+        user = await self.user_repository.get_by_clerk_user_id(clerk_user_id)
+        return user.id if user is not None else None
 
     async def _add_disable_intent_if_needed(
         self,
@@ -386,3 +446,16 @@ class BillingService:
             return (anchor, None)
 
         return (None, None)
+
+    @staticmethod
+    def _stripe_timestamp(value: object) -> datetime:
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise UnsupportedStripeLifecycleError(
+                "Stripe event creation timestamp is invalid"
+            )
+        try:
+            return datetime.fromtimestamp(value, UTC)
+        except (OverflowError, OSError, ValueError):
+            raise UnsupportedStripeLifecycleError(
+                "Stripe event creation timestamp is invalid"
+            ) from None
