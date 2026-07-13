@@ -21,7 +21,11 @@ def base_settings() -> Settings:
         clerk_issuer="https://clerk.example.com",
         clerk_jwks_url="https://clerk.example.com/.well-known/jwks.json",
         clerk_webhook_secret="clerk-webhook-secret",
+        stripe_secret_key="stripe-secret-key",
         stripe_webhook_secret="stripe-webhook-secret",
+        stripe_price_starter="stripe-starter-price",
+        stripe_checkout_success_url="https://app.example.com/billing/success",
+        stripe_checkout_cancel_url="https://app.example.com/billing/cancel",
         livekit_url="wss://livekit.example.com",
         livekit_api_key="livekit-api-key",
         livekit_api_secret="livekit-api-secret",
@@ -47,7 +51,11 @@ def base_settings() -> Settings:
         ("redis_url", "REDIS_URL"),
         ("clerk_issuer", "CLERK_ISSUER"),
         ("clerk_webhook_secret", "CLERK_WEBHOOK_SECRET"),
+        ("stripe_secret_key", "STRIPE_SECRET_KEY"),
         ("stripe_webhook_secret", "STRIPE_WEBHOOK_SECRET"),
+        ("stripe_price_starter", "STRIPE_PRICE_STARTER"),
+        ("stripe_checkout_success_url", "STRIPE_CHECKOUT_SUCCESS_URL"),
+        ("stripe_checkout_cancel_url", "STRIPE_CHECKOUT_CANCEL_URL"),
         ("livekit_url", "LIVEKIT_URL"),
         ("livekit_api_key", "LIVEKIT_API_KEY"),
         ("livekit_api_secret", "LIVEKIT_API_SECRET"),
@@ -113,10 +121,22 @@ def test_production_requires_gemini_credentials_for_gemini_summaries(
         validate_api_runtime(settings)
 
 
-def test_production_rejects_unsupported_summary_provider_without_echoing_it(
+def test_production_keeps_standard_stripe_price_optional(
     base_settings: Settings,
 ) -> None:
-    provider_value = "private-provider-value"
+    settings = base_settings.model_copy(update={"stripe_price_standard": ""})
+
+    validate_api_runtime(settings)
+
+
+@pytest.mark.parametrize(
+    "provider_value",
+    ["Gemini", " gemini", "gemini ", "private-provider-value"],
+)
+def test_production_requires_exact_summary_provider_without_echoing_value(
+    base_settings: Settings,
+    provider_value: str,
+) -> None:
     settings = base_settings.model_copy(update={"summary_provider": provider_value})
 
     with pytest.raises(RuntimeError, match="SUMMARY_PROVIDER") as exc_info:

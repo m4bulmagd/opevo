@@ -121,3 +121,25 @@ def test_build_worker_options_validates_before_initializing_runtime(
     build_worker_options()
 
     assert events == ["validate", "initialize"]
+
+
+def test_build_worker_options_rejects_invalid_production_before_initialization(
+    agent_settings: AgentSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalid_settings = agent_settings.model_copy(update={"livekit_api_secret": ""})
+    events: list[str] = []
+    monkeypatch.setattr("agent.main.get_settings", lambda: invalid_settings)
+    monkeypatch.setattr(
+        "agent.main._register_inference_runners",
+        lambda: events.append("initialize"),
+    )
+    monkeypatch.setattr(
+        "agent.main.WorkerOptions",
+        lambda **kwargs: events.append("worker_options"),
+    )
+
+    with pytest.raises(RuntimeError, match="LIVEKIT_API_SECRET"):
+        build_worker_options()
+
+    assert events == []

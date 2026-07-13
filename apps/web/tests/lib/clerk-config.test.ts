@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { requireProductionClerkConfig, shouldUseClerkMiddleware } from "@/lib/auth/clerk-config";
+import { requireProductionClerkConfig, selectFirstNonblank, shouldUseClerkMiddleware } from "@/lib/auth/clerk-config";
 
 const productionConfig = {
   nodeEnv: "production",
@@ -68,6 +68,30 @@ describe("requireProductionClerkConfig", () => {
     ).not.toThrow();
   });
 
+  it("uses the public backend URL when the server-only candidate is blank", () => {
+    const publicFallback = "https://public-api.example.com";
+    const backendBaseUrl = selectFirstNonblank(" ", publicFallback);
+
+    expect(backendBaseUrl).toBe(publicFallback);
+    expect(() =>
+      requireProductionClerkConfig({
+        ...productionConfig,
+        backendBaseUrl,
+      }),
+    ).not.toThrow();
+  });
+
+  it("initializes production with a public backend URL when the server-only value is blank", async () => {
+    vi.resetModules();
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "pk_live_test");
+    vi.stubEnv("CLERK_SECRET_KEY", "sk_live_test");
+    vi.stubEnv("API_BASE_URL", "");
+    vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", "https://public-api.example.com");
+
+    await expect(import("@/lib/auth/clerk-config")).resolves.toBeDefined();
+  });
+
   it("fails during server initialization when production configuration is absent", async () => {
     vi.resetModules();
     vi.stubEnv("NODE_ENV", "production");
@@ -77,6 +101,17 @@ describe("requireProductionClerkConfig", () => {
     vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", "");
 
     await expect(import("@/lib/auth/clerk-config")).rejects.toThrow("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY");
+  });
+
+  it("does not produce a proxy default export for invalid production configuration", async () => {
+    vi.resetModules();
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "");
+    vi.stubEnv("CLERK_SECRET_KEY", "");
+    vi.stubEnv("API_BASE_URL", "");
+    vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", "");
+
+    await expect(import("@/proxy")).rejects.toThrow("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY");
   });
 
   it("uses Clerk middleware unconditionally in production", () => {

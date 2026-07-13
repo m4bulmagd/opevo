@@ -8,7 +8,11 @@ PRODUCTION_REQUIRED_SETTINGS = (
     "redis_url",
     "clerk_issuer",
     "clerk_webhook_secret",
+    "stripe_secret_key",
     "stripe_webhook_secret",
+    "stripe_price_starter",
+    "stripe_checkout_success_url",
+    "stripe_checkout_cancel_url",
     "livekit_url",
     "livekit_api_key",
     "livekit_api_secret",
@@ -46,7 +50,7 @@ def validate_api_runtime(settings: Settings) -> None:
         missing.append("CLERK_JWT_KEY or CLERK_JWKS_URL")
 
     if not _is_missing(settings.summary_provider):
-        if settings.summary_provider.strip().lower() == "gemini":
+        if settings.summary_provider == "gemini":
             missing.extend(_require(settings, ("gemini_api_key",)))
         else:
             missing.append("SUMMARY_PROVIDER")
