@@ -10,7 +10,12 @@ class TelephonyProvisioningReviewRequired(Exception):
 
 class TelephonyProvider(ABC):
     @abstractmethod
-    async def provision_number(self, *, country_code: str) -> dict:
+    async def provision_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str | None = None,
+    ) -> dict:
         raise NotImplementedError
 
     @abstractmethod

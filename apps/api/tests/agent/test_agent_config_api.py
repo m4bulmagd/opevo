@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.agent_config import AgentConfig
+from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
@@ -139,6 +140,15 @@ async def fetch_phone_number(database_url: str, *, clerk_user_id: str) -> PhoneN
     return phone_number
 
 
+async def fetch_outbox_event(database_url: str) -> OutboxEvent:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        event = (await session.execute(select(OutboxEvent))).scalar_one()
+    await engine.dispose()
+    return event
+
+
 @pytest.mark.anyio
 async def test_get_agent_config_returns_full_config(
     async_client, client_database_url, rs256_clerk_token_for
@@ -221,7 +231,7 @@ async def test_patch_agent_config_updates_prompt_fields_without_toggle(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("subscription_status", ["active", "trialing"])
-async def test_patch_agent_config_enables_number_when_is_enabled_changes(
+async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes(
     async_client,
     client_database_url,
     rs256_clerk_token_for,
@@ -278,10 +288,15 @@ async def test_patch_agent_config_enables_number_when_is_enabled_changes(
 
     assert response.status_code == 200
     assert response.json()["is_enabled"] is True
-    assert fake_provider.enabled_provider_number_ids == ["pn_123"]
+    event = await fetch_outbox_event(client_database_url)
+    assert fake_provider.enabled_provider_number_ids == []
     assert config.is_enabled is True
-    assert phone_number.is_active is True
-    assert phone_number.provider_connection_name == "app-active"
+    assert phone_number.is_active is False
+    assert phone_number.provider_connection_name == "app-disabled"
+    assert event.topic == "phone.enable"
+    assert event.aggregate_type == "user"
+    assert event.aggregate_id == config.user_id
+    assert event.payload == {"user_id": str(config.user_id)}
 
 
 @pytest.mark.anyio
@@ -394,18 +409,12 @@ async def test_patch_agent_config_enable_with_incomplete_setup_returns_409(
 
 
 @pytest.mark.anyio
-async def test_patch_agent_config_rolls_back_when_telephony_switch_fails(
+async def test_patch_agent_config_commit_survives_redis_wakeup_failure(
     async_client, client_database_url, rs256_clerk_token_for
 ) -> None:
-    class FailingTelephonyProvider:
-        async def provision_number(self, *, country_code: str) -> dict:
-            raise AssertionError("provision_number should not be called")
-
-        async def enable_number(self, *, provider_number_id: str) -> str:
-            raise RuntimeError("telnyx unavailable")
-
-        async def disable_number(self, *, provider_number_id: str) -> str:
-            raise AssertionError("disable_number should not be called")
+    class FailingPool:
+        async def enqueue_job(self, _name, _payload):
+            raise ConnectionError("redis unavailable")
 
     await seed_agent_config(
         client_database_url,
@@ -422,9 +431,8 @@ async def test_patch_agent_config_rolls_back_when_telephony_switch_fails(
     await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
 
     from app.main import app
-    from app.providers.telephony.telnyx import get_telephony_provider
-
-    app.dependency_overrides[get_telephony_provider] = lambda: FailingTelephonyProvider()
+    original_pool = getattr(app.state, "arq_pool", None)
+    app.state.arq_pool = FailingPool()
     try:
         response = await async_client.patch(
             "/api/agent/config",
@@ -432,13 +440,14 @@ async def test_patch_agent_config_rolls_back_when_telephony_switch_fails(
             json={"is_enabled": True},
         )
     finally:
-        app.dependency_overrides.pop(get_telephony_provider, None)
+        app.state.arq_pool = original_pool
 
     config = await fetch_agent_config(client_database_url, clerk_user_id="user_agent_cfg")
     phone_number = await fetch_phone_number(client_database_url, clerk_user_id="user_agent_cfg")
 
-    assert response.status_code == 502
-    assert response.json()["detail"] == "Failed to update telephony state"
-    assert config.is_enabled is False
+    event = await fetch_outbox_event(client_database_url)
+    assert response.status_code == 200
+    assert config.is_enabled is True
     assert phone_number.is_active is False
     assert phone_number.provider_connection_name == "app-disabled"
+    assert event.status == "pending"

@@ -1,12 +1,14 @@
+import logging
 from uuid import UUID
+from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_config import AgentConfig
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.services.onboarding_service import OnboardingService
+from app.services.outbox_service import OutboxService
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
-from app.services.telephony_service import TelephonyService
 
 
 class AgentConfigNotFoundError(Exception):
@@ -25,18 +27,22 @@ class AgentConfigReadinessError(Exception):
     pass
 
 
+logger = logging.getLogger(__name__)
+
+
 class AgentConfigService:
     def __init__(
         self,
         session: AsyncSession,
         agent_config_repository: AgentConfigRepository,
-        telephony_service: TelephonyService,
         onboarding_service: OnboardingService,
+        arq_pool=None,
     ) -> None:
         self.session = session
         self.agent_config_repository = agent_config_repository
-        self.telephony_service = telephony_service
         self.onboarding_service = onboarding_service
+        self.outbox_service = OutboxService(session)
+        self.arq_pool = arq_pool
 
     async def get_by_user_id(self, user_id: UUID) -> AgentConfig:
         return await self.agent_config_repository.get_or_create_default(user_id)
@@ -59,9 +65,15 @@ class AgentConfigService:
             if should_toggle:
                 if bool(requested_enabled):
                     await self._ensure_ready_to_enable(user_id, config)
-                    await self.telephony_service.enable_number(user_id)
-                else:
-                    await self.telephony_service.disable_number(user_id)
+                await self.outbox_service.add(
+                    topic=("phone.enable" if bool(requested_enabled) else "phone.disable"),
+                    aggregate_type="user",
+                    aggregate_id=user_id,
+                    idempotency_key=(
+                        f"agent-config:{config.id}:routing:{uuid4().hex}"
+                    ),
+                    payload={"user_id": str(user_id)},
+                )
             await self.session.commit()
         except ValueError as exc:
             await self.session.rollback()
@@ -75,6 +87,15 @@ class AgentConfigService:
             await self.session.rollback()
             raise AgentConfigTelephonySyncError from exc
 
+        if should_toggle and self.arq_pool is not None:
+            try:
+                await self.arq_pool.enqueue_job("outbox_delivery_job", {})
+            except Exception as error:
+                logger.warning(
+                    "outbox wakeup enqueue failed operation=agent_config_routing "
+                    "error_type=%s",
+                    type(error).__name__,
+                )
         await self.session.refresh(config)
         return config
 

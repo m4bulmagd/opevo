@@ -9,7 +9,6 @@ from app.core.auth import UserIdentity, require_user_identity
 from app.core.config import get_settings
 from app.core.database import get_session
 from app.core.dispatch_token import verify_dispatch_token
-from app.providers.telephony.telnyx import get_telephony_provider
 from app.schemas.agent import AgentConfigPatchRequest, AgentConfigResponse
 from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionResponse
 from app.repositories.agent_config_repository import AgentConfigRepository
@@ -21,7 +20,6 @@ from app.services.agent_config_service import (
     AgentConfigTelephonySyncError,
 )
 from app.services.onboarding_service import OnboardingService
-from app.services.telephony_service import TelephonyService
 from app.workers.call_finalization_queue import CallFinalizationQueue
 
 
@@ -59,14 +57,14 @@ def get_call_finalization_queue(request: Request) -> CallFinalizationQueue:
 
 
 def get_agent_config_service(
+    request: Request,
     session: AsyncSession = Depends(get_session),
-    telephony_provider=Depends(get_telephony_provider),
 ) -> AgentConfigService:
     return AgentConfigService(
         session,
         agent_config_repository=AgentConfigRepository(session),
-        telephony_service=TelephonyService(session, provider=telephony_provider),
         onboarding_service=OnboardingService(session),
+        arq_pool=getattr(request.app.state, "arq_pool", None),
     )
 
 

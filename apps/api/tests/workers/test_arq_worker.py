@@ -29,6 +29,22 @@ def test_worker_job_functions_accept_arq_context() -> None:
         assert parameters[0].name == "ctx"
 
 
+def test_worker_registers_outbox_wakeup_and_reconciliation() -> None:
+    from app.services.outbox_service import SUPPORTED_OUTBOX_TOPICS
+    from app.workers.jobs.outbox_topics import DEFAULT_OUTBOX_HANDLERS
+
+    function_names = {
+        function.__name__ for function in arq_worker.WorkerSettings.functions
+    }
+
+    assert "outbox_delivery_job" in function_names
+    assert any(
+        getattr(job, "name", None) == "outbox_reconciliation_job"
+        for job in arq_worker.WorkerSettings.cron_jobs
+    )
+    assert set(DEFAULT_OUTBOX_HANDLERS) == set(SUPPORTED_OUTBOX_TOPICS)
+
+
 @pytest.mark.anyio
 async def test_worker_startup_initializes_safe_logging(monkeypatch) -> None:
     setup_calls: list[bool] = []

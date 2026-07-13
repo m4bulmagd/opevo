@@ -258,17 +258,17 @@ async def test_subscription_activation_persists_subscription_and_support_notific
     assert response.status_code == 202
     
     assert len(pool.enqueued_jobs) == 1
-    assert pool.enqueued_jobs[0][0] == "phone_provisioning_job"
+    assert pool.enqueued_jobs[0][0] == "outbox_delivery_job"
     
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
     
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     
-    await phone_provisioning_job({
+    await outbox_delivery_job({
         "telephony_provider": ReviewRequiredTelephonyProvider(),
         "session_factory": session_factory
-    }, pool.enqueued_jobs[0][1])
+    })
     
     await engine.dispose()
 
@@ -400,7 +400,7 @@ async def test_invoice_paid_bootstraps_subscription_activation_and_enqueues_prov
     assert subscriptions[0].status == "active"
     assert ledgers[-1].event_type == "subscription_activated"
     assert len(pool.enqueued_jobs) == 1
-    assert pool.enqueued_jobs[0][0] == "phone_provisioning_job"
+    assert pool.enqueued_jobs[0][0] == "outbox_delivery_job"
 
 
 @pytest.mark.anyio
@@ -463,7 +463,7 @@ async def test_distinct_webhook_events_for_one_invoice_grant_and_provision_once(
     assert len(ledgers) == 1
     assert ledgers[0].event_type == "subscription_activated"
     assert ledgers[0].source_id == first_payload["data"]["object"]["id"]
-    assert [job[0] for job in pool.enqueued_jobs] == ["phone_provisioning_job"]
+    assert [job[0] for job in pool.enqueued_jobs] == ["outbox_delivery_job"]
 
 
 @pytest.mark.anyio
@@ -473,7 +473,7 @@ async def test_distinct_webhook_events_for_one_invoice_grant_and_provision_once(
         ("customer.subscription.created", "active", 0, 0),
         ("customer.subscription.updated", "past_due", 1, 0),
         ("customer.subscription.deleted", "canceled", 1, 0),
-        ("invoice.paid", "active", 0, 1),
+        ("invoice.paid", "active", 1, 1),
         ("invoice.payment_failed", "past_due", 1, 0),
     ],
 )
@@ -548,7 +548,12 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe(
 
     assert first.status_code == 202
     assert replay.status_code == 202
-    assert pool.enqueued_jobs == []
+    expected_jobs = (
+        [("outbox_delivery_job", {})]
+        if expected_outbox and event_type != "invoice.paid"
+        else []
+    )
+    assert pool.enqueued_jobs == expected_jobs
 
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -573,10 +578,61 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe(
     assert len(ledgers) == expected_ledger
     if outbox_events:
         intent = outbox_events[0]
-        assert intent.topic == "phone.disable"
-        assert intent.aggregate_type == "subscription"
-        assert intent.aggregate_id == subscription.id
-        assert intent.idempotency_key == f"stripe:{event_type}:{event_id}"
+        expected_topic = (
+            "phone.provision" if event_type == "invoice.paid" else "phone.disable"
+        )
+        assert intent.topic == expected_topic
+        assert intent.aggregate_type == "user"
+        assert intent.aggregate_id == subscription.user_id
+        if event_type == "invoice.paid":
+            assert intent.idempotency_key == "stripe:invoice:in_123:phone.provision"
+        else:
+            assert intent.idempotency_key == f"stripe:{event_type}:{event_id}"
+
+
+@pytest.mark.anyio
+async def test_invoice_outbox_commit_survives_redis_wakeup_failure(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_invoice_paid_payload,
+) -> None:
+    class FailingPool:
+        async def enqueue_job(self, _name, _payload):
+            raise ConnectionError("redis unavailable")
+
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(User(clerk_user_id="user_123", email="redis-down@example.com"))
+        await session.commit()
+    await engine.dispose()
+
+    payload = deepcopy(stripe_invoice_paid_payload)
+    payload["data"]["object"]["lines"]["data"][0]["price"] = {
+        "lookup_key": "starter"
+    }
+    payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
+        "clerk_user_id": "user_123",
+        "plan_tier": "starter",
+    }
+    from app.main import app
+
+    app.state.arq_pool = FailingPool()
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        event = await session.scalar(select(OutboxEvent))
+        assert event is not None
+        assert event.status == "pending"
+    await engine.dispose()
 
 
 def test_stripe_handler_map_lists_every_supported_lifecycle_event() -> None:

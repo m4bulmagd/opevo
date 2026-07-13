@@ -14,6 +14,17 @@ class PhoneNumberProvisioningRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_user_id_for_update(
+        self,
+        user_id,
+    ) -> PhoneNumberProvisioning | None:
+        result = await self.session.execute(
+            select(PhoneNumberProvisioning)
+            .where(PhoneNumberProvisioning.user_id == user_id)
+            .with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def mark_running(self, *, user_id, target_country_code: str) -> PhoneNumberProvisioning:
         provisioning = await self.get_by_user_id(user_id)
         if provisioning is None:

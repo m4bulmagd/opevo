@@ -11,12 +11,21 @@ class TelephonyService:
         self.provider = provider or TelephonyTelnyx()
         self.phone_number_repository = PhoneNumberRepository(session)
 
-    async def provision_number(self, user_id, *, country_code: str):
+    async def provision_number(
+        self,
+        user_id,
+        *,
+        country_code: str,
+        operation_key: str | None = None,
+    ):
         existing_number = await self.phone_number_repository.get_by_user_id(user_id)
         if existing_number is not None:
             return existing_number
 
-        provisioned = await self.provider.provision_number(country_code=country_code)
+        provider_kwargs = {"country_code": country_code}
+        if operation_key is not None:
+            provider_kwargs["operation_key"] = operation_key
+        provisioned = await self.provider.provision_number(**provider_kwargs)
         phone_number = await self.phone_number_repository.create(
             user_id=user_id,
             e164=provisioned["e164"],

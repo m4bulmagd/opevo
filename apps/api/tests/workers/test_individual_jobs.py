@@ -512,9 +512,16 @@ async def test_transcript_flush_job_missing_call_id(
 class CapturingProvisioningProvider:
     def __init__(self) -> None:
         self.country_codes: list[str] = []
+        self.operation_keys: list[str | None] = []
 
-    async def provision_number(self, *, country_code: str) -> dict:
+    async def provision_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str | None = None,
+    ) -> dict:
         self.country_codes.append(country_code)
+        self.operation_keys.append(operation_key)
         return {
             "e164": "+33123456789",
             "provider_number_id": "pn_123",
@@ -650,6 +657,7 @@ async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_de
             "session_factory": session_factory,
         },
         {"user_id": str(active_user.id)},
+        operation_key="outbox:phone-provision:evt_123",
     )
 
     provisionings = (
@@ -662,6 +670,7 @@ async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_de
     ).scalars().all()
 
     assert provider.country_codes == ["FR"]
+    assert provider.operation_keys == ["outbox:phone-provision:evt_123"]
     assert len(phone_numbers) == 1
     assert len(provisionings) == 1
     assert provisionings[0].status == "succeeded"

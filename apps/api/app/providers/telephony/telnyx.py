@@ -14,6 +14,7 @@ ALLOWED_NUMBER_TYPES = ("national", "local")
 
 logger = logging.getLogger(__name__)
 
+
 class TelephonyTelnyx(TelephonyProvider):
     def __init__(
         self,
@@ -35,8 +36,31 @@ class TelephonyTelnyx(TelephonyProvider):
         self.phone_number_order_resource = phone_number_order_resource
         self.phone_number_resource = phone_number_resource
 
-    async def provision_number(self, *, country_code: str) -> dict:
+    async def provision_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str | None = None,
+    ) -> dict:
         logger.info(f"Attempting to provision number with Telnyx for country_code={country_code}")
+
+        if self.ordering_enabled:
+            customer_reference = self._require_operation_key(
+                operation_key,
+                country_code=country_code,
+            )
+            existing_number = self._reconcile_existing_order(
+                customer_reference=customer_reference,
+                country_code=country_code,
+            )
+            if existing_number is not None:
+                logger.info(
+                    "Reconciled Telnyx number %s for provisioning (country_code=%s)",
+                    redact_phone(existing_number),
+                    country_code,
+                )
+                return self._activate_ordered_number(existing_number)
+
         inspected_candidates: list[dict] = []
         selected_candidate: dict | None = None
 
@@ -101,9 +125,73 @@ class TelephonyTelnyx(TelephonyProvider):
 
         self.phone_number_order_resource.create(
             api_key=self.api_key,
+            customer_reference=customer_reference,
             phone_numbers=[{"phone_number": selected_number}],
         )
 
+        return self._activate_ordered_number(selected_number)
+
+    def _reconcile_existing_order(
+        self,
+        *,
+        customer_reference: str,
+        country_code: str,
+    ) -> str | None:
+        response = self.phone_number_order_resource.list(
+            api_key=self.api_key,
+            **{"filter[customer_reference]": customer_reference},
+        )
+        orders = list(getattr(response, "data", None) or [])
+        if not orders:
+            return None
+        if len(orders) != 1:
+            self._raise_existing_order_review(
+                reason="existing_order_conflict",
+                country_code=country_code,
+                order_count=len(orders),
+            )
+
+        order = orders[0]
+        if self._read_field(order, "customer_reference") != customer_reference:
+            self._raise_existing_order_review(
+                reason="existing_order_conflict",
+                country_code=country_code,
+                order_count=1,
+            )
+
+        if self._read_field(order, "requirements_met") is not True:
+            self._raise_existing_order_review(
+                reason="existing_order_requires_review",
+                country_code=country_code,
+                order_count=1,
+            )
+
+        ordered_numbers = list(self._read_field(order, "phone_numbers") or [])
+        if len(ordered_numbers) != 1:
+            self._raise_existing_order_review(
+                reason="existing_order_requires_review",
+                country_code=country_code,
+                order_count=1,
+            )
+        ordered_number = ordered_numbers[0]
+        status = self._read_field(ordered_number, "status")
+        status = getattr(status, "value", status)
+        if status != "success":
+            self._raise_existing_order_review(
+                reason="existing_order_requires_review",
+                country_code=country_code,
+                order_count=1,
+            )
+        selected_number = self._read_field(ordered_number, "phone_number")
+        if not isinstance(selected_number, str) or not selected_number.startswith("+"):
+            self._raise_existing_order_review(
+                reason="existing_order_requires_review",
+                country_code=country_code,
+                order_count=1,
+            )
+        return selected_number
+
+    def _activate_ordered_number(self, selected_number: str) -> dict:
         phone_numbers = self.phone_number_resource.list(
             api_key=self.api_key,
             **{"filter[phone_number]": selected_number},
@@ -123,6 +211,48 @@ class TelephonyTelnyx(TelephonyProvider):
             "provider_number_id": provider_number.id,
             "provider_connection_name": "app-active",
         }
+
+    @staticmethod
+    def _require_operation_key(
+        operation_key: str | None,
+        *,
+        country_code: str,
+    ) -> str:
+        if isinstance(operation_key, str) and operation_key.strip():
+            return operation_key.strip()
+        raise TelephonyProvisioningReviewRequired(
+            reason="missing_operation_key",
+            payload={
+                "event": "phone_number_provisioning_review_required",
+                "country_code": country_code,
+                "contact_support": True,
+                "manual_review_required": True,
+            },
+        )
+
+    @staticmethod
+    def _raise_existing_order_review(
+        *,
+        reason: str,
+        country_code: str,
+        order_count: int,
+    ) -> None:
+        raise TelephonyProvisioningReviewRequired(
+            reason=reason,
+            payload={
+                "event": "phone_number_provisioning_review_required",
+                "country_code": country_code,
+                "existing_order_count": order_count,
+                "contact_support": True,
+                "manual_review_required": True,
+            },
+        )
+
+    @staticmethod
+    def _read_field(value, field: str):
+        if isinstance(value, dict):
+            return value.get(field)
+        return getattr(value, field, None)
 
     async def enable_number(self, *, provider_number_id: str) -> str:
         self.phone_number_resource.modify(

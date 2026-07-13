@@ -584,23 +584,41 @@ git commit -m "fix: make usage accounting authoritative and concurrency safe"
 ### Task 7: Add a transactional outbox for provider operations
 
 **Files:**
-- Modify: `apps/api/alembic/versions/0008_add_outbox_and_call_lifecycle.py`
+- Create: `apps/api/alembic/versions/0009_complete_transactional_outbox.py`
 - Modify: `apps/api/app/models/outbox_event.py`
-- Modify: `apps/api/app/models/__init__.py`
+- Modify: `apps/api/app/models/phone_number_provisioning.py`
 - Modify: `apps/api/app/repositories/outbox_repository.py`
+- Modify: `apps/api/app/repositories/phone_number_provisioning_repository.py`
 - Modify: `apps/api/app/services/outbox_service.py`
 - Create: `apps/api/app/workers/jobs/outbox_delivery.py`
+- Create: `apps/api/app/workers/jobs/outbox_topics.py`
 - Modify: `apps/api/app/workers/arq_worker.py`
 - Modify: `apps/api/app/services/billing_service.py`
+- Modify: `apps/api/app/services/onboarding_service.py`
+- Modify: `apps/api/app/services/agent_config_service.py`
+- Modify: `apps/api/app/routers/agent.py`
 - Modify: `apps/api/app/workers/jobs/phone_provisioning.py`
-- Modify: `apps/api/app/services/livekit_dispatch_service.py`
+- Modify: `apps/api/app/providers/telephony/base.py`
+- Modify: `apps/api/app/providers/telephony/telnyx.py`
+- Modify: `apps/api/app/services/telephony_service.py`
 - Create: `apps/api/tests/integration/test_outbox_delivery.py`
+- Create: `apps/api/tests/test_outbox_delivery_migration.py`
 - Modify: `apps/api/tests/workers/test_arq_worker.py`
+- Modify: `apps/api/tests/workers/test_individual_jobs.py`
+- Modify: `apps/api/tests/services/test_outbox_service.py`
+- Modify: `apps/api/tests/services/test_onboarding_service.py`
+- Modify: `apps/api/tests/agent/test_agent_config_api.py`
+- Modify: `apps/api/tests/billing/test_stripe_webhooks.py`
+- Modify: `apps/api/tests/telephony/test_telnyx_provider.py`
+- Modify: `apps/api/tests/test_integrity_models.py`
+- Modify: `apps/api/tests/test_redaction.py`
 
 **Interfaces:**
 - Produces: `OutboxService.add(topic: str, aggregate_type: str, aggregate_id: UUID, idempotency_key: str, payload: dict) -> OutboxEvent`.
 - Produces: `OutboxRepository.claim_batch(limit: int, now: datetime) -> list[OutboxEvent]` using `FOR UPDATE SKIP LOCKED`.
 - Supported launch topics: `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `recording.start`, `notification.send`.
+- Telephony events all use `aggregate_type="user"` and the internal user UUID as `aggregate_id`; this single namespace preserves provisioning/routing order.
+- Payloads contain internal references only. Task 8 activates the `livekit.dispatch` producer and Task 10 activates recording/notification producers after their replay contracts are implemented.
 
 - [ ] **Step 1: Write rollback and duplicate-delivery tests**
 
@@ -627,7 +645,9 @@ Expected: failure because claiming, delivery, retry, and terminal-failure behavi
 
 - [ ] **Step 3: Complete the outbox delivery state machine and repository**
 
-The existing Task 5 table already contains the launch shape below. Add the final allowed-state constraint and claim/update queries without replacing the insert-only API:
+The existing Task 5 table already contains the launch shape below. Do not rewrite applied migration `0008`; add the final state/attempt/consistency constraints and due-work index in forward migration `0009`. Replace the insert-only API with `add_once`: equal idempotency-key content returns the durable event, while different content raises a controlled conflict.
+
+Migration `0009` also owns the final provisioning invariants: `status` is exactly one of `queued`, `running`, `succeeded`, or `failed`, and `attempt_count` is nonnegative. Preflight both conditions before adding their model-aligned checks.
 
 ```python
 idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
@@ -644,17 +664,58 @@ delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), n
 
 - [ ] **Step 4: Implement claim, exponential retry, and terminal failure**
 
-Retry at 10 seconds, 1 minute, 5 minutes, 30 minutes, and 2 hours. After the fifth failure, mark the event `failed` and emit an error metric. Never store raw provider error bodies in `last_error_code`.
+Claim in a short transaction, increment `attempt_count` as the claim generation, set a five-minute lease in `next_attempt_at`, and commit before provider I/O. Expired `processing` work is reclaimable; completion/retry updates must match `(id, attempt_count)` so an old worker cannot overwrite a newer claim. Preserve aggregate order when claiming.
+
+Retry after failures at 10 seconds, 1 minute, 5 minutes, 30 minutes, and 2 hours. After those five retry opportunities, mark the event `failed` on the sixth total delivery failure and emit a structured error metric. Unknown topics and malformed reference payloads fail terminally. Persist allowlisted safe error codes only; never store raw provider error bodies in `last_error_code`.
+
+Only earlier `pending` or `processing` events block a later event for the same aggregate. A terminal `failed` event is historical evidence, not a permanent aggregate barrier; later current-state-revalidated corrective intents remain claimable.
 
 - [ ] **Step 5: Replace pre-commit queue and provider calls**
 
-Write outbox events inside the Stripe, provisioning, routing, dispatch, recording, and notification transactions. Schedule the generic delivery job only after commit. The scheduled reconciliation poller must also pick up pending events, so a process crash between commit and enqueue does not lose work.
+Write `phone.provision`, `phone.enable`, and `phone.disable` events inside Stripe, onboarding-retry, and agent-configuration transactions. Schedule only the generic delivery job after commit; enqueue failure is nonfatal because PostgreSQL is authoritative. The minute reconciliation poller also claims due/expired events, so a process crash between commit and enqueue does not lose work.
+
+Telnyx provisioning passes the stable outbox idempotency key as `customer_reference`, reconciles an existing order by that reference before creating one, and therefore survives provider-success/DB-failure replay. Routing delivery re-derives the desired current state before provider I/O, so a stale enable intent cannot override a later cancellation. LiveKit dispatch remains owned by Task 8; post-call recording and notification production remains owned by Task 10.
+
+Routing delivery always reapplies the authoritative absolute enable/disable provider operation, even when the database projection already matches, then validates the returned connection name before persisting the projection. Provisioning commits its short `running` transition before Telnyx I/O. Terminal-failure logs use the redaction filter's preserved `event`, `operation`, `status`, and `count` fields.
+
+The minute-exhaustion disable currently issued by `CallLifecycleService` is also deferred to Task 10, where finalization becomes one short state/outbox transaction. Task 7 does not claim that post-call provider path is converted yet.
 
 - [ ] **Step 6: Run the API suite and commit**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
-git add apps/api/alembic/versions/0008_add_outbox_and_call_lifecycle.py apps/api/app/models/outbox_event.py apps/api/app/models/__init__.py apps/api/app/repositories/outbox_repository.py apps/api/app/services/outbox_service.py apps/api/app/workers/jobs/outbox_delivery.py apps/api/app/workers/arq_worker.py apps/api/app/services/billing_service.py apps/api/app/workers/jobs/phone_provisioning.py apps/api/app/services/livekit_dispatch_service.py apps/api/tests/integration/test_outbox_delivery.py apps/api/tests/workers/test_arq_worker.py
+git add \
+  apps/api/alembic/versions/0009_complete_transactional_outbox.py \
+  apps/api/app/models/outbox_event.py \
+  apps/api/app/models/phone_number_provisioning.py \
+  apps/api/app/providers/telephony/base.py \
+  apps/api/app/providers/telephony/telnyx.py \
+  apps/api/app/repositories/outbox_repository.py \
+  apps/api/app/repositories/phone_number_provisioning_repository.py \
+  apps/api/app/routers/agent.py \
+  apps/api/app/services/agent_config_service.py \
+  apps/api/app/services/billing_service.py \
+  apps/api/app/services/onboarding_service.py \
+  apps/api/app/services/outbox_service.py \
+  apps/api/app/services/telephony_service.py \
+  apps/api/app/workers/arq_worker.py \
+  apps/api/app/workers/jobs/outbox_delivery.py \
+  apps/api/app/workers/jobs/outbox_topics.py \
+  apps/api/app/workers/jobs/phone_provisioning.py \
+  apps/api/tests/agent/test_agent_config_api.py \
+  apps/api/tests/billing/test_stripe_webhooks.py \
+  apps/api/tests/fakes.py \
+  apps/api/tests/integration/test_outbox_delivery.py \
+  apps/api/tests/integration/test_subscription_disable_intent.py \
+  apps/api/tests/services/test_onboarding_service.py \
+  apps/api/tests/services/test_outbox_service.py \
+  apps/api/tests/telephony/test_telnyx_provider.py \
+  apps/api/tests/test_integrity_models.py \
+  apps/api/tests/test_redaction.py \
+  apps/api/tests/test_outbox_delivery_migration.py \
+  apps/api/tests/workers/test_arq_worker.py \
+  apps/api/tests/workers/test_individual_jobs.py \
+  docs/superpowers/plans/2026-07-12-production-readiness-hardening.md
 git commit -m "feat: deliver provider operations through transactional outbox"
 ```
 

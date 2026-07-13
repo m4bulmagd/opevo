@@ -5,7 +5,6 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -81,7 +80,7 @@ async def test_postgres_outbox_rolls_back_with_its_business_transaction(
 
 
 @pytest.mark.anyio
-async def test_postgres_outbox_rejects_duplicate_intent_identity(
+async def test_postgres_outbox_add_once_returns_duplicate_intent_identity(
     task5_postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     arguments = {
@@ -92,13 +91,13 @@ async def test_postgres_outbox_rejects_duplicate_intent_identity(
         "payload": {"user_id": str(uuid4())},
     }
     async with task5_postgres_session_factory() as session:
-        await OutboxService(session).add(**arguments)
+        first = await OutboxService(session).add(**arguments)
         await session.commit()
 
-        with pytest.raises(IntegrityError):
-            await OutboxService(session).add(**arguments)
-        await session.rollback()
+        second = await OutboxService(session).add(**arguments)
+        await session.commit()
 
+        assert second.id == first.id
         assert await session.scalar(
             select(func.count()).select_from(OutboxEvent)
         ) == 1

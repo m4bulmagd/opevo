@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import logging
 
 from arq.connections import ArqRedis
 from fastapi import HTTPException, status
@@ -43,6 +44,8 @@ STRIPE_EVENT_HANDLER_MAP = {
     "invoice.payment_failed": "_handle_invoice_payment_failed",
 }
 
+logger = logging.getLogger(__name__)
+
 
 class UnsupportedStripeLifecycleError(ValueError):
     pass
@@ -67,6 +70,7 @@ class BillingService:
         self.webhook_event_repository = WebhookEventRepository(session)
         self.outbox_service = OutboxService(session)
         self.arq_pool = arq_pool
+        self._outbox_wakeup_needed = False
 
     def verify_signature(self, payload: bytes, signature_header: str | None) -> None:
         if not self.settings.stripe_webhook_secret:
@@ -109,6 +113,7 @@ class BillingService:
                 raise StripeLifecycleConflictError from exc
 
         await self.session.commit()
+        await self._enqueue_outbox_wakeup()
 
     async def _handle_subscription_event(
         self,
@@ -231,18 +236,23 @@ class BillingService:
             minutes=allocated_minutes,
         )
 
-        if grant.first_activation and not grant.already_granted:
-            if (
-                self.arq_pool
-                and await self.phone_number_repository.get_by_user_id(
-                    subscription.user_id
-                )
-                is None
-            ):
-                await self.arq_pool.enqueue_job(
-                    "phone_provisioning_job",
-                    {"user_id": str(subscription.user_id)},
-                )
+        if grant.already_granted:
+            return
+        phone_number = await self.phone_number_repository.get_by_user_id(
+            subscription.user_id
+        )
+        if grant.first_activation and phone_number is None:
+            await self._add_phone_intent(
+                topic="phone.provision",
+                user_id=subscription.user_id,
+                idempotency_key=f"stripe:invoice:{invoice_id}:phone.provision",
+            )
+        elif phone_number is not None:
+            await self._add_phone_intent(
+                topic="phone.enable",
+                user_id=subscription.user_id,
+                idempotency_key=f"stripe:invoice:{invoice_id}:phone.enable",
+            )
 
     async def _handle_invoice_payment_failed(
         self,
@@ -343,17 +353,39 @@ class BillingService:
         ):
             return
 
-        await self.outbox_service.add(
+        await self._add_phone_intent(
             topic="phone.disable",
-            aggregate_type="subscription",
-            aggregate_id=subscription.id,
+            user_id=subscription.user_id,
             idempotency_key=f"stripe:{event_type}:{event_id}",
-            payload={
-                "user_id": str(subscription.user_id),
-                "subscription_id": str(subscription.id),
-                "stripe_subscription_id": subscription.stripe_subscription_id,
-            },
         )
+
+    async def _add_phone_intent(
+        self,
+        *,
+        topic: str,
+        user_id,
+        idempotency_key: str,
+    ) -> None:
+        await self.outbox_service.add(
+            topic=topic,
+            aggregate_type="user",
+            aggregate_id=user_id,
+            idempotency_key=idempotency_key,
+            payload={"user_id": str(user_id)},
+        )
+        self._outbox_wakeup_needed = True
+
+    async def _enqueue_outbox_wakeup(self) -> None:
+        if not self._outbox_wakeup_needed or self.arq_pool is None:
+            return
+        try:
+            await self.arq_pool.enqueue_job("outbox_delivery_job", {})
+        except Exception as error:
+            logger.warning(
+                "outbox wakeup enqueue failed operation=stripe_webhook "
+                "error_type=%s",
+                type(error).__name__,
+            )
 
     @staticmethod
     def _extract_subscription_plan_tier(event_object: dict) -> str | None:

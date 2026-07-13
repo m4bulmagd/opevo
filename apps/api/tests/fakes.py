@@ -2,7 +2,12 @@ from app.providers.telephony.base import TelephonyProvisioningReviewRequired
 
 
 class FakeTelephonyProvider:
-    async def provision_number(self, *, country_code: str) -> dict:
+    async def provision_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str | None = None,
+    ) -> dict:
         return {
             "e164": "+33123456789",
             "provider_number_id": "pn_123",
@@ -17,7 +22,12 @@ class FakeTelephonyProvider:
 
 
 class ReviewRequiredTelephonyProvider:
-    async def provision_number(self, *, country_code: str) -> dict:
+    async def provision_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str | None = None,
+    ) -> dict:
         raise TelephonyProvisioningReviewRequired(
             reason="no_affordable_number",
             payload={
@@ -58,4 +68,3 @@ class MockArqPool:
     
     async def enqueue_job(self, name, payload):
         self.enqueued_jobs.append((name, payload))
-

@@ -1,8 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, Uuid, func, text
+from sqlalchemy import CheckConstraint, DateTime, Index, Integer, JSON, String, UniqueConstraint, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.schema import conv
 
 from app.models import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
@@ -13,6 +14,28 @@ class OutboxEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UniqueConstraint(
             "idempotency_key",
             name="uq_outbox_events_idempotency_key",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'delivered', 'failed')",
+            name=conv("ck_outbox_events_status_allowed"),
+        ),
+        CheckConstraint(
+            "attempt_count >= 0",
+            name=conv("ck_outbox_events_attempt_count_nonnegative"),
+        ),
+        CheckConstraint(
+            "((status = 'delivered' AND delivered_at IS NOT NULL "
+            "AND last_error_code IS NULL) OR "
+            "(status <> 'delivered' AND delivered_at IS NULL)) "
+            "AND (status <> 'failed' OR last_error_code IS NOT NULL)",
+            name=conv("ck_outbox_events_delivery_consistent"),
+        ),
+        Index(
+            "ix_outbox_events_due_work",
+            "status",
+            "next_attempt_at",
+            "created_at",
+            "id",
         ),
     )
 

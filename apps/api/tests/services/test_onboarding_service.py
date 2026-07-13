@@ -8,6 +8,8 @@ from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
+from app.models.outbox_event import OutboxEvent
+from sqlalchemy import select
 
 
 @pytest.mark.anyio
@@ -61,6 +63,93 @@ async def test_get_status_returns_provisioning_failed_with_retry(db_session, act
     assert status.phone_number_status == "failed"
     assert status.can_retry_provisioning is True
     assert status.overall_status == "provisioning_failed"
+
+
+@pytest.mark.anyio
+async def test_retry_provisioning_commits_durable_intent_without_redis(
+    db_session,
+    active_user,
+) -> None:
+    from app.services.onboarding_service import OnboardingService
+
+    db_session.add(
+        Subscription(
+            user_id=active_user.id,
+            stripe_customer_id="cus_retry",
+            stripe_subscription_id="sub_retry",
+            plan_tier="starter",
+            status="active",
+            allocated_minutes=60,
+        )
+    )
+    provisioning = PhoneNumberProvisioning(
+        user_id=active_user.id,
+        target_country_code="FR",
+        status="failed",
+        attempt_count=1,
+        can_retry=True,
+        last_error_reason="provider_retryable",
+    )
+    db_session.add(provisioning)
+    await db_session.commit()
+
+    result = await OnboardingService(db_session).retry_provisioning(
+        active_user.id,
+        arq_pool=None,
+    )
+
+    await db_session.refresh(provisioning)
+    event = await db_session.scalar(select(OutboxEvent))
+    assert result.status == "accepted"
+    assert result.queued is True
+    assert provisioning.status == "queued"
+    assert provisioning.can_retry is False
+    assert event is not None
+    assert event.topic == "phone.provision"
+    assert event.aggregate_type == "user"
+    assert event.aggregate_id == active_user.id
+    assert event.payload == {"user_id": str(active_user.id)}
+
+
+@pytest.mark.anyio
+async def test_retry_provisioning_enqueue_failure_keeps_committed_intent(
+    db_session,
+    active_user,
+) -> None:
+    from app.services.onboarding_service import OnboardingService
+
+    class FailingPool:
+        async def enqueue_job(self, _name, _payload):
+            raise ConnectionError("redis unavailable")
+
+    db_session.add(
+        Subscription(
+            user_id=active_user.id,
+            stripe_customer_id="cus_retry_redis",
+            stripe_subscription_id="sub_retry_redis",
+            plan_tier="starter",
+            status="active",
+            allocated_minutes=60,
+        )
+    )
+    db_session.add(
+        PhoneNumberProvisioning(
+            user_id=active_user.id,
+            target_country_code="FR",
+            status="failed",
+            attempt_count=2,
+            can_retry=True,
+        )
+    )
+    await db_session.commit()
+
+    result = await OnboardingService(db_session).retry_provisioning(
+        active_user.id,
+        arq_pool=FailingPool(),
+    )
+
+    assert result.queued is True
+    assert await db_session.scalar(select(OutboxEvent)) is not None
 
 
 @pytest.mark.anyio

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,11 +11,15 @@ from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.schemas.onboarding import OnboardingStatusResponse, RetryProvisioningResponse
+from app.services.outbox_service import OutboxService
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
 
 
 class OnboardingRetryNotAllowedError(Exception):
     pass
+
+
+logger = logging.getLogger(__name__)
 
 
 class OnboardingService:
@@ -48,6 +53,8 @@ class OnboardingService:
         self.phone_number_repository = phone_number_repository
         self.provisioning_repository = provisioning_repository
         self.agent_config_repository = agent_config_repository
+        self.session = session
+        self.outbox_service = OutboxService(session) if session is not None else None
 
     async def get_status(self, user_id: UUID | str) -> OnboardingStatusResponse:
         subscription = await self.subscription_repository.get_by_user_id(user_id)
@@ -115,13 +122,54 @@ class OnboardingService:
         )
 
     async def retry_provisioning(self, user_id: UUID | str, *, arq_pool) -> RetryProvisioningResponse:
-        status = await self.get_status(user_id)
-        if not status.can_retry_provisioning:
+        if self.session is None or self.outbox_service is None:
+            raise RuntimeError("A database session is required for provisioning retry")
+        user_uuid = UUID(str(user_id))
+        provisioning = await self.provisioning_repository.get_by_user_id_for_update(
+            user_uuid
+        )
+        if (
+            provisioning is None
+            or provisioning.status != "failed"
+            or not provisioning.can_retry
+        ):
             raise OnboardingRetryNotAllowedError
-        if arq_pool is None:
-            raise RuntimeError("ARQ pool unavailable")
 
-        await arq_pool.enqueue_job("phone_provisioning_job", {"user_id": str(user_id)})
+        subscription = await self.subscription_repository.get_by_user_id(user_uuid)
+        phone_number = await self.phone_number_repository.get_by_user_id(user_uuid)
+        if (
+            subscription is None
+            or not SubscriptionAccessPolicy.can_route(
+                subscription.status,
+                subscription.current_period_end,
+            )
+            or phone_number is not None
+        ):
+            raise OnboardingRetryNotAllowedError
+
+        next_attempt = provisioning.attempt_count + 1
+        provisioning.status = "queued"
+        provisioning.can_retry = False
+        await self.outbox_service.add(
+            topic="phone.provision",
+            aggregate_type="user",
+            aggregate_id=user_uuid,
+            idempotency_key=(
+                f"onboarding:phone.provision:{provisioning.id}:attempt:{next_attempt}"
+            ),
+            payload={"user_id": str(user_uuid)},
+        )
+        await self.session.commit()
+
+        if arq_pool is not None:
+            try:
+                await arq_pool.enqueue_job("outbox_delivery_job", {})
+            except Exception as error:
+                logger.warning(
+                    "outbox wakeup enqueue failed operation=retry_phone_provisioning "
+                    "error_type=%s",
+                    type(error).__name__,
+                )
         return RetryProvisioningResponse(status="accepted", queued=True)
 
     @staticmethod

@@ -6,6 +6,7 @@ import pytest
 
 from app.core.logging import report_safe_exception, setup_logging
 from app.core.redaction import SafeExtraFilter, redact_phone
+from app.workers.jobs.outbox_delivery import emit_outbox_terminal_failure_metric
 
 
 class RecordStateFormatter(logging.Formatter):
@@ -290,6 +291,37 @@ def test_safe_extra_filter_preserves_valid_identifiers_and_metrics() -> None:
     assert record.duration_ms == 84.5
     assert record.frame_count == 4
     assert record.token_count == 12
+
+
+@pytest.mark.anyio
+async def test_outbox_terminal_failure_metric_survives_safe_extra_filter(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    safe_filter = SafeExtraFilter()
+    caplog.handler.addFilter(safe_filter)
+    try:
+        with caplog.at_level(
+            logging.ERROR,
+            logger="app.workers.jobs.outbox_delivery",
+        ):
+            await emit_outbox_terminal_failure_metric(
+                "phone.disable",
+                "provider_terminal",
+            )
+    finally:
+        caplog.handler.removeFilter(safe_filter)
+
+    record = next(
+        item
+        for item in caplog.records
+        if item.name == "app.workers.jobs.outbox_delivery"
+    )
+    assert record.event == "outbox_terminal_failure"
+    assert record.operation == "deliver_outbox_event"
+    assert record.status == "failed"
+    assert record.count == 1
+    assert "topic=phone.disable" in record.getMessage()
+    assert "error_code=provider_terminal" in record.getMessage()
 
 
 def test_report_safe_exception_rejects_unsafe_labels_ids_and_custom_objects(caplog) -> None:

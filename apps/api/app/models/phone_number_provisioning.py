@@ -1,13 +1,26 @@
 from uuid import UUID
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Uuid
+from sqlalchemy import JSON, Boolean, CheckConstraint, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.schema import conv
 
 from app.models import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class PhoneNumberProvisioning(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "phone_number_provisionings"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed')",
+            name=conv("ck_phone_number_provisionings_status_allowed"),
+        ),
+        CheckConstraint(
+            "attempt_count >= 0",
+            name=conv(
+                "ck_phone_number_provisionings_attempt_count_nonnegative"
+            ),
+        ),
+    )
 
     user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False, unique=True, index=True)
     phone_number_id: Mapped[UUID | None] = mapped_column(

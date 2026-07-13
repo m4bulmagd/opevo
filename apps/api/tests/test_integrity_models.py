@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models import Base
 from app.models.call import Call
 from app.models.call_message import CallMessage
+from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
@@ -41,6 +42,13 @@ def test_models_expose_exact_integrity_constraint_names() -> None:
     assert "ck_subscriptions_plan_tier_allowed" in _constraint_names(Subscription)
     assert "ck_calls_duration_seconds_nonnegative" in _constraint_names(Call)
     assert "ck_calls_minutes_charged_nonnegative" in _constraint_names(Call)
+    assert "ck_phone_number_provisionings_status_allowed" in _constraint_names(
+        PhoneNumberProvisioning
+    )
+    assert (
+        "ck_phone_number_provisionings_attempt_count_nonnegative"
+        in _constraint_names(PhoneNumberProvisioning)
+    )
 
     usage_indexes = _indexes(UsageLedger)
     assert usage_indexes["uq_usage_ledgers_call_event_type"].unique is True
@@ -54,6 +62,23 @@ def test_models_expose_exact_integrity_constraint_names() -> None:
     assert str(sqlite_predicate) == (
         "status IN ('pending', 'connected', 'ending', 'finalizing')"
     )
+
+
+def test_phone_number_provisioning_checks_use_final_task7_state_set() -> None:
+    checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in PhoneNumberProvisioning.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert checks == {
+        "ck_phone_number_provisionings_status_allowed": (
+            "status IN ('queued', 'running', 'succeeded', 'failed')"
+        ),
+        "ck_phone_number_provisionings_attempt_count_nonnegative": (
+            "attempt_count >= 0"
+        ),
+    }
 
 
 def test_subscription_persists_nullable_stripe_event_ordering_fields() -> None:
