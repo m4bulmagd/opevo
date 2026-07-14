@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tomllib
@@ -293,91 +294,208 @@ def test_api_import_rejects_invalid_production_settings_before_startup() -> None
     assert "AGENT_DISPATCH_JWT_SECRET" in result.stderr
 
 
-def test_deployment_docs_cover_staging_checklist_and_local_infra() -> None:
-    readme = (REPO_ROOT / "README.md").read_text()
+def test_api_startup_is_migration_free_but_release_image_keeps_alembic() -> None:
+    api_dockerfile = (REPO_ROOT / "apps" / "api" / "Dockerfile").read_text()
+    api_main = (REPO_ROOT / "apps" / "api" / "app" / "main.py").read_text()
+    migration_compose = (REPO_ROOT / "compose.migrate.yaml").read_text()
+
+    assert "COPY alembic.ini" in api_dockerfile
+    assert "COPY alembic" in api_dockerfile
+    assert "alembic" not in api_main.lower()
+    assert not (REPO_ROOT / "apps" / "api" / "docker-entrypoint.sh").exists()
+    assert 'CMD ["/app/.venv/bin/uvicorn"' in api_dockerfile
+    assert "migrate:" in migration_compose
+    assert 'command: ["/app/.venv/bin/alembic", "-c", "/app/alembic.ini", "upgrade", "head"]' in migration_compose
+
+
+def test_migration_compose_requires_only_image_and_database_url() -> None:
+    migration_compose = (REPO_ROOT / "compose.migrate.yaml").read_text()
+    interpolated_variables = set(re.findall(r"\$\{([A-Z0-9_]+)", migration_compose))
+
+    assert interpolated_variables == {"API_IMAGE", "DATABASE_URL"}
+    assert "read_only: true" in migration_compose
+    assert "cap_drop:" in migration_compose
+    assert "no-new-privileges:true" in migration_compose
+
+
+def test_alembic_offline_requires_only_database_url(tmp_path: Path) -> None:
+    isolated_root = tmp_path / "migration-runtime"
+    isolated_root.mkdir()
+    (isolated_root / "app").symlink_to(REPO_ROOT / "apps" / "api" / "app", target_is_directory=True)
+    (isolated_root / "alembic").symlink_to(
+        REPO_ROOT / "apps" / "api" / "alembic",
+        target_is_directory=True,
+    )
+    (isolated_root / "alembic.ini").write_text(
+        (REPO_ROOT / "apps" / "api" / "alembic.ini").read_text()
+    )
+
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"REDIS_URL", "TEST_REDIS_URL"}
+    }
+    environment["DATABASE_URL"] = (
+        "postgresql+asyncpg://migration:pa%25ss@database.example/presvo"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            str(isolated_root / "alembic.ini"),
+            "upgrade",
+            "0001_initial_schema",
+            "--sql",
+        ],
+        cwd=isolated_root,
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_runtime_images_are_pinned_minimal_non_root_and_health_checked() -> None:
+    dockerfiles = {
+        application: (REPO_ROOT / "apps" / application / "Dockerfile").read_text()
+        for application in ("api", "agent", "web")
+    }
+
+    for dockerfile in dockerfiles.values():
+        assert " AS builder" in dockerfile
+        assert "USER 10001:10001" in dockerfile
+        assert "HEALTHCHECK" in dockerfile
+        assert "HOME=/tmp" in dockerfile
+
+    for application in ("api", "agent"):
+        dockerfile = dockerfiles[application]
+        assert "python:3.13-slim@sha256:" in dockerfile
+        assert 'uv==0.11.19' in dockerfile
+        assert "uv sync --frozen --no-dev" in dockerfile
+        assert 'CMD ["uv"' not in dockerfile
+
+    assert "node:22-alpine@sha256:" in dockerfiles["web"]
+    assert "COPY --from=builder /app/.next/standalone ./" in dockerfiles["web"]
+    assert "COPY --from=builder /app/.next/static ./.next/static" in dockerfiles["web"]
+    assert 'CMD ["node", "server.js"]' in dockerfiles["web"]
+    assert "node_modules ./node_modules" not in dockerfiles["web"]
+
+    next_config = (REPO_ROOT / "apps" / "web" / "next.config.mjs").read_text()
+    assert 'output: "standalone"' in next_config
+
+
+def test_compose_separates_required_production_inputs_from_local_services() -> None:
     compose = (REPO_ROOT / "compose.yaml").read_text()
     compose_dev = (REPO_ROOT / "compose.dev.yaml").read_text()
-    api_env = (REPO_ROOT / "apps" / "api" / ".env.example").read_text()
-    agent_env = (REPO_ROOT / "apps" / "agent" / ".env.example").read_text()
-    api_dockerfile = (REPO_ROOT / "apps" / "api" / "Dockerfile").read_text()
-    api_entrypoint = (REPO_ROOT / "apps" / "api" / "docker-entrypoint.sh").read_text()
-    agent_dockerfile = (REPO_ROOT / "apps" / "agent" / "Dockerfile").read_text()
-    backend_context = (REPO_ROOT / "docs" / "architecture" / "backend-context.md").read_text()
 
-    assert "## Local Infra" in readme
-    assert "docker compose up -d postgres redis minio minio-init" in readme
-    assert "- [ ] API starts with real Postgres and Redis" in readme
-    assert "- [ ] Agent worker starts with real LiveKit credentials" in readme
-    assert "- [ ] Clerk webhook reaches `/webhooks/clerk`" in readme
-    assert "- [ ] Stripe webhook resets minutes" in readme
-    assert "- [ ] Telnyx number can be provisioned" in readme
-    assert "- [ ] LiveKit dispatch reaches the agent" in readme
-    assert "docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker agent" in readme
-    assert "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload" in readme
-    assert "uv run arq app.workers.arq_worker.WorkerSettings" in readme
-    assert "python dev_runner.py" in readme
+    for service in ("postgres", "redis", "minio", "minio-init"):
+        assert f"  {service}:" not in compose
+        assert f"  {service}:" in compose_dev
 
-    assert 'image: postgres:17.8-bookworm' in compose
-    assert 'image: redis:7.4.7-alpine' in compose
-    assert 'image: quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z' in compose
-    assert 'image: quay.io/minio/mc:RELEASE.2025-07-21T05-28-08Z' in compose
-    assert 'MINIO_ROOT_USER: minioadmin' in compose
-    assert 'MINIO_ROOT_PASSWORD: minioadmin' in compose
-    assert 'STORAGE_BUCKET_NAME: recordings' in compose
-    assert 'env_file:' in compose
-    assert '- ./apps/api/.env' in compose
-    assert '- ./apps/agent/.env' in compose
-    assert 'DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call' in compose
-    assert 'REDIS_URL: redis://redis:6379/0' in compose
-    assert 'container_name: ai-call-worker' in compose
-    assert 'command: ["uv", "run", "arq", "app.workers.arq_worker.WorkerSettings"]' in compose
-    assert 'API_BASE_URL: http://api:8000' in compose
-    assert '${LIVEKIT_API_KEY:-replace-me}' not in compose
-    assert '${LIVEKIT_API_SECRET:-replace-me}' not in compose
-    assert '${TELNYX_API_KEY:-replace-me}' not in compose
-    assert '${AGENT_INTERNAL_API_TOKEN:-replace-me}' not in compose
+    for unsafe_value in ("minioadmin", "postgres:postgres", "replace-me"):
+        assert unsafe_value not in compose
 
-    assert "STORAGE_BUCKET_NAME=recordings" in api_env
-    assert "S3_ENDPOINT_URL=http://minio:9000" in api_env
-    assert "S3_ACCESS_KEY=minioadmin" in api_env
-    assert "S3_SECRET_KEY=minioadmin" in api_env
-    assert "S3_REGION=us-east-1" in api_env
-    assert "CLERK_JWKS_URL=replace-me" in api_env
-    assert "STRIPE_SECRET_KEY=replace-me" in api_env
-    assert "TELNYX_ORDERING_ENABLED=false" in api_env
-    assert "STRIPE_PRICE_STARTER=price_replace_me" in api_env
-    assert "STRIPE_PRICE_STANDARD" not in api_env
-    assert "STRIPE_CHECKOUT_SUCCESS_URL=https://your-app.example.com/billing/success" in api_env
-    assert "STRIPE_CHECKOUT_CANCEL_URL=https://your-app.example.com/billing/cancel" in api_env
-    assert "STRIPE_BILLING_PORTAL_RETURN_URL=https://your-app.example.com/dashboard/billing" in api_env
-    assert "CLERK_JWT_SECRET=replace-me" not in api_env
-    assert "OPENAI_API_KEY=replace-me" not in api_env
+    for required_input in (
+        "DATABASE_URL",
+        "REDIS_URL",
+        "CLERK_WEBHOOK_SECRET",
+        "LIVEKIT_API_SECRET",
+        "AGENT_DISPATCH_JWT_SECRET",
+        "CLERK_SECRET_KEY",
+    ):
+        assert f"${{{required_input}:?" in compose
 
-    assert "REDIS_URL=redis://redis:6379/0" in agent_env
-    assert "API_BASE_URL=http://api:8000" in agent_env
-    assert "AGENT_INTERNAL_API_TOKEN=replace-me" in agent_env
-    assert "GEMINI_API_KEY=replace-me" in agent_env
-    assert "OPENAI_API_KEY=replace-me" not in agent_env
-    assert "DEEPGRAM_API_KEY=replace-me" in agent_env
-    assert "ELEVENLABS_API_KEY=replace-me" in agent_env
+    assert "  migrate:" not in compose
+    assert "read_only: true" in compose
+    assert "tmpfs:" in compose
+    assert 'image: postgres:17.8-bookworm' in compose_dev
+    assert 'image: redis:7.4.7-alpine' in compose_dev
+    assert 'MINIO_ROOT_USER: minioadmin' in compose_dev
+    assert 'MINIO_ROOT_PASSWORD: minioadmin' in compose_dev
+    assert "migrate:" in compose_dev
+    assert "service_completed_successfully" in compose_dev
 
-    assert "COPY alembic.ini ./" in api_dockerfile
-    assert "COPY alembic ./alembic" in api_dockerfile
-    assert 'CMD ["./docker-entrypoint.sh"]' in api_dockerfile
-    assert "uv run alembic -c alembic.ini upgrade head" in api_entrypoint
-    assert 'exec uv run uvicorn app.main:app --host 0.0.0.0 --port 8000' in api_entrypoint
 
-    assert 'CMD ["uv", "run", "python", "-m", "agent.main", "start"]' in agent_dockerfile
+def test_worker_secrets_are_least_privilege_and_agent_shutdown_can_drain() -> None:
+    compose = (REPO_ROOT / "compose.yaml").read_text()
+    worker_environment = compose.split(
+        "x-worker-environment: &worker-environment", 1
+    )[1].split("x-api-environment: &api-environment", 1)[0]
+    worker_service = compose.split("\n  worker:", 1)[1].split("\n  agent:", 1)[0]
+    agent_service = compose.split("\n  agent:", 1)[1].split("\n  api:", 1)[0]
 
-    assert "services:" in compose_dev
-    assert "volumes:" in compose_dev
-    assert "./apps/api/app:/app/app" in compose_dev
-    assert "./apps/agent/agent:/app/agent" in compose_dev
-    assert "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload" in compose_dev
-    assert 'command: ["uv", "run", "arq", "app.workers.arq_worker.WorkerSettings"]' in compose_dev
-    assert "dev_runner.py" in compose_dev
+    for forbidden_secret in (
+        "CLERK_WEBHOOK_SECRET",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+    ):
+        assert forbidden_secret not in worker_environment
+    for required_worker_setting in (
+        "DATABASE_URL",
+        "REDIS_URL",
+        "LIVEKIT_API_SECRET",
+        "TELNYX_API_KEY",
+        "S3_SECRET_KEY",
+        "AGENT_DISPATCH_JWT_SECRET",
+        "GEMINI_API_KEY",
+    ):
+        assert required_worker_setting in worker_environment
 
-    assert "## Staging Smoke Status" in backend_context
-    assert "Partially executed on 2026-03-16." in backend_context
-    assert "Queue-backed call finalization" in backend_context
-    assert "phone_number_provisioning_review_required" in backend_context
+    assert "environment: *worker-environment" in worker_service
+    assert "environment: *api-environment" not in worker_service
+    assert "stop_grace_period: 66m" in agent_service
+
+
+def test_deployment_and_rollback_runbooks_define_safe_release_boundaries() -> None:
+    architecture = (
+        REPO_ROOT / "docs" / "architecture" / "production-deployment.md"
+    ).read_text()
+    deploy = (REPO_ROOT / "docs" / "runbooks" / "deploy.md").read_text()
+    normalized_deploy = " ".join(deploy.replace("**", "").split())
+    rollback = (REPO_ROOT / "docs" / "runbooks" / "rollback.md").read_text()
+
+    for provider in ("AWS Paris", "Scaleway Paris", "EU managed application platform"):
+        assert provider in architecture
+    for criterion in (
+        "data residency",
+        "PostgreSQL PITR",
+        "Redis TLS",
+        "private networking",
+        "secret management",
+        "static egress IP",
+        "monthly beta cost",
+    ):
+        assert criterion in architecture
+    assert "pending explicit user approval" in architecture
+    assert "Terraform" not in architecture
+
+    release_order = (
+        "backup verification",
+        "migration job",
+        "worker and agent",
+        "API",
+        "readiness",
+        "web",
+        "smoke test",
+    )
+    positions = [deploy.index(step) for step in release_order]
+    assert positions == sorted(positions)
+    assert "do not start the API" in deploy
+    assert "previous API must be proven compatible" in deploy
+    assert "with the migrated schema" in deploy
+    assert "maintenance procedure" in deploy
+    assert "new agent revision is compatible with the previous API" in normalized_deploy
+    assert "previous web revision is compatible with the new API" in normalized_deploy
+    assert "cross-service contract evidence" in normalized_deploy
+    assert "stop accepting new dispatches" in deploy
+    assert "active job count reaches zero" in deploy
+    assert "termination grace" in deploy
+    assert "pre-drain" in architecture
+    assert "backward-compatible" in rollback
+    assert "forward-fix" in rollback
+    assert "irreversible" in rollback

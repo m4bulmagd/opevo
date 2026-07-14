@@ -1,4 +1,4 @@
-FROM node:22-alpine AS deps
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS deps
 
 WORKDIR /app
 
@@ -6,7 +6,11 @@ COPY package.json package-lock.json ./
 
 RUN npm ci
 
-FROM node:22-alpine AS builder
+FROM deps AS development
+
+COPY . .
+
+FROM deps AS builder
 
 WORKDIR /app
 
@@ -18,27 +22,41 @@ ARG NEXT_PUBLIC_REALTIME_ENABLED=false
 ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
     NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL \
     NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
-    NEXT_PUBLIC_REALTIME_ENABLED=$NEXT_PUBLIC_REALTIME_ENABLED
+    NEXT_PUBLIC_REALTIME_ENABLED=$NEXT_PUBLIC_REALTIME_ENABLED \
+    NEXT_TELEMETRY_DISABLED=1
 
-COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 RUN CLERK_SECRET_KEY=ci-build-only-placeholder \
     API_BASE_URL=http://127.0.0.1:8000 \
     npm run build
 
-FROM node:22-alpine AS runner
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS runtime
 
 WORKDIR /app
-ENV NODE_ENV=production
 
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/package-lock.json ./package-lock.json
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
+ENV HOME=/tmp \
+    TMPDIR=/tmp \
+    HOSTNAME=0.0.0.0 \
+    NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000
 
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+
+RUN rm -rf /app/.next/cache \
+    && ln -s /tmp/next-cache /app/.next/cache \
+    && rm -rf /usr/local/lib/node_modules/npm \
+        /usr/local/lib/node_modules/corepack /opt/yarn* \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx \
+        /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
+
+USER 10001:10001
 
 EXPOSE 3000
 
-CMD ["node", "node_modules/next/dist/bin/next", "start", "--hostname", "0.0.0.0"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["wget", "--quiet", "--spider", "http://127.0.0.1:3000/"]
+
+CMD ["node", "server.js"]

@@ -1,0 +1,17 @@
+services:
+  migrate:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    command: ["/app/.venv/bin/alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,uid=10001,gid=10001
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    init: true
+    restart: "no"
+    healthcheck:
+      disable: true

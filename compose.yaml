@@ -1,157 +1,103 @@
+x-worker-environment: &worker-environment
+  APP_ENV: production
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+  LIVEKIT_URL: ${LIVEKIT_URL:?LIVEKIT_URL is required}
+  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}
+  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}
+  LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-ai-call-agent}
+  TELNYX_API_KEY: ${TELNYX_API_KEY:?TELNYX_API_KEY is required}
+  TELNYX_ACTIVE_CONNECTION_ID: ${TELNYX_ACTIVE_CONNECTION_ID:?TELNYX_ACTIVE_CONNECTION_ID is required}
+  TELNYX_DISABLED_CONNECTION_ID: ${TELNYX_DISABLED_CONNECTION_ID:?TELNYX_DISABLED_CONNECTION_ID is required}
+  STORAGE_BUCKET_NAME: ${STORAGE_BUCKET_NAME:?STORAGE_BUCKET_NAME is required}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:?S3_ENDPOINT_URL is required}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
+  S3_REGION: ${S3_REGION:?S3_REGION is required}
+  AGENT_DISPATCH_JWT_SECRET: ${AGENT_DISPATCH_JWT_SECRET:?AGENT_DISPATCH_JWT_SECRET is required}
+  SUMMARY_PROVIDER: ${SUMMARY_PROVIDER:?SUMMARY_PROVIDER is required}
+  SUMMARY_MODEL: ${SUMMARY_MODEL:?SUMMARY_MODEL is required}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY is required}
+  MAX_CALL_DURATION_SECONDS: ${MAX_CALL_DURATION_SECONDS:-3600}
+  CALL_RECONCILIATION_PENDING_STALE_SECONDS: ${CALL_RECONCILIATION_PENDING_STALE_SECONDS:-120}
+  CALL_RECONCILIATION_CONNECTED_STALE_SECONDS: ${CALL_RECONCILIATION_CONNECTED_STALE_SECONDS:-3720}
+  CALL_RECONCILIATION_ENDING_GRACE_SECONDS: ${CALL_RECONCILIATION_ENDING_GRACE_SECONDS:-60}
+  CALL_RECONCILIATION_FINALIZING_LEASE_SECONDS: ${CALL_RECONCILIATION_FINALIZING_LEASE_SECONDS:-300}
+  CALL_RECONCILIATION_MAX_ATTEMPTS: ${CALL_RECONCILIATION_MAX_ATTEMPTS:-5}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+
+x-api-environment: &api-environment
+  <<: *worker-environment
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}
+  CLERK_ISSUER: ${CLERK_ISSUER:?CLERK_ISSUER is required}
+  CLERK_JWKS_URL: ${CLERK_JWKS_URL:?CLERK_JWKS_URL is required}
+  CLERK_WEBHOOK_SECRET: ${CLERK_WEBHOOK_SECRET:?CLERK_WEBHOOK_SECRET is required}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:?STRIPE_SECRET_KEY is required}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:?STRIPE_WEBHOOK_SECRET is required}
+  STRIPE_PRICE_STARTER: ${STRIPE_PRICE_STARTER:?STRIPE_PRICE_STARTER is required}
+  STRIPE_CHECKOUT_SUCCESS_URL: ${STRIPE_CHECKOUT_SUCCESS_URL:?STRIPE_CHECKOUT_SUCCESS_URL is required}
+  STRIPE_CHECKOUT_CANCEL_URL: ${STRIPE_CHECKOUT_CANCEL_URL:?STRIPE_CHECKOUT_CANCEL_URL is required}
+  STRIPE_BILLING_PORTAL_RETURN_URL: ${STRIPE_BILLING_PORTAL_RETURN_URL:?STRIPE_BILLING_PORTAL_RETURN_URL is required}
+
+x-service-hardening: &service-hardening
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=128m,uid=10001,gid=10001
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  init: true
+
 services:
-  postgres:
-    image: postgres:17.8-bookworm
-    container_name: ai-call-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ai_call
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_call"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7.4.7-alpine
-    container_name: ai-call-redis
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  minio:
-    image: quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z
-    container_name: ai-call-minio
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-07-21T05-28-08Z
-    container_name: ai-call-minio-init
-    depends_on:
-      minio:
-        condition: service_healthy
-    restart: "no"
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin &&
-      mc mb --ignore-existing local/$$STORAGE_BUCKET_NAME &&
-      mc ilm rule import local/$$STORAGE_BUCKET_NAME < /config/recording-lifecycle.json &&
-      mc anonymous set private local/$$STORAGE_BUCKET_NAME
-      "
-    environment:
-      STORAGE_BUCKET_NAME: recordings
-    volumes:
-      - ./infra/minio/recording-lifecycle.json:/config/recording-lifecycle.json:ro
-
-  api:
-    profiles: ["app"]
-    build:
-      context: ./apps/api
-    container_name: ai-call-api
-    env_file:
-      - ./apps/api/.env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-    environment:
-      APP_ENV: development
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call
-      REDIS_URL: redis://redis:6379/0
-    ports:
-      - "8000:8000"
-
   worker:
-    profiles: ["app"]
-    build:
-      context: ./apps/api
-    container_name: ai-call-worker
-    env_file:
-      - ./apps/api/.env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-    environment:
-      APP_ENV: development
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call
-      REDIS_URL: redis://redis:6379/0
-    command: ["uv", "run", "arq", "app.workers.arq_worker.WorkerSettings"]
+    <<: *service-hardening
+    image: ${API_IMAGE:?API_IMAGE is required}
+    environment: *worker-environment
+    command: ["/app/.venv/bin/arq", "app.workers.arq_worker.WorkerSettings"]
+    restart: unless-stopped
+    healthcheck:
+      disable: true
 
   agent:
-    profiles: ["app"]
-    build:
-      context: ./apps/agent
-    container_name: ai-call-agent
-    env_file:
-      - ./apps/agent/.env
-    depends_on:
-      redis:
-        condition: service_healthy
-      api:
-        condition: service_started
-      worker:
-        condition: service_started
+    <<: *service-hardening
+    image: ${AGENT_IMAGE:?AGENT_IMAGE is required}
     environment:
-      API_BASE_URL: http://api:8000
-      REDIS_URL: redis://redis:6379/0
+      APP_ENV: production
+      LIVEKIT_URL: ${LIVEKIT_URL:?LIVEKIT_URL is required}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}
+      LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-ai-call-agent}
+      API_BASE_URL: ${API_BASE_URL:?API_BASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      SPEECHMATICS_API_KEY: ${SPEECHMATICS_API_KEY:?SPEECHMATICS_API_KEY is required}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY is required}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+      AGENT_DEBUG_STREAMS: "false"
+    restart: unless-stopped
+    stop_grace_period: 66m
+
+  api:
+    <<: *service-hardening
+    image: ${API_IMAGE:?API_IMAGE is required}
+    environment: *api-environment
+    ports:
+      - ${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000
+    restart: unless-stopped
 
   web:
-    profiles: ["app"]
-    build:
-      context: ./apps/web
-      args:
-        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-pk_test_Y2xlcmsuZXhhbXBsZS5jb20k}
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
-        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
-        NEXT_PUBLIC_REALTIME_ENABLED: ${NEXT_PUBLIC_REALTIME_ENABLED:-false}
-    container_name: ai-call-web
-    env_file:
-      - ./apps/web/.env
-    depends_on:
-      api:
-        condition: service_started
+    <<: *service-hardening
+    image: ${WEB_IMAGE:?WEB_IMAGE is required}
     environment:
-      API_BASE_URL: http://api:8000
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      API_BASE_URL: ${API_BASE_URL:?API_BASE_URL is required}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?NEXT_PUBLIC_API_BASE_URL is required}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:?NEXT_PUBLIC_APP_URL is required}
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is required}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:?CLERK_SECRET_KEY is required}
+      NEXT_PUBLIC_REALTIME_ENABLED: ${NEXT_PUBLIC_REALTIME_ENABLED:-false}
     ports:
-      - "3000:3000"
-
-volumes:
-  postgres_data:
-  redis_data:
-  minio_data:
+      - ${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-3000}:3000
+    restart: unless-stopped

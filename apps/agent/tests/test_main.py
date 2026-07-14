@@ -51,6 +51,7 @@ def test_build_worker_options_sets_prewarm_hook() -> None:
     assert options.prewarm_fnc is not None
     assert options.prewarm_fnc.__name__ == "prewarm_assets"
     assert options.job_executor_type is JobExecutorType.PROCESS
+    assert options.drain_timeout == 3900
 
 
 def test_build_worker_options_registers_job_request_handler() -> None:

@@ -38,6 +38,7 @@ from agent.session_runtime import (
 
 logger = logging.getLogger(__name__)
 SIP_PARTICIPANT_KIND = rtc.ParticipantKind.Value("PARTICIPANT_KIND_SIP")
+WORKER_DRAIN_TIMEOUT_SECONDS = 3900
 
 
 def _initialize_observability_safely() -> None:
@@ -360,6 +361,7 @@ def build_worker_options() -> WorkerOptions:
         ws_url=settings.livekit_url,
         api_key=settings.livekit_api_key,
         api_secret=settings.livekit_api_secret,
+        drain_timeout=WORKER_DRAIN_TIMEOUT_SECONDS,
     )
 
 
