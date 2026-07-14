@@ -11,8 +11,8 @@ class SubscriptionAccessPolicy:
         return status in cls._ROUTING_STATUSES
 
     @staticmethod
-    def should_grant_invoice(invoice_status: str, paid: bool) -> bool:
-        return paid is True and invoice_status == "paid"
+    def should_grant_invoice(invoice_status: str) -> bool:
+        return invoice_status == "paid"
 
     @classmethod
     def can_start_checkout(cls, status: str | None) -> bool:

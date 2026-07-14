@@ -375,6 +375,7 @@ async def test_invoice_paid_bootstraps_subscription_activation_and_enqueues_prov
     await seed_user()
 
     invoice_payload = json.loads(json.dumps(stripe_invoice_paid_payload))
+    invoice_payload["data"]["object"].pop("paid")
     invoice_payload["data"]["object"]["lines"]["data"][0]["price"] = {"lookup_key": "starter"}
     invoice_payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
         "clerk_user_id": "user_123",
@@ -398,7 +399,10 @@ async def test_invoice_paid_bootstraps_subscription_activation_and_enqueues_prov
     assert subscriptions[0].stripe_subscription_id == "sub_123"
     assert subscriptions[0].plan_tier == "starter"
     assert subscriptions[0].status == "active"
+    assert subscriptions[0].allocated_minutes == 60
     assert ledgers[-1].event_type == "subscription_activated"
+    assert ledgers[-1].minutes_delta == 60
+    assert ledgers[-1].balance_after == 60
     assert len(pool.enqueued_jobs) == 1
     assert pool.enqueued_jobs[0][0] == "outbox_delivery_job"
 
