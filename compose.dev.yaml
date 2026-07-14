@@ -148,7 +148,6 @@ services:
     restart: unless-stopped
 
   agent:
-    profiles: ["voice"]
     build:
       context: ./apps/agent
       target: development
