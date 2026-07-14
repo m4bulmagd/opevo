@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class TranscriptSpeaker(str, Enum):
@@ -11,29 +11,10 @@ class TranscriptSpeaker(str, Enum):
 
 
 class AuthenticatedAgentIdentity(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    user_id: UUID | None = None
-    agent_config_id: UUID | None = None
-    trusted_development: bool = False
-
-    @model_validator(mode="after")
-    def require_scoped_claims_or_explicit_development_trust(self):
-        has_scoped_claims = (
-            self.user_id is not None and self.agent_config_id is not None
-        )
-        is_explicit_development_identity = (
-            self.trusted_development
-            and self.user_id is None
-            and self.agent_config_id is None
-        )
-        if not (has_scoped_claims or is_explicit_development_identity):
-            raise ValueError(
-                "agent identity requires scoped claims or explicit development trust"
-            )
-        if has_scoped_claims and self.trusted_development:
-            raise ValueError("scoped agent identity cannot use development trust")
-        return self
+    user_id: UUID
+    agent_config_id: UUID
 
 
 class TranscriptAppendRequest(BaseModel):
