@@ -421,6 +421,42 @@ def test_compose_separates_required_production_inputs_from_local_services() -> N
     assert "service_completed_successfully" in compose_dev
 
 
+def test_development_services_load_local_env_files_without_empty_secret_overrides() -> None:
+    compose_dev = (REPO_ROOT / "compose.dev.yaml").read_text()
+    api_service = compose_dev.split("\n  api:", 1)[1].split("\n  worker:", 1)[0]
+    worker_service = compose_dev.split("\n  worker:", 1)[1].split("\n  agent:", 1)[0]
+    agent_service = compose_dev.split("\n  agent:", 1)[1].split("\n  web:", 1)[0]
+    web_service = compose_dev.split("\n  web:", 1)[1].split("\nvolumes:", 1)[0]
+
+    for service, env_path in (
+        (api_service, "./apps/api/.env"),
+        (worker_service, "./apps/api/.env"),
+        (agent_service, "./apps/agent/.env"),
+        (web_service, "./apps/web/.env"),
+    ):
+        assert "env_file:" in service
+        assert f"path: {env_path}" in service
+        assert "required: false" in service
+
+    for provider_key in (
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "SPEECHMATICS_API_KEY",
+        "GEMINI_API_KEY",
+        "MISTRAL_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "DEEPGRAM_API_KEY",
+    ):
+        assert f"{provider_key}:" not in agent_service
+
+    assert "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:" not in web_service
+    assert "CLERK_SECRET_KEY:" not in web_service
+    assert "DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call" in api_service
+    assert "API_BASE_URL: http://api:8000" in agent_service
+    assert "API_BASE_URL: http://api:8000" in web_service
+
+
 def test_worker_secrets_are_least_privilege_and_agent_shutdown_can_drain() -> None:
     compose = (REPO_ROOT / "compose.yaml").read_text()
     worker_environment = compose.split(
