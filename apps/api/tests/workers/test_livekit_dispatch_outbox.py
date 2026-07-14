@@ -184,6 +184,42 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
 
 
 @pytest.mark.anyio
+async def test_unnamed_automatic_dispatch_does_not_block_named_dispatch(
+    db_session,
+    monkeypatch,
+) -> None:
+    call, event, _subscription = await _seed_dispatch(db_session)
+    provider = _Provider()
+    provider.dispatches.append(
+        LiveKitDispatch(
+            id="dispatch-automatic",
+            agent_name="",
+            room="room-outbox",
+            metadata="",
+            state="active",
+        )
+    )
+    monkeypatch.setenv("LIVEKIT_AGENT_NAME", "configured-worker")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    await deliver_livekit_dispatch(
+        {"session_factory": session_factory, "livekit_dispatch_provider": provider},
+        event,
+    )
+
+    await db_session.refresh(call)
+    assert call.livekit_dispatch_id == "dispatch-1"
+    assert len(provider.create_calls) == 1
+
+
+@pytest.mark.anyio
 async def test_create_then_timeout_reconciles_to_one_effective_dispatch(
     db_session,
     monkeypatch,
