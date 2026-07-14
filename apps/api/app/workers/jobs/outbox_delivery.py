@@ -3,8 +3,10 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from app.core.database import get_session_factory
+from app.core.observability import bind_call_id, get_observability
 from app.models.outbox_event import OutboxEvent
 from app.repositories.call_repository import CallRepository
 from app.repositories.outbox_repository import OutboxRepository
@@ -38,6 +40,12 @@ SAFE_OUTBOX_ERROR_CODES = frozenset(
         "summary_stale",
     }
 )
+
+_CALL_TOPIC_AGGREGATE_TYPES = {
+    "livekit.dispatch": "call",
+    "summary.generate": "call-summary",
+    "recording.stop": "call-recording",
+}
 
 
 class OutboxDeliveryError(RuntimeError):
@@ -74,7 +82,24 @@ async def emit_outbox_terminal_failure_metric(
     )
 
 
-async def outbox_delivery_job(ctx: dict[str, Any], _payload: dict | None = None) -> dict[str, int]:
+def _outbox_error_class(error_code: str) -> str:
+    return {
+        "provider_retryable": "unavailable",
+        "provider_terminal": "unknown",
+        "unsupported_topic": "validation",
+        "invalid_payload": "validation",
+        "handler_configuration": "validation",
+        "dispatch_ineligible": "validation",
+        "dispatch_conflict": "conflict",
+        "dispatch_configuration": "validation",
+        "summary_stale": "conflict",
+    }.get(error_code, "unknown")
+
+
+async def outbox_delivery_job(
+    ctx: dict[str, Any],
+    _payload: dict | None = None,
+) -> dict[str, int]:
     session_factory = ctx.get("session_factory") or get_session_factory()
     now_provider = ctx.get("outbox_now") or (lambda: datetime.now(UTC))
     handlers: Mapping[str, OutboxHandler] = (
@@ -106,7 +131,8 @@ async def outbox_delivery_job(ctx: dict[str, Any], _payload: dict | None = None)
                     retryable=False,
                 ) from None
             validate_outbox_payload(event.topic, event.payload)
-            await handler(ctx, event)
+            with bind_call_id(_validated_event_call_id(event)):
+                await handler(ctx, event)
         except Exception as error:
             error_code, retryable = _classify_error(error)
             failure_time = now_provider()
@@ -131,7 +157,12 @@ async def outbox_delivery_job(ctx: dict[str, Any], _payload: dict | None = None)
             if stored.status == "failed":
                 result["failed"] += 1
                 metric = ctx.get("outbox_terminal_failure_metric")
-                metric = metric or emit_outbox_terminal_failure_metric
+                if metric is None:
+                    telemetry = ctx.get("observability") or get_observability()
+                    metric = lambda topic, code: telemetry.record_outbox_terminal_failure(
+                        topic,
+                        _outbox_error_class(code),
+                    )
                 metric_result = metric(event.topic, error_code)
                 if inspect.isawaitable(metric_result):
                     await metric_result
@@ -151,6 +182,22 @@ async def outbox_delivery_job(ctx: dict[str, Any], _payload: dict | None = None)
             result["delivered"] += 1
 
     return result
+
+
+def _validated_event_call_id(event: OutboxEvent) -> str | None:
+    expected_aggregate_type = _CALL_TOPIC_AGGREGATE_TYPES.get(event.topic)
+    if (
+        expected_aggregate_type is None
+        or event.aggregate_type != expected_aggregate_type
+    ):
+        return None
+    try:
+        call_id = UUID(str(event.payload["call_id"]))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    if event.aggregate_id != call_id:
+        return None
+    return str(call_id)
 
 
 async def _fail_livekit_dispatch_call(
@@ -180,7 +227,27 @@ async def _fail_livekit_dispatch_call(
 
 
 async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:
-    return await outbox_delivery_job(ctx)
+    result = await outbox_delivery_job(ctx)
+    telemetry = ctx.get("observability") or get_observability()
+    session_factory = ctx.get("session_factory") or get_session_factory()
+    try:
+        async with session_factory() as session:
+            snapshot = await OutboxRepository(session).observability_snapshot(
+                datetime.now(UTC)
+            )
+        telemetry.record_outbox_snapshot(snapshot)
+    except Exception as error:
+        from app.core.logging import report_safe_exception
+
+        report_safe_exception(
+            logger,
+            event="observability_snapshot_failed",
+            operation="collect_outbox_snapshot",
+            error=error,
+            status="failed",
+            level=logging.WARNING,
+        )
+    return result
 
 
 def get_default_outbox_handlers() -> Mapping[str, OutboxHandler]:

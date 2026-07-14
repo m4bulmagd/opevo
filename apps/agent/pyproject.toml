@@ -10,6 +10,9 @@ dependencies = [
   "livekit-plugins-silero==1.4.4",
   "livekit-plugins-speechmatics==1.4.4",
   "livekit-plugins-turn-detector==1.4.4",
+  "opentelemetry-api>=1.39,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.39,<2",
+  "opentelemetry-sdk>=1.39,<2",
   "pydantic-settings>=2.13.1",
   "redis>=5.0,<6.0",
 ]

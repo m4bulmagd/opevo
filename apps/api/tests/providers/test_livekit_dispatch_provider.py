@@ -1,8 +1,24 @@
 from types import SimpleNamespace
+from contextlib import asynccontextmanager
 
 import pytest
 
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
+
+
+class _Telemetry:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    @asynccontextmanager
+    async def provider_operation(self, provider: str, operation: str, **_kwargs):
+        try:
+            yield
+        except Exception:
+            self.calls.append((provider, operation, "error"))
+            raise
+        else:
+            self.calls.append((provider, operation, "success"))
 
 
 class _DispatchService:
@@ -37,7 +53,8 @@ class _DispatchService:
 async def test_livekit_adapter_uses_pinned_list_and_create_contract() -> None:
     dispatch_service = _DispatchService()
     api = SimpleNamespace(agent_dispatch=dispatch_service)
-    provider = LiveKitDispatchAPIProvider(livekit_api=api)
+    telemetry = _Telemetry()
+    provider = LiveKitDispatchAPIProvider(livekit_api=api, observability=telemetry)
 
     listed = await provider.list_dispatches(room_name="room-1")
     created = await provider.create_dispatch(
@@ -55,6 +72,10 @@ async def test_livekit_adapter_uses_pinned_list_and_create_contract() -> None:
     assert request.room == "room-1"
     assert request.metadata == '{"call_id":"call-1"}'
     assert created.id == "dispatch-created"
+    assert telemetry.calls == [
+        ("livekit", "list_dispatches", "success"),
+        ("livekit", "create_dispatch", "success"),
+    ]
 
 
 @pytest.mark.parametrize(

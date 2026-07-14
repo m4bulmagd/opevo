@@ -84,7 +84,7 @@ class BillingService:
             signature_header=signature_header,
         )
 
-    async def handle_event(self, envelope: dict) -> None:
+    async def handle_event(self, envelope: dict) -> bool:
         is_new = await self.webhook_event_repository.record_if_new(
             provider="stripe",
             external_event_id=envelope["id"],
@@ -93,7 +93,7 @@ class BillingService:
         )
         if not is_new:
             await self.session.commit()
-            return
+            return False
 
         event_type = envelope["type"]
         event_object = envelope["data"]["object"]
@@ -114,6 +114,7 @@ class BillingService:
 
         await self.session.commit()
         await self._enqueue_outbox_wakeup()
+        return True
 
     async def _handle_subscription_event(
         self,

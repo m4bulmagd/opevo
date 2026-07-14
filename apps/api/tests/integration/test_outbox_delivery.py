@@ -379,6 +379,10 @@ async def test_delivery_retries_all_backoffs_then_fails_terminally_with_safe_cod
         raise RuntimeError("RAW_PROVIDER_RESPONSE_MUST_NOT_BE_PERSISTED")
 
     async def metric(topic: str, error_code: str) -> None:
+        async with outbox_session_factory() as committed_session:
+            committed = await committed_session.get(OutboxEvent, event.id)
+            assert committed is not None
+            assert committed.status == "failed"
         metric_calls.append((topic, error_code))
 
     ctx = {

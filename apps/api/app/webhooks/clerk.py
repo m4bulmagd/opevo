@@ -1,8 +1,11 @@
+import time
+
 from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import ClerkAuthProvider, get_auth_provider
 from app.core.database import get_session
+from app.core.observability import get_request_observability
 from app.schemas.auth import ClerkWebhookEnvelope
 from app.services.auth_service import AuthService
 
@@ -16,14 +19,20 @@ async def handle_clerk_webhook(
     session: AsyncSession = Depends(get_session),
     auth_provider: ClerkAuthProvider = Depends(get_auth_provider),
 ) -> Response:
-    payload_bytes = await request.body()
-    event_id = auth_provider.verify_webhook(payload_bytes, dict(request.headers))
-    envelope = ClerkWebhookEnvelope.model_validate_json(payload_bytes)
-
-    await AuthService(session).sync_clerk_user(
-        payload=envelope.model_dump(),
-        event_id=event_id,
-        event_type=envelope.type,
-    )
-
-    return Response(status_code=status.HTTP_202_ACCEPTED)
+    started = time.monotonic()
+    outcome = "rejected"
+    telemetry = get_request_observability(request)
+    try:
+        payload_bytes = await request.body()
+        event_id = auth_provider.verify_webhook(payload_bytes, dict(request.headers))
+        envelope = ClerkWebhookEnvelope.model_validate_json(payload_bytes)
+        outcome = "error"
+        is_new = await AuthService(session).sync_clerk_user(
+            payload=envelope.model_dump(),
+            event_id=event_id,
+            event_type=envelope.type,
+        )
+        outcome = "duplicate" if is_new is False else "accepted"
+        return Response(status_code=status.HTTP_202_ACCEPTED)
+    finally:
+        telemetry.record_webhook("clerk", outcome, time.monotonic() - started)

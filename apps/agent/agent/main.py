@@ -18,6 +18,12 @@ from pydantic import ValidationError
 from agent.api_client import AgentApiClient
 from agent.config import get_settings
 from agent.event_publisher import EventPublisher
+from agent.observability import (
+    agent_lifecycle_span,
+    agent_provider_span,
+    initialize_observability,
+    shutdown_observability,
+)
 from agent.pipeline_factory import build_agent_runtime
 from agent.pipeline_factory import _resolve_speechmatics_turn_detection_mode
 from agent.providers import PipelineMode
@@ -32,6 +38,18 @@ from agent.session_runtime import (
 
 logger = logging.getLogger(__name__)
 SIP_PARTICIPANT_KIND = rtc.ParticipantKind.Value("PARTICIPANT_KIND_SIP")
+
+
+def _initialize_observability_safely() -> None:
+    try:
+        initialize_observability()
+    except Exception as exc:
+        report_safe_exception(
+            logger,
+            event="agent_observability_initialization_failed",
+            operation="initialize_agent_observability",
+            error=exc,
+        )
 
 
 async def _safe_task(coro) -> None:
@@ -197,61 +215,84 @@ async def handle_job_request(request: JobRequest) -> None:
 
 
 async def entrypoint(context: JobContext) -> None:
+    _initialize_observability_safely()
+    context.add_shutdown_callback(shutdown_observability)
     metadata_dict = json.loads(context.job.metadata or "{}")
     metadata = DispatchMetadata.model_validate(metadata_dict)
     metadata_dict = metadata.model_dump()
     started_at = time.monotonic()
-    await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
-    sip_participant = await context.wait_for_participant(
-        kind=SIP_PARTICIPANT_KIND
-    )
+    with agent_lifecycle_span(
+        call_id=metadata.call_id,
+        pipeline_mode=metadata.pipeline_mode,
+    ):
+        with agent_provider_span(
+            provider="livekit",
+            operation="connect",
+            call_id=metadata.call_id,
+        ):
+            await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
+            sip_participant = await context.wait_for_participant(
+                kind=SIP_PARTICIPANT_KIND
+            )
 
-    prewarmed = getattr(context.proc, "userdata", {}) or {}
-    agent, session = build_agent_runtime(
-        metadata_dict,
-        vad=prewarmed.get("silero_vad"),
-        inference_executor=context.inference_executor,
-    )
-    runtime = SessionRuntime(
-        EventPublisher(),
-        api_client=AgentApiClient(),
-        fatal_shutdown=context.shutdown,
-        call_limit_started_at=started_at,
-        warning_callback=lambda message: _play_call_limit_message(
-            session,
-            metadata,
-            message,
-        ),
-    )
-    _register_session_handlers(session, runtime, metadata)
-    context.add_shutdown_callback(
-        lambda *_: runtime.finalize(
-            metadata,
-            duration_seconds=max(1, int(time.monotonic() - started_at)),
+        prewarmed = getattr(context.proc, "userdata", {}) or {}
+        agent, session = build_agent_runtime(
+            metadata_dict,
+            vad=prewarmed.get("silero_vad"),
+            inference_executor=context.inference_executor,
         )
-    )
-    await session.start(
-        agent=agent,
-        room=context.room,
-        room_options=room_io.RoomOptions(
-            participant_identity=sip_participant.identity,
-            participant_kinds=[SIP_PARTICIPANT_KIND],
-            close_on_disconnect=True,
-            delete_room_on_close=True,
-        ),
-    )
-    runtime.enforce_call_limit(
-        metadata,
-        lambda: _disconnect_at_call_limit(session, metadata),
-    )
-    if runtime.call_limit_expired_on_start:
-        if runtime.call_limit_task is not None:
-            await runtime.call_limit_task
-        return
-    await _send_initial_greeting(session, metadata)
+        runtime = SessionRuntime(
+            EventPublisher(),
+            api_client=AgentApiClient(),
+            fatal_shutdown=context.shutdown,
+            call_limit_started_at=started_at,
+            warning_callback=lambda message: _play_call_limit_message(
+                session,
+                metadata,
+                message,
+            ),
+        )
+        _register_session_handlers(session, runtime, metadata)
+        context.add_shutdown_callback(
+            lambda *_: runtime.finalize(
+                metadata,
+                duration_seconds=max(1, int(time.monotonic() - started_at)),
+            )
+        )
+        with agent_provider_span(
+            provider="livekit",
+            operation="session_start",
+            call_id=metadata.call_id,
+        ):
+            await session.start(
+                agent=agent,
+                room=context.room,
+                room_options=room_io.RoomOptions(
+                    participant_identity=sip_participant.identity,
+                    participant_kinds=[SIP_PARTICIPANT_KIND],
+                    close_on_disconnect=True,
+                    delete_room_on_close=True,
+                ),
+                record={
+                    "audio": False,
+                    "transcript": False,
+                    "traces": False,
+                    "logs": False,
+                },
+            )
+        runtime.enforce_call_limit(
+            metadata,
+            lambda: _disconnect_at_call_limit(session, metadata),
+        )
+        if runtime.call_limit_expired_on_start:
+            if runtime.call_limit_task is not None:
+                await runtime.call_limit_task
+            return
+        await _send_initial_greeting(session, metadata)
 
 
 def prewarm_assets(proc) -> None:
+    _initialize_observability_safely()
     settings = get_settings()
     userdata = getattr(proc, "userdata", None)
     if userdata is None:

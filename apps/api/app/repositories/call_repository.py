@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.call import Call
@@ -30,6 +31,12 @@ CALL_FAILURE_CODES = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class CallObservabilitySnapshot:
+    current: dict[str, int]
+    stale: dict[str, int]
+
+
 class CallTransitionError(ValueError):
     pass
 
@@ -40,6 +47,82 @@ class CallRepository:
 
     async def get_by_id(self, call_id: UUID) -> Call | None:
         return await self.session.get(Call, call_id)
+
+    async def observability_snapshot(
+        self,
+        now: datetime,
+        settings,
+    ) -> CallObservabilitySnapshot:
+        states = (
+            "pending",
+            "connected",
+            "ending",
+            "finalizing",
+            "completed",
+            "failed",
+        )
+        stale_expression = case(
+            (
+                (Call.status == "pending")
+                & (
+                    Call.state_changed_at
+                    <= now
+                    - timedelta(
+                        seconds=settings.call_reconciliation_pending_stale_seconds
+                    )
+                ),
+                1,
+            ),
+            (
+                (Call.status == "connected")
+                & (
+                    Call.state_changed_at
+                    <= now
+                    - timedelta(
+                        seconds=settings.call_reconciliation_connected_stale_seconds
+                    )
+                ),
+                1,
+            ),
+            (
+                (Call.status == "ending")
+                & (
+                    Call.state_changed_at
+                    <= now
+                    - timedelta(
+                        seconds=settings.call_reconciliation_ending_grace_seconds
+                    )
+                ),
+                1,
+            ),
+            (
+                (Call.status == "finalizing")
+                & (
+                    Call.state_changed_at
+                    <= now
+                    - timedelta(
+                        seconds=settings.call_reconciliation_finalizing_lease_seconds
+                    )
+                ),
+                1,
+            ),
+            else_=0,
+        )
+        rows = await self.session.execute(
+            select(
+                Call.status,
+                func.count(Call.id),
+                func.sum(stale_expression),
+            )
+            .where(Call.status.in_(states), Call.deleted_at.is_(None))
+            .group_by(Call.status)
+        )
+        current = {state: 0 for state in states}
+        stale = {state: 0 for state in states}
+        for state, count, stale_count in rows:
+            current[state] = int(count)
+            stale[state] = int(stale_count or 0)
+        return CallObservabilitySnapshot(current=current, stale=stale)
 
     async def get_by_id_for_update(self, call_id: UUID) -> Call | None:
         result = await self.session.execute(

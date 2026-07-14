@@ -1,13 +1,23 @@
 from dataclasses import dataclass
 
+from app.core.observability import validated_error_class
+
 
 class StorageProviderError(RuntimeError):
-    def __init__(self, category: str) -> None:
+    def __init__(
+        self,
+        category: str,
+        *,
+        error_class: str | None = None,
+    ) -> None:
         if category not in {"provider_retryable", "provider_terminal"}:
             raise ValueError("Unsafe storage provider category")
         super().__init__(category)
         self.category = category
         self.retryable = category == "provider_retryable"
+        self.error_class = validated_error_class(
+            error_class or ("unavailable" if self.retryable else "unknown")
+        )
 
 
 @dataclass(frozen=True)

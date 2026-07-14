@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from contextlib import asynccontextmanager
 
 import pytest
 from livekit import api
@@ -7,6 +8,25 @@ from app.providers.livekit_recording.livekit import (
     LiveKitRecordingProvider,
     LiveKitRecordingProviderError,
 )
+
+
+class _Telemetry:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+        self.error_classes: list[str] = []
+
+    @asynccontextmanager
+    async def provider_operation(self, provider: str, operation: str, **_kwargs):
+        try:
+            yield
+        except Exception as error:
+            from app.core.observability import normalize_error_class
+
+            self.calls.append((provider, operation, "error"))
+            self.error_classes.append(normalize_error_class(error))
+            raise
+        else:
+            self.calls.append((provider, operation, "success"))
 
 
 class FakeEgressClient:
@@ -64,22 +84,98 @@ async def ensure_stopped(provider: LiveKitRecordingProvider, egress_id: str) -> 
     "terminal_status",
     [
         api.EgressStatus.EGRESS_COMPLETE,
-        api.EgressStatus.EGRESS_FAILED,
-        api.EgressStatus.EGRESS_ABORTED,
-        api.EgressStatus.EGRESS_LIMIT_REACHED,
     ],
 )
-async def test_ensure_stopped_accepts_missing_or_terminal_egress(
+async def test_ensure_stopped_accepts_only_completed_terminal_egress(
     terminal_status: int,
 ) -> None:
-    missing = FakeEgressClient([[]])
     terminal = FakeEgressClient([[terminal_status]])
 
-    await ensure_stopped(build_provider(missing), "egress-1")
     await ensure_stopped(build_provider(terminal), "egress-1")
 
-    assert missing.stop_requests == []
     assert terminal.stop_requests == []
+
+
+@pytest.mark.anyio
+async def test_ensure_stopped_retries_when_initial_egress_lookup_is_missing() -> None:
+    client = FakeEgressClient([[]])
+    telemetry = _Telemetry()
+    provider = LiveKitRecordingProvider(
+        egress_client=client,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+        access_key="key",
+        secret_key="secret",
+        region="us-east-1",
+        observability=telemetry,
+    )
+
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await ensure_stopped(provider, "egress-1")
+
+    assert exc_info.value.category == "provider_retryable"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.error_class == "unavailable"
+    assert str(exc_info.value) == "provider_retryable"
+    assert client.stop_requests == []
+    assert telemetry.calls == [
+        ("livekit", "ensure_recording_stopped", "error")
+    ]
+    assert telemetry.error_classes == ["unavailable"]
+
+
+@pytest.mark.anyio
+async def test_ensure_stopped_retries_when_post_stop_egress_lookup_is_missing() -> None:
+    client = FakeEgressClient([[api.EgressStatus.EGRESS_ACTIVE], []])
+
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await ensure_stopped(build_provider(client), "egress-1")
+
+    assert exc_info.value.category == "provider_retryable"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.error_class == "unavailable"
+    assert str(exc_info.value) == "provider_retryable"
+    assert len(client.stop_requests) == 1
+    assert len(client.list_requests) == 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("failed_status", "expected_error_class"),
+    [
+        (api.EgressStatus.EGRESS_FAILED, "unknown"),
+        (api.EgressStatus.EGRESS_ABORTED, "conflict"),
+        (api.EgressStatus.EGRESS_LIMIT_REACHED, "rate_limited"),
+    ],
+)
+async def test_ensure_stopped_reports_failed_terminal_egress_as_provider_error(
+    failed_status: int,
+    expected_error_class: str,
+) -> None:
+    client = FakeEgressClient([[failed_status]])
+    telemetry = _Telemetry()
+    provider = LiveKitRecordingProvider(
+        egress_client=client,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+        access_key="key",
+        secret_key="secret",
+        region="us-east-1",
+        observability=telemetry,
+    )
+
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await ensure_stopped(provider, "egress-1")
+
+    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.retryable is False
+    assert exc_info.value.error_class == expected_error_class
+    assert str(exc_info.value) == "provider_terminal"
+    assert client.stop_requests == []
+    assert telemetry.calls == [
+        ("livekit", "ensure_recording_stopped", "error")
+    ]
+    assert telemetry.error_classes == [expected_error_class]
 
 
 @pytest.mark.anyio
@@ -114,13 +210,19 @@ async def test_ensure_stopped_retries_when_recheck_is_still_active() -> None:
         ]
     )
 
-    with pytest.raises(Exception, match="not terminal"):
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
         await ensure_stopped(build_provider(client), "egress-1")
+
+    assert exc_info.value.category == "provider_retryable"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.error_class == "unavailable"
+    assert str(exc_info.value) == "provider_retryable"
 
 
 @pytest.mark.anyio
 async def test_start_room_recording_uses_audio_only_direct_minio_output() -> None:
     client = FakeStartEgressClient()
+    telemetry = _Telemetry()
     provider = LiveKitRecordingProvider(
         egress_client=client,
         bucket_name="recordings",
@@ -128,6 +230,7 @@ async def test_start_room_recording_uses_audio_only_direct_minio_output() -> Non
         access_key="minio-key",
         secret_key="minio-secret",
         region="us-east-1",
+        observability=telemetry,
     )
 
     result = await provider.start_room_recording(
@@ -148,6 +251,7 @@ async def test_start_room_recording_uses_audio_only_direct_minio_output() -> Non
     assert request.file.s3.secret == "minio-secret"
     assert request.file.s3.region == "us-east-1"
     assert request.file.s3.force_path_style is True
+    assert telemetry.calls == [("livekit", "start_recording", "success")]
 
 
 @pytest.mark.anyio
@@ -177,7 +281,9 @@ async def test_start_room_recording_uses_aws_native_s3_shape() -> None:
 
 @pytest.mark.anyio
 async def test_start_room_recording_wraps_provider_failures() -> None:
-    client = FakeStartEgressClient(failure=RuntimeError("provider unavailable"))
+    client = FakeStartEgressClient(
+        failure=RuntimeError("provider unavailable SECRET_PROVIDER_MESSAGE")
+    )
 
     with pytest.raises(LiveKitRecordingProviderError) as exc_info:
         await build_provider(client).start_room_recording(
@@ -186,4 +292,8 @@ async def test_start_room_recording_wraps_provider_failures() -> None:
             call_id="call-1",
         )
 
-    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert exc_info.value.category == "provider_retryable"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.error_class == "unknown"
+    assert str(exc_info.value) == "provider_retryable"
+    assert exc_info.value.__cause__ is None

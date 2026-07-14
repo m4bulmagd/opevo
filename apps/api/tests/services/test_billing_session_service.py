@@ -1,8 +1,24 @@
 import asyncio
 import time
+from contextlib import asynccontextmanager
 
 import pytest
 import stripe
+
+
+class _Telemetry:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    @asynccontextmanager
+    async def provider_operation(self, provider: str, operation: str, **_kwargs):
+        try:
+            yield
+        except Exception:
+            self.calls.append((provider, operation, "error"))
+            raise
+        else:
+            self.calls.append((provider, operation, "success"))
 
 
 class FakeCheckoutSessionAPI:
@@ -68,6 +84,7 @@ async def test_create_checkout_session_uses_price_mapping() -> None:
     from app.services.billing_session_service import BillingSessionService
 
     client = FakeStripeClient()
+    telemetry = _Telemetry()
     service = BillingSessionService(
         stripe_client=client,
         secret_key="sk_test_123",
@@ -75,6 +92,7 @@ async def test_create_checkout_session_uses_price_mapping() -> None:
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
         billing_portal_return_url="https://app.example.com/dashboard/billing",
+        observability=telemetry,
     )
 
     result = await service.create_checkout_session(
@@ -89,6 +107,7 @@ async def test_create_checkout_session_uses_price_mapping() -> None:
     assert client.checkout.Session.calls[0]["metadata"]["plan_tier"] == "starter"
     assert client.checkout.Session.calls[0]["metadata"]["clerk_user_id"] == "clerk_123"
     assert client.checkout.Session.calls[0]["subscription_data"]["metadata"]["plan_tier"] == "starter"
+    assert telemetry.calls == [("stripe", "create_checkout_session", "success")]
 
 
 @pytest.mark.anyio
@@ -249,7 +268,7 @@ def test_stripe_sdk_uses_bounded_network_policy(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("provider_error", "expected_category"),
+    ("provider_error", "expected_category", "expected_error_class"),
     [
         (
             stripe.error.APIConnectionError(
@@ -257,27 +276,44 @@ def test_stripe_sdk_uses_bounded_network_policy(monkeypatch: pytest.MonkeyPatch)
                 should_retry=True,
             ),
             "provider_retryable",
+            "unavailable",
         ),
-        (stripe.error.RateLimitError("rate limit secret"), "provider_retryable"),
+        (
+            stripe.error.RateLimitError("rate limit secret"),
+            "provider_retryable",
+            "rate_limited",
+        ),
         (
             stripe.error.APIError("server secret", http_status=503),
             "provider_retryable",
+            "unavailable",
         ),
-        (stripe.error.AuthenticationError("auth secret"), "provider_terminal"),
-        (stripe.error.PermissionError("permission secret"), "provider_terminal"),
+        (
+            stripe.error.AuthenticationError("auth secret"),
+            "provider_terminal",
+            "authentication",
+        ),
+        (
+            stripe.error.PermissionError("permission secret"),
+            "provider_terminal",
+            "authentication",
+        ),
         (
             stripe.error.InvalidRequestError("validation secret", "customer"),
             "provider_terminal",
+            "validation",
         ),
         (
             stripe.error.APIError("client secret", http_status=404),
             "provider_terminal",
+            "validation",
         ),
     ],
 )
 async def test_stripe_errors_use_safe_fixed_categories(
     provider_error: Exception,
     expected_category: str,
+    expected_error_class: str,
 ) -> None:
     from app.services.billing_session_service import (
         BillingSessionProviderError,
@@ -300,4 +336,5 @@ async def test_stripe_errors_use_safe_fixed_categories(
         )
 
     assert exc_info.value.category == expected_category
+    assert exc_info.value.error_class == expected_error_class
     assert str(exc_info.value) == expected_category

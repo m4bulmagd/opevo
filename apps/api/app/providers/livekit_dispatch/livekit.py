@@ -1,11 +1,14 @@
 from app.core.config import get_settings
+from app.core.observability import get_observability, instrument_provider
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 
 
 class LiveKitDispatchAPIProvider:
-    def __init__(self, livekit_api=None) -> None:
+    def __init__(self, livekit_api=None, observability=None) -> None:
         self._livekit_api = livekit_api
+        self.observability = observability or get_observability()
 
+    @instrument_provider("livekit", "list_dispatches")
     async def list_dispatches(self, *, room_name: str) -> list[LiveKitDispatch]:
         livekit_api, owns_client = self._client()
         try:
@@ -15,6 +18,7 @@ class LiveKitDispatchAPIProvider:
             if owns_client:
                 await livekit_api.aclose()
 
+    @instrument_provider("livekit", "create_dispatch")
     async def create_dispatch(
         self,
         *,

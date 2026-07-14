@@ -19,6 +19,9 @@ dependencies = [
     { name = "livekit-plugins-silero" },
     { name = "livekit-plugins-speechmatics" },
     { name = "livekit-plugins-turn-detector" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "pydantic-settings" },
     { name = "redis" },
 ]
@@ -37,6 +40,9 @@ requires-dist = [
     { name = "livekit-plugins-silero", specifier = "==1.4.4" },
     { name = "livekit-plugins-speechmatics", specifier = "==1.4.4" },
     { name = "livekit-plugins-turn-detector", specifier = "==1.4.4" },
+    { name = "opentelemetry-api", specifier = ">=1.39,<2" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.39,<2" },
+    { name = "opentelemetry-sdk", specifier = ">=1.39,<2" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "redis", specifier = ">=5.0,<6.0" },
 ]

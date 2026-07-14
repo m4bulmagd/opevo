@@ -1,5 +1,6 @@
 import asyncio
 import time
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,21 @@ from minio.error import InvalidResponseError, S3Error, ServerError
 from app.providers.notifications.firebase import FirebaseNotificationProvider
 from app.providers.storage.base import StorageProviderError
 from app.providers.storage.s3 import S3Storage, StorageConfigurationError
+
+
+class _StorageTelemetry:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    @asynccontextmanager
+    async def provider_operation(self, provider: str, operation: str, **_kwargs):
+        try:
+            yield
+        except Exception:
+            self.calls.append((provider, operation, "error"))
+            raise
+        else:
+            self.calls.append((provider, operation, "success"))
 
 
 class FakeMinioClient:
@@ -138,6 +154,7 @@ class FailingOperationMinioClient(FakeMinioClient):
 @pytest.mark.anyio
 async def test_s3_storage_uploads_recordings_with_env_backed_endpoint() -> None:
     client = FakeMinioClient()
+    telemetry = _StorageTelemetry()
     storage = S3Storage(
         bucket_name="recordings",
         endpoint_url="http://minio:9000",
@@ -145,6 +162,7 @@ async def test_s3_storage_uploads_recordings_with_env_backed_endpoint() -> None:
         secret_key="minioadmin",
         region="us-east-1",
         client=client,
+        observability=telemetry,
     )
 
     stored = await storage.upload_bytes(
@@ -165,6 +183,7 @@ async def test_s3_storage_uploads_recordings_with_env_backed_endpoint() -> None:
         }
     ]
     assert stored.url == "http://minio:9000/recordings/calls/user-123/call-456.mp3"
+    assert telemetry.calls == [("s3", "upload_bytes", "success")]
 
 
 @pytest.mark.anyio
@@ -246,20 +265,56 @@ async def test_s3_storage_maps_missing_bucket_races_to_configuration_failure(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("operation", "provider_error", "expected_category"),
+    (
+        "operation",
+        "provider_error",
+        "expected_category",
+        "expected_error_class",
+    ),
     [
-        ("bucket", TimeoutError("provider-controlled timeout"), "provider_retryable"),
-        ("put", _s3_error(code="SlowDown", status=429), "provider_retryable"),
-        ("lifecycle", _s3_error(code="InternalError", status=503), "provider_retryable"),
-        ("stat", _s3_error(code="AccessDenied", status=403), "provider_terminal"),
-        ("sign", _s3_error(code="InvalidArgument", status=400), "provider_terminal"),
-        ("put", _s3_error(code="NoSuchKey", status=404), "provider_terminal"),
+        (
+            "bucket",
+            TimeoutError("provider-controlled timeout"),
+            "provider_retryable",
+            "timeout",
+        ),
+        (
+            "put",
+            _s3_error(code="SlowDown", status=429),
+            "provider_retryable",
+            "rate_limited",
+        ),
+        (
+            "lifecycle",
+            _s3_error(code="InternalError", status=503),
+            "provider_retryable",
+            "unavailable",
+        ),
+        (
+            "stat",
+            _s3_error(code="AccessDenied", status=403),
+            "provider_terminal",
+            "authentication",
+        ),
+        (
+            "sign",
+            _s3_error(code="InvalidArgument", status=400),
+            "provider_terminal",
+            "validation",
+        ),
+        (
+            "put",
+            _s3_error(code="NoSuchKey", status=404),
+            "provider_terminal",
+            "validation",
+        ),
     ],
 )
 async def test_s3_storage_uses_safe_fixed_provider_categories(
     operation: str,
     provider_error: Exception,
     expected_category: str,
+    expected_error_class: str,
 ) -> None:
     client = FailingOperationMinioClient(
         operation=operation,
@@ -283,6 +338,7 @@ async def test_s3_storage_uses_safe_fixed_provider_categories(
 
     assert exc_info.value.category == expected_category
     assert exc_info.value.retryable is (expected_category == "provider_retryable")
+    assert exc_info.value.error_class == expected_error_class
     assert str(exc_info.value) == expected_category
     assert "provider-controlled" not in str(exc_info.value)
     assert exc_info.value.__cause__ is None
@@ -291,7 +347,7 @@ async def test_s3_storage_uses_safe_fixed_provider_categories(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("provider_error", "expected_category"),
+    ("provider_error", "expected_category", "expected_error_class"),
     [
         (
             InvalidResponseError(
@@ -300,6 +356,15 @@ async def test_s3_storage_uses_safe_fixed_provider_categories(
                 "provider-controlled credential and phone +33123456789",
             ),
             "provider_terminal" if status_code in {400, 401, 403} else "provider_retryable",
+            (
+                "authentication"
+                if status_code in {401, 403}
+                else "validation"
+                if status_code == 400
+                else "rate_limited"
+                if status_code == 429
+                else "unavailable"
+            ),
         )
         for status_code in (400, 401, 403, 429, 500, 503)
     ]
@@ -310,6 +375,15 @@ async def test_s3_storage_uses_safe_fixed_provider_categories(
                 status_code,
             ),
             "provider_terminal" if status_code in {400, 401, 403} else "provider_retryable",
+            (
+                "authentication"
+                if status_code in {401, 403}
+                else "validation"
+                if status_code == 400
+                else "rate_limited"
+                if status_code == 429
+                else "unavailable"
+            ),
         )
         for status_code in (400, 401, 403, 429, 500, 503)
     ],
@@ -317,6 +391,7 @@ async def test_s3_storage_uses_safe_fixed_provider_categories(
 async def test_s3_storage_maps_pinned_minio_http_exceptions_safely(
     provider_error: Exception,
     expected_category: str,
+    expected_error_class: str,
 ) -> None:
     storage = S3Storage(
         bucket_name="recordings",
@@ -335,6 +410,7 @@ async def test_s3_storage_maps_pinned_minio_http_exceptions_safely(
 
     assert exc_info.value.category == expected_category
     assert exc_info.value.retryable is (expected_category == "provider_retryable")
+    assert exc_info.value.error_class == expected_error_class
     assert str(exc_info.value) == expected_category
     assert "provider-controlled" not in str(exc_info.value)
     assert exc_info.value.__cause__ is None

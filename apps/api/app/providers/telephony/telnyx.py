@@ -7,6 +7,10 @@ import telnyx
 from telnyx.http_client import new_default_http_client
 
 from app.core.config import get_settings
+from app.core.observability import (
+    get_observability,
+    instrument_provider,
+)
 from app.core.redaction import redact_phone
 from app.providers.telephony.base import (
     TelephonyProvider,
@@ -53,6 +57,7 @@ class TelephonyTelnyx(TelephonyProvider):
         available_phone_number_resource=telnyx.AvailablePhoneNumber,
         phone_number_order_resource=telnyx.NumberOrder,
         phone_number_resource=telnyx.PhoneNumber,
+        observability=None,
     ) -> None:
         _configure_telnyx_network_policy()
         settings = get_settings()
@@ -63,7 +68,9 @@ class TelephonyTelnyx(TelephonyProvider):
         self.available_phone_number_resource = available_phone_number_resource
         self.phone_number_order_resource = phone_number_order_resource
         self.phone_number_resource = phone_number_resource
+        self.observability = observability or get_observability()
 
+    @instrument_provider("telnyx", "provision_number")
     async def provision_number(
         self,
         *,
@@ -313,6 +320,7 @@ class TelephonyTelnyx(TelephonyProvider):
             return value.get(field)
         return getattr(value, field, None)
 
+    @instrument_provider("telnyx", "enable_number")
     async def enable_number(self, *, provider_number_id: str) -> str:
         response = await self._run_resource_call(
             self.phone_number_resource.modify,
@@ -323,6 +331,7 @@ class TelephonyTelnyx(TelephonyProvider):
         self._confirm_connection(response, self.active_connection_id)
         return "app-active"
 
+    @instrument_provider("telnyx", "disable_number")
     async def disable_number(self, *, provider_number_id: str) -> str:
         response = await self._run_resource_call(
             self.phone_number_resource.modify,
@@ -342,38 +351,76 @@ class TelephonyTelnyx(TelephonyProvider):
                 if getattr(exc, "should_retry", False) is True
                 else "provider_terminal"
             )
-            raise TelephonyProviderError(category) from None
+            raise TelephonyProviderError(
+                category,
+                error_class="unavailable",
+            ) from None
+        except telnyx.error.TimeoutError:
+            raise TelephonyProviderError(
+                "provider_retryable",
+                error_class="timeout",
+            ) from None
+        except telnyx.error.RateLimitError:
+            raise TelephonyProviderError(
+                "provider_retryable",
+                error_class="rate_limited",
+            ) from None
+        except telnyx.error.ServiceUnavailableError:
+            raise TelephonyProviderError(
+                "provider_retryable",
+                error_class="unavailable",
+            ) from None
         except (
-            telnyx.error.TimeoutError,
-            telnyx.error.RateLimitError,
-            telnyx.error.ServiceUnavailableError,
-        ):
-            raise TelephonyProviderError("provider_retryable") from None
-        except telnyx.error.APIError as exc:
-            category = (
-                "provider_retryable"
-                if exc.http_status == 429
-                or (exc.http_status is not None and exc.http_status >= 500)
-                else "provider_terminal"
-            )
-            raise TelephonyProviderError(category) from None
-        except (
-            telnyx.error.InvalidRequestError,
             telnyx.error.AuthenticationError,
             telnyx.error.PermissionError,
+        ):
+            raise TelephonyProviderError(
+                "provider_terminal",
+                error_class="authentication",
+            ) from None
+        except (
+            telnyx.error.InvalidRequestError,
             telnyx.error.ResourceNotFoundError,
             telnyx.error.MethodNotSupportedError,
             telnyx.error.UnsupportedMediaTypeError,
             telnyx.error.InvalidParametersError,
         ):
-            raise TelephonyProviderError("provider_terminal") from None
-        except telnyx.error.TelnyxError as exc:
-            category = (
-                "provider_retryable"
-                if exc.http_status is not None and exc.http_status >= 500
-                else "provider_terminal"
+            raise TelephonyProviderError(
+                "provider_terminal",
+                error_class="validation",
+            ) from None
+        except telnyx.error.APIError as exc:
+            category, error_class = self._telnyx_http_error_details(
+                exc.http_status
             )
-            raise TelephonyProviderError(category) from None
+            raise TelephonyProviderError(
+                category,
+                error_class=error_class,
+            ) from None
+        except telnyx.error.TelnyxError as exc:
+            category, error_class = self._telnyx_http_error_details(
+                exc.http_status
+            )
+            raise TelephonyProviderError(
+                category,
+                error_class=error_class,
+            ) from None
+
+    @staticmethod
+    def _telnyx_http_error_details(status: int | None) -> tuple[str, str]:
+        if status == 429:
+            return "provider_retryable", "rate_limited"
+        if status in {408, 504}:
+            return "provider_retryable", "timeout"
+        if status is not None and status >= 500:
+            return "provider_retryable", "unavailable"
+        if status in {401, 403}:
+            return "provider_terminal", "authentication"
+        if status == 409:
+            return "provider_terminal", "conflict"
+        if status in {400, 404, 405, 415, 422}:
+            return "provider_terminal", "validation"
+        return "provider_terminal", "unknown"
 
     @staticmethod
     def _confirm_connection(response, requested_connection_id: str | None) -> None:

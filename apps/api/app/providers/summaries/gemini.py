@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from app.core.config import get_settings
+from app.core.observability import get_observability, instrument_provider
 from app.providers.summaries.base import StructuredSummary, SummaryProvider
 
 
@@ -13,11 +14,13 @@ class GeminiSummaryProvider(SummaryProvider):
         api_key: str | None = None,
         model: str | None = None,
         client=None,
+        observability=None,
     ) -> None:
         settings = get_settings()
         self.api_key = api_key or settings.gemini_api_key
         self.model = model or settings.summary_model
         self.client = client
+        self.observability = observability or get_observability()
 
     def _get_client(self):
         if self.client is not None:
@@ -34,6 +37,7 @@ class GeminiSummaryProvider(SummaryProvider):
         self.client = genai.Client(api_key=self.api_key)
         return self.client
 
+    @instrument_provider("gemini", "generate_summary")
     async def generate_summary(self, transcript: list[dict]) -> StructuredSummary:
         client = self._get_client()
         prompt = self._build_prompt(transcript)

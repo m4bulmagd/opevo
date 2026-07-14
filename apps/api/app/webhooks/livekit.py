@@ -1,10 +1,12 @@
 import logging
+import time
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import get_session
+from app.core.observability import get_request_observability
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
@@ -74,54 +76,62 @@ async def handle_livekit_webhook(
     webhook_receiver=Depends(get_webhook_receiver),
     realtime_service: RealtimeService | None = Depends(get_realtime_service),
 ) -> Response:
-    body = (await request.body()).decode("utf-8")
-    event = webhook_receiver.receive(body, request.headers.get("authorization"))
+    started = time.monotonic()
+    outcome = "rejected"
+    telemetry = get_request_observability(request)
+    try:
+        body = (await request.body()).decode("utf-8")
+        event = webhook_receiver.receive(body, request.headers.get("authorization"))
+        event_payload = convert_livekit_event(event)
 
-    event_payload = convert_livekit_event(event)
+        event_id = event_payload.get("id")
+        event_type = event_payload.get("event")
+        if not isinstance(event_id, str) or not event_id.strip():
+            logger.warning(
+                "livekit webhook rejected event=missing_event_id event_type=%s",
+                event_type,
+            )
+            return Response(status_code=status.HTTP_202_ACCEPTED)
 
-    event_id = event_payload.get("id")
-    event_type = event_payload.get("event")
-    if not isinstance(event_id, str) or not event_id.strip():
-        logger.warning(
-            "livekit webhook rejected event=missing_event_id event_type=%s",
+        outcome = "error"
+        is_new = await WebhookEventRepository(session).record_if_new(
+            provider="livekit",
+            external_event_id=event_id,
+            event_type=str(event_type or "unknown"),
+            payload={},
+        )
+        if not is_new:
+            await session.commit()
+            outcome = "duplicate"
+            return Response(status_code=status.HTTP_202_ACCEPTED)
+
+        logger.info(
+            "livekit webhook received event=%s participant_kind=%s",
             event_type,
+            event_payload.get("participant", {}).get("kind"),
         )
-        return Response(status_code=status.HTTP_202_ACCEPTED)
 
-    is_new = await WebhookEventRepository(session).record_if_new(
-        provider="livekit",
-        external_event_id=event_id,
-        event_type=str(event_type or "unknown"),
-        payload={},
-    )
-    if not is_new:
-        await session.commit()
-        return Response(status_code=status.HTTP_202_ACCEPTED)
-
-    logger.info(
-        "livekit webhook received event=%s participant_kind=%s",
-        event_type,
-        event_payload.get("participant", {}).get("kind"),
-    )
-
-    if event_payload["event"] in ("participant_joined", "participant_left"):
-        service = LiveKitDispatchService(
-            session,
-            phone_number_repository=PhoneNumberRepository(session),
-            agent_config_repository=AgentConfigRepository(session),
-            call_repository=CallRepository(session),
-            user_repository=UserRepository(session),
-            usage_repository=UsageRepository(session),
-            subscription_repository=SubscriptionRepository(session),
-            realtime_service=realtime_service,
-            recording_service=LiveKitRecordingService(),
-            arq_pool=getattr(request.app.state, "arq_pool", None),
-        )
-        if event_payload["event"] == "participant_joined":
-            await service.handle_participant_joined(event_payload)
+        if event_payload["event"] in ("participant_joined", "participant_left"):
+            service = LiveKitDispatchService(
+                session,
+                phone_number_repository=PhoneNumberRepository(session),
+                agent_config_repository=AgentConfigRepository(session),
+                call_repository=CallRepository(session),
+                user_repository=UserRepository(session),
+                usage_repository=UsageRepository(session),
+                subscription_repository=SubscriptionRepository(session),
+                realtime_service=realtime_service,
+                recording_service=LiveKitRecordingService(),
+                arq_pool=getattr(request.app.state, "arq_pool", None),
+            )
+            if event_payload["event"] == "participant_joined":
+                await service.handle_participant_joined(event_payload)
+            else:
+                await service.handle_participant_left(event_payload)
         else:
-            await service.handle_participant_left(event_payload)
-    else:
-        await session.commit()
+            await session.commit()
 
-    return Response(status_code=status.HTTP_202_ACCEPTED)
+        outcome = "accepted"
+        return Response(status_code=status.HTTP_202_ACCEPTED)
+    finally:
+        telemetry.record_webhook("livekit", outcome, time.monotonic() - started)

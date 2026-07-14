@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, exists, func, or_, select
@@ -8,6 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.models.outbox_event import OutboxEvent
+
+
+@dataclass(frozen=True)
+class OutboxSnapshot:
+    counts: dict[str, int]
+    oldest_unfinished_age_seconds: float
 
 
 class OutboxRepository:
@@ -66,6 +73,35 @@ class OutboxRepository:
             select(func.count()).select_from(OutboxEvent)
         )
         return int(value or 0)
+
+    async def observability_snapshot(self, now: datetime) -> OutboxSnapshot:
+        statuses = ("pending", "processing", "delivered", "failed")
+        rows = await self.session.execute(
+            select(OutboxEvent.status, func.count(OutboxEvent.id))
+            .where(OutboxEvent.status.in_(statuses))
+            .group_by(OutboxEvent.status)
+        )
+        counts = {status: 0 for status in statuses}
+        for status, count in rows:
+            counts[status] = int(count)
+
+        oldest = await self.session.scalar(
+            select(func.min(OutboxEvent.created_at)).where(
+                OutboxEvent.status.in_(("pending", "processing"))
+            )
+        )
+        if oldest is None:
+            age = 0.0
+        else:
+            if oldest.tzinfo is None:
+                oldest = oldest.replace(tzinfo=UTC)
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=UTC)
+            age = max(0.0, (now - oldest).total_seconds())
+        return OutboxSnapshot(
+            counts=counts,
+            oldest_unfinished_age_seconds=age,
+        )
 
     async def claim_batch(
         self,

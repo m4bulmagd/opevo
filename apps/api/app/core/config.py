@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str
     redis_url: str
+    otel_service_name: str = "presvo-api"
+    otel_exporter_otlp_endpoint: str | None = None
     realtime_enabled: bool = False
     cors_allowed_origins: str | None = None
     agent_internal_api_token: str | None = None

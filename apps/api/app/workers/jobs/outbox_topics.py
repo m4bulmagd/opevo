@@ -10,6 +10,7 @@ from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
+from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
 from app.providers.telephony.base import TelephonyProviderError
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
@@ -555,6 +556,11 @@ async def deliver_recording_stop(
     provider = provider or LiveKitRecordingService()
     try:
         await provider.ensure_stopped(egress_id)
+    except LiveKitRecordingProviderError as exc:
+        raise OutboxDeliveryError(
+            exc.category,
+            retryable=exc.retryable,
+        ) from None
     except Exception:
         raise OutboxDeliveryError("provider_retryable", retryable=True) from None
 

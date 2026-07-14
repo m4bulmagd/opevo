@@ -1,8 +1,24 @@
 from types import SimpleNamespace
+from contextlib import asynccontextmanager
 
 import pytest
 
 from app.providers.summaries.gemini import GeminiSummaryProvider
+
+
+class _Telemetry:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    @asynccontextmanager
+    async def provider_operation(self, provider: str, operation: str, **_kwargs):
+        try:
+            yield
+        except Exception:
+            self.calls.append((provider, operation, "error"))
+            raise
+        else:
+            self.calls.append((provider, operation, "success"))
 
 
 def test_extract_json_accepts_markdown_fenced_payload() -> None:
@@ -72,6 +88,7 @@ async def test_generate_summary_uses_async_client_and_parses_result() -> None:
             )
 
     async_models = AsyncModels()
+    telemetry = _Telemetry()
     client = SimpleNamespace(
         models=SyncModels(),
         aio=SimpleNamespace(models=async_models),
@@ -80,9 +97,11 @@ async def test_generate_summary_uses_async_client_and_parses_result() -> None:
     result = await GeminiSummaryProvider(
         client=client,
         model="gemini-test",
+        observability=telemetry,
     ).generate_summary([{"speaker": "CALLER", "text": "Hello"}])
 
     assert result.summary_text == "Async summary"
     assert len(async_models.calls) == 1
     assert async_models.calls[0]["model"] == "gemini-test"
     assert "CALLER: Hello" in async_models.calls[0]["contents"]
+    assert telemetry.calls == [("gemini", "generate_summary", "success")]

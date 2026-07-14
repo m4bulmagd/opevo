@@ -13,7 +13,12 @@ class AuthService:
         self.agent_config_repository = AgentConfigRepository(session)
         self.webhook_event_repository = WebhookEventRepository(session)
 
-    async def sync_clerk_user(self, payload: dict, event_id: str, event_type: str) -> None:
+    async def sync_clerk_user(
+        self,
+        payload: dict,
+        event_id: str,
+        event_type: str,
+    ) -> bool:
         is_new_event = await self.webhook_event_repository.record_if_new(
             provider="clerk",
             external_event_id=event_id,
@@ -22,7 +27,7 @@ class AuthService:
         )
         if not is_new_event:
             await self.session.commit()
-            return
+            return False
 
         user_data = payload["data"]
         clerk_user_id = user_data["id"]
@@ -35,3 +40,4 @@ class AuthService:
             await self.agent_config_repository.create_default(user.id)
 
         await self.session.commit()
+        return True

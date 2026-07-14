@@ -1,10 +1,13 @@
 import asyncio
+import json
 import logging
 import sys
+from contextlib import contextmanager
 from types import ModuleType, SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from livekit.agents import JobExecutorType
 from pydantic import ValidationError
 
 import agent.main as agent_main
@@ -47,6 +50,7 @@ def test_build_worker_options_sets_prewarm_hook() -> None:
 
     assert options.prewarm_fnc is not None
     assert options.prewarm_fnc.__name__ == "prewarm_assets"
+    assert options.job_executor_type is JobExecutorType.PROCESS
 
 
 def test_build_worker_options_registers_job_request_handler() -> None:
@@ -75,6 +79,9 @@ def test_agent_env_example_documents_debug_stream_flag() -> None:
     assert "AGENT_MAX_ENDPOINTING_DELAY=1.5" in env_example
     assert "LIVEKIT_SILERO_VAD_ENABLED=true" in env_example
     assert "LIVEKIT_TURN_DETECTOR_ENABLED=true" in env_example
+    assert "OTEL_SERVICE_NAME=presvo-agent" in env_example
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT=" in env_example
+    assert "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf" in env_example
 
 
 class FakeSession:
@@ -398,6 +405,13 @@ async def test_entrypoint_connects_then_waits_only_for_sip_participant(
     metadata = make_metadata()
     context = FakeJobContext(metadata)
     session = FakeEntrypointSession()
+    initialize_calls: list[bool] = []
+    monkeypatch.setattr(
+        agent_main,
+        "initialize_observability",
+        lambda: initialize_calls.append(True),
+        raising=False,
+    )
     monkeypatch.setattr(
         "agent.main.build_agent_runtime",
         lambda *_args, **_kwargs: (object(), session),
@@ -406,12 +420,141 @@ async def test_entrypoint_connects_then_waits_only_for_sip_participant(
     await entrypoint(context)
 
     assert context.events == ["connect", ("wait_for_participant", 3)]
+    assert initialize_calls == [True]
     assert session.started is True
+    assert session.start_kwargs["record"] == {
+        "audio": False,
+        "transcript": False,
+        "traces": False,
+        "logs": False,
+    }
     assert session.start_kwargs["room_options"].participant_identity == "sip-caller"
     assert session.start_kwargs["room_options"].participant_kinds == [3]
     assert session.start_kwargs["room_options"].close_on_disconnect is True
     assert session.start_kwargs["room_options"].delete_room_on_close is True
 
+
+@pytest.mark.anyio
+async def test_entrypoint_records_only_fixed_lifecycle_and_provider_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    context = FakeJobContext(metadata)
+    session = FakeEntrypointSession()
+    spans: list[tuple[str, dict[str, object]]] = []
+
+    @contextmanager
+    def capture_lifecycle(**kwargs):
+        spans.append(("lifecycle", kwargs))
+        yield
+
+    @contextmanager
+    def capture_provider(**kwargs):
+        spans.append(("provider", kwargs))
+        yield
+
+    monkeypatch.setattr(
+        "agent.main.build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+    monkeypatch.setattr(
+        agent_main,
+        "agent_lifecycle_span",
+        capture_lifecycle,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        agent_main,
+        "agent_provider_span",
+        capture_provider,
+        raising=False,
+    )
+
+    await entrypoint(context)
+
+    assert spans == [
+        (
+            "lifecycle",
+            {
+                "call_id": metadata.call_id,
+                "pipeline_mode": metadata.pipeline_mode,
+            },
+        ),
+        (
+            "provider",
+            {
+                "provider": "livekit",
+                "operation": "connect",
+                "call_id": metadata.call_id,
+            },
+        ),
+        (
+            "provider",
+            {
+                "provider": "livekit",
+                "operation": "session_start",
+                "call_id": metadata.call_id,
+            },
+        ),
+    ]
+
+
+@pytest.mark.anyio
+async def test_entrypoint_registers_bounded_observability_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    context = FakeJobContext(metadata)
+    session = FakeEntrypointSession()
+    shutdown_calls: list[bool] = []
+
+    async def capture_shutdown() -> None:
+        shutdown_calls.append(True)
+
+    monkeypatch.setattr(
+        "agent.main.build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+    monkeypatch.setattr(
+        agent_main,
+        "shutdown_observability",
+        capture_shutdown,
+        raising=False,
+    )
+
+    await entrypoint(context)
+    assert len(context.shutdown_callbacks) == 2
+    assert context.shutdown_callbacks[0] is capture_shutdown
+    await context.shutdown_callbacks[0]()
+
+    assert shutdown_calls == [True]
+
+
+@pytest.mark.anyio
+async def test_entrypoint_registers_observability_shutdown_before_metadata_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    context = FakeJobContext(metadata)
+    context.job.metadata = "{"
+    shutdown_calls: list[bool] = []
+
+    async def capture_shutdown() -> None:
+        shutdown_calls.append(True)
+
+    monkeypatch.setattr(
+        agent_main,
+        "shutdown_observability",
+        capture_shutdown,
+        raising=False,
+    )
+
+    with pytest.raises(json.JSONDecodeError):
+        await entrypoint(context)
+
+    assert context.shutdown_callbacks == [capture_shutdown]
+    await context.shutdown_callbacks[0]()
+    assert shutdown_calls == [True]
 
 @pytest.mark.anyio
 async def test_entrypoint_arms_call_limit_only_after_session_start(
@@ -589,6 +732,55 @@ def test_silero_prewarm_failure_does_not_render_exception_message(
     assert "event=silero_prewarm_failed" in caplog.text
     assert "operation=load_silero_vad" in caplog.text
     assert "error_type=RuntimeError" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_observability_initialization_failure_does_not_prevent_prewarm(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from livekit import plugins
+
+    def fail_initialization() -> None:
+        raise RuntimeError("OTEL_EXPORTER_CREDENTIAL_SENTINEL")
+
+    adaptive_mode = object()
+    smart_turn_mode = object()
+    fake_speechmatics = ModuleType("livekit.plugins.speechmatics")
+    fake_speechmatics.TurnDetectionMode = SimpleNamespace(
+        ADAPTIVE=adaptive_mode,
+        SMART_TURN=smart_turn_mode,
+    )
+    fake_smart_turn = ModuleType("speechmatics.voice._smart_turn")
+    fake_smart_turn.SmartTurnDetector = object
+    monkeypatch.setattr(plugins, "speechmatics", fake_speechmatics, raising=False)
+    monkeypatch.setitem(sys.modules, "livekit.plugins.speechmatics", fake_speechmatics)
+    monkeypatch.setitem(sys.modules, "speechmatics.voice._smart_turn", fake_smart_turn)
+
+    monkeypatch.setattr(
+        agent_main,
+        "initialize_observability",
+        fail_initialization,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "agent.main.get_settings",
+        lambda: SimpleNamespace(
+            livekit_silero_vad_enabled=False,
+            livekit_turn_detector_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "agent.main._resolve_speechmatics_turn_detection_mode",
+        lambda _plugin: adaptive_mode,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        prewarm_assets(SimpleNamespace(userdata={}))
+
+    assert "OTEL_EXPORTER_CREDENTIAL_SENTINEL" not in caplog.text
+    assert "event=agent_observability_initialization_failed" in caplog.text
+    assert "operation=initialize_agent_observability" in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
 
 

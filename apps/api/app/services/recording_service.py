@@ -2,8 +2,10 @@ from uuid import UUID
 
 from fastapi import Depends
 
+from app.core.observability import bind_call_id
 from app.providers.storage.base import StorageProvider
 from app.providers.storage.s3 import S3Storage, get_s3_storage
+
 
 class RecordingService:
     def __init__(self, provider: StorageProvider) -> None:
@@ -19,7 +21,10 @@ class RecordingService:
         if not recording_object_key:
             return None
         try:
-            return await self.provider.get_download_url(object_key=recording_object_key)
+            with bind_call_id(call_id):
+                return await self.provider.get_download_url(
+                    object_key=recording_object_key
+                )
         except FileNotFoundError:
             return None
 

@@ -11,6 +11,11 @@ from slowapi.errors import RateLimitExceeded
 from app.core.auth import ClerkAuthProvider
 from app.core.config import Settings, get_settings
 from app.core.logging import report_safe_exception, setup_logging
+from app.core.observability import (
+    initialize_observability,
+    install_http_observability,
+    shutdown_observability,
+)
 from app.core.rate_limit import limiter
 from app.core.redis import RedisEventBus, create_arq_pool
 from app.core.runtime_validation import validate_api_runtime
@@ -19,6 +24,10 @@ from app.routers.billing import router as billing_router
 from app.routers.calls import router as calls_router
 from app.routers.health import router as health_router
 from app.routers.onboarding import router as onboarding_router
+from app.routers.readiness import (
+    create_readiness_checks,
+    router as readiness_router,
+)
 from app.routers.websocket import router as websocket_router
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import manager as websocket_manager
@@ -85,10 +94,16 @@ def _lifespan(settings: Settings):
         app.state.call_finalization_queue = None
         app.state.livekit_webhook_receiver = None
         app.state.arq_pool = None
+        app.state.observability = initialize_observability(
+            service_name=settings.otel_service_name,
+            endpoint=settings.otel_exporter_otlp_endpoint,
+        )
+        app.state.readiness_checks = None
         relay_task = None
         call_finalization_pool = None
         realtime_event_bus = None
         try:
+            app.state.readiness_checks = await create_readiness_checks(settings)
             if settings.realtime_enabled:
                 realtime_event_bus = RedisEventBus(redis_url=settings.redis_url)
                 app.state.realtime_service = RealtimeService(
@@ -124,6 +139,11 @@ def _lifespan(settings: Settings):
         finally:
             await _stop_realtime_fanout(relay_task)
             await _close_runtime_resource(
+                app.state.readiness_checks,
+                event="readiness_checks_close_failed",
+                operation="close_readiness_checks",
+            )
+            await _close_runtime_resource(
                 realtime_event_bus,
                 event="realtime_bus_close_failed",
                 operation="close_realtime_bus",
@@ -133,6 +153,7 @@ def _lifespan(settings: Settings):
                 event="arq_pool_close_failed",
                 operation="close_arq_pool",
             )
+            await shutdown_observability(app.state.observability)
 
     return lifespan
 
@@ -142,6 +163,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     validate_api_runtime(configured_settings)
 
     application = FastAPI(lifespan=_lifespan(configured_settings))
+    install_http_observability(application)
     application.state.limiter = limiter
     application.add_exception_handler(
         RateLimitExceeded,
@@ -167,6 +189,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(calls_router)
     application.include_router(health_router)
     application.include_router(onboarding_router)
+    application.include_router(readiness_router)
     if configured_settings.realtime_enabled:
         application.include_router(websocket_router)
     application.include_router(clerk_webhook_router)

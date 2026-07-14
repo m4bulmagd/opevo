@@ -1086,7 +1086,7 @@ Pending timeout must acquire the same `livekit.dispatch:{call_id}` advisory lock
 
 `summary.generate` loads the complete ordered PostgreSQL transcript and maximum sequence in a short snapshot transaction, calls Gemini with no open business transaction, then rechecks the maximum sequence and persists structured summary data plus its coverage watermark under a fresh call lock. Empty transcript records watermark `0`; provider failure and a transcript change during provider I/O are retryable. An existing summary is idempotent only when its watermark covers the current durable maximum. Completed-call recovery that stores a new sequence writes a new versioned summary intent without placing transcript text in the payload.
 
-`recording.stop` uses an adapter-level `ensure_stopped(egress_id)` contract: missing or terminal egress is already successful; active/starting/ending egress is stopped and rechecked; uncertain provider failures retry. It performs no I/O with an ORM transaction open. A retrying summary must not block recording stop. `phone.disable` continues to re-derive current routing eligibility. No push notification is sent.
+`recording.stop` uses an adapter-level `ensure_stopped(egress_id)` contract: only `EGRESS_COMPLETE` is successful; missing egress is uncertain and retries; failed/aborted/limit-reached terminal states fail immediately; active/starting/ending egress is stopped and rechecked. It performs no I/O with an ORM transaction open. A retrying summary must not block recording stop. `phone.disable` continues to re-derive current routing eligibility. No push notification is sent.
 
 - [ ] **Step 6: Run tests and verify failure**
 
@@ -1435,24 +1435,46 @@ git commit -m "refactor: remove realtime from the launch-critical path"
 ### Task 14: Add liveness, readiness, metrics, traces, and error reporting
 
 **Files:**
-- Modify: `apps/api/pyproject.toml`
+- Modify: `apps/api/.env.example`
+- Modify: `apps/api/pyproject.toml`, `apps/api/uv.lock`
+- Modify: `apps/api/app/core/config.py`
 - Create: `apps/api/app/core/observability.py`
 - Create: `apps/api/app/routers/readiness.py`
-- Modify: `apps/api/app/routers/health.py`
 - Modify: `apps/api/app/main.py`
+- Modify: `apps/api/app/repositories/call_repository.py`, `apps/api/app/repositories/outbox_repository.py`
+- Modify: `apps/api/app/webhooks/clerk.py`, `apps/api/app/webhooks/stripe.py`, `apps/api/app/webhooks/livekit.py`
+- Modify: `apps/api/app/services/auth_service.py`, `apps/api/app/services/billing_service.py`, `apps/api/app/services/billing_session_service.py`
+- Modify: `apps/api/app/services/recording_service.py`
+- Modify: `apps/api/app/providers/telephony/base.py`, `apps/api/app/providers/storage/base.py`
+- Modify: `apps/api/app/providers/telephony/telnyx.py`, `apps/api/app/providers/storage/s3.py`, `apps/api/app/providers/livekit_dispatch/livekit.py`, `apps/api/app/providers/livekit_recording/livekit.py`, `apps/api/app/providers/summaries/gemini.py`
 - Modify: `apps/api/app/workers/arq_worker.py`
-- Modify: `apps/agent/pyproject.toml`
+- Modify: `apps/api/app/workers/jobs/call_reconciliation.py`, `apps/api/app/workers/jobs/outbox_delivery.py`, `apps/api/app/workers/jobs/outbox_topics.py`
+- Modify: `apps/api/tests/integration/test_outbox_delivery.py`
+- Modify: `apps/api/tests/telephony/test_telnyx_provider.py`
+- Modify: `apps/api/tests/providers/test_integrations.py`, `apps/api/tests/providers/test_livekit_dispatch_provider.py`, `apps/api/tests/providers/test_livekit_recording_provider.py`, `apps/api/tests/providers/test_summary_gemini.py`
+- Modify: `apps/api/tests/services/test_billing_session_service.py`
+- Modify: `apps/api/tests/services/test_safe_service_exceptions.py`
+- Create: `apps/api/tests/services/test_recording_service.py`
 - Modify: `apps/agent/agent/main.py`
+- Create: `apps/agent/agent/observability.py`
+- Modify: `apps/agent/tests/test_main.py`
+- Create: `apps/agent/tests/test_observability.py`
+- Modify: `apps/agent/.env.example`, `apps/agent/pyproject.toml`, `apps/agent/uv.lock`
 - Create: `apps/api/tests/test_readiness.py`
 - Create: `apps/api/tests/test_observability.py`
+- Create: `docs/runbooks/incident-response.md`
+- Modify: `docs/superpowers/plans/2026-07-12-production-readiness-hardening.md`
 
 **Interfaces:**
 - `GET /healthz` is process liveness and never contacts dependencies.
 - `GET /readyz` checks PostgreSQL and Redis with a two-second total deadline and returns `503` when either is unavailable.
 - Metrics include request latency/status, webhook outcomes, outbox depth/failures, queue latency, calls by state, reconciliation outcomes, and provider latency/error class.
-- Traces propagate `trace_id`, `call_id`, and provider request ID without customer content.
+- HTTP traces propagate W3C `trace_id`; validated `call_id` correlates worker,
+  provider, and agent spans when directly available. A sanitized provider
+  request ID may be included only when an SDK exposes one directly; adapters do
+  not parse exception text to invent this signal.
 
-- [ ] **Step 1: Write readiness tests**
+- [x] **Step 1: Write readiness tests**
 
 ```python
 async def test_readyz_reports_database_failure(client, failing_database):
@@ -1466,21 +1488,27 @@ async def test_readyz_reports_database_failure(client, failing_database):
 
 Add the symmetric Redis failure and all-healthy cases. Assert `/healthz` remains `200` during dependency failure.
 
-- [ ] **Step 2: Write metric and redaction tests**
+- [x] **Step 2: Write metric and redaction tests**
 
 Execute one successful webhook and one provider failure. Assert counters increment and that phone numbers, prompts, transcript text, and credentials do not appear in labels or spans.
 
-- [ ] **Step 3: Run tests and verify failure**
+- [x] **Step 3: Run tests and verify failure**
 
 Run: `cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/test_readiness.py tests/test_observability.py -v`
 
 Expected: readiness and metrics do not exist.
 
-- [ ] **Step 4: Implement OpenTelemetry-compatible instrumentation**
+- [x] **Step 4: Implement OpenTelemetry-compatible instrumentation**
 
-Use OpenTelemetry APIs and OTLP exporters configured by environment. Instrument FastAPI, SQLAlchemy, Redis, HTTPX, workers, and provider adapters. Use low-cardinality metric labels; never use `user_id`, `call_id`, or phone numbers as metric labels.
+Use OpenTelemetry APIs and OTLP HTTP exporters configured by environment. Add
+manual HTTP server and worker spans, safe PostgreSQL/Redis readiness dependency
+spans, and semantic outbound provider boundaries (including HTTP-backed SDKs).
+Do not blanket-instrument SQLAlchemy, Redis, or HTTP clients: SQL arguments,
+Redis keys/values, URL/query/header/body data, and exception content remain out
+of telemetry. Use low-cardinality metric labels; never use `user_id`, `call_id`,
+or phone numbers as metric labels.
 
-- [ ] **Step 5: Define beta alerts**
+- [x] **Step 5: Define beta alerts**
 
 Document these alert thresholds in `docs/runbooks/incident-response.md`:
 
@@ -1493,12 +1521,12 @@ Document these alert thresholds in `docs/runbooks/incident-response.md`:
 - recording upload failures above 5% for 10 minutes;
 - no successful backup within 24 hours.
 
-- [ ] **Step 6: Run full tests and commit**
+- [x] **Step 6: Run full tests and commit**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
 cd ../agent && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
-git add apps/api/pyproject.toml apps/api/uv.lock apps/api/app/core/observability.py apps/api/app/routers/readiness.py apps/api/app/routers/health.py apps/api/app/main.py apps/api/app/workers/arq_worker.py apps/api/tests/test_readiness.py apps/api/tests/test_observability.py apps/agent/pyproject.toml apps/agent/uv.lock apps/agent/agent/main.py docs/runbooks/incident-response.md
+git add apps/api/.env.example apps/api/pyproject.toml apps/api/uv.lock apps/api/app/core/config.py apps/api/app/core/observability.py apps/api/app/routers/readiness.py apps/api/app/main.py apps/api/app/repositories/call_repository.py apps/api/app/repositories/outbox_repository.py apps/api/app/webhooks/clerk.py apps/api/app/webhooks/stripe.py apps/api/app/webhooks/livekit.py apps/api/app/services/auth_service.py apps/api/app/services/billing_service.py apps/api/app/services/billing_session_service.py apps/api/app/services/recording_service.py apps/api/app/providers/telephony/base.py apps/api/app/providers/telephony/telnyx.py apps/api/app/providers/storage/base.py apps/api/app/providers/storage/s3.py apps/api/app/providers/livekit_dispatch/livekit.py apps/api/app/providers/livekit_recording/livekit.py apps/api/app/providers/summaries/gemini.py apps/api/app/workers/arq_worker.py apps/api/app/workers/jobs/call_reconciliation.py apps/api/app/workers/jobs/outbox_delivery.py apps/api/app/workers/jobs/outbox_topics.py apps/api/tests/integration/test_outbox_delivery.py apps/api/tests/test_readiness.py apps/api/tests/test_observability.py apps/api/tests/telephony/test_telnyx_provider.py apps/api/tests/providers/test_integrations.py apps/api/tests/providers/test_livekit_dispatch_provider.py apps/api/tests/providers/test_livekit_recording_provider.py apps/api/tests/providers/test_summary_gemini.py apps/api/tests/services/test_billing_session_service.py apps/api/tests/services/test_recording_service.py apps/api/tests/services/test_safe_service_exceptions.py apps/agent/.env.example apps/agent/pyproject.toml apps/agent/uv.lock apps/agent/agent/main.py apps/agent/agent/observability.py apps/agent/tests/test_main.py apps/agent/tests/test_observability.py docs/runbooks/incident-response.md docs/superpowers/plans/2026-07-12-production-readiness-hardening.md
 git commit -m "feat: add production health and observability signals"
 ```
 

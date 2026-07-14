@@ -8,6 +8,7 @@ from urllib3 import PoolManager
 from urllib3.util import Retry, Timeout
 
 from app.core.config import get_settings
+from app.core.observability import get_observability, instrument_provider
 from app.providers.storage.base import StorageProvider, StorageProviderError, StoredObject
 
 
@@ -25,6 +26,7 @@ class S3Storage(StorageProvider):
         secret_key: str | None = None,
         region: str | None = None,
         client=None,
+        observability=None,
     ) -> None:
         settings = get_settings()
         self.bucket_name = bucket_name or settings.storage_bucket_name
@@ -34,6 +36,7 @@ class S3Storage(StorageProvider):
         self.region = region or settings.s3_region
         self.client = client
         self._bucket_verified = False
+        self.observability = observability or get_observability()
 
     def _build_client(self):
         from minio import Minio
@@ -84,41 +87,71 @@ class S3Storage(StorageProvider):
             ) from None
         if isinstance(error, S3Error):
             status = getattr(getattr(error, "response", None), "status", None)
-            retryable_codes = {
-                "InternalError",
-                "RequestTimeout",
-                "ServiceUnavailable",
-                "SlowDown",
-                "TooManyRequests",
-            }
-            category = (
-                "provider_retryable"
-                if status == 429
-                or (isinstance(status, int) and status >= 500)
-                or error.code in retryable_codes
-                else "provider_terminal"
+            category, error_class = S3Storage._s3_error_details(
+                status=status,
+                code=error.code,
             )
         elif isinstance(error, InvalidResponseError):
             status = error._code
-            category = (
-                "provider_retryable"
-                if status == 429 or status >= 500
-                else "provider_terminal"
+            category, error_class = S3Storage._s3_error_details(
+                status=status,
             )
         elif isinstance(error, ServerError):
             status = error.status_code
-            category = (
-                "provider_retryable"
-                if status == 429 or status >= 500
-                else "provider_terminal"
+            category, error_class = S3Storage._s3_error_details(
+                status=status,
             )
-        elif isinstance(error, (TimeoutError, ConnectionError, OSError)):
+        elif isinstance(error, TimeoutError):
             category = "provider_retryable"
+            error_class = "timeout"
+        elif isinstance(error, (ConnectionError, OSError)):
+            category = "provider_retryable"
+            error_class = "unavailable"
         elif isinstance(error, (TypeError, ValueError)):
             category = "provider_terminal"
+            error_class = "validation"
         else:
             category = "provider_retryable"
-        raise StorageProviderError(category) from None
+            error_class = "unknown"
+        raise StorageProviderError(
+            category,
+            error_class=error_class,
+        ) from None
+
+    @staticmethod
+    def _s3_error_details(
+        *,
+        status: int | None,
+        code: str | None = None,
+    ) -> tuple[str, str]:
+        if code == "RequestTimeout" or status in {408, 504}:
+            return "provider_retryable", "timeout"
+        if code in {"SlowDown", "TooManyRequests"} or status == 429:
+            return "provider_retryable", "rate_limited"
+        if code in {"InternalError", "ServiceUnavailable"} or (
+            isinstance(status, int) and status >= 500
+        ):
+            return "provider_retryable", "unavailable"
+        if code in {
+            "AccessDenied",
+            "InvalidAccessKeyId",
+            "InvalidToken",
+            "SignatureDoesNotMatch",
+        } or status in {401, 403}:
+            return "provider_terminal", "authentication"
+        if code in {"BucketAlreadyExists", "BucketAlreadyOwnedByYou"} or (
+            status == 409
+        ):
+            return "provider_terminal", "conflict"
+        if code in {
+            "InvalidArgument",
+            "InvalidRequest",
+            "NoSuchKey",
+            "NoSuchObject",
+            "NoSuchVersion",
+        } or status in {400, 404, 405, 415, 422}:
+            return "provider_terminal", "validation"
+        return "provider_terminal", "unknown"
 
     async def _run_application_call(self, operation, *args, **kwargs):
         try:
@@ -128,6 +161,7 @@ class S3Storage(StorageProvider):
         except Exception as exc:
             self._raise_provider_error(exc)
 
+    @instrument_provider("s3", "upload_bytes")
     async def upload_bytes(self, *, object_key: str, data: bytes, content_type: str) -> StoredObject:
         client = self._get_client()
         await self._run_application_call(self._ensure_bucket_exists, client)
@@ -145,6 +179,7 @@ class S3Storage(StorageProvider):
             url=f"{self.endpoint_url.rstrip('/')}/{self.bucket_name}/{object_key}",
         )
 
+    @instrument_provider("s3", "get_download_url")
     async def get_download_url(self, *, object_key: str) -> str | None:
         client = self._get_client()
         await self._run_application_call(self._ensure_bucket_exists, client)
@@ -170,6 +205,7 @@ class S3Storage(StorageProvider):
             object_key,
         )
 
+    @instrument_provider("s3", "get_bucket_lifecycle")
     async def get_bucket_lifecycle(self):
         client = self._get_client()
         await self._run_application_call(self._ensure_bucket_exists, client)
