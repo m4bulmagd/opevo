@@ -46,23 +46,18 @@ class AgentApiClient:
         self,
         *,
         base_url: str | None = None,
-        agent_token: str | None = None,
         http_client: httpx.AsyncClient | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
     ) -> None:
         settings = get_settings()
         self.base_url = (base_url or settings.api_base_url).rstrip("/")
-        self.agent_token = (
-            agent_token
-            if agent_token is not None
-            else settings.agent_internal_api_token
-        )
-        self.app_env = settings.app_env.strip().lower()
         self.http_client = http_client
         self._owns_http_client = http_client is None
         self.timeout = timeout if timeout is not None else settings.api_timeout_seconds
-        self.max_retries = max_retries if max_retries is not None else settings.api_max_retries
+        self.max_retries = (
+            max_retries if max_retries is not None else settings.api_max_retries
+        )
 
     async def append_transcript(
         self,
@@ -137,16 +132,8 @@ class AgentApiClient:
         await client.aclose()
 
     async def complete_call(self, payload: dict) -> dict:
-        dispatch_token = payload.get("dispatch_token")
-        if isinstance(dispatch_token, str) and dispatch_token:
-            token = dispatch_token
-        elif (
-            self.app_env == "development"
-            and isinstance(self.agent_token, str)
-            and self.agent_token
-        ):
-            token = self.agent_token
-        else:
+        token = payload.get("dispatch_token")
+        if not isinstance(token, str) or not token:
             raise ValueError("Dispatch token is required")
 
         url = f"{self.base_url}/api/agent/calls/{payload['call_id']}/complete"
