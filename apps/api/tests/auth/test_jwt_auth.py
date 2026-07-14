@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -86,7 +87,9 @@ def test_dispatch_token_contains_all_required_call_scoped_claims(
 
 def test_create_dispatch_token_fails_safely_without_secret(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("AGENT_DISPATCH_JWT_SECRET", raising=False)
     from app.core.config import get_settings
 
