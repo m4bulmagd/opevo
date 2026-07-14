@@ -70,11 +70,12 @@ npm run build
 ```
 
 For local web development, start from [apps/web/.env.example](apps/web/.env.example).
-The Docker `web` service reads `apps/web/.env`, and local `npm run dev` can also
-use `.env.local`. Hosted auth and protected data require real public
-`NEXT_PUBLIC_*` values when the web assets are built, plus the real
-`CLERK_SECRET_KEY` and server-only `API_BASE_URL` values at runtime. Never pass
-the Clerk secret as a Docker build argument.
+Local `npm run dev` can use `.env.local`. For `compose.dev.yaml`, export the
+Clerk values in the invoking shell or explicitly pass an ignored local env file
+with `--env-file`; without them, the UI shows setup notices. Hosted auth and
+protected data require real public `NEXT_PUBLIC_*` values when the web assets
+are built, plus the real `CLERK_SECRET_KEY` and server-only `API_BASE_URL`
+values at runtime. Never pass the Clerk secret as a Docker build argument.
 
 ### Dependency audits
 
@@ -152,6 +153,11 @@ run before saving the ruleset.
 
 ## Docker Builds
 
+The production images are multi-stage builds. Their final stages run as numeric
+user `10001:10001`, contain production dependencies only, and invoke the
+installed application binaries directly. `uv` and npm remain build-time tools;
+they are not process supervisors in the final images.
+
 ### API
 
 ```bash
@@ -180,52 +186,115 @@ docker build \
 The Dockerfile's default public values are non-secret localhost/CI placeholders
 so credential-free checks can build the image. A deployable image must override
 them as shown above. Inject `CLERK_SECRET_KEY` only when the resulting container
-runs.
+runs. The public values are embedded in the browser bundle, so the values used
+to build the web image must match the production URLs supplied at runtime.
 
-## Local Infra
+## Production Compose
 
-Start the stateful dependencies first:
+[`compose.yaml`](compose.yaml) is an application definition for an
+already-provisioned production or staging environment. It does not create a
+database, Redis, object storage, or default credentials. Supply immutable image
+references and every required runtime value from an environment file managed
+outside this repository or from the deployment platform's secret store.
+
+Validate a deployment definition without starting containers:
 
 ```bash
-docker compose up -d postgres redis minio minio-init
+docker compose \
+  --env-file /secure/path/presvo.production.env \
+  -f compose.yaml \
+  config --quiet
 ```
 
-Deployment-like runtime launch (the explicit env file also supplies the public
-values to the web image build):
+The external environment must include `API_IMAGE`, `AGENT_IMAGE`, and
+`WEB_IMAGE`, preferably as registry references pinned by digest. It must also
+include the `${VARIABLE:?message}` application settings listed in
+[`compose.yaml`](compose.yaml). Compose stops at interpolation time when one is
+missing; the error identifies the variable without printing its value.
+
+Run the database migration from the separate, one-shot
+[`compose.migrate.yaml`](compose.migrate.yaml) definition. Its environment file
+must contain only `API_IMAGE` and `DATABASE_URL`; Compose therefore cannot make
+the migration depend on unrelated application or provider settings:
 
 ```bash
-docker compose --env-file apps/web/.env --profile app up --build api worker agent web
+docker compose \
+  --env-file /secure/path/presvo.migration.env \
+  -f compose.migrate.yaml \
+  run --rm migrate
 ```
 
-The core app stack can also be started without the web container when you only need the backend and agent services:
+Only after the migration succeeds, start and verify the worker and agent. Start
+the API in a separate gate, verify readiness, and only then start the web
+process:
 
 ```bash
-docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker agent
+docker compose \
+  --env-file /secure/path/presvo.production.env \
+  -f compose.yaml \
+  up -d worker agent
+
+docker compose \
+  --env-file /secure/path/presvo.production.env \
+  -f compose.yaml \
+  ps worker agent
+
+docker compose \
+  --env-file /secure/path/presvo.production.env \
+  -f compose.yaml \
+  up -d api
+
+curl --fail --show-error http://127.0.0.1:8000/readyz
+
+docker compose \
+  --env-file /secure/path/presvo.production.env \
+  -f compose.yaml \
+  up -d web
 ```
 
-The web container uses:
-- `API_BASE_URL=http://api:8000` at runtime for server-side requests inside the Compose network
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` from `apps/web/.env` at build time
-- `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` at build time for browser-visible URLs
-- `NEXT_PUBLIC_APP_URL=http://localhost:3000` at build time for billing return URLs and app links
+The production services use a read-only root filesystem, a constrained writable
+`/tmp`, `no-new-privileges`, and no Linux capabilities. Next.js writes its
+runtime cache through an image symlink into `/tmp`; application code and built
+assets remain read-only. The API image never runs migrations during startup;
+the same immutable API artifact is reused by the migration definition and the
+`worker` and `api` services with different direct commands.
 
-Compose forwards only public `NEXT_PUBLIC_*` values as build arguments. It
-continues injecting `CLERK_SECRET_KEY` from `apps/web/.env` only into the running
-container.
+Do not combine `compose.yaml`, `compose.migrate.yaml`, or `compose.dev.yaml`.
+They are independent definitions for different trust boundaries and are
+intentionally not Compose overlays.
 
-## Local Dev Overlay
+## Standalone Local Development Stack
 
-For faster iteration without rebuilding containers on every code change, use the dev overlay:
+[`compose.dev.yaml`](compose.dev.yaml) is the complete local stack. It includes
+PostgreSQL 17.8, Redis 7.4.7, pinned MinIO services, a one-shot migration
+service, bind-mounted source, and development commands. The API and worker wait
+for the migration service to complete successfully before starting.
+
+Start the local backend and web stack:
 
 ```bash
-docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker agent web
+docker compose -f compose.dev.yaml up --build
 ```
 
 What it does:
-- `api` bind-mounts [apps/api/app](apps/api/app) and runs `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`
-- `worker` bind-mounts [apps/api/app](apps/api/app) and runs `uv run arq app.workers.arq_worker.WorkerSettings`
-- `agent` bind-mounts [apps/agent/agent](apps/agent/agent) and runs `python dev_runner.py`, which restarts the worker when Python files change
-- `web` bind-mounts [apps/web](apps/web) and runs `npm run dev -- --hostname 0.0.0.0`
+- `migrate` applies Alembic migrations once and exits
+- `api` bind-mounts [apps/api/app](apps/api/app) and runs the venv's `uvicorn` with reload enabled
+- `worker` bind-mounts [apps/api/app](apps/api/app) and runs the venv's `arq` binary
+- `web` bind-mounts [apps/web](apps/web) and runs the local Next.js binary in development mode
+- PostgreSQL, Redis, and MinIO persist data in named local volumes
+
+The voice agent depends on external LiveKit and model-provider credentials, so
+it is isolated behind the `voice` profile. After setting those variables in
+your shell or a local ignored env file, start it with the rest of the local
+stack:
+
+```bash
+docker compose \
+  --env-file apps/agent/.env \
+  -f compose.dev.yaml \
+  --profile voice \
+  up --build
+```
 
 Frontend-specific notes:
 - The dashboard keeps the template shell, colors, and theme presets: `default`, `brutalist`, `soft-pop`, and `tangerine`
@@ -233,15 +302,25 @@ Frontend-specific notes:
 - Without Clerk env vars, the UI renders setup notices instead of the hosted sign-in flow
 
 Important limits:
-- Source edits reload automatically, but dependency changes still require rebuilding the image
-- API worker code changes require restarting the `worker` container in the dev overlay
-- Agent code changes restart the worker process, so any active call in flight will be interrupted
+- Source edits reload automatically. After a `package-lock.json` change, stop
+  the web service, refresh the persistent dependency volume with `npm ci`, and
+  rebuild it as shown below; rebuilding alone does not replace a non-empty
+  `web_node_modules` volume.
+- API worker code changes require restarting the `worker` container in the local stack
+- Agent code changes require restarting the `agent` container, which interrupts any active call
+
+```bash
+docker compose -f compose.dev.yaml stop web
+docker compose -f compose.dev.yaml run --rm web npm ci
+docker compose -f compose.dev.yaml up -d --build web
+```
 
 Useful commands:
 
 ```bash
-docker compose -f compose.yaml -f compose.dev.yaml --profile app logs -f api worker agent web
-docker compose -f compose.yaml -f compose.dev.yaml --profile app restart api worker agent web
+docker compose -f compose.dev.yaml logs -f postgres redis minio migrate api worker web
+docker compose -f compose.dev.yaml restart api worker web
+docker compose -f compose.dev.yaml down
 ```
 
 Live STT/LLM/TTS debug logs:
@@ -250,8 +329,8 @@ Live STT/LLM/TTS debug logs:
 # set in apps/agent/.env
 AGENT_DEBUG_STREAMS=true
 
-docker compose --profile app up -d --build agent
-docker compose --profile app logs -f agent
+docker compose --env-file apps/agent/.env -f compose.dev.yaml --profile voice up -d --build agent
+docker compose -f compose.dev.yaml --profile voice logs -f agent
 ```
 
 When enabled, the agent emits structured `agent.debug` log lines for:

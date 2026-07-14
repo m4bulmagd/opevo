@@ -1604,22 +1604,29 @@ git commit -m "ci: enforce tests builds and security scans"
 
 **Files:**
 - Modify: `apps/api/Dockerfile`
+- Delete: `apps/api/docker-entrypoint.sh`
+- Modify: `apps/api/alembic/env.py`
 - Modify: `apps/agent/Dockerfile`
+- Modify: `apps/agent/agent/main.py`
+- Modify: `apps/agent/tests/test_main.py`
 - Modify: `apps/web/Dockerfile`
-- Modify: `apps/api/app/main.py`
+- Modify: `apps/web/next.config.mjs`
 - Modify: `compose.yaml`
+- Create: `compose.migrate.yaml`
 - Modify: `compose.dev.yaml`
+- Modify: `README.md`
 - Create: `docs/architecture/production-deployment.md`
 - Create: `docs/runbooks/deploy.md`
 - Create: `docs/runbooks/rollback.md`
 - Modify: `apps/api/tests/test_deployment_readiness.py`
+- Modify: `apps/api/tests/providers/test_s3_lifecycle.py`
 
 **Interfaces:**
 - API startup never runs Alembic.
 - A one-shot release command runs `alembic upgrade head` before new application replicas receive traffic.
 - Containers run as numeric non-root users, expose only required ports, and have explicit health checks.
 
-- [ ] **Step 1: Write deployment-readiness assertions**
+- [x] **Step 1: Write deployment-readiness assertions**
 
 Assert the API startup code contains no migration invocation. Build each image and inspect its configured user:
 
@@ -1631,15 +1638,20 @@ docker inspect --format '{{.Config.User}}' presvo-web:test
 
 Expected: each output is a nonzero numeric UID.
 
-- [ ] **Step 2: Build minimal multi-stage images**
+Red baseline captured on 2026-07-14: four focused assertions fail because the
+API entrypoint still runs Alembic, every image is single-stage/root without a
+health check, production Compose contains local stateful services/credentials,
+and the architecture/deploy/rollback documents do not exist.
+
+- [x] **Step 2: Build minimal multi-stage images**
 
 Pin the package installer version, copy only locked production dependencies, use Next.js standalone output, remove compilers and development dependencies from runtime layers, and set read-only-compatible working directories with a writable `/tmp` only.
 
-- [ ] **Step 3: Separate local and production concerns**
+- [x] **Step 3: Separate local and production concerns**
 
 Keep PostgreSQL, Redis, and MinIO in `compose.dev.yaml`. Keep `compose.yaml` free of active credentials and development database passwords. Use `${VARIABLE:?required}` syntax for values required by a composed staging smoke run.
 
-- [ ] **Step 4: Create the hosting decision record**
+- [x] **Step 4: Create the hosting decision record**
 
 In `production-deployment.md`, compare at least:
 
@@ -1649,22 +1661,24 @@ In `production-deployment.md`, compare at least:
 
 Score data residency, managed PostgreSQL PITR, managed Redis TLS, private networking, secret management, object lifecycle/KMS, worker support, static egress IP, operational effort, and monthly beta cost. Select one target and obtain user approval before writing vendor-specific infrastructure-as-code. The selected target receives a separate implementation plan with exact Terraform resources.
 
-- [ ] **Step 5: Document release and rollback sequences**
+- [x] **Step 5: Document release and rollback sequences**
 
 Release order: backup verification → migration job → worker/agent deployment → API deployment → readiness pass → web deployment → smoke test. Rollback must distinguish backward-compatible application rollback from irreversible data migration and specify when forward-fix is required.
 
-- [ ] **Step 6: Verify images and commit**
+- [x] **Step 6: Verify images and commit**
 
 ```bash
 docker build -t presvo-api:test apps/api
 docker build -t presvo-agent:test apps/agent
 docker build -t presvo-web:test apps/web
-docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+API_IMAGE=presvo-api:test DATABASE_URL=postgresql+asyncpg://migration:secret@database/presvo docker compose -f compose.migrate.yaml config --quiet
+docker compose --env-file /secure/path/presvo.production.env -f compose.yaml config --quiet
+docker compose -f compose.dev.yaml up -d --build
 curl --fail http://localhost:8000/healthz
 ```
 
 ```bash
-git add apps/api/Dockerfile apps/agent/Dockerfile apps/web/Dockerfile apps/api/app/main.py compose.yaml compose.dev.yaml docs/architecture/production-deployment.md docs/runbooks/deploy.md docs/runbooks/rollback.md apps/api/tests/test_deployment_readiness.py
+git add README.md apps/api/Dockerfile apps/api/docker-entrypoint.sh apps/api/alembic/env.py apps/api/tests/test_deployment_readiness.py apps/api/tests/providers/test_s3_lifecycle.py apps/agent/Dockerfile apps/agent/agent/main.py apps/agent/tests/test_main.py apps/web/Dockerfile apps/web/next.config.mjs compose.yaml compose.migrate.yaml compose.dev.yaml docs/architecture/production-deployment.md docs/runbooks/deploy.md docs/runbooks/rollback.md docs/superpowers/plans/2026-07-12-production-readiness-hardening.md
 git commit -m "ops: harden containers and release migrations separately"
 ```
 

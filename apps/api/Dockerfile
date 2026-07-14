@@ -1,18 +1,43 @@
-FROM python:3.13-slim
+FROM python:3.13-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280 AS builder
 
 WORKDIR /app
-ENV PYTHONUNBUFFERED=1
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
 
 COPY pyproject.toml uv.lock ./
 
-RUN pip install uv && uv sync --frozen --no-dev
+RUN python -m pip install --no-cache-dir uv==0.11.19 \
+    && uv sync --frozen --no-dev
+
+FROM builder AS development
+
+RUN uv sync --frozen --all-groups
 
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
-COPY docker-entrypoint.sh ./
 
-RUN chmod +x ./docker-entrypoint.sh
+FROM python:3.13-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280 AS runtime
+
+WORKDIR /app
+
+ENV HOME=/tmp \
+    TMPDIR=/tmp \
+    PATH=/app/.venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+COPY --from=builder /app/.venv /app/.venv
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY app ./app
+
+USER 10001:10001
 
 EXPOSE 8000
-CMD ["./docker-entrypoint.sh"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).read()"]
+
+CMD ["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

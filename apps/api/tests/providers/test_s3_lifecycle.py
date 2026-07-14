@@ -42,13 +42,15 @@ def test_recording_lifecycle_manifest_has_exact_retention_rule() -> None:
     }
 
 
-def test_minio_init_imports_lifecycle_and_enforces_private_access() -> None:
-    compose = (REPOSITORY_ROOT / "compose.yaml").read_text()
+def test_development_minio_init_imports_lifecycle_and_enforces_private_access() -> None:
+    production_compose = (REPOSITORY_ROOT / "compose.yaml").read_text()
+    compose = (REPOSITORY_ROOT / "compose.dev.yaml").read_text()
 
+    assert "minio:" not in production_compose
     assert "./infra/minio/recording-lifecycle.json:/config/recording-lifecycle.json:ro" in compose
-    assert "mc mb --ignore-existing local/$$STORAGE_BUCKET_NAME" in compose
-    assert "mc ilm rule import local/$$STORAGE_BUCKET_NAME < /config/recording-lifecycle.json" in compose
-    assert "mc anonymous set private local/$$STORAGE_BUCKET_NAME" in compose
+    assert "mc mb --ignore-existing local/recordings" in compose
+    assert "mc ilm rule import local/recordings < /config/recording-lifecycle.json" in compose
+    assert "mc anonymous set private local/recordings" in compose
 
 
 @pytest.mark.anyio
