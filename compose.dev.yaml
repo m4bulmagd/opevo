@@ -85,6 +85,9 @@ services:
     build:
       context: ./apps/api
       target: development
+    env_file:
+      - path: ./apps/api/.env
+        required: false
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -120,6 +123,9 @@ services:
     build:
       context: ./apps/api
       target: development
+    env_file:
+      - path: ./apps/api/.env
+        required: false
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -146,6 +152,9 @@ services:
     build:
       context: ./apps/agent
       target: development
+    env_file:
+      - path: ./apps/agent/.env
+        required: false
     depends_on:
       api:
         condition: service_healthy
@@ -155,14 +164,6 @@ services:
       APP_ENV: development
       API_BASE_URL: http://api:8000
       REDIS_URL: redis://redis:6379/0
-      LIVEKIT_URL: ${LIVEKIT_URL:-}
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
-      SPEECHMATICS_API_KEY: ${SPEECHMATICS_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
-      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
-      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
     command: ["/app/.venv/bin/python", "-m", "agent.main", "start"]
     volumes:
       - ./apps/agent/agent:/app/agent
@@ -172,6 +173,9 @@ services:
     build:
       context: ./apps/web
       target: development
+    env_file:
+      - path: ./apps/web/.env
+        required: false
     depends_on:
       api:
         condition: service_healthy
@@ -180,8 +184,6 @@ services:
       API_BASE_URL: http://api:8000
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
       NEXT_PUBLIC_APP_URL: http://localhost:3000
-      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
-      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
       NEXT_PUBLIC_REALTIME_ENABLED: "false"
     command: ["/app/node_modules/.bin/next", "dev", "--hostname", "0.0.0.0", "--webpack"]
     ports:

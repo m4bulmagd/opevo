@@ -70,9 +70,11 @@ npm run build
 ```
 
 For local web development, start from [apps/web/.env.example](apps/web/.env.example).
-Local `npm run dev` can use `.env.local`. For `compose.dev.yaml`, export the
-Clerk values in the invoking shell or explicitly pass an ignored local env file
-with `--env-file`; without them, the UI shows setup notices. Hosted auth and
+Local `npm run dev` can use `.env.local`. The standalone development Compose
+stack automatically reads the ignored `apps/api/.env`, `apps/agent/.env`, and
+`apps/web/.env` files when they exist; Docker-internal database, Redis, object
+storage, and API addresses still override host-only addresses from those
+files. Without Clerk values, the UI shows setup notices. Hosted auth and
 protected data require real public `NEXT_PUBLIC_*` values when the web assets
 are built, plus the real `CLERK_SECRET_KEY` and server-only `API_BASE_URL`
 values at runtime. Never pass the Clerk secret as a Docker build argument.
@@ -285,12 +287,10 @@ What it does:
 
 The voice agent depends on external LiveKit and model-provider credentials, so
 it is isolated behind the `voice` profile. After setting those variables in
-your shell or a local ignored env file, start it with the rest of the local
-stack:
+the ignored `apps/agent/.env` file, start it with the rest of the local stack:
 
 ```bash
 docker compose \
-  --env-file apps/agent/.env \
   -f compose.dev.yaml \
   --profile voice \
   up --build
@@ -302,6 +302,8 @@ Frontend-specific notes:
 - Without Clerk env vars, the UI renders setup notices instead of the hosted sign-in flow
 
 Important limits:
+- After changing any app-specific `.env`, recreate the affected service;
+  `restart` does not reload container environment variables.
 - Source edits reload automatically. After a `package-lock.json` change, stop
   the web service, refresh the persistent dependency volume with `npm ci`, and
   rebuild it as shown below; rebuilding alone does not replace a non-empty
@@ -329,7 +331,7 @@ Live STT/LLM/TTS debug logs:
 # set in apps/agent/.env
 AGENT_DEBUG_STREAMS=true
 
-docker compose --env-file apps/agent/.env -f compose.dev.yaml --profile voice up -d --build agent
+docker compose -f compose.dev.yaml --profile voice up -d --build agent
 docker compose -f compose.dev.yaml --profile voice logs -f agent
 ```
 
