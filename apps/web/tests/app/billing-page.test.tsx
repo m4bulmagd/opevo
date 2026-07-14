@@ -6,6 +6,11 @@ const getUsageSnapshotMock = vi.fn();
 const getUsageLedgerMock = vi.fn();
 const createCheckoutSessionMock = vi.fn();
 const createPortalSessionMock = vi.fn();
+const revalidatePathMock = vi.fn();
+
+vi.mock("next/cache", () => ({
+  revalidatePath: revalidatePathMock,
+}));
 
 vi.mock("@/lib/api/billing", () => ({
   getSubscription: getSubscriptionMock,

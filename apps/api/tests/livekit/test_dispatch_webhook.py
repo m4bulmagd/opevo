@@ -281,3 +281,36 @@ async def test_participant_left_routes_to_leave_handler(
             },
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_disabled_app_webhook_injects_no_realtime_service(
+    async_client,
+    monkeypatch,
+) -> None:
+    from app.main import app
+    from app.webhooks.livekit import get_webhook_receiver
+
+    observed: list[object] = []
+
+    async def fake_handle_participant_left(self, event: dict) -> None:
+        observed.append(self.realtime_service)
+        await self.session.commit()
+
+    monkeypatch.setattr(
+        LiveKitDispatchService,
+        "handle_participant_left",
+        fake_handle_participant_left,
+    )
+    app.dependency_overrides[get_webhook_receiver] = lambda: FakeParticipantLeftReceiver()
+    try:
+        response = await async_client.post(
+            "/webhooks/livekit",
+            content=json.dumps({"ignored": True}).encode("utf-8"),
+            headers={"authorization": "Bearer test"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_webhook_receiver, None)
+
+    assert response.status_code == 202
+    assert observed == [None]

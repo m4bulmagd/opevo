@@ -1,5 +1,7 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
+
 import { patchAgentConfig } from "@/lib/api/agent";
 import { BackendApiError } from "@/lib/api/backend-client";
 import type { AgentConfig, AgentConfigPatch } from "@/lib/types/agent";
@@ -13,6 +15,8 @@ export type AgentActionResult = {
 export async function saveAgentSettingsAction(payload: AgentConfigPatch): Promise<AgentActionResult> {
   try {
     const config = await patchAgentConfig(payload);
+    revalidatePath("/dashboard/agent");
+    revalidatePath("/dashboard");
 
     return {
       status: "success",

@@ -105,7 +105,7 @@ class LiveKitDispatchService:
         usage_repository: UsageRepository | None = None,
         subscription_repository: SubscriptionRepository | None = None,
         outbox_service: OutboxService | None = None,
-        realtime_service: RealtimeService,
+        realtime_service: RealtimeService | None,
         recording_service: LiveKitRecordingService,
         call_lifecycle_service: CallLifecycleService | None = None,
         arq_pool=None,
@@ -296,11 +296,24 @@ class LiveKitDispatchService:
 
         await self.session.commit()
         await self._best_effort_outbox_wakeup()
-        await self.realtime_service.publish_call_started(
-            str(user.id),
-            room_name=room_name,
-            call_id=str(call.id),
-        )
+        if self.realtime_service is not None:
+            try:
+                await self.realtime_service.publish_call_started(
+                    str(user.id),
+                    room_name=room_name,
+                    call_id=str(call.id),
+                )
+            except Exception as error:
+                report_safe_exception(
+                    logger,
+                    event="livekit_realtime_publish_failed",
+                    operation="publish_call_started",
+                    error=error,
+                    call_id=call.id,
+                    user_id=user.id,
+                    status="failed",
+                    level=logging.WARNING,
+                )
         return DispatchJoinResult("accepted", str(call.id))
 
     async def _handle_agent_participant_joined(

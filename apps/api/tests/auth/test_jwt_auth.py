@@ -1,15 +1,33 @@
 import time
+from types import SimpleNamespace
 from uuid import uuid4
 
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 
-from app.core.auth import ClerkAuthProvider
+from app.core.auth import ClerkAuthProvider, get_auth_provider
 from app.core.dispatch_token import create_dispatch_token, verify_dispatch_token
 
 
 DISPATCH_SECRET = "dispatch-test-secret-with-enough-entropy-for-all-hmac-tests"
+
+
+def test_request_auth_provider_uses_app_bound_settings(settings) -> None:
+    configured = settings.model_copy(
+        update={"clerk_issuer": "https://captured-clerk.example"}
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(settings=configured))
+    )
+
+    try:
+        provider = get_auth_provider(request)
+    except TypeError as error:
+        pytest.fail(f"get_auth_provider must accept the current request: {error}")
+
+    assert isinstance(provider, ClerkAuthProvider)
+    assert provider.settings is configured
 
 
 def _configure_dispatch_tokens(

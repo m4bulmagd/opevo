@@ -1,5 +1,7 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
+
 import { BackendApiError } from "@/lib/api/backend-client";
 import { createCheckoutSession, createPortalSession } from "@/lib/api/billing";
 
@@ -12,6 +14,8 @@ type HostedActionResult = {
 export async function createCheckoutSessionAction(planTier: "starter"): Promise<HostedActionResult> {
   try {
     const session = await createCheckoutSession(planTier);
+    revalidatePath("/dashboard/billing");
+    revalidatePath("/dashboard");
     return {
       status: "success",
       message: "Checkout session created.",
@@ -37,6 +41,8 @@ export async function createPortalSessionAction(): Promise<HostedActionResult> {
 
   try {
     const session = await createPortalSession(`${appUrl}/dashboard/billing`);
+    revalidatePath("/dashboard/billing");
+    revalidatePath("/dashboard");
     return {
       status: "success",
       message: "Billing portal session created.",

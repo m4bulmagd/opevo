@@ -108,34 +108,40 @@ async def active_user(db_session: AsyncSession):
 
 @pytest_asyncio.fixture
 async def test_app(tmp_path: Path):
+    from app.core.config import get_settings
     from app.core.database import get_session
-    from app.main import app
+    from app import main as main_module
 
-    database_path = tmp_path / "test_client.db"
-    database_url = f"sqlite+aiosqlite:///{database_path}"
+    original_app = main_module.app
+    app = main_module.create_app(get_settings())
+    try:
+        main_module.app = app
+        database_path = tmp_path / "test_client.db"
+        database_url = f"sqlite+aiosqlite:///{database_path}"
 
-    async def setup_database() -> None:
-        engine = create_async_engine(database_url, future=True)
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-        await engine.dispose()
+        async def setup_database() -> None:
+            engine = create_async_engine(database_url, future=True)
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+            await engine.dispose()
 
-    await setup_database()
-    app.state.test_database_url = database_url
+        await setup_database()
+        app.state.test_database_url = database_url
 
-    async def override_get_session():
-        engine = create_async_engine(database_url, future=True)
-        session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        async with session_factory() as session:
-            yield session
-        await engine.dispose()
+        async def override_get_session():
+            engine = create_async_engine(database_url, future=True)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with session_factory() as session:
+                yield session
+            await engine.dispose()
 
-    app.dependency_overrides[get_session] = override_get_session
+        app.dependency_overrides[get_session] = override_get_session
 
-    async with app.router.lifespan_context(app):
-        yield app
-
-    app.dependency_overrides.clear()
+        async with app.router.lifespan_context(app):
+            yield app
+    finally:
+        app.dependency_overrides.clear()
+        main_module.app = original_app
 
 
 @pytest_asyncio.fixture

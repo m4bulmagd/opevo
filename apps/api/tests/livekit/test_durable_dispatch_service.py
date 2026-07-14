@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select
@@ -32,6 +33,17 @@ class _Realtime:
         self.events.append(
             {"user_id": user_id, "room_name": room_name, "call_id": call_id}
         )
+
+
+class _FailingRealtime:
+    async def publish_call_started(
+        self,
+        user_id: str,
+        *,
+        room_name: str,
+        call_id: str,
+    ) -> None:
+        raise RuntimeError("REALTIME_PROVIDER_SECRET caller transcript")
 
 
 class _Recording:
@@ -100,10 +112,10 @@ class _FailingCleanupRecording(_CompletingRecording):
 
 class _Pool:
     def __init__(self) -> None:
-        self.jobs: list[tuple[str, dict]] = []
+        self.jobs: list[tuple[str, dict, dict]] = []
 
-    async def enqueue_job(self, name: str, payload: dict) -> None:
-        self.jobs.append((name, payload))
+    async def enqueue_job(self, name: str, payload: dict, **kwargs) -> None:
+        self.jobs.append((name, payload, kwargs))
 
 
 async def _seed_eligible_user(db_session):
@@ -201,7 +213,7 @@ async def test_sip_join_commits_call_and_dispatch_intent_without_provider_io(db_
     assert events[0].aggregate_id == calls[0].id
     assert events[0].payload == {"call_id": str(calls[0].id)}
     assert direct.calls == 0
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [("outbox_delivery_job", {}, {})]
     assert realtime.events == [
         {
             "user_id": str(user.id),
@@ -209,6 +221,59 @@ async def test_sip_join_commits_call_and_dispatch_intent_without_provider_io(db_
             "call_id": str(calls[0].id),
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_sip_join_is_durable_without_realtime_service(db_session) -> None:
+    await _seed_eligible_user(db_session)
+    pool = _Pool()
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=None,
+        recording_service=_Recording(),
+        arq_pool=pool,
+    )
+
+    result = await service.handle_participant_joined(
+        _sip_join(room="room-no-realtime")
+    )
+
+    calls = list((await db_session.execute(select(Call))).scalars())
+    events = list((await db_session.execute(select(OutboxEvent))).scalars())
+    assert result.status == "accepted"
+    assert len(calls) == len(events) == 1
+    assert calls[0].livekit_room_id == "room-no-realtime"
+    assert events[0].aggregate_id == calls[0].id
+    assert pool.jobs == [("outbox_delivery_job", {}, {})]
+
+
+@pytest.mark.anyio
+async def test_realtime_publish_failure_cannot_change_durable_acceptance(
+    db_session,
+    caplog,
+) -> None:
+    await _seed_eligible_user(db_session)
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=_FailingRealtime(),
+        recording_service=_Recording(),
+    )
+
+    with caplog.at_level("WARNING"):
+        result = await service.handle_participant_joined(
+            _sip_join(room="room-failing-realtime")
+        )
+
+    calls = list((await db_session.execute(select(Call))).scalars())
+    events = list((await db_session.execute(select(OutboxEvent))).scalars())
+    assert result.status == "accepted"
+    assert len(calls) == len(events) == 1
+    assert events[0].aggregate_id == calls[0].id
+    assert "event=livekit_realtime_publish_failed" in caplog.text
+    assert "REALTIME_PROVIDER_SECRET" not in caplog.text
+    assert "caller transcript" not in caplog.text
 
 
 @pytest.mark.anyio
@@ -298,7 +363,7 @@ async def test_only_expected_agent_identity_connects_and_starts_recording(db_ses
     service = LiveKitDispatchService(
         db_session,
         _ForbiddenDirectDispatch(),
-        realtime_service=_Realtime(),
+        realtime_service=None,
         recording_service=recording,
     )
     await service.handle_participant_joined(_sip_join())
@@ -332,6 +397,61 @@ async def test_only_expected_agent_identity_connects_and_starts_recording(db_ses
     assert call.recording_egress_id == "egress-1"
     assert recording.starts == [
         {"room_name": "room-1", "user_id": user.id, "call_id": call.id}
+    ]
+
+
+@pytest.mark.anyio
+async def test_sip_leave_commits_and_enqueues_finalization_without_realtime(
+    db_session,
+) -> None:
+    await _seed_eligible_user(db_session)
+    pool = _Pool()
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=None,
+        recording_service=_Recording(),
+        arq_pool=pool,
+    )
+    joined = await service.handle_participant_joined(_sip_join())
+    assert joined.call_id is not None
+    connected = await service.handle_participant_joined(
+        {
+            "event": "participant_joined",
+            "room": {"name": "room-1"},
+            "participant": {
+                "identity": f"agent-call-{joined.call_id}",
+                "kind": "AGENT",
+                "attributes": {},
+            },
+        }
+    )
+
+    left = await service.handle_participant_left(
+        {
+            "event": "participant_left",
+            "room": {"name": "room-1"},
+            "participant": {
+                "identity": "caller",
+                "kind": "SIP",
+                "attributes": {},
+            },
+        }
+    )
+
+    call = await db_session.get(Call, UUID(joined.call_id))
+    assert connected.status == "connected"
+    assert left.status == "ending"
+    assert call is not None
+    assert call.status == "ending"
+    assert call.ended_at is not None
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {}),
+        (
+            "call_finalization_job",
+            {"call_id": str(call.id)},
+            {"_job_id": f"call-finalization:{call.id}"},
+        ),
     ]
 
 

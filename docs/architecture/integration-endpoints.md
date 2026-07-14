@@ -18,7 +18,11 @@ Response:
 
 ### `GET /ws`
 
-WebSocket endpoint for authenticated per-user realtime events.
+Optional WebSocket endpoint for authenticated per-user observer events. It is not part of the launch-critical path and is not registered unless `REALTIME_ENABLED=true`; with the default `REALTIME_ENABLED=false`, HTTP requests to `/ws` return `404` and WebSocket upgrades are not accepted.
+
+The dashboard does not consume this endpoint. Its authoritative state comes from authenticated PostgreSQL-backed API reads, with affected routes revalidated after successful mutations. Missing, delayed, duplicated, or failed realtime delivery must not change call acceptance, finalization, billing, provisioning, recording, onboarding, or dashboard correctness.
+
+Do not enable this capability for customer use yet. Current API and agent publishers use the local internal user UUID as the Redis channel key, while WebSocket authentication registers connections by Clerk subject ID. The publisher and subscriber identity key must be unified before realtime is re-enabled.
 
 Expected first client message:
 
@@ -50,10 +54,12 @@ Behavior:
 {"type":"pong"}
 ```
 
-Current pushed event types include:
+The observer event contract currently defines:
 
 - `call_started`
 - `call_ended`
+
+`call_started` is published only as a best-effort notification after durable SIP-call acceptance commits. Publisher failure is safely reported and cannot change the accepted result. The API realtime service has no production callsite for `publish_call_ended`; no launch behavior depends on it.
 
 ## Internal Agent Transcript Append
 

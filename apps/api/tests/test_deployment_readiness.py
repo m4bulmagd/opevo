@@ -147,6 +147,16 @@ def test_settings_do_not_expose_a_standard_stripe_price() -> None:
     assert "stripe_price_standard" not in Settings.model_fields
 
 
+def test_realtime_is_disabled_by_default() -> None:
+    settings = Settings(
+        app_env="development",
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+    )
+
+    assert settings.realtime_enabled is False
+
+
 @pytest.mark.parametrize(
     "portal_return_url",
     [

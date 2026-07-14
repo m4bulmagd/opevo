@@ -20,14 +20,27 @@ def get_redis_client() -> Redis:
     return Redis.from_url(settings.redis_url, decode_responses=True)
 
 
-async def create_arq_pool() -> ArqRedis:
-    settings = get_settings()
-    return await create_pool(RedisSettings.from_dsn(settings.redis_url))
+async def create_arq_pool(redis_url: str | None = None) -> ArqRedis:
+    configured_url = redis_url or get_settings().redis_url
+    return await create_pool(RedisSettings.from_dsn(configured_url))
 
 
 class RedisEventBus:
-    def __init__(self, redis_client: Redis | None = None) -> None:
-        self.redis_client = redis_client or get_redis_client()
+    def __init__(
+        self,
+        redis_client: Redis | None = None,
+        *,
+        redis_url: str | None = None,
+    ) -> None:
+        if redis_client is not None:
+            self.redis_client = redis_client
+            self._owns_client = False
+        elif redis_url is not None:
+            self.redis_client = Redis.from_url(redis_url, decode_responses=True)
+            self._owns_client = True
+        else:
+            self.redis_client = get_redis_client()
+            self._owns_client = False
 
     @staticmethod
     def channel_name(user_id: str) -> str:
@@ -58,3 +71,13 @@ class RedisEventBus:
                 await close()
             else:
                 await pubsub.close()
+
+    async def aclose(self) -> None:
+        if not self._owns_client:
+            return
+        self._owns_client = False
+        close = getattr(self.redis_client, "aclose", None)
+        if close is not None:
+            await close()
+        else:
+            await self.redis_client.close()

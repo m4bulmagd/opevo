@@ -5,11 +5,11 @@ from typing import Any
 from uuid import UUID
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.database import get_session
 from app.repositories.user_repository import UserRepository
 
@@ -32,8 +32,13 @@ class AuthProvider(ABC):
 
 
 class ClerkAuthProvider(AuthProvider):
-    def __init__(self, *, jwk_client: jwt.PyJWKClient | None = None) -> None:
-        self.settings = get_settings()
+    def __init__(
+        self,
+        *,
+        settings: Settings | None = None,
+        jwk_client: jwt.PyJWKClient | None = None,
+    ) -> None:
+        self.settings = settings or get_settings()
         self._jwk_client = jwk_client
 
     def verify_token(self, token: str) -> UserIdentity:
@@ -88,8 +93,9 @@ class ClerkAuthProvider(AuthProvider):
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def get_auth_provider() -> AuthProvider:
-    return ClerkAuthProvider()
+def get_auth_provider(request: Request) -> AuthProvider:
+    settings = getattr(request.app.state, "settings", None) or get_settings()
+    return ClerkAuthProvider(settings=settings)
 
 
 async def require_user_identity(

@@ -4,7 +4,11 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models.webhook_event import WebhookEvent
-from app.webhooks.livekit import convert_livekit_event, handle_livekit_webhook
+from app.webhooks.livekit import (
+    convert_livekit_event,
+    get_webhook_receiver,
+    handle_livekit_webhook,
+)
 
 
 class _Request:
@@ -36,6 +40,43 @@ class _SessionWithoutWrites:
 class _Realtime:
     async def publish_call_started(self, *_args, **_kwargs) -> None:
         raise AssertionError("missing-id webhook must not run business logic")
+
+
+def test_webhook_receiver_fallback_uses_app_bound_settings(
+    settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit import api as livekit_api_module
+
+    configured = settings.model_copy(
+        update={
+            "livekit_api_key": "captured-livekit-key",
+            "livekit_api_secret": "captured-livekit-secret",
+        }
+    )
+    observed: dict[str, object] = {}
+
+    class Verifier:
+        def __init__(self, key: str, secret: str) -> None:
+            observed["credentials"] = (key, secret)
+
+    class Receiver:
+        def __init__(self, verifier) -> None:
+            observed["verifier"] = verifier
+
+    monkeypatch.setattr(livekit_api_module, "TokenVerifier", Verifier)
+    monkeypatch.setattr(livekit_api_module, "WebhookReceiver", Receiver)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(settings=configured))
+    )
+
+    receiver = get_webhook_receiver(request)
+
+    assert isinstance(receiver, Receiver)
+    assert observed["credentials"] == (
+        "captured-livekit-key",
+        "captured-livekit-secret",
+    )
 
 
 def test_convert_dict_preserves_signed_event_id_and_normalizes_numeric_kind() -> None:

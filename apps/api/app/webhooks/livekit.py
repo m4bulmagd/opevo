@@ -24,8 +24,8 @@ router = APIRouter(prefix="/webhooks", tags=["livekit"])
 logger = logging.getLogger(__name__)
 
 
-def get_realtime_service(request: Request) -> RealtimeService:
-    return request.app.state.realtime_service
+def get_realtime_service(request: Request) -> RealtimeService | None:
+    return getattr(request.app.state, "realtime_service", None)
 
 
 def get_webhook_receiver(request: Request):
@@ -34,7 +34,7 @@ def get_webhook_receiver(request: Request):
         return receiver
     from livekit import api
 
-    settings = get_settings()
+    settings = getattr(request.app.state, "settings", None) or get_settings()
     verifier = api.TokenVerifier(settings.livekit_api_key, settings.livekit_api_secret)
     return api.WebhookReceiver(verifier)
 
@@ -72,7 +72,7 @@ async def handle_livekit_webhook(
     request: Request,
     session: AsyncSession = Depends(get_session),
     webhook_receiver=Depends(get_webhook_receiver),
-    realtime_service: RealtimeService = Depends(get_realtime_service),
+    realtime_service: RealtimeService | None = Depends(get_realtime_service),
 ) -> Response:
     body = (await request.body()).decode("utf-8")
     event = webhook_receiver.receive(body, request.headers.get("authorization"))

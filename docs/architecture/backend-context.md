@@ -30,16 +30,19 @@ This document captures implementation notes and staging verification for the bac
 - Billing and usage API now exposes hosted Stripe action endpoints for checkout and billing portal sessions instead of mutating subscriptions directly in the app backend.
 - Contract details and usage examples for that surface are documented in [billing-usage-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/billing-usage-api.md).
 - Internal and integration surfaces are documented in [integration-endpoints.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/integration-endpoints.md).
+- Realtime delivery is an optional observer and is disabled by default. With `REALTIME_ENABLED=false`, the API does not register `/ws`, construct the realtime Redis event bus, or start its fanout task. Dashboard correctness continues to rely on authenticated PostgreSQL-backed API reads and explicit route revalidation after successful mutations.
 
 ## Known Contract Drift
 
 - Product-facing docs may still describe a broader planned backend surface than what is currently implemented in `apps/api`. Treat this file and the focused docs under `docs/architecture/` as the current source for implemented backend contracts.
 - User-facing call delete is currently a soft delete, not a destructive delete. The current call-history contract is documented in [call-history-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/call-history-api.md).
-- The implemented realtime endpoint is `GET /ws` with first-message auth, as documented in [integration-endpoints.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/integration-endpoints.md). Older product docs may still reference a more specific websocket path shape.
+- The optional realtime endpoint is `/ws` with first-message auth, but it exists only when `REALTIME_ENABLED=true`; the normal production default returns `404`. Older product docs may still describe it as always available or use a more specific path shape.
+- Realtime must not be enabled for customer use until its identity key is made consistent. Current API and agent publishers address Redis channels with the local internal user UUID, while WebSocket authentication subscribes the connection with the Clerk subject ID. Those keys do not match, so delivery is not reliable even though both sides work independently.
 
 ## Verified Locally
 
 - API tests covering health, auth, billing, telephony, realtime, LiveKit dispatch, repository flow, and post-call lifecycle.
+- Realtime tests now cover disabled-by-default configuration, absence of the `/ws` route and Redis/fanout resources while disabled, the explicit authenticated enabled path, and durable call acceptance when realtime is absent or publishing fails.
 - Agent config API tests now cover bootstrapped first-run config reads, readiness-gated enables, successful telephony toggles, and rollback on telephony failure.
 - Call history API tests now cover visible-call listing, transcript detail, fresh recording URL minting, and soft-delete behavior.
 - LiveKit recording provider tests now cover audio-only room composite egress request shaping, explicit stop behavior, and provider-failure wrapping.

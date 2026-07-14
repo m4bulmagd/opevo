@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,8 +9,8 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.core.auth import ClerkAuthProvider
-from app.core.config import get_settings
-from app.core.logging import setup_logging
+from app.core.config import Settings, get_settings
+from app.core.logging import report_safe_exception, setup_logging
 from app.core.rate_limit import limiter
 from app.core.redis import RedisEventBus, create_arq_pool
 from app.core.runtime_validation import validate_api_runtime
@@ -27,71 +28,151 @@ from app.webhooks.livekit import router as livekit_webhook_router
 from app.webhooks.stripe import router as stripe_webhook_router
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    setup_logging()
-    get_settings.cache_clear()
-    settings = get_settings()
-    app.state.settings = settings
-    app.state.realtime_service = RealtimeService(
-        auth_provider=ClerkAuthProvider(),
-        event_bus=RedisEventBus(),
-        websocket_manager=websocket_manager,
-    )
-    app.state.call_finalization_queue = None
-    app.state.livekit_webhook_receiver = None
-    relay_task = None
-    call_finalization_pool = None
-    if settings.app_env != "test":
-        call_finalization_pool = await create_arq_pool()
-        app.state.arq_pool = call_finalization_pool
-        app.state.call_finalization_queue = CallFinalizationQueue(call_finalization_pool)
-        relay_task = asyncio.create_task(app.state.realtime_service.fanout_forever())
-        if settings.livekit_url and settings.livekit_api_key and settings.livekit_api_secret:
-            from livekit import api as livekit_api_module
+logger = logging.getLogger(__name__)
 
-            verifier = livekit_api_module.TokenVerifier(settings.livekit_api_key, settings.livekit_api_secret)
-            app.state.livekit_webhook_receiver = livekit_api_module.WebhookReceiver(verifier)
 
+async def _stop_realtime_fanout(relay_task: asyncio.Task | None) -> None:
+    if relay_task is None:
+        return
+    if not relay_task.done():
+        relay_task.cancel()
     try:
-        yield
-    finally:
-        if relay_task is not None:
-            relay_task.cancel()
-            try:
-                await relay_task
-            except asyncio.CancelledError:
-                pass
-        if call_finalization_pool is not None:
-            close = getattr(call_finalization_pool, "aclose", None)
-            if close is not None:
-                await close()
-            else:
-                await call_finalization_pool.close()
+        await relay_task
+    except asyncio.CancelledError:
+        pass
+    except Exception as error:
+        report_safe_exception(
+            logger,
+            event="realtime_fanout_failed",
+            operation="stop_realtime_fanout",
+            error=error,
+            status="failed",
+            level=logging.WARNING,
+        )
 
 
-app = FastAPI(lifespan=lifespan)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+async def _close_runtime_resource(
+    resource,
+    *,
+    event: str,
+    operation: str,
+) -> None:
+    if resource is None:
+        return
+    try:
+        close = getattr(resource, "aclose", None)
+        if close is not None:
+            await close()
+        else:
+            await resource.close()
+    except Exception as error:
+        report_safe_exception(
+            logger,
+            event=event,
+            operation=operation,
+            error=error,
+            status="failed",
+            level=logging.WARNING,
+        )
 
-settings = get_settings()
-validate_api_runtime(settings)
-if settings.cors_allowed_origins:
-    origins = [origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+
+def _lifespan(settings: Settings):
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        setup_logging()
+        app.state.settings = settings
+        app.state.realtime_service = None
+        app.state.call_finalization_queue = None
+        app.state.livekit_webhook_receiver = None
+        app.state.arq_pool = None
+        relay_task = None
+        call_finalization_pool = None
+        realtime_event_bus = None
+        try:
+            if settings.realtime_enabled:
+                realtime_event_bus = RedisEventBus(redis_url=settings.redis_url)
+                app.state.realtime_service = RealtimeService(
+                    auth_provider=ClerkAuthProvider(settings=settings),
+                    event_bus=realtime_event_bus,
+                    websocket_manager=websocket_manager,
+                )
+            if settings.app_env != "test":
+                call_finalization_pool = await create_arq_pool(settings.redis_url)
+                app.state.arq_pool = call_finalization_pool
+                app.state.call_finalization_queue = CallFinalizationQueue(
+                    call_finalization_pool
+                )
+                if app.state.realtime_service is not None:
+                    relay_task = asyncio.create_task(
+                        app.state.realtime_service.fanout_forever()
+                    )
+                if (
+                    settings.livekit_url
+                    and settings.livekit_api_key
+                    and settings.livekit_api_secret
+                ):
+                    from livekit import api as livekit_api_module
+
+                    verifier = livekit_api_module.TokenVerifier(
+                        settings.livekit_api_key,
+                        settings.livekit_api_secret,
+                    )
+                    app.state.livekit_webhook_receiver = (
+                        livekit_api_module.WebhookReceiver(verifier)
+                    )
+            yield
+        finally:
+            await _stop_realtime_fanout(relay_task)
+            await _close_runtime_resource(
+                realtime_event_bus,
+                event="realtime_bus_close_failed",
+                operation="close_realtime_bus",
+            )
+            await _close_runtime_resource(
+                call_finalization_pool,
+                event="arq_pool_close_failed",
+                operation="close_arq_pool",
+            )
+
+    return lifespan
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    configured_settings = settings or get_settings()
+    validate_api_runtime(configured_settings)
+
+    application = FastAPI(lifespan=_lifespan(configured_settings))
+    application.state.limiter = limiter
+    application.add_exception_handler(
+        RateLimitExceeded,
+        _rate_limit_exceeded_handler,
     )
 
-app.include_router(agent_router)
-app.include_router(billing_router)
-app.include_router(calls_router)
-app.include_router(health_router)
-app.include_router(onboarding_router)
-app.include_router(websocket_router)
-app.include_router(clerk_webhook_router)
-app.include_router(livekit_webhook_router)
-app.include_router(stripe_webhook_router)
+    if configured_settings.cors_allowed_origins:
+        origins = [
+            origin.strip()
+            for origin in configured_settings.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    application.include_router(agent_router)
+    application.include_router(billing_router)
+    application.include_router(calls_router)
+    application.include_router(health_router)
+    application.include_router(onboarding_router)
+    if configured_settings.realtime_enabled:
+        application.include_router(websocket_router)
+    application.include_router(clerk_webhook_router)
+    application.include_router(livekit_webhook_router)
+    application.include_router(stripe_webhook_router)
+    return application
+
+
+app = create_app()

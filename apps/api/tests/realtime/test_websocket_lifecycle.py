@@ -86,7 +86,12 @@ def ws_app(settings_env):  # settings_env auto-use fixture sets env vars
     """
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
     from app.models import Base
-    from app.main import app
+    from app.core.config import get_settings
+    from app.main import create_app
+
+    app = create_app(
+        get_settings().model_copy(update={"realtime_enabled": True})
+    )
 
     tmp = tempfile.mkdtemp()
     db_url = f"sqlite+aiosqlite:///{tmp}/ws_test.db"
@@ -120,6 +125,48 @@ def ws_app(settings_env):  # settings_env auto-use fixture sets env vars
     yield app, ws_manager
 
     app.dependency_overrides.pop(get_session, None)
+
+
+def test_disabled_app_does_not_register_or_accept_websocket(settings_env) -> None:
+    from app.core.config import get_settings
+    from app.main import create_app
+
+    app = create_app(
+        get_settings().model_copy(update={"realtime_enabled": False})
+    )
+    websocket_paths = {
+        route.path
+        for route in app.routes
+        if route.__class__.__name__ == "APIWebSocketRoute"
+    }
+    client = TestClient(app, raise_server_exceptions=True)
+
+    assert "/ws" not in websocket_paths
+    assert client.get("/ws").status_code == 404
+    with pytest.raises(StarletteWebSocketDisconnect):
+        with client.websocket_connect("/ws"):
+            pass
+
+
+def test_disabled_app_lifespan_does_not_construct_realtime_redis(
+    settings_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import get_settings
+    from app import main as main_module
+
+    class ForbiddenRealtimeDependency:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise AssertionError("disabled realtime must not construct Redis or service")
+
+    monkeypatch.setattr(main_module, "RedisEventBus", ForbiddenRealtimeDependency)
+    monkeypatch.setattr(main_module, "RealtimeService", ForbiddenRealtimeDependency)
+    app = main_module.create_app(
+        get_settings().model_copy(update={"realtime_enabled": False})
+    )
+
+    with TestClient(app, raise_server_exceptions=True):
+        assert app.state.realtime_service is None
 
 
 # ---------------------------------------------------------------------------

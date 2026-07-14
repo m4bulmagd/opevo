@@ -1344,44 +1344,89 @@ git commit -m "fix: harden telephony billing and recording providers"
 ### Task 13: Remove realtime delivery from the launch-critical path
 
 **Files:**
+- Modify: `apps/api/.env.example`
+- Modify: `apps/api/app/core/auth.py`
 - Modify: `apps/api/app/core/config.py`
+- Modify: `apps/api/app/core/redis.py`
 - Modify: `apps/api/app/main.py`
 - Modify: `apps/api/app/services/livekit_dispatch_service.py`
-- Modify: `apps/api/app/routers/websocket.py`
-- Modify: `apps/api/tests/realtime/test_websocket_auth.py`
+- Modify: `apps/api/app/webhooks/livekit.py`
+- Modify: `apps/api/tests/conftest.py`
+- Modify: `apps/api/tests/auth/test_jwt_auth.py`
+- Modify: `apps/api/tests/test_deployment_readiness.py`
+- Create: `apps/api/tests/realtime/test_runtime_resources.py`
 - Modify: `apps/api/tests/realtime/test_websocket_lifecycle.py`
+- Modify: `apps/api/tests/livekit/test_durable_dispatch_service.py`
+- Modify: `apps/api/tests/livekit/test_durable_dispatch_webhook.py`
+- Modify: `apps/api/tests/livekit/test_dispatch_webhook.py`
+- Modify: `apps/web/.env.example`
 - Modify: `apps/web/src/config/app-config.ts`
+- Modify: `apps/web/src/app/(app)/dashboard/agent/actions.ts`
+- Modify: `apps/web/src/app/(app)/dashboard/billing/actions.ts`
+- Create: `apps/web/tests/app-config.test.ts`
+- Create: `apps/web/tests/app/dashboard-actions.test.ts`
+- Modify: `apps/web/tests/app/billing-page.test.tsx`
 - Modify: `docs/architecture/backend-context.md`
+- Modify: `docs/architecture/integration-endpoints.md`
+- Modify: `docs/superpowers/plans/2026-07-12-production-readiness-hardening.md`
+- Create (ignored execution evidence): `.superpowers/sdd/task-13-report.md`
 
 **Interfaces:**
 - Adds `realtime_enabled: bool = False`.
 - Production returns `404` for the WebSocket route while the flag is false.
 - Dashboard correctness relies on server reads and `revalidatePath`, not Pub/Sub delivery.
+- Resources wired by app construction and request authentication use the `Settings` captured by `create_app(settings)`, including Clerk authentication, realtime Redis, ARQ, and the LiveKit webhook receiver fallback.
+- Lifespan cleanup covers partial startup, safely observes a failed fanout task, closes the app-owned realtime Redis client and ARQ pool, and never logs provider exception details.
 
-- [ ] **Step 1: Write disabled-route tests**
+- [x] **Step 1: Write disabled-route tests**
 
-Assert production with `REALTIME_ENABLED=false` does not register or accept the route and that call dispatch/finalization succeeds without a realtime service.
+Assert the setting defaults false, a disabled app does not construct realtime resources or register/accept `/ws`, an explicitly enabled app preserves authentication and ping/pong, and durable SIP acceptance succeeds both without a realtime service and when the observer raises.
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
-Run: `cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/realtime tests/livekit/test_dispatch_service.py -v`
+Run the focused settings/lifecycle and durable-dispatch tests, then the web action/config tests. Record the exact commands, expected failures, and later GREEN results in `.superpowers/sdd/task-13-report.md`.
 
-Expected: route and service are currently always wired.
+Expected: the flag and `create_app(settings)` seam do not yet exist; the app always wires realtime; dispatch dereferences or propagates a failing observer; web config and successful action revalidation are incomplete.
 
-- [ ] **Step 3: Make realtime optional and remove business dependencies**
+- [x] **Step 3: Make realtime optional and remove business dependencies**
 
-Publish realtime events only as best-effort observers behind the flag. Do not make billing, calls, recording, provisioning, or onboarding depend on Pub/Sub success.
+Bind app construction and every app-owned lifespan resource to explicit settings. Register `/ws`, construct its owned Redis bus, and start fanout only when enabled. Protect every acquired resource during partial startup and safely close/observe fanout, Redis, and ARQ failures without provider details. Publish `call_started` only after the durable commit and catch/report observer failures safely. Do not make billing, calls, recording, provisioning, onboarding, or finalization depend on Pub/Sub success.
 
-- [ ] **Step 4: Ensure server actions revalidate authoritative pages**
+- [x] **Step 4: Ensure server actions revalidate authoritative pages**
 
-After agent configuration, archive, billing portal return, and provisioning retry actions, revalidate `/dashboard`, `/dashboard/agent`, `/dashboard/billing`, and `/dashboard/calls` according to the mutated resource.
+After successful agent configuration, archive, provisioning retry, checkout creation, and billing portal creation, revalidate only the authoritative route mapping specified above. Never invalidate after a failed action. Expose `NEXT_PUBLIC_REALTIME_ENABLED` as false-by-default capability metadata without adding a client connection.
 
-- [ ] **Step 5: Run API and web suites, then commit**
+- [x] **Step 5: Run API and web suites, then commit**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
 cd ../web && npm run test -- --run && npm run build
-git add apps/api/app/core/config.py apps/api/app/main.py apps/api/app/services/livekit_dispatch_service.py apps/api/app/routers/websocket.py apps/api/tests/realtime apps/api/tests/livekit/test_dispatch_service.py apps/web/src/config/app-config.ts apps/web/src/app docs/architecture/backend-context.md
+git add \
+  apps/api/.env.example \
+  apps/api/app/core/auth.py \
+  apps/api/app/core/config.py \
+  apps/api/app/core/redis.py \
+  apps/api/app/main.py \
+  apps/api/app/services/livekit_dispatch_service.py \
+  apps/api/app/webhooks/livekit.py \
+  apps/api/tests/conftest.py \
+  apps/api/tests/auth/test_jwt_auth.py \
+  apps/api/tests/test_deployment_readiness.py \
+  apps/api/tests/realtime/test_runtime_resources.py \
+  apps/api/tests/realtime/test_websocket_lifecycle.py \
+  apps/api/tests/livekit/test_durable_dispatch_service.py \
+  apps/api/tests/livekit/test_durable_dispatch_webhook.py \
+  apps/api/tests/livekit/test_dispatch_webhook.py \
+  apps/web/.env.example \
+  apps/web/src/config/app-config.ts \
+  'apps/web/src/app/(app)/dashboard/agent/actions.ts' \
+  'apps/web/src/app/(app)/dashboard/billing/actions.ts' \
+  apps/web/tests/app-config.test.ts \
+  apps/web/tests/app/dashboard-actions.test.ts \
+  apps/web/tests/app/billing-page.test.tsx \
+  docs/architecture/backend-context.md \
+  docs/architecture/integration-endpoints.md \
+  docs/superpowers/plans/2026-07-12-production-readiness-hardening.md
 git commit -m "refactor: remove realtime from the launch-critical path"
 ```
 
