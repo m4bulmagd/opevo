@@ -167,7 +167,6 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
         api_client = BlockThirdAppendClient(
             AgentApiClient(
                 base_url="http://testserver",
-                agent_token=None,
                 http_client=http_client,
                 max_retries=1,
             )
