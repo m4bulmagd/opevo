@@ -32,23 +32,21 @@ def test_can_route_is_driven_by_provider_status_not_period_end() -> None:
 
 
 @pytest.mark.parametrize(
-    ("invoice_status", "paid", "should_grant"),
+    ("invoice_status", "should_grant"),
     [
-        ("paid", True, True),
-        ("paid", False, False),
-        ("open", True, False),
-        ("draft", True, False),
-        ("void", True, False),
-        ("uncollectible", True, False),
-        ("unknown", True, False),
+        ("paid", True),
+        ("open", False),
+        ("draft", False),
+        ("void", False),
+        ("uncollectible", False),
+        ("unknown", False),
     ],
 )
-def test_should_grant_invoice_requires_paid_status_and_paid_flag(
+def test_should_grant_invoice_requires_paid_status(
     invoice_status: str,
-    paid: bool,
     should_grant: bool,
 ) -> None:
-    assert SubscriptionAccessPolicy.should_grant_invoice(invoice_status, paid) is should_grant
+    assert SubscriptionAccessPolicy.should_grant_invoice(invoice_status) is should_grant
 
 
 @pytest.mark.parametrize(

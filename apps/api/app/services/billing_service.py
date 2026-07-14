@@ -189,7 +189,6 @@ class BillingService:
     ) -> None:
         if not SubscriptionAccessPolicy.should_grant_invoice(
             event_object.get("status", ""),
-            event_object.get("paid") is True,
         ):
             return
 
