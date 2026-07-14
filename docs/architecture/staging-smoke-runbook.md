@@ -40,7 +40,7 @@ Minimum required values from `apps/api/.env`:
 APP_ENV=development
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ai_call
 REDIS_URL=redis://localhost:6379/0
-AGENT_INTERNAL_API_TOKEN=<same-shared-secret-as-agent>
+AGENT_DISPATCH_JWT_SECRET=<long-random-api-and-worker-secret>
 CLERK_ISSUER=<your-clerk-issuer>
 CLERK_JWKS_URL=<your-clerk-jwks-url>
 CLERK_WEBHOOK_SECRET=<your-clerk-webhook-secret>
@@ -82,7 +82,6 @@ LIVEKIT_API_KEY=<same-livekit-api-key>
 LIVEKIT_API_SECRET=<same-livekit-api-secret>
 LIVEKIT_AGENT_NAME=ai-call-agent
 API_BASE_URL=http://api:8000
-AGENT_INTERNAL_API_TOKEN=<same-shared-secret-as-api>
 REDIS_URL=redis://redis:6379/0
 AGENT_DEBUG_STREAMS=true
 AGENT_MIN_ENDPOINTING_DELAY=0.25
