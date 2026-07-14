@@ -143,7 +143,7 @@ Behavior:
 - returns `503` when the queue is unavailable, after recovery rows, end facts, and any recording-stop intent are durable
 - rejects raw recording fields and agent-supplied accounting or ownership fields
 - requires the same call-scoped JWT ownership checks as transcript append
-- the static `AGENT_INTERNAL_API_TOKEN` fallback exists only in development
+- rejects static shared tokens in every environment
 
 ### Durable finalization and reconciliation
 
