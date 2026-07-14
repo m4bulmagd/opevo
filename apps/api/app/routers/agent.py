@@ -1,11 +1,9 @@
-import hmac
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
-from app.core.config import get_settings
 from app.core.database import get_session
 from app.core.dispatch_token import DispatchTokenError, verify_dispatch_token
 from app.models.agent_config import AgentConfig
@@ -48,20 +46,11 @@ async def require_agent_auth(
     x_agent_token: str | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> AuthenticatedAgentIdentity:
-    settings = get_settings()
-
-    if settings.app_env.strip().lower() == "development":
-        expected_token = settings.agent_internal_api_token
-        if (
-            isinstance(x_agent_token, str)
-            and isinstance(expected_token, str)
-            and expected_token
-            and hmac.compare_digest(x_agent_token, expected_token)
-        ):
-            return AuthenticatedAgentIdentity(trusted_development=True)
-
     if not isinstance(x_agent_token, str) or not x_agent_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid agent token",
+        )
 
     try:
         claims = verify_dispatch_token(
