@@ -14,6 +14,7 @@ from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.outbox_event import OutboxEvent
+from app.schemas.agent_runtime import AuthenticatedAgentIdentity
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.outbox_service import OutboxService
 
@@ -88,11 +89,9 @@ def _configure_auth(
     monkeypatch: pytest.MonkeyPatch,
     *,
     app_env: str,
-    static_token: str = "test-agent-token",
     dispatch_secret: str | None = None,
 ) -> None:
     monkeypatch.setenv("APP_ENV", app_env)
-    monkeypatch.setenv("AGENT_INTERNAL_API_TOKEN", static_token)
     if dispatch_secret is None:
         monkeypatch.delenv("AGENT_DISPATCH_JWT_SECRET", raising=False)
     else:
@@ -103,8 +102,13 @@ def _configure_auth(
     get_settings.cache_clear()
 
 
-def _build_completion_app(fake_queue, *, auth_session=None):
-    from app.routers.agent import get_call_finalization_queue
+def _build_completion_app(
+    fake_queue,
+    *,
+    auth_session=None,
+    authenticated: bool = False,
+):
+    from app.routers.agent import get_call_finalization_queue, require_agent_auth
     from app.routers.agent import router as agent_router
 
     async def override_get_call_finalization_queue():
@@ -116,12 +120,22 @@ def _build_completion_app(fake_queue, *, auth_session=None):
     app.dependency_overrides[get_call_finalization_queue] = (
         override_get_call_finalization_queue
     )
+    user_id = uuid4()
+    agent_config_id = uuid4()
+    if authenticated:
+        async def override_require_agent_auth() -> AuthenticatedAgentIdentity:
+            return AuthenticatedAgentIdentity(
+                user_id=user_id,
+                agent_config_id=agent_config_id,
+            )
+
+        app.dependency_overrides[require_agent_auth] = override_require_agent_auth
     call_id = uuid4()
     session = auth_session or FakeAuthSession(
         call=SimpleNamespace(
             id=call_id,
-            user_id=uuid4(),
-            agent_config_id=None,
+            user_id=user_id,
+            agent_config_id=agent_config_id,
             status="pending",
             ended_at=None,
             duration_seconds=None,
@@ -142,18 +156,15 @@ def _build_completion_app(fake_queue, *, auth_session=None):
 
 @pytest.mark.anyio
 async def test_agent_completion_endpoint_enqueues_call_finalization_job(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _configure_auth(monkeypatch, app_env="development")
     call_id = uuid4()
     fake_queue = FakeCallFinalizationQueue()
-    app = _build_completion_app(fake_queue)
+    app = _build_completion_app(fake_queue, authenticated=True)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
-            headers={"x-agent-token": "test-agent-token"},
             json={
                 "duration_seconds": 61,
                 "transcript": [],
@@ -179,13 +190,11 @@ async def test_agent_completion_endpoint_enqueues_call_finalization_job(
 
 @pytest.mark.anyio
 async def test_agent_completion_endpoint_rejects_accounting_authority_fields(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _configure_auth(monkeypatch, app_env="development")
     call_id = uuid4()
     fake_queue = FakeCallFinalizationQueue()
 
-    app = _build_completion_app(fake_queue)
+    app = _build_completion_app(fake_queue, authenticated=True)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -194,7 +203,6 @@ async def test_agent_completion_endpoint_rejects_accounting_authority_fields(
     ) as client:
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
-            headers={"x-agent-token": "test-agent-token"},
             json={
                 "user_id": str(uuid4()),
                 "duration_seconds": 61,
@@ -209,13 +217,11 @@ async def test_agent_completion_endpoint_rejects_accounting_authority_fields(
 
 @pytest.mark.anyio
 async def test_agent_completion_endpoint_rejects_raw_recording_blob(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _configure_auth(monkeypatch, app_env="development")
     call_id = uuid4()
     fake_queue = FakeCallFinalizationQueue()
 
-    app = _build_completion_app(fake_queue)
+    app = _build_completion_app(fake_queue, authenticated=True)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport,
@@ -223,7 +229,6 @@ async def test_agent_completion_endpoint_rejects_raw_recording_blob(
     ) as client:
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
-            headers={"x-agent-token": "test-agent-token"},
             json={
                 "duration_seconds": 61,
                 "recording_bytes_base64": "cmVjb3JkaW5nLWJ5dGVz",
@@ -236,13 +241,11 @@ async def test_agent_completion_endpoint_rejects_raw_recording_blob(
 
 @pytest.mark.anyio
 async def test_agent_completion_endpoint_rejects_negative_duration(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _configure_auth(monkeypatch, app_env="development")
     call_id = uuid4()
     fake_queue = FakeCallFinalizationQueue()
 
-    app = _build_completion_app(fake_queue)
+    app = _build_completion_app(fake_queue, authenticated=True)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -251,7 +254,6 @@ async def test_agent_completion_endpoint_rejects_negative_duration(
     ) as client:
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
-            headers={"x-agent-token": "test-agent-token"},
             json={"duration_seconds": -1, "transcript": []},
         )
 
@@ -260,8 +262,11 @@ async def test_agent_completion_endpoint_rejects_negative_duration(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("app_env", ["test", "staging", "production"])
-async def test_static_agent_token_is_rejected_outside_development(
+@pytest.mark.parametrize(
+    "app_env",
+    ["development", "test", "staging", "production"],
+)
+async def test_static_agent_token_is_rejected_in_every_environment(
     monkeypatch: pytest.MonkeyPatch,
     app_env: str,
 ) -> None:
@@ -293,7 +298,6 @@ async def test_dispatch_jwt_completes_call_without_static_token(
     _configure_auth(
         monkeypatch,
         app_env="test",
-        static_token="",
         dispatch_secret=dispatch_secret,
     )
     config = AgentConfig(
@@ -342,7 +346,6 @@ async def test_queue_outage_preserves_end_facts_recovery_and_recording_stop_inte
     _configure_auth(
         monkeypatch,
         app_env="test",
-        static_token="",
         dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
     )
     config = AgentConfig(
@@ -432,7 +435,6 @@ async def test_failed_call_completion_is_conflict_and_does_not_enqueue(
     _configure_auth(
         monkeypatch,
         app_env="test",
-        static_token="",
         dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
     )
     config = AgentConfig(
@@ -485,7 +487,6 @@ async def test_completed_call_accepts_scoped_recovery_tail_then_finalizes_idempo
     _configure_auth(
         monkeypatch,
         app_env="test",
-        static_token="",
         dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
     )
     config = AgentConfig(
@@ -622,7 +623,6 @@ async def test_dispatch_jwt_for_call_a_cannot_complete_call_b(
     _configure_auth(
         monkeypatch,
         app_env="test",
-        static_token="",
         dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
     )
     call_a_id = uuid4()
@@ -668,7 +668,6 @@ async def test_dispatch_jwt_rejects_durable_ownership_or_config_mismatch_before_
     _configure_auth(
         monkeypatch,
         app_env="test",
-        static_token="",
         dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
     )
     call_id = uuid4()

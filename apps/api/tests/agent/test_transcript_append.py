@@ -370,39 +370,6 @@ async def test_completion_queues_only_a_reference_after_recovery_merge(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("endpoint", ["transcript", "complete"])
-async def test_development_static_auth_returns_404_for_missing_call(
-    db_session,
-    monkeypatch: pytest.MonkeyPatch,
-    endpoint: str,
-) -> None:
-    monkeypatch.setenv("APP_ENV", "development")
-    monkeypatch.setenv("AGENT_INTERNAL_API_TOKEN", "development-agent-token")
-    from app.core.config import get_settings
-
-    get_settings.cache_clear()
-    call_id = uuid4()
-    if endpoint == "transcript":
-        payload = {"sequence_number": 1, "speaker": "CALLER", "text": "Missing"}
-    else:
-        payload = {
-            "duration_seconds": 1,
-            "transcript": [],
-        }
-
-    response = await _post(
-        _runtime_app(db_session),
-        f"/api/agent/calls/{call_id}/{endpoint}",
-        "development-agent-token",
-        payload,
-        raise_app_exceptions=False,
-    )
-
-    assert response.status_code == 404
-    assert response.json() == {"detail": "call_not_found"}
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("endpoint", ["transcript", "complete"])
 async def test_locked_row_claim_mismatch_maps_to_401_before_persistence_or_queue(
     db_session,
     active_user,

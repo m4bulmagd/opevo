@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str | None = None
     realtime_enabled: bool = False
     cors_allowed_origins: str | None = None
-    agent_internal_api_token: str | None = None
     clerk_issuer: str = ""
     clerk_audience: str | None = None
     clerk_jwt_key: str | None = None
