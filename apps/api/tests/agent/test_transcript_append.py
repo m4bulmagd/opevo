@@ -26,22 +26,22 @@ class CapturingQueue:
         return f"call-finalization:{payload['call_id']}"
 
 
-def test_agent_identity_requires_scoped_claims_or_explicit_development_trust() -> None:
+def test_agent_identity_requires_scoped_claims() -> None:
     user_id = uuid4()
     config_id = uuid4()
 
-    assert AuthenticatedAgentIdentity(
+    identity = AuthenticatedAgentIdentity(
         user_id=user_id,
         agent_config_id=config_id,
-    ).trusted_development is False
-    assert AuthenticatedAgentIdentity(
-        trusted_development=True,
-    ).trusted_development is True
+    )
+    assert identity.user_id == user_id
+    assert identity.agent_config_id == config_id
 
     invalid_identities = [
         {},
         {"user_id": user_id},
         {"agent_config_id": config_id},
+        {"trusted_development": True},
         {
             "user_id": user_id,
             "agent_config_id": config_id,
