@@ -74,7 +74,6 @@ class LiveKitDispatchAPIProvider:
             not isinstance(dispatch_id, str)
             or not dispatch_id.strip()
             or not isinstance(agent_name, str)
-            or not agent_name.strip()
             or not isinstance(room, str)
             or not room.strip()
             or not isinstance(metadata, str)

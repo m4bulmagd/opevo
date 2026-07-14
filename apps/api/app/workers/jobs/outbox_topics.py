@@ -408,8 +408,11 @@ def _reconcile_dispatches(
     snapshot: _DispatchSnapshot,
     dispatches: list[LiveKitDispatch],
 ) -> LiveKitDispatch | None:
+    named_dispatches = [
+        dispatch for dispatch in dispatches if dispatch.agent_name.strip()
+    ]
     matches: list[LiveKitDispatch] = []
-    for dispatch in dispatches:
+    for dispatch in named_dispatches:
         try:
             metadata = json.loads(dispatch.metadata)
         except (TypeError, ValueError):
@@ -422,9 +425,9 @@ def _reconcile_dispatches(
         ):
             matches.append(dispatch)
 
-    if not dispatches:
+    if not named_dispatches:
         return None
-    if len(dispatches) == 1 and len(matches) == 1 and matches[0].id:
+    if len(named_dispatches) == 1 and len(matches) == 1 and matches[0].id:
         if (
             snapshot.persisted_dispatch_id is not None
             and matches[0].id != snapshot.persisted_dispatch_id

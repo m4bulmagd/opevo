@@ -78,13 +78,39 @@ async def test_livekit_adapter_uses_pinned_list_and_create_contract() -> None:
     ]
 
 
+@pytest.mark.anyio
+async def test_livekit_adapter_accepts_unnamed_automatic_dispatches() -> None:
+    dispatch_service = _DispatchService()
+
+    async def list_dispatch(room_name: str):
+        return [
+            SimpleNamespace(
+                id="dispatch-automatic",
+                agent_name="",
+                room=room_name,
+                metadata="",
+                state=1,
+            )
+        ]
+
+    dispatch_service.list_dispatch = list_dispatch
+    provider = LiveKitDispatchAPIProvider(
+        livekit_api=SimpleNamespace(agent_dispatch=dispatch_service),
+        observability=_Telemetry(),
+    )
+
+    listed = await provider.list_dispatches(room_name="room-automatic")
+
+    assert len(listed) == 1
+    assert listed[0].agent_name == ""
+
+
 @pytest.mark.parametrize(
     ("field_name", "invalid_value"),
     [
         ("id", None),
         ("id", ""),
         ("agent_name", None),
-        ("agent_name", "   "),
         ("room", None),
         ("room", ""),
         ("metadata", None),
