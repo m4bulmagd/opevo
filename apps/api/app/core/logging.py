@@ -34,21 +34,21 @@ def report_safe_exception(
     level: int = logging.ERROR,
 ) -> None:
     fields: list[tuple[str, object]] = []
-    for key, value in (
+    for key, label_value in (
         ("event", event),
         ("operation", operation),
         ("error_type", type(error).__name__ if error is not None else error_type),
         ("status", status),
     ):
-        safe_value = safe_log_label(value)
+        safe_value = safe_log_label(label_value)
         if safe_value is not None:
             fields.append((key, safe_value))
-    for key, value in (
+    for key, identifier_value in (
         ("call_id", call_id),
         ("user_id", user_id),
         ("provider_request_id", provider_request_id),
     ):
-        safe_value = safe_log_identifier(value)
+        safe_value = safe_log_identifier(identifier_value)
         if safe_value is not None:
             fields.append((key, safe_value))
 

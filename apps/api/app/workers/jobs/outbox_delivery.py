@@ -159,10 +159,12 @@ async def outbox_delivery_job(
                 metric = ctx.get("outbox_terminal_failure_metric")
                 if metric is None:
                     telemetry = ctx.get("observability") or get_observability()
-                    metric = lambda topic, code: telemetry.record_outbox_terminal_failure(
-                        topic,
-                        _outbox_error_class(code),
-                    )
+
+                    def metric(topic: str, code: str) -> None:
+                        telemetry.record_outbox_terminal_failure(
+                            topic,
+                            _outbox_error_class(code),
+                        )
                 metric_result = metric(event.topic, error_code)
                 if inspect.isawaitable(metric_result):
                     await metric_result

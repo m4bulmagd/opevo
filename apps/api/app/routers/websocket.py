@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import jwt
 
 from app.services.realtime_service import RealtimeService

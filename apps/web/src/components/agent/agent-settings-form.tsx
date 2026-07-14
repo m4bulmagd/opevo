@@ -107,7 +107,9 @@ export function AgentSettingsForm({ initialConfig }: { initialConfig: AgentConfi
                   The France launch ships on a single verified runtime path.
                 </div>
               </div>
-              <FieldDescription>The launch pipeline is fixed while self-serve onboarding is being proven.</FieldDescription>
+              <FieldDescription>
+                The launch pipeline is fixed while self-serve onboarding is being proven.
+              </FieldDescription>
             </FieldContent>
           </Field>
 

@@ -13,7 +13,12 @@ from agent.api_client import (
     is_completion_acknowledgement,
 )
 from agent.event_publisher import EventPublisher
-from agent.schemas import CallCompletionPayload, CallTranscriptItem, DispatchMetadata
+from agent.schemas import (
+    CallCompletionPayload,
+    CallTranscriptItem,
+    DispatchMetadata,
+    TranscriptSpeaker,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +52,7 @@ class SessionRuntime:
         warning_callback: Callable[[str], object] | None = None,
         call_limit_started_at: float | None = None,
         call_limit_clock: Callable[[], float] = time.monotonic,
-        call_limit_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        call_limit_sleep: Callable[[float], Coroutine[Any, Any, None]] = asyncio.sleep,
         call_limit_cleanup_timeout_seconds: float = (
             DEFAULT_CALL_LIMIT_CLEANUP_TIMEOUT_SECONDS
         ),
@@ -355,7 +360,7 @@ class SessionRuntime:
 
     def _accept_segment(
         self,
-        speaker: str,
+        speaker: TranscriptSpeaker,
         text: str,
     ) -> CallTranscriptItem | None:
         if not self._accepting_current_task():
@@ -399,6 +404,9 @@ class SessionRuntime:
             self._flusher_task = asyncio.create_task(self._flush_transcripts())
 
     async def _flush_transcripts(self) -> None:
+        api_client = self.api_client
+        if api_client is None:
+            return
         while True:
             await self._wake_flusher.wait()
             retry_delay = 1
@@ -406,7 +414,7 @@ class SessionRuntime:
             while self._pending:
                 item = self._pending[0]
                 try:
-                    acknowledgement = await self.api_client.append_transcript(
+                    acknowledgement = await api_client.append_transcript(
                         self._active_call_id,
                         self._active_dispatch_token,
                         item,

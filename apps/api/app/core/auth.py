@@ -22,6 +22,12 @@ class UserIdentity:
     internal_user_id: UUID | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class AuthenticatedUserIdentity:
+    clerk_user_id: str
+    internal_user_id: UUID
+
+
 class AuthProvider(ABC):
     @abstractmethod
     def verify_token(self, token: str) -> UserIdentity:
@@ -102,7 +108,7 @@ async def require_user_identity(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     session: AsyncSession = Depends(get_session),
     auth_provider: AuthProvider = Depends(get_auth_provider),
-) -> UserIdentity:
+) -> AuthenticatedUserIdentity:
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
 
@@ -132,8 +138,10 @@ async def require_user_identity(
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not synced")
 
-    identity.internal_user_id = user.id
-    return identity
+    return AuthenticatedUserIdentity(
+        clerk_user_id=identity.clerk_user_id,
+        internal_user_id=user.id,
+    )
 
 
 def extract_primary_email(payload: dict[str, Any]) -> str:

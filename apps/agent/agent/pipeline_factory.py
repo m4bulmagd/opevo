@@ -1,3 +1,5 @@
+from typing import Any
+
 from livekit.agents import Agent
 from livekit.agents import AgentSession
 
@@ -8,7 +10,7 @@ from agent.prompt_builder import build_system_prompt
 from agent.providers import LLMProvider, PipelineMode, STSProvider, STTProvider, TTSProvider
 
 
-def _resolve_speechmatics_turn_detection_mode(plugin_module):
+def _resolve_speechmatics_turn_detection_mode(plugin_module: Any):
     settings = get_settings()
     configured_mode = settings.speechmatics_turn_detection_mode.strip().lower()
 
@@ -35,7 +37,7 @@ def build_pipeline_config(agent_config: dict) -> dict:
     }
 
 
-def _resolve_gemini_llm(plugin_module):
+def _resolve_gemini_llm(plugin_module: Any):
     settings = get_settings()
     return plugin_module.LLM(model="gemini-2.5-flash", api_key=settings.gemini_api_key)
 
@@ -47,14 +49,25 @@ def _resolve_gemini_api_key() -> str:
     raise ValueError("Gemini credentials are required for sts pipeline mode")
 
 
-def _default_plugin_modules(config: dict) -> dict[str, object]:
+def _default_plugin_modules(config: dict) -> dict[str, Any]:
     settings = get_settings()
-    modules: dict[str, object] = {}
+    modules: dict[str, Any] = {}
 
-    if config["stt_provider"] == STTProvider.SPEECHMATICS.value or config["tts_provider"] == TTSProvider.SPEECHMATICS.value:
+    if (
+        config["stt_provider"] == STTProvider.SPEECHMATICS.value
+        or config["tts_provider"] == TTSProvider.SPEECHMATICS.value
+    ):
         from livekit.plugins import speechmatics
 
         modules["speechmatics"] = speechmatics
+
+    if (
+        config["stt_provider"] == STTProvider.ELEVENLABS.value
+        or config["tts_provider"] == TTSProvider.ELEVENLABS.value
+    ):
+        from livekit.plugins import elevenlabs
+
+        modules["elevenlabs"] = elevenlabs
 
     if config["stt_provider"] == STTProvider.DEEPGRAM.value:
         from livekit.plugins import deepgram
@@ -79,7 +92,7 @@ def _default_plugin_modules(config: dict) -> dict[str, object]:
     return modules
 
 
-def _build_stt(config: dict, plugins: dict[str, object]):
+def _build_stt(config: dict, plugins: dict[str, Any]):
     settings = get_settings()
 
     if config["stt_provider"] == STTProvider.SPEECHMATICS.value:
@@ -97,13 +110,13 @@ def _build_stt(config: dict, plugins: dict[str, object]):
     raise ValueError(f"Unsupported STT provider: {config['stt_provider']}")
 
 
-def _build_llm(config: dict, plugins: dict[str, object]):
+def _build_llm(config: dict, plugins: dict[str, Any]):
     if config["llm_provider"] == LLMProvider.GEMINI.value:
         return _resolve_gemini_llm(plugins["google"])
     raise ValueError(f"Unsupported LLM provider: {config['llm_provider']}")
 
 
-def _build_tts(config: dict, plugins: dict[str, object]):
+def _build_tts(config: dict, plugins: dict[str, Any]):
     settings = get_settings()
 
     if config["tts_provider"] == TTSProvider.ELEVENLABS.value:
@@ -120,14 +133,14 @@ def _build_tts(config: dict, plugins: dict[str, object]):
     raise ValueError(f"Unsupported TTS provider: {config['tts_provider']}")
 
 
-def _build_vad(plugins: dict[str, object]):
+def _build_vad(plugins: dict[str, Any]):
     settings = get_settings()
     if not settings.livekit_silero_vad_enabled:
         return None
     return plugins["silero"].VAD.load()
 
 
-def _build_turn_detection(plugins: dict[str, object]):
+def _build_turn_detection(plugins: dict[str, Any]):
     settings = get_settings()
     if not settings.livekit_turn_detector_enabled:
         return None
@@ -142,7 +155,7 @@ def _bind_turn_detector_executor(turn_detection, inference_executor):
     return turn_detection
 
 
-def _build_sts_model(config: dict, plugins: dict[str, object], instructions: str):
+def _build_sts_model(config: dict, plugins: dict[str, Any], instructions: str):
     if config["sts_provider"] != STSProvider.GEMINI.value:
         raise ValueError(f"Unsupported STS provider: {config['sts_provider']}")
 
@@ -157,14 +170,14 @@ def _build_sts_model(config: dict, plugins: dict[str, object], instructions: str
     )
 
 
-def _build_sts_session(config: dict, plugins: dict[str, object], instructions: str, session_cls):
+def _build_sts_session(config: dict, plugins: dict[str, Any], instructions: str, session_cls):
     return session_cls(llm=_build_sts_model(config, plugins, instructions))
 
 
 def build_agent_runtime(
     dispatch_metadata: dict,
     *,
-    plugin_modules: dict[str, object] | None = None,
+    plugin_modules: dict[str, Any] | None = None,
     vad=None,
     turn_detection=None,
     inference_executor=None,

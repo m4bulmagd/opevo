@@ -68,9 +68,10 @@ def validate_api_runtime(settings: Settings) -> None:
         else:
             missing.append("SUMMARY_PROVIDER")
 
-    if not _is_missing(settings.stripe_billing_portal_return_url):
+    portal_return_url = settings.stripe_billing_portal_return_url
+    if isinstance(portal_return_url, str) and portal_return_url.strip():
         try:
-            parse_http_origin(settings.stripe_billing_portal_return_url)
+            parse_http_origin(portal_return_url)
         except ValueError:
             missing.append("STRIPE_BILLING_PORTAL_RETURN_URL")
 

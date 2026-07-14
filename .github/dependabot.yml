@@ -1,0 +1,73 @@
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directories:
+      - "/apps/api"
+      - "/apps/agent"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: "npm"
+    directory: "/apps/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:15"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "deps(web)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:30"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps(actions)"
+
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+      - "/apps/api"
+      - "/apps/agent"
+      - "/apps/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:45"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 5
+    groups:
+      containers:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps(container)"

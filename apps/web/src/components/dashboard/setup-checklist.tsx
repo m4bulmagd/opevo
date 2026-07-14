@@ -58,7 +58,9 @@ export function SetupChecklist({
           <Sparkles className="size-4 text-muted-foreground" />
           Setup checklist
         </CardTitle>
-        <CardDescription>Move through the self-serve launch steps before switching your number routing live.</CardDescription>
+        <CardDescription>
+          Move through the self-serve launch steps before switching your number routing live.
+        </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex items-center justify-between rounded-lg border border-dashed px-4 py-3">

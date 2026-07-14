@@ -7,13 +7,13 @@ import time
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
-from functools import wraps
+from functools import partial, wraps
+from types import TracebackType
 from typing import Any, Callable
 from uuid import UUID
 
 from opentelemetry import metrics, trace
 from opentelemetry.context import Context
-from opentelemetry.propagators.textmap import CarrierT
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.sdk.metrics.export import MetricExporter, MetricExportResult
@@ -421,7 +421,11 @@ class Observability:
             _safe_failure("observability_trace_failed", "start_span", error)
             span_context = None
 
-        exception_info = (None, None, None)
+        exception_info: tuple[
+            type[BaseException] | None,
+            BaseException | None,
+            TracebackType | None,
+        ] = (None, None, None)
         try:
             yield span
         except BaseException as error:
@@ -462,7 +466,7 @@ class Observability:
         for key, value in attributes.items():
             _safe_trace_call(
                 "set_span_attribute",
-                lambda key=key, value=value: span.set_attribute(key, value),
+                partial(span.set_attribute, key, value),
             )
 
     @asynccontextmanager
@@ -497,7 +501,11 @@ class Observability:
             _safe_failure("observability_trace_failed", "start_provider_span", error)
             span_context = None
 
-        exception_info = (None, None, None)
+        exception_info: tuple[
+            type[BaseException] | None,
+            BaseException | None,
+            TracebackType | None,
+        ] = (None, None, None)
         try:
             yield
         except BaseException as error:
@@ -562,7 +570,8 @@ class Observability:
                 continue
             _safe_call(
                 "record_outbox_snapshot",
-                lambda status=status, count=count: self.outbox_events.set(
+                partial(
+                    self.outbox_events.set,
                     count,
                     {"status": status},
                 ),
@@ -592,7 +601,8 @@ class Observability:
                 continue
             _safe_call(
                 "record_current_calls",
-                lambda state=state, count=count: self.calls_current.set(
+                partial(
+                    self.calls_current.set,
                     count,
                     {"state": state},
                 ),
@@ -602,7 +612,8 @@ class Observability:
                 continue
             _safe_call(
                 "record_stale_calls",
-                lambda state=state, count=count: self.calls_stale.set(
+                partial(
+                    self.calls_stale.set,
                     count,
                     {"state": state},
                 ),
@@ -612,7 +623,8 @@ class Observability:
         for outcome in ("scanned", "recovered", "failed", "deferred"):
             _safe_call(
                 "record_reconciliation_outcomes",
-                lambda outcome=outcome: self.reconciliation_outcomes.add(
+                partial(
+                    self.reconciliation_outcomes.add,
                     result[outcome],
                     {"outcome": outcome},
                 ),
@@ -874,7 +886,7 @@ def install_http_observability(app) -> None:
         status_code = 500
         method = _safe_label(request.method, _HTTP_METHODS)
         telemetry = get_request_observability(request)
-        carrier: CarrierT = {}
+        carrier: dict[str, str] = {}
         traceparent = request.headers.get("traceparent")
         if traceparent is not None:
             carrier["traceparent"] = traceparent

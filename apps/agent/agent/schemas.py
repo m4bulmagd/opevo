@@ -3,6 +3,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+TranscriptSpeaker = Literal["CALLER", "AGENT"]
+
+
 class DispatchMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -25,7 +28,7 @@ class CallTranscriptItem(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     sequence_number: int = Field(ge=1)
-    speaker: Literal["CALLER", "AGENT"]
+    speaker: TranscriptSpeaker
     text: str = Field(min_length=1, max_length=4000)
 
     @field_validator("text", mode="before")

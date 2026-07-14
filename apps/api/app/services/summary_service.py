@@ -84,7 +84,10 @@ class SummaryService:
             value = data.get(key)
             if value is None or not isinstance(value, expected_type):
                 return None
-        if not all(isinstance(item, str) for item in data["action_items"]):
+        action_items = data.get("action_items")
+        if not isinstance(action_items, list) or not all(
+            isinstance(item, str) for item in action_items
+        ):
             return None
         return data
 

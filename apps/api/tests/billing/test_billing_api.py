@@ -6,6 +6,11 @@ import pytest
 from fastapi import HTTPException
 
 from app.core.auth import UserIdentity
+from app.schemas.billing_api import (
+    UsageLedgerEntryResponse,
+    UsageLedgerListResponse,
+    UsageSnapshotResponse,
+)
 
 
 def _fake_request():
@@ -17,7 +22,6 @@ def _fake_request():
     req.url = SimpleNamespace(path="/test")
     req.app = SimpleNamespace(state=SimpleNamespace(limiter=None))
     return req
-from app.schemas.billing_api import UsageLedgerEntryResponse, UsageLedgerListResponse, UsageSnapshotResponse
 
 
 class FakeBillingQueryService:

@@ -1,0 +1,21 @@
+vulnerabilities:
+  - id: CVE-2026-4372
+    paths:
+      - app/.venv/lib/python3.13/site-packages/transformers-4.57.1.dist-info/METADATA
+    purls:
+      - pkg:pypi/transformers@4.57.1
+    expired_at: 2026-08-14
+    statement: >-
+      The pinned voice plugins prevent upgrading transformers. The agent never
+      invokes AutoModel or accepts model repositories/configuration from users;
+      see docs/security/dependency-exceptions.md.
+  - id: CVE-2026-5241
+    paths:
+      - app/.venv/lib/python3.13/site-packages/transformers-4.57.1.dist-info/METADATA
+    purls:
+      - pkg:pypi/transformers@4.57.1
+    expired_at: 2026-08-14
+    statement: >-
+      The pinned voice plugins prevent upgrading transformers. The agent never
+      loads LightGlue or accepts model repositories/configuration from users;
+      see docs/security/dependency-exceptions.md.

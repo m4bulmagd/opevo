@@ -198,6 +198,8 @@ class BillingService:
             return
 
         invoice_id = event_object.get("id")
+        if not isinstance(invoice_id, str) or not invoice_id:
+            return
         await self.usage_accounting_service.acquire_invoice_grant_lock(
             invoice_id=invoice_id
         )

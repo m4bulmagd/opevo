@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import limiter
 
-from app.core.auth import UserIdentity, require_user_identity
+from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.core.database import get_session
 from app.schemas.calls import CallDetailResponse, CallHistoryListResponse
 from app.services.call_history_service import CallHistoryNotFoundError, CallHistoryService
@@ -27,7 +27,7 @@ def get_call_history_service(
 @limiter.limit("60/minute")
 async def list_calls(
     request: Request,
-    identity: UserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_history_service),
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -41,7 +41,7 @@ async def list_calls(
 async def get_call(
     request: Request,
     call_id: UUID,
-    identity: UserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_history_service),
 ) -> CallDetailResponse:
     try:
@@ -53,7 +53,7 @@ async def get_call(
 @router.delete("/{call_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_call(
     call_id: UUID,
-    identity: UserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_history_service),
 ) -> Response:
     try:

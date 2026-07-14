@@ -1,6 +1,10 @@
+from importlib.metadata import version
+from types import SimpleNamespace
+
 import pytest
 
 from agent.config import get_settings
+from agent import pipeline_factory
 from agent.pipeline_factory import build_agent_runtime
 from agent.pipeline_factory import build_pipeline_config
 from agent.debug_streams import InstrumentedAgent
@@ -76,6 +80,62 @@ class FakeAgent:
 class FakeSession:
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
+
+
+@pytest.mark.parametrize(
+    ("stt_provider", "tts_provider"),
+    [
+        ("elevenlabs", "speechmatics"),
+        ("speechmatics", "elevenlabs"),
+    ],
+)
+def test_default_plugin_modules_loads_elevenlabs_for_each_speech_role(
+    monkeypatch: pytest.MonkeyPatch,
+    stt_provider: str,
+    tts_provider: str,
+) -> None:
+    monkeypatch.setattr(
+        pipeline_factory,
+        "get_settings",
+        lambda: SimpleNamespace(
+            livekit_silero_vad_enabled=False,
+            livekit_turn_detector_enabled=False,
+        ),
+    )
+
+    modules = pipeline_factory._default_plugin_modules(
+        {
+            "stt_provider": stt_provider,
+            "llm_provider": "unsupported-for-this-focused-test",
+            "tts_provider": tts_provider,
+        }
+    )
+
+    assert modules["elevenlabs"].__name__ == "livekit.plugins.elevenlabs"
+
+
+def test_deepgram_advertised_stt_path_has_pinned_plugin_and_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pipeline_factory,
+        "get_settings",
+        lambda: SimpleNamespace(
+            livekit_silero_vad_enabled=False,
+            livekit_turn_detector_enabled=False,
+        ),
+    )
+
+    modules = pipeline_factory._default_plugin_modules(
+        {
+            "stt_provider": "deepgram",
+            "llm_provider": "unsupported-for-this-focused-test",
+            "tts_provider": "unsupported-for-this-focused-test",
+        }
+    )
+
+    assert version("livekit-plugins-deepgram") == "1.4.4"
+    assert modules["deepgram"].__name__ == "livekit.plugins.deepgram"
 
 
 def test_pipeline_factory_defaults_to_stt_llm_tts() -> None:

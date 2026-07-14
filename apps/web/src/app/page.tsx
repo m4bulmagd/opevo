@@ -115,8 +115,7 @@ const faqs = [
   },
 ] as const;
 
-const linkMotionClass =
-  "transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-px";
+const linkMotionClass = "transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-px";
 
 const buttonMotionClass =
   "transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-0.5 active:translate-y-0";
@@ -158,7 +157,11 @@ export default async function Page() {
 
               <div className="flex items-center gap-3">
                 {isAuthenticated ? (
-                  <Button asChild size="sm" className={`${buttonMotionClass} rounded-full px-5 shadow-sm hover:shadow-md`}>
+                  <Button
+                    asChild
+                    size="sm"
+                    className={`${buttonMotionClass} rounded-full px-5 shadow-sm hover:shadow-md`}
+                  >
                     <Link href="/dashboard">Dashboard</Link>
                   </Button>
                 ) : (
@@ -166,7 +169,11 @@ export default async function Page() {
                     <Button asChild variant="ghost" size="sm" className={`${buttonMotionClass} rounded-full px-4`}>
                       <Link href="/sign-in">Log in</Link>
                     </Button>
-                    <Button asChild size="sm" className={`${buttonMotionClass} rounded-full px-5 shadow-sm hover:shadow-md`}>
+                    <Button
+                      asChild
+                      size="sm"
+                      className={`${buttonMotionClass} rounded-full px-5 shadow-sm hover:shadow-md`}
+                    >
                       <Link href="/sign-up">Sign up</Link>
                     </Button>
                   </>
@@ -191,15 +198,19 @@ export default async function Page() {
 
             <LandingMotionItem>
               <p className="mt-5 max-w-2xl text-base text-slate-600 leading-8 sm:text-lg">
-                Presvo helps professional individuals and small businesses answer calls, stay available, and review every
-                conversation without turning call handling into another full-time job.
+                Presvo helps professional individuals and small businesses answer calls, stay available, and review
+                every conversation without turning call handling into another full-time job.
               </p>
             </LandingMotionItem>
 
             <LandingMotionItem>
               <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
                 {isAuthenticated ? (
-                  <Button asChild size="lg" className={`${buttonMotionClass} rounded-full px-6 shadow-sm hover:shadow-lg`}>
+                  <Button
+                    asChild
+                    size="lg"
+                    className={`${buttonMotionClass} rounded-full px-6 shadow-sm hover:shadow-lg`}
+                  >
                     <Link href="/dashboard">
                       Dashboard
                       <ArrowRight className="size-4 transition-transform duration-300 group-hover/button:translate-x-0.5" />
@@ -207,7 +218,11 @@ export default async function Page() {
                   </Button>
                 ) : (
                   <>
-                    <Button asChild size="lg" className={`${buttonMotionClass} rounded-full px-6 shadow-sm hover:shadow-lg`}>
+                    <Button
+                      asChild
+                      size="lg"
+                      className={`${buttonMotionClass} rounded-full px-6 shadow-sm hover:shadow-lg`}
+                    >
                       <Link href="/sign-up">
                         Start with Presvo
                         <ArrowRight className="size-4 transition-transform duration-300 group-hover/button:translate-x-0.5" />
@@ -248,7 +263,9 @@ export default async function Page() {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="font-medium text-slate-950 text-sm">Incoming call answered</p>
-                          <p className="mt-1 text-slate-500 text-sm">Presvo handled the call while you were in a meeting.</p>
+                          <p className="mt-1 text-slate-500 text-sm">
+                            Presvo handled the call while you were in a meeting.
+                          </p>
                         </div>
                         <PhoneCall className="size-4 text-[oklch(0.58_0.17_257)]" />
                       </div>
@@ -274,7 +291,9 @@ export default async function Page() {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="font-medium text-slate-950 text-sm">Dashboard stays organized</p>
-                          <p className="mt-1 text-slate-500 text-sm">Calls, transcripts, recordings, and usage stay in one place.</p>
+                          <p className="mt-1 text-slate-500 text-sm">
+                            Calls, transcripts, recordings, and usage stay in one place.
+                          </p>
                         </div>
                         <ClipboardCheck className="size-4 text-[oklch(0.58_0.17_257)]" />
                       </div>
@@ -311,7 +330,10 @@ export default async function Page() {
           </div>
         </LandingMotionFade>
 
-        <LandingMotionFade delay={0.22} className="mt-10 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-slate-400 text-sm">
+        <LandingMotionFade
+          delay={0.22}
+          className="mt-10 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-slate-400 text-sm"
+        >
           <span>LiveKit</span>
           <span>Telnyx</span>
           <span>Clerk</span>
@@ -383,7 +405,9 @@ export default async function Page() {
         <div className="mx-auto max-w-6xl">
           <LandingMotionFade delay={0.16} className="mx-auto max-w-2xl text-center">
             <p className="font-medium text-sm text-white/80 uppercase tracking-[0.22em]">How it works</p>
-            <h2 className="mt-3 font-medium text-3xl tracking-tight sm:text-4xl">A simple flow that stays easy to trust</h2>
+            <h2 className="mt-3 font-medium text-3xl tracking-tight sm:text-4xl">
+              A simple flow that stays easy to trust
+            </h2>
             <p className="mt-4 text-base text-white/78 leading-7">
               Presvo is meant to feel operationally clear: set it up, let it handle the call, and review what happened
               when you are ready.
@@ -408,7 +432,9 @@ export default async function Page() {
 
       <section className="mx-auto w-full max-w-6xl px-6 py-18 sm:px-8 lg:px-10">
         <LandingMotionFade delay={0.18} className="mx-auto max-w-3xl text-center">
-          <p className="font-medium text-[oklch(0.58_0.17_257)] text-sm uppercase tracking-[0.22em]">Built for real work</p>
+          <p className="font-medium text-[oklch(0.58_0.17_257)] text-sm uppercase tracking-[0.22em]">
+            Built for real work
+          </p>
           <h2 className="mt-3 font-medium text-3xl text-slate-950 tracking-tight sm:text-4xl">
             Advanced AI phone agents for smarter business communication
           </h2>
@@ -433,7 +459,10 @@ export default async function Page() {
         </div>
       </section>
 
-      <section id="faq" className="mx-auto grid w-full max-w-6xl gap-10 px-6 py-12 sm:px-8 lg:grid-cols-[0.85fr_1.15fr] lg:px-10">
+      <section
+        id="faq"
+        className="mx-auto grid w-full max-w-6xl gap-10 px-6 py-12 sm:px-8 lg:grid-cols-[0.85fr_1.15fr] lg:px-10"
+      >
         <LandingMotionFade delay={0.12}>
           <div>
             <p className="font-medium text-[oklch(0.58_0.17_257)] text-sm uppercase tracking-[0.22em]">FAQ</p>
@@ -461,7 +490,10 @@ export default async function Page() {
       <footer className="relative overflow-hidden bg-slate-950 px-6 py-14 text-slate-200 sm:px-8 lg:px-10">
         <LandingAmbientGlow className="absolute inset-x-0 bottom-[-11rem] mx-auto h-72 w-[34rem] rounded-full bg-[radial-gradient(circle,rgba(118,140,255,0.95),rgba(118,140,255,0.18)_46%,transparent_72%)] blur-3xl" />
 
-        <LandingMotionFade delay={0.2} className="relative mx-auto grid w-full max-w-6xl gap-10 lg:grid-cols-[1fr_0.8fr_0.8fr_0.8fr]">
+        <LandingMotionFade
+          delay={0.2}
+          className="relative mx-auto grid w-full max-w-6xl gap-10 lg:grid-cols-[1fr_0.8fr_0.8fr_0.8fr]"
+        >
           <div>
             <p className="font-medium text-slate-400 text-sm uppercase tracking-[0.22em]">Made for</p>
             <h2 className="mt-4 font-medium text-3xl text-white">Presvo</h2>

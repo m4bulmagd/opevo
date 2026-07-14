@@ -2,8 +2,8 @@
 
 import type { ReactNode } from "react";
 
-import { motion, useReducedMotion } from "motion/react";
 import type { HTMLMotionProps } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 
 import { cn } from "@/lib/utils";
 

@@ -294,6 +294,7 @@ def _record_span(
     try:
         yield span
     except BaseException as exc:
+        error_class = _normalize_error_class(exc)
         _safe_span_action(
             span,
             "record_agent_span_error",
@@ -302,7 +303,7 @@ def _record_span(
         _safe_span_action(
             span,
             "record_agent_error_class",
-            lambda: span.set_attribute("presvo.error.class", _normalize_error_class(exc)),
+            lambda: span.set_attribute("presvo.error.class", error_class),
         )
         _safe_span_action(
             span,

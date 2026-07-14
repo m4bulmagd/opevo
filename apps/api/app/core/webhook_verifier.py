@@ -43,7 +43,7 @@ def verify_svix_signature(
     headers: Mapping[str, str],
 ) -> str:
     try:
-        Webhook(secret).verify(payload, headers)
+        Webhook(secret).verify(payload, dict(headers))
     except (WebhookVerificationError, ValueError):
         raise _invalid_signature() from None
 

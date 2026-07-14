@@ -2,12 +2,9 @@ from datetime import UTC, datetime, timedelta
 from importlib.util import find_spec
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.call import Call
-from app.models.notification import Notification
-from app.models.outbox_event import OutboxEvent
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.services import call_reconciliation_service as reconciliation_module

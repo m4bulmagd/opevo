@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import limiter
 
-from app.core.auth import UserIdentity, require_user_identity
+from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.core.database import get_session
 from app.repositories.user_repository import UserRepository
 from app.schemas.billing_api import (
@@ -40,7 +40,7 @@ def get_billing_session_service() -> BillingSessionService:
 
 
 async def get_current_user(
-    identity: UserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     session: AsyncSession = Depends(get_session),
 ):
     user = await UserRepository(session).get_by_clerk_user_id(identity.clerk_user_id)
@@ -51,7 +51,7 @@ async def get_current_user(
 
 @router.get("/subscription", response_model=SubscriptionResponse | None)
 async def get_subscription(
-    identity: UserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: BillingQueryService = Depends(get_billing_query_service),
 ) -> SubscriptionResponse | None:
     return await service.get_subscription(identity.internal_user_id)
@@ -59,7 +59,7 @@ async def get_subscription(
 
 @router.get("/usage", response_model=UsageSnapshotResponse)
 async def get_usage(
-    identity: UserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: BillingQueryService = Depends(get_billing_query_service),
 ) -> UsageSnapshotResponse:
     return await service.get_usage_snapshot(identity.internal_user_id)
@@ -67,7 +67,7 @@ async def get_usage(
 
 @router.get("/usage-ledger", response_model=UsageLedgerListResponse)
 async def get_usage_ledger(
-    identity: UserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: BillingQueryService = Depends(get_billing_query_service),
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> UsageLedgerListResponse:
@@ -79,7 +79,7 @@ async def get_usage_ledger(
 async def create_checkout_session(
     request: Request,
     payload: CheckoutSessionRequest,
-    identity: UserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: BillingSessionService = Depends(get_billing_session_service),
     query_service: BillingQueryService = Depends(get_billing_query_service),
     user=Depends(get_current_user),
@@ -122,7 +122,7 @@ async def create_checkout_session(
 async def create_portal_session(
     request: Request,
     payload: PortalSessionRequest,
-    identity: UserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: BillingSessionService = Depends(get_billing_session_service),
     query_service: BillingQueryService = Depends(get_billing_query_service),
 ) -> HostedSessionResponse:

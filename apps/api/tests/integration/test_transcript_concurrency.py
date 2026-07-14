@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from app.models import Base
 from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.user import User
@@ -25,7 +27,7 @@ from app.services.transcript_service import (
 
 
 @pytest_asyncio.fixture
-async def postgres_session_factory():
+async def postgres_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     database_url = os.getenv("TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("PostgreSQL transcript concurrency tests require TEST_DATABASE_URL")
@@ -38,12 +40,35 @@ async def postgres_session_factory():
     if not database_url.startswith("postgresql+asyncpg://"):
         pytest.skip("TEST_DATABASE_URL must identify a PostgreSQL database")
 
-    engine = create_async_engine(database_url, poolclass=NullPool)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    schema_name = f"transcript_concurrency_{uuid4().hex}"
+    quoted_schema = f'"{schema_name}"'
+    admin_engine = create_async_engine(
+        database_url,
+        isolation_level="AUTOCOMMIT",
+        poolclass=NullPool,
+    )
+    test_engine = None
     try:
-        yield factory
+        async with admin_engine.connect() as connection:
+            await connection.execute(text(f"CREATE SCHEMA {quoted_schema}"))
+
+        test_engine = create_async_engine(
+            database_url,
+            connect_args={"server_settings": {"search_path": schema_name}},
+            poolclass=NullPool,
+        )
+        async with test_engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        yield async_sessionmaker(test_engine, expire_on_commit=False)
     finally:
-        await engine.dispose()
+        if test_engine is not None:
+            await test_engine.dispose()
+        async with admin_engine.connect() as connection:
+            await connection.execute(
+                text(f"DROP SCHEMA IF EXISTS {quoted_schema} CASCADE")
+            )
+        await admin_engine.dispose()
 
 
 async def _create_call(factory: async_sessionmaker[AsyncSession]) -> Call:

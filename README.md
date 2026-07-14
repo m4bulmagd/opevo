@@ -27,27 +27,128 @@ Anything outside that contract, especially additional plans or `sts`, should be 
 
 ```bash
 cd apps/api
-UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -v
+UV_CACHE_DIR=/tmp/uv-cache uv lock --check
+UV_CACHE_DIR=/tmp/uv-cache uv sync --frozen --all-groups
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check app tests
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
 ```
 
 ### Agent
 
 ```bash
 cd apps/agent
-UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -v
+UV_CACHE_DIR=/tmp/uv-cache uv lock --check
+UV_CACHE_DIR=/tmp/uv-cache uv sync --frozen --all-groups
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check agent tests
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
 ```
 
 ### Web
 
 ```bash
 cd apps/web
-npm install
-npm run test -- --run
-npm run lint
+npm ci
+npm run check
+npm run typecheck
+npm run test:ci
 npm run build
 ```
 
-For local web development, start from [apps/web/.env.example](/home/i933k/code/ai/bmad-opevo/apps/web/.env.example). The Docker `web` service reads `apps/web/.env`, and local `npm run dev` can also use `.env.local` if you prefer. The dashboard builds without Clerk keys, but hosted auth and protected data only work when `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` are configured.
+The production web build validates its public Clerk key, server Clerk key, and
+backend URL at module initialization. For a local build that is not connected to
+hosted services, use explicit non-secret build-only values:
+
+```bash
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k \
+CLERK_SECRET_KEY=ci-build-only-placeholder \
+API_BASE_URL=http://127.0.0.1:8000 \
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 \
+NEXT_PUBLIC_APP_URL=http://127.0.0.1:3000 \
+npm run build
+```
+
+For local web development, start from [apps/web/.env.example](apps/web/.env.example).
+The Docker `web` service reads `apps/web/.env`, and local `npm run dev` can also
+use `.env.local`. Hosted auth and protected data require real public
+`NEXT_PUBLIC_*` values when the web assets are built, plus the real
+`CLERK_SECRET_KEY` and server-only `API_BASE_URL` values at runtime. Never pass
+the Clerk secret as a Docker build argument.
+
+### Dependency audits
+
+Python audits use the exact hashes in each uv lockfile rather than resolving a
+fresh dependency graph:
+
+```bash
+cd apps/api # repeat from apps/agent
+UV_CACHE_DIR=/tmp/uv-cache uv export --frozen --all-groups --no-emit-project \
+  --format requirements-txt --output-file /tmp/presvo-requirements.txt
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pip-audit \
+  --disable-pip --require-hashes --no-deps --progress-spinner=off \
+  --requirement /tmp/presvo-requirements.txt
+
+cd ../web
+npm audit --audit-level=high
+```
+
+The agent currently has five narrowly scoped, time-limited `transformers`
+exceptions imposed by pinned LiveKit and Speechmatics dependency ceilings. Run
+its local audit with the exact `--ignore-vuln` arguments recorded in
+[the dependency exception register](docs/security/dependency-exceptions.md).
+The exceptions apply only to model-loading paths the agent does not use and
+must not be copied to the API or web audits.
+
+## Continuous Integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull
+request, every push to `main`, and manual dispatch. It enforces:
+
+- API Ruff, mypy, and the complete pytest suite against PostgreSQL 17, plus
+  Redis 7 availability;
+- agent Ruff, mypy, and the complete pytest suite;
+- web Biome, TypeScript, Vitest, and Next.js production build;
+- a blank-database Alembic upgrade to `head`;
+- hashed Python and locked npm dependency audits;
+- full-history gitleaks scanning; and
+- HIGH/CRITICAL fixed-vulnerability Trivy scans for all three application
+  images.
+
+All third-party GitHub Actions are pinned to full commit SHAs. Dependabot tracks
+uv, npm, GitHub Actions, and Docker dependencies every week.
+
+### Required GitHub branch protection
+
+After this workflow exists on the remote default branch, configure a GitHub
+ruleset targeting `main` with all of the following settings:
+
+- Require a pull request with at least one approving review.
+- Dismiss stale pull request approvals when new commits are pushed.
+- Require conversation resolution and a branch that is up to date before merge.
+- Require linear history.
+- Require signed commits.
+- Do not permit force pushes or branch deletion.
+- Leave the bypass list empty for administrators and repository roles during
+  beta.
+- Require every check below; `CI / Required` is the stable aggregate check and
+  must never replace the individual migration or security checks:
+  - `CI / API`
+  - `CI / Agent`
+  - `CI / Web`
+  - `CI / Migrations`
+  - `CI / Dependency audit / api`
+  - `CI / Dependency audit / agent`
+  - `CI / Dependency audit / web`
+  - `CI / Gitleaks`
+  - `CI / Container scan / api`
+  - `CI / Container scan / agent`
+  - `CI / Container scan / web`
+  - `CI / Required`
+
+The ruleset is external GitHub state; committing this repository does not
+activate it. Verify the exact check names from one successful remote workflow
+run before saving the ruleset.
 
 ## Docker Builds
 
@@ -69,8 +170,17 @@ docker build -t ai-call-agent .
 
 ```bash
 cd apps/web
-docker build -t ai-call-web .
+docker build \
+  --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_replace_me \
+  --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.com \
+  --build-arg NEXT_PUBLIC_APP_URL=https://app.example.com \
+  -t ai-call-web .
 ```
+
+The Dockerfile's default public values are non-secret localhost/CI placeholders
+so credential-free checks can build the image. A deployable image must override
+them as shown above. Inject `CLERK_SECRET_KEY` only when the resulting container
+runs.
 
 ## Local Infra
 
@@ -80,10 +190,11 @@ Start the stateful dependencies first:
 docker compose up -d postgres redis minio minio-init
 ```
 
-Deployment-like runtime launch:
+Deployment-like runtime launch (the explicit env file also supplies the public
+values to the web image build):
 
 ```bash
-docker compose --profile app up --build api worker agent web
+docker compose --env-file apps/web/.env --profile app up --build api worker agent web
 ```
 
 The core app stack can also be started without the web container when you only need the backend and agent services:
@@ -93,9 +204,14 @@ docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker a
 ```
 
 The web container uses:
-- `API_BASE_URL=http://api:8000` for server-side requests inside the Compose network
-- `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` for browser-visible URLs
-- `NEXT_PUBLIC_APP_URL=http://localhost:3000` for billing return URLs and app links
+- `API_BASE_URL=http://api:8000` at runtime for server-side requests inside the Compose network
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` from `apps/web/.env` at build time
+- `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` at build time for browser-visible URLs
+- `NEXT_PUBLIC_APP_URL=http://localhost:3000` at build time for billing return URLs and app links
+
+Compose forwards only public `NEXT_PUBLIC_*` values as build arguments. It
+continues injecting `CLERK_SECRET_KEY` from `apps/web/.env` only into the running
+container.
 
 ## Local Dev Overlay
 
@@ -106,10 +222,10 @@ docker compose -f compose.yaml -f compose.dev.yaml --profile app up api worker a
 ```
 
 What it does:
-- `api` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/apps/api/app) and runs `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`
-- `worker` bind-mounts [apps/api/app](/home/i933k/code/ai/bmad-opevo/apps/api/app) and runs `uv run arq app.workers.arq_worker.WorkerSettings`
-- `agent` bind-mounts [apps/agent/agent](/home/i933k/code/ai/bmad-opevo/apps/agent/agent) and runs `python dev_runner.py`, which restarts the worker when Python files change
-- `web` bind-mounts [apps/web](/home/i933k/code/ai/bmad-opevo/apps/web) and runs `npm run dev -- --hostname 0.0.0.0`
+- `api` bind-mounts [apps/api/app](apps/api/app) and runs `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`
+- `worker` bind-mounts [apps/api/app](apps/api/app) and runs `uv run arq app.workers.arq_worker.WorkerSettings`
+- `agent` bind-mounts [apps/agent/agent](apps/agent/agent) and runs `python dev_runner.py`, which restarts the worker when Python files change
+- `web` bind-mounts [apps/web](apps/web) and runs `npm run dev -- --hostname 0.0.0.0`
 
 Frontend-specific notes:
 - The dashboard keeps the template shell, colors, and theme presets: `default`, `brutalist`, `soft-pop`, and `tangerine`
@@ -162,7 +278,10 @@ Core local endpoints:
 
 ## Staging Checklist
 
-For the current backend implementation and partial staging-smoke status, see [backend-context.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/backend-context.md). The checklist below is the intended France self-serve smoke path, not a claim that every item is already complete.
+For the current backend implementation and partial staging-smoke status, see
+[backend-context.md](docs/architecture/backend-context.md). The checklist below
+is the intended France self-serve smoke path, not a claim that every item is
+already complete.
 
 - [ ] API starts with real Postgres and Redis
 - [ ] Agent worker starts with real LiveKit credentials

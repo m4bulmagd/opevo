@@ -69,13 +69,21 @@ def _register_inference_runners() -> None:
         importlib.import_module("livekit.plugins.turn_detector.multilingual")
 
 
-async def _handle_standard_user_input_transcribed(runtime: SessionRuntime, metadata: dict, event) -> None:
+async def _handle_standard_user_input_transcribed(
+    runtime: SessionRuntime,
+    metadata: DispatchMetadata,
+    event,
+) -> None:
     if not getattr(event, "is_final", False) or not getattr(event, "transcript", None):
         return
     await runtime.handle_caller_transcript(metadata, event.transcript)
 
 
-async def _handle_standard_conversation_item_added(runtime: SessionRuntime, metadata: dict, event) -> None:
+async def _handle_standard_conversation_item_added(
+    runtime: SessionRuntime,
+    metadata: DispatchMetadata,
+    event,
+) -> None:
     item = getattr(event, "item", None)
     if item is None or getattr(item, "type", None) != "message":
         return
@@ -87,7 +95,11 @@ async def _handle_standard_conversation_item_added(runtime: SessionRuntime, meta
     await runtime.handle_agent_utterance(metadata, text)
 
 
-async def _handle_sts_conversation_item_added(runtime: SessionRuntime, metadata: dict, event) -> None:
+async def _handle_sts_conversation_item_added(
+    runtime: SessionRuntime,
+    metadata: DispatchMetadata,
+    event,
+) -> None:
     item = getattr(event, "item", None)
     if item is None or getattr(item, "type", None) != "message":
         return

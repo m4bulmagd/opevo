@@ -1,15 +1,17 @@
 import type { AnchorHTMLAttributes } from "react";
 
+import type { LinkProps } from "next/link";
+
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+type MockLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
+  href: string;
+  prefetch?: LinkProps["prefetch"];
+};
+
 vi.mock("next/link", () => ({
-  default: ({
-    children,
-    href,
-    prefetch: _prefetch,
-    ...props
-  }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
+  default: ({ children, href, prefetch: _prefetch, ...props }: MockLinkProps) => (
     <a href={href} {...props}>
       {children}
     </a>

@@ -251,6 +251,11 @@ async def deliver_livekit_dispatch(
                     [created_dispatch],
                 )
 
+        if dispatch is None:
+            raise OutboxDeliveryError(
+                "provider_retryable",
+                retryable=True,
+            )
         await _persist_dispatch_identity(
             session_factory,
             call_id=call_id,
@@ -312,6 +317,12 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
         balance = await UsageRepository(session).get_current_balance(
             user_id=call.user_id
         )
+        if subscription is None or agent_config is None:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_ineligible",
+                retryable=False,
+            )
 
         called_number_matches = bool(
             phone is not None
@@ -322,8 +333,6 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
         eligible = bool(
             user.status == "active"
             and call.status in {"pending", "connected"}
-            and subscription is not None
-            and agent_config is not None
             and agent_config.id == call.agent_config_id
             and DispatchEligibilityPolicy.can_dispatch(
                 subscription_status=subscription.status,

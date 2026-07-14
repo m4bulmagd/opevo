@@ -1536,16 +1536,23 @@ git commit -m "feat: add production health and observability signals"
 - Create: `.github/workflows/ci.yml`
 - Create: `.github/dependabot.yml`
 - Create: `.gitleaks.toml`
-- Modify: `apps/api/pyproject.toml`
-- Modify: `apps/agent/pyproject.toml`
-- Modify: `apps/web/package.json`
+- Create: `.trivyignore.yaml`
+- Create: `docs/security/dependency-exceptions.md`
+- Create: `apps/api/.dockerignore`
+- Create: `apps/agent/.dockerignore`
+- Create: `apps/web/.dockerignore`
+- Modify: `apps/api/pyproject.toml`, `apps/api/uv.lock`, API typing fixes, and affected tests
+- Modify: `apps/agent/pyproject.toml`, `apps/agent/uv.lock`, provider loading/typing fixes, and affected tests
+- Modify: `apps/web/package.json`, `apps/web/package-lock.json`, deterministic web checks, and Biome/type fixes
+- Modify: `apps/web/Dockerfile`
+- Modify: `compose.yaml`
 - Modify: `README.md`
 
 **Interfaces:**
 - Every pull request runs API tests on PostgreSQL, agent tests, web tests, Biome check, TypeScript/Next build, Alembic upgrade, dependency audits, secret scan, and container scan.
 - Main-branch protection requires every CI job before merge.
 
-- [ ] **Step 1: Add deterministic local quality commands**
+- [x] **Step 1: Add deterministic local quality commands**
 
 Add API/agent development dependencies for `ruff`, `mypy`, and `pip-audit`. Add scripts or documented commands so CI and developers run the same checks.
 
@@ -1555,26 +1562,41 @@ cd apps/agent && uv run ruff check agent tests && uv run mypy agent
 cd apps/web && npm run check && npm run test -- --run && npm run build
 ```
 
-- [ ] **Step 2: Fix the existing web formatting/import-order failures**
+- [x] **Step 2: Fix the existing web formatting/import-order failures**
 
 Run `npm run check:fix`, inspect every diff, then run `npm run check`. Do not mix behavioral frontend changes into this formatting commit.
 
-- [ ] **Step 3: Create the GitHub Actions workflow**
+- [x] **Step 3: Create the GitHub Actions workflow**
 
 Use PostgreSQL 17 and Redis 7 service containers. Separate jobs for API, agent, web, migrations, dependency audits, gitleaks, and Trivy image scanning. Pin actions to immutable major versions and grant read-only repository permissions except where an action explicitly requires more.
 
-- [ ] **Step 4: Verify the workflow locally**
+- [x] **Step 4a: Verify every locally executable workflow gate**
 
-Run every workflow command in the repository. Push a test branch and confirm every required job passes. Intentionally introduce a formatting error and a fake gitleaks test credential in an ignored fixture to confirm the appropriate jobs fail, then remove them.
+Run every workflow command in the repository. Intentionally introduce a formatting error and a fake gitleaks test credential in an ignored fixture to confirm the appropriate jobs fail, then remove them.
+
+Local evidence on 2026-07-14:
+
+- API lock, Ruff, mypy, compile, and PostgreSQL 17 suite pass: `762 passed, 1 skipped`; the sole skip is the optional MinIO integration. A separate exact-Python-3.13 run passes `705 passed, 58 skipped` without the PostgreSQL integration environment.
+- A blank PostgreSQL 17 database upgrades through Alembic revision `0011`.
+- Agent lock, Ruff, mypy, compile, and exact-Python-3.13 suite pass: `162 passed`. Focused greeting/limit tests prove STS uses `generate_reply` and STT → LLM → TTS uses `session.say`, which routes through that pipeline's configured TTS provider.
+- Web `npm ci`, Biome (93 files), TypeScript, Vitest (51 tests), and Next.js production build pass.
+- Live audits pass with zero API/web findings and zero unignored agent findings. CI fails when the five exact agent exceptions change count or reach their 2026-08-14 expiry; the reviewed upstream constraints are recorded in `docs/security/dependency-exceptions.md`.
+- All three images build from credential-filtered contexts; every web `.env*` file is excluded and only non-secret fake build configuration is used in CI. Offline Trivy 0.70.0 scans pass for fixed HIGH/CRITICAL findings; the two agent image exceptions are restricted by CVE, path, PURL, and expiry, and the exception file is never supplied to API or web scans.
+- A malformed TypeScript fixture fails Biome, and the pinned Gitleaks image rejects a disposable Git history containing fake GitLab and Slack credentials.
+- Workflow/config contract, YAML parsing, and `git diff --check` pass.
+
+- [ ] **Step 4b: Verify the committed workflow on a remote test branch**
+
+This requires an authorized push and the GitHub-hosted run. It also verifies the full-history Gitleaks job without mounting the private repository into a third-party local container.
 
 - [ ] **Step 5: Configure branch protection**
 
 Require one review, dismissal of stale approvals, linear history, signed status checks, and the complete CI job set. Do not allow administrators to bypass production migration and security jobs during the beta.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
-git add .github/workflows/ci.yml .github/dependabot.yml .gitleaks.toml apps/api/pyproject.toml apps/api/uv.lock apps/agent/pyproject.toml apps/agent/uv.lock apps/web/package.json apps/web/package-lock.json apps/web README.md
+git add .github .gitleaks.toml .trivyignore.yaml apps/api apps/agent apps/web compose.yaml README.md docs/security/dependency-exceptions.md docs/superpowers/plans/2026-07-12-production-readiness-hardening.md
 git commit -m "ci: enforce tests builds and security scans"
 ```
 
