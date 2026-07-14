@@ -93,7 +93,11 @@ async def test_onboarding_routes_only_with_central_subscription_access(
     has_access: bool,
 ) -> None:
     subscription = SimpleNamespace(status=subscription_status, plan_tier="starter")
-    phone_number = SimpleNamespace(e164="+33123456789", is_active=True)
+    phone_number = SimpleNamespace(
+        e164="+33123456789",
+        is_active=True,
+        provider_connection_name="app-active",
+    )
     provisioning = SimpleNamespace(
         status="succeeded",
         can_retry=False,

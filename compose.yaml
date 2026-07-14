@@ -61,10 +61,14 @@ services:
     entrypoint: >
       /bin/sh -c "
       mc alias set local http://minio:9000 minioadmin minioadmin &&
-      mc mb --ignore-existing local/recordings
+      mc mb --ignore-existing local/$$STORAGE_BUCKET_NAME &&
+      mc ilm rule import local/$$STORAGE_BUCKET_NAME < /config/recording-lifecycle.json &&
+      mc anonymous set private local/$$STORAGE_BUCKET_NAME
       "
     environment:
       STORAGE_BUCKET_NAME: recordings
+    volumes:
+      - ./infra/minio/recording-lifecycle.json:/config/recording-lifecycle.json:ro
 
   api:
     profiles: ["app"]

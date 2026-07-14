@@ -37,6 +37,15 @@ class FakeLiveKitReceiver:
         }
 
 
+class FakeLocalFrenchTrunkReceiver(FakeLiveKitReceiver):
+    def receive(self, body: bytes, authorization: str | None) -> dict:
+        event = super().receive(body, authorization)
+        event["participant"]["attributes"]["sip.trunkPhoneNumber"] = (
+            "09 99 88 87 77"
+        )
+        return event
+
+
 class FakeParticipantLeftReceiver:
     def receive(self, body: bytes, authorization: str | None) -> dict:
         return {
@@ -118,10 +127,15 @@ async def test_webhook_log_does_not_render_provider_controlled_room_name(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "receiver_type",
+    [FakeLiveKitReceiver, FakeLocalFrenchTrunkReceiver],
+)
 async def test_participant_joined_dispatches_agent_and_creates_pending_call(
     async_client,
     client_database_url,
     caplog,
+    receiver_type,
 ) -> None:
     async def seed() -> None:
         engine = create_async_engine(client_database_url, future=True)
@@ -183,7 +197,7 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
     from app.webhooks.livekit import get_realtime_service, get_webhook_receiver
 
     realtime_service = FakeRealtimeService()
-    app.dependency_overrides[get_webhook_receiver] = lambda: FakeLiveKitReceiver()
+    app.dependency_overrides[get_webhook_receiver] = receiver_type
     app.dependency_overrides[get_realtime_service] = lambda: realtime_service
 
     try:

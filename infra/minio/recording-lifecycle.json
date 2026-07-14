@@ -1,0 +1,14 @@
+{
+  "Rules": [
+    {
+      "Expiration": {
+        "Days": 30
+      },
+      "ID": "expire-call-recordings-after-30-days",
+      "Filter": {
+        "Prefix": "calls/"
+      },
+      "Status": "Enabled"
+    }
+  ]
+}

@@ -15,6 +15,7 @@ from app.repositories.phone_number_repository import (
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
+from app.providers.telephony.telnyx import normalize_french_number
 from app.services.dispatch_eligibility_policy import DispatchEligibilityPolicy
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.livekit_recording_service import LiveKitRecordingService
@@ -195,7 +196,11 @@ class LiveKitDispatchService:
             await self.session.commit()
             return DispatchJoinResult("idempotent", str(existing.id))
 
-        normalized_called_number = normalize_phone_number(raw_called_number)
+        try:
+            normalized_called_number = normalize_french_number(raw_called_number)
+        except ValueError:
+            await self.session.commit()
+            return DispatchJoinResult("denied")
         initial_phone = await self.phone_number_repository.get_by_e164(
             normalized_called_number
         )
@@ -241,7 +246,10 @@ class LiveKitDispatchService:
                 current_period_start=subscription.current_period_start,
                 current_period_end=subscription.current_period_end,
                 balance=balance,
-                phone_active=phone_number.is_active,
+                phone_active=bool(
+                    phone_number.is_active
+                    and phone_number.provider_connection_name == "app-active"
+                ),
                 agent_enabled=agent_config.is_enabled,
                 setup_complete=_agent_setup_complete(agent_config),
                 called_number_matches=called_number_matches,

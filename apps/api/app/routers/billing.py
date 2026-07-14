@@ -94,10 +94,12 @@ async def create_checkout_session(
             detail="Subscription is not eligible for checkout",
         )
 
+    customer_email = str(user.email)
+    await query_service.end_business_transaction()
     try:
-        session = service.create_checkout_session(
+        session = await service.create_checkout_session(
             user_id=str(identity.internal_user_id),
-            customer_email=user.email,
+            customer_email=customer_email,
             clerk_user_id=identity.clerk_user_id,
             plan_tier=payload.plan_tier,
         )
@@ -131,9 +133,11 @@ async def create_portal_session(
             detail="Stripe customer not found",
         )
 
+    customer_id = subscription.stripe_customer_id
+    await query_service.end_business_transaction()
     try:
-        session = service.create_portal_session(
-            customer_id=subscription.stripe_customer_id,
+        session = await service.create_portal_session(
+            customer_id=customer_id,
             return_url=payload.return_url,
         )
     except BillingPortalReturnUrlError as exc:

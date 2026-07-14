@@ -10,6 +10,7 @@ from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
+from app.providers.telephony.base import TelephonyProviderError
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
@@ -61,11 +62,17 @@ async def deliver_phone_provision(
     ctx: dict[str, Any],
     event: OutboxEvent,
 ) -> None:
-    await phone_provisioning_job(
-        ctx,
-        dict(event.payload),
-        operation_key=event.idempotency_key,
-    )
+    try:
+        await phone_provisioning_job(
+            ctx,
+            dict(event.payload),
+            operation_key=event.idempotency_key,
+        )
+    except TelephonyProviderError as exc:
+        raise OutboxDeliveryError(
+            exc.category,
+            retryable=exc.retryable,
+        ) from None
     user_id = UUID(event.payload["user_id"])
     session_factory = ctx.get("session_factory") or get_session_factory()
     async with session_factory() as session:
@@ -108,14 +115,20 @@ async def deliver_phone_routing(
         from app.providers.telephony.telnyx import TelephonyTelnyx
 
         provider = TelephonyTelnyx()
-    if snapshot.should_enable:
-        provider_connection_name = await provider.enable_number(
-            provider_number_id=snapshot.provider_number_id
-        )
-    else:
-        provider_connection_name = await provider.disable_number(
-            provider_number_id=snapshot.provider_number_id
-        )
+    try:
+        if snapshot.should_enable:
+            provider_connection_name = await provider.enable_number(
+                provider_number_id=snapshot.provider_number_id
+            )
+        else:
+            provider_connection_name = await provider.disable_number(
+                provider_number_id=snapshot.provider_number_id
+            )
+    except TelephonyProviderError as exc:
+        raise OutboxDeliveryError(
+            exc.category,
+            retryable=exc.retryable,
+        ) from None
     if provider_connection_name != desired_connection_name:
         raise OutboxDeliveryError("provider_retryable", retryable=True)
 
@@ -316,7 +329,11 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
                 current_period_start=subscription.current_period_start,
                 current_period_end=subscription.current_period_end,
                 balance=balance,
-                phone_active=bool(phone is not None and phone.is_active),
+                phone_active=bool(
+                    phone is not None
+                    and phone.is_active
+                    and phone.provider_connection_name == "app-active"
+                ),
                 agent_enabled=agent_config.is_enabled,
                 setup_complete=_agent_setup_complete(agent_config),
                 called_number_matches=called_number_matches,

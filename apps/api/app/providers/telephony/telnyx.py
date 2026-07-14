@@ -1,12 +1,16 @@
+import asyncio
 import logging
 from decimal import Decimal, InvalidOperation
 
+import phonenumbers
 import telnyx
+from telnyx.http_client import new_default_http_client
 
 from app.core.config import get_settings
 from app.core.redaction import redact_phone
 from app.providers.telephony.base import (
     TelephonyProvider,
+    TelephonyProviderError,
     TelephonyProvisioningPending,
     TelephonyProvisioningReviewRequired,
 )
@@ -17,6 +21,25 @@ MAX_TOTAL_COST_USD = Decimal("2.00")
 ALLOWED_NUMBER_TYPES = ("national", "local")
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_telnyx_network_policy() -> None:
+    # Telnyx 2.1.6 retries every HTTP method, including NumberOrder.create
+    # POSTs. Durable outbox retry plus customer_reference reconciliation owns
+    # replay safety, so the SDK must never retry an order POST internally.
+    telnyx.max_network_retries = 0
+    if getattr(telnyx.default_http_client, "_timeout", None) != (5, 30):
+        telnyx.default_http_client = new_default_http_client(timeout=(5, 30))
+
+
+def normalize_french_number(value: str) -> str:
+    try:
+        parsed = phonenumbers.parse(value, "FR")
+    except phonenumbers.NumberParseException:
+        raise ValueError("A valid French phone number is required") from None
+    if not phonenumbers.is_valid_number_for_region(parsed, "FR"):
+        raise ValueError("A valid French phone number is required")
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
 
 class TelephonyTelnyx(TelephonyProvider):
@@ -31,6 +54,7 @@ class TelephonyTelnyx(TelephonyProvider):
         phone_number_order_resource=telnyx.NumberOrder,
         phone_number_resource=telnyx.PhoneNumber,
     ) -> None:
+        _configure_telnyx_network_policy()
         settings = get_settings()
         self.api_key = api_key or settings.telnyx_api_key
         self.active_connection_id = active_connection_id or settings.telnyx_active_connection_id
@@ -53,7 +77,7 @@ class TelephonyTelnyx(TelephonyProvider):
                 operation_key,
                 country_code=country_code,
             )
-            existing_number = self._reconcile_existing_order(
+            existing_number = await self._reconcile_existing_order(
                 customer_reference=customer_reference,
                 country_code=country_code,
             )
@@ -63,7 +87,7 @@ class TelephonyTelnyx(TelephonyProvider):
                     redact_phone(existing_number),
                     country_code,
                 )
-                return self._activate_ordered_number(existing_number)
+                return await self._activate_ordered_number(existing_number)
 
         inspected_candidates: list[dict] = []
         selected_candidate: dict | None = None
@@ -73,7 +97,8 @@ class TelephonyTelnyx(TelephonyProvider):
             if remaining_attempts <= 0:
                 break
 
-            available_numbers = self.available_phone_number_resource.list(
+            available_numbers = await self._run_resource_call(
+                self.available_phone_number_resource.list,
                 api_key=self.api_key,
                 **{
                     "filter[country_code]": country_code,
@@ -103,7 +128,10 @@ class TelephonyTelnyx(TelephonyProvider):
                     "country_code": country_code,
                     "max_total_cost_usd": str(MAX_TOTAL_COST_USD),
                     "attempts": len(inspected_candidates),
-                    "candidates": inspected_candidates,
+                    "candidates": [
+                        self._candidate_review_details(candidate)
+                        for candidate in inspected_candidates
+                    ],
                     "contact_support": True,
                 },
             )
@@ -120,28 +148,37 @@ class TelephonyTelnyx(TelephonyProvider):
                 payload={
                     "event": "phone_number_provisioning_review_required",
                     "country_code": country_code,
-                    "selected_candidate": selected_candidate,
+                    "selected_candidate": self._candidate_review_details(
+                        selected_candidate
+                    ),
                     "max_total_cost_usd": str(MAX_TOTAL_COST_USD),
                     "contact_support": False,
                     "manual_review_required": True,
                 },
             )
 
-        self.phone_number_order_resource.create(
+        await self._run_resource_call(
+            self.phone_number_order_resource.create,
             api_key=self.api_key,
             customer_reference=customer_reference,
             phone_numbers=[{"phone_number": selected_number}],
         )
+        ordered_number = await self._reconcile_existing_order(
+            customer_reference=customer_reference,
+            country_code=country_code,
+        )
+        if ordered_number is None:
+            raise TelephonyProvisioningPending(reason="existing_order_pending")
+        return await self._activate_ordered_number(ordered_number)
 
-        return self._activate_ordered_number(selected_number)
-
-    def _reconcile_existing_order(
+    async def _reconcile_existing_order(
         self,
         *,
         customer_reference: str,
         country_code: str,
     ) -> str | None:
-        response = self.phone_number_order_resource.list(
+        response = await self._run_resource_call(
+            self.phone_number_order_resource.list,
             api_key=self.api_key,
             **{"filter[customer_reference]": customer_reference},
         )
@@ -185,32 +222,52 @@ class TelephonyTelnyx(TelephonyProvider):
                 order_count=1,
             )
         selected_number = self._read_field(ordered_number, "phone_number")
-        if not isinstance(selected_number, str) or not selected_number.startswith("+"):
+        if not isinstance(selected_number, str):
             self._raise_existing_order_review(
                 reason="existing_order_requires_review",
                 country_code=country_code,
                 order_count=1,
             )
-        return selected_number
+        try:
+            return normalize_french_number(selected_number)
+        except ValueError:
+            self._raise_existing_order_review(
+                reason="existing_order_requires_review",
+                country_code=country_code,
+                order_count=1,
+            )
 
-    def _activate_ordered_number(self, selected_number: str) -> dict:
-        phone_numbers = self.phone_number_resource.list(
+    async def _activate_ordered_number(self, selected_number: str) -> dict:
+        try:
+            normalized_number = normalize_french_number(selected_number)
+        except (TypeError, ValueError):
+            raise TelephonyProviderError("provider_terminal") from None
+        phone_numbers = await self._run_resource_call(
+            self.phone_number_resource.list,
             api_key=self.api_key,
-            **{"filter[phone_number]": selected_number},
+            **{"filter[phone_number]": normalized_number},
         )
-        if not getattr(phone_numbers, "data", None):
-            raise ValueError("Ordered Telnyx number was not retrievable")
+        provider_numbers = list(getattr(phone_numbers, "data", None) or [])
+        if not provider_numbers:
+            raise TelephonyProvisioningPending(reason="existing_order_pending")
+        if len(provider_numbers) != 1:
+            raise TelephonyProviderError("provider_terminal") from None
 
-        provider_number = phone_numbers.data[0]
-        self.phone_number_resource.modify(
-            provider_number.id,
+        provider_number = provider_numbers[0]
+        provider_number_id = self._read_field(provider_number, "id")
+        if not isinstance(provider_number_id, str) or not provider_number_id:
+            raise TelephonyProviderError("provider_terminal") from None
+        response = await self._run_resource_call(
+            self.phone_number_resource.modify,
+            provider_number_id,
             api_key=self.api_key,
             connection_id=self.disabled_connection_id,
         )
+        self._confirm_connection(response, self.disabled_connection_id)
 
         return {
-            "e164": selected_number,
-            "provider_number_id": provider_number.id,
+            "e164": normalized_number,
+            "provider_number_id": provider_number_id,
             "provider_connection_name": "app-disabled",
         }
 
@@ -257,26 +314,84 @@ class TelephonyTelnyx(TelephonyProvider):
         return getattr(value, field, None)
 
     async def enable_number(self, *, provider_number_id: str) -> str:
-        self.phone_number_resource.modify(
+        response = await self._run_resource_call(
+            self.phone_number_resource.modify,
             provider_number_id,
             api_key=self.api_key,
             connection_id=self.active_connection_id,
         )
+        self._confirm_connection(response, self.active_connection_id)
         return "app-active"
 
     async def disable_number(self, *, provider_number_id: str) -> str:
-        self.phone_number_resource.modify(
+        response = await self._run_resource_call(
+            self.phone_number_resource.modify,
             provider_number_id,
             api_key=self.api_key,
             connection_id=self.disabled_connection_id,
         )
+        self._confirm_connection(response, self.disabled_connection_id)
         return "app-disabled"
+
+    async def _run_resource_call(self, operation, *args, **kwargs):
+        try:
+            return await asyncio.to_thread(operation, *args, **kwargs)
+        except telnyx.error.APIConnectionError as exc:
+            category = (
+                "provider_retryable"
+                if getattr(exc, "should_retry", False) is True
+                else "provider_terminal"
+            )
+            raise TelephonyProviderError(category) from None
+        except (
+            telnyx.error.TimeoutError,
+            telnyx.error.RateLimitError,
+            telnyx.error.ServiceUnavailableError,
+        ):
+            raise TelephonyProviderError("provider_retryable") from None
+        except telnyx.error.APIError as exc:
+            category = (
+                "provider_retryable"
+                if exc.http_status == 429
+                or (exc.http_status is not None and exc.http_status >= 500)
+                else "provider_terminal"
+            )
+            raise TelephonyProviderError(category) from None
+        except (
+            telnyx.error.InvalidRequestError,
+            telnyx.error.AuthenticationError,
+            telnyx.error.PermissionError,
+            telnyx.error.ResourceNotFoundError,
+            telnyx.error.MethodNotSupportedError,
+            telnyx.error.UnsupportedMediaTypeError,
+            telnyx.error.InvalidParametersError,
+        ):
+            raise TelephonyProviderError("provider_terminal") from None
+        except telnyx.error.TelnyxError as exc:
+            category = (
+                "provider_retryable"
+                if exc.http_status is not None and exc.http_status >= 500
+                else "provider_terminal"
+            )
+            raise TelephonyProviderError(category) from None
+
+    @staticmethod
+    def _confirm_connection(response, requested_connection_id: str | None) -> None:
+        if requested_connection_id is None:
+            raise TelephonyProviderError("provider_terminal")
+        connection_id = TelephonyTelnyx._read_field(response, "connection_id")
+        if connection_id != requested_connection_id:
+            raise TelephonyProviderError("provider_retryable")
 
     @staticmethod
     def _extract_candidate_details(candidate, *, phone_number_type: str) -> dict:
         cost_information = getattr(candidate, "cost_information", None) or {}
+        try:
+            e164 = normalize_french_number(getattr(candidate, "phone_number", ""))
+        except ValueError:
+            e164 = None
         return {
-            "e164": getattr(candidate, "phone_number", None),
+            "e164": e164,
             "phone_number_type": phone_number_type,
             "currency": cost_information.get("currency"),
             "upfront_cost": cost_information.get("upfront_cost"),
@@ -285,7 +400,7 @@ class TelephonyTelnyx(TelephonyProvider):
 
     @staticmethod
     def _is_candidate_affordable(candidate: dict) -> bool:
-        if candidate.get("currency") != "USD":
+        if not candidate.get("e164") or candidate.get("currency") != "USD":
             return False
         try:
             upfront_cost = Decimal(str(candidate.get("upfront_cost")))
@@ -293,6 +408,18 @@ class TelephonyTelnyx(TelephonyProvider):
         except (InvalidOperation, TypeError):
             return False
         return upfront_cost + monthly_cost <= MAX_TOTAL_COST_USD
+
+    @staticmethod
+    def _candidate_review_details(candidate: dict) -> dict:
+        return {
+            key: candidate.get(key)
+            for key in (
+                "phone_number_type",
+                "currency",
+                "upfront_cost",
+                "monthly_cost",
+            )
+        }
 
 
 def get_telephony_provider() -> TelephonyProvider:

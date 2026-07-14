@@ -31,6 +31,12 @@ class BillingQueryService:
 
         self.subscription_repository = subscription_repository
         self.usage_repository = usage_repository
+        self.session = session
+
+    async def end_business_transaction(self) -> None:
+        """Release the request transaction before hosted-provider I/O."""
+        if self.session is not None and self.session.in_transaction():
+            await self.session.rollback()
 
     async def get_subscription(self, user_id: UUID | str) -> SubscriptionResponse | None:
         subscription = await self.subscription_repository.get_by_user_id(user_id)

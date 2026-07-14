@@ -1,6 +1,18 @@
 from abc import ABC, abstractmethod
 
 
+SAFE_PROVIDER_CATEGORIES = frozenset({"provider_retryable", "provider_terminal"})
+
+
+class TelephonyProviderError(RuntimeError):
+    def __init__(self, category: str) -> None:
+        if category not in SAFE_PROVIDER_CATEGORIES:
+            raise ValueError("Unsafe telephony provider category")
+        super().__init__(category)
+        self.category = category
+        self.retryable = category == "provider_retryable"
+
+
 class TelephonyProvisioningReviewRequired(Exception):
     def __init__(self, *, reason: str, payload: dict) -> None:
         super().__init__(reason)

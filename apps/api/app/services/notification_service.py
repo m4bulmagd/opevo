@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.providers.notifications.base import NotificationProvider
-from app.providers.notifications.firebase import FirebaseNotificationProvider
 from app.repositories.notification_repository import NotificationRepository
 
 
@@ -29,22 +28,9 @@ class NotificationService:
         summary_text: str | None,
         minutes_charged: int,
     ) -> NotificationResult:
-        payload = {
-            "event": "call_completed",
-            "summary_text": summary_text,
-            "minutes_charged": minutes_charged,
-        }
-        try:
-            status = await self.provider.send_notification(
-                user_id=user_id,
-                notification_type="call_completed",
-                payload=payload,
-            )
-            job_enqueued = True
-        except Exception as exc:
-            status = "failed"
-            payload["notification_error"] = str(exc)
-            job_enqueued = False
+        payload = {"event": "call_completed", "call_id": str(call_id)}
+        status = "disabled"
+        job_enqueued = False
         await self.notification_repository.create(
             user_id=user_id,
             call_id=call_id,

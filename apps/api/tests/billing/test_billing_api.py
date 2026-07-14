@@ -23,6 +23,10 @@ from app.schemas.billing_api import UsageLedgerEntryResponse, UsageLedgerListRes
 class FakeBillingQueryService:
     def __init__(self) -> None:
         self.usage_limits: list[int] = []
+        self.business_transaction_active = True
+
+    async def end_business_transaction(self) -> None:
+        self.business_transaction_active = False
 
     async def get_subscription(self, user_id):
         return None
@@ -103,32 +107,45 @@ async def test_get_usage_ledger_returns_recent_entries() -> None:
 
 
 class FakeBillingSessionService:
-    def __init__(self, *, checkout_url="https://checkout.stripe.test/session", portal_url="https://billing.stripe.test/session") -> None:
+    def __init__(
+        self,
+        *,
+        checkout_url="https://checkout.stripe.test/session",
+        portal_url="https://billing.stripe.test/session",
+        query_service: FakeBillingQueryService | None = None,
+    ) -> None:
         self.checkout_url = checkout_url
         self.portal_url = portal_url
+        self.query_service = query_service
 
-    def create_checkout_session(self, *, user_id, customer_email, clerk_user_id, plan_tier):
+    def _assert_transaction_ended(self) -> None:
+        if self.query_service is not None:
+            assert self.query_service.business_transaction_active is False
+
+    async def create_checkout_session(self, *, user_id, customer_email, clerk_user_id, plan_tier):
+        self._assert_transaction_ended()
         if plan_tier != "starter":
             raise ValueError(f"Unsupported plan tier: {plan_tier}")
         return type("HostedSession", (), {"url": self.checkout_url})()
 
-    def create_portal_session(self, *, customer_id, return_url):
+    async def create_portal_session(self, *, customer_id, return_url):
+        self._assert_transaction_ended()
         return type("HostedSession", (), {"url": self.portal_url})()
 
 
 class FakeUnsafePortalSessionService(FakeBillingSessionService):
-    def create_portal_session(self, *, customer_id, return_url):
+    async def create_portal_session(self, *, customer_id, return_url):
         from app.services.billing_session_service import BillingPortalReturnUrlError
 
         raise BillingPortalReturnUrlError("unsafe return URL")
 
 
-class FakeEmptySubscriptionQueryService:
+class FakeEmptySubscriptionQueryService(FakeBillingQueryService):
     async def get_subscription(self, user_id):
         return None
 
 
-class FakeActiveSubscriptionQueryService:
+class FakeActiveSubscriptionQueryService(FakeBillingQueryService):
     async def get_subscription(self, user_id):
         from app.schemas.billing_api import SubscriptionResponse
 
@@ -164,6 +181,27 @@ async def test_create_checkout_session_returns_url() -> None:
         identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
         service=FakeBillingSessionService(),
         query_service=FakeEmptySubscriptionQueryService(),
+        user=type("User", (), {"email": "billing@example.com"})(),
+    )
+
+    assert response.url == "https://checkout.stripe.test/session"
+
+
+@pytest.mark.anyio
+async def test_checkout_ends_business_transaction_before_stripe() -> None:
+    from app.routers.billing import create_checkout_session
+    from app.schemas.billing_api import CheckoutSessionRequest
+
+    query_service = FakeEmptySubscriptionQueryService()
+    response = await create_checkout_session(
+        request=_fake_request(),
+        payload=CheckoutSessionRequest(plan_tier="starter"),
+        identity=UserIdentity(
+            clerk_user_id="user_123",
+            internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+        ),
+        service=FakeBillingSessionService(query_service=query_service),
+        query_service=query_service,
         user=type("User", (), {"email": "billing@example.com"})(),
     )
 
@@ -252,6 +290,42 @@ async def test_create_portal_session_returns_url() -> None:
     )
 
     assert response.url == "https://billing.stripe.test/session"
+
+
+@pytest.mark.anyio
+async def test_portal_ends_business_transaction_before_stripe() -> None:
+    from app.routers.billing import create_portal_session
+    from app.schemas.billing_api import PortalSessionRequest
+
+    query_service = FakeActiveSubscriptionQueryService()
+    response = await create_portal_session(
+        request=_fake_request(),
+        payload=PortalSessionRequest(return_url="https://app.example.com/settings"),
+        identity=UserIdentity(
+            clerk_user_id="user_123",
+            internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+        ),
+        service=FakeBillingSessionService(query_service=query_service),
+        query_service=query_service,
+    )
+
+    assert response.url == "https://billing.stripe.test/session"
+
+
+@pytest.mark.anyio
+async def test_billing_query_service_rolls_back_autobegun_transaction(
+    db_session,
+    active_user,
+) -> None:
+    from app.services.billing_query_service import BillingQueryService
+
+    service = BillingQueryService(db_session)
+    await service.get_subscription(active_user.id)
+    assert db_session.in_transaction() is True
+
+    await service.end_business_transaction()
+
+    assert db_session.in_transaction() is False
 
 
 @pytest.mark.anyio

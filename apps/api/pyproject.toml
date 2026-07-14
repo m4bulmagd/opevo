@@ -10,6 +10,7 @@ dependencies = [
   "google-genai>=1.69.0",
   "livekit-api>=1.0,<2.0",
   "minio>=7.2,<8.0",
+  "phonenumbers>=9.0,<10.0",
   "pydantic-settings>=2.10,<3.0",
   "pyjwt>=2.10,<3.0",
   "redis>=5.0,<6.0",

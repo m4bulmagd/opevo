@@ -1,13 +1,35 @@
+import asyncio
 import logging
+import time
 import pytest
 from types import SimpleNamespace
 
+import app.providers.telephony.telnyx as telnyx_module
+import telnyx
 from app.providers.telephony.base import (
+    TelephonyProviderError,
     TelephonyProvisioningPending,
     TelephonyProvisioningReviewRequired,
 )
 from app.providers.telephony.telnyx import TelephonyTelnyx
 from app.services.telephony_service import TelephonyService
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("06 12 34 56 78", "+33612345678"),
+        ("0033 6 12 34 56 78", "+33612345678"),
+        ("+33 6 12 34 56 78", "+33612345678"),
+    ],
+)
+def test_normalize_french_number(raw: str, expected: str) -> None:
+    assert telnyx_module.normalize_french_number(raw) == expected
+
+
+def test_normalize_french_number_rejects_valid_non_french_number() -> None:
+    with pytest.raises(ValueError, match="valid French phone number"):
+        telnyx_module.normalize_french_number("+44 20 7946 0958")
 
 
 class FakeTelephonyProvider:
@@ -23,6 +45,12 @@ class FakeTelephonyProvider:
 
     async def disable_number(self, *, provider_number_id: str) -> str:
         return "app-disabled"
+
+
+class FakeLocalFormatTelephonyProvider(FakeTelephonyProvider):
+    async def provision_number(self, *, country_code: str) -> dict:
+        result = await super().provision_number(country_code=country_code)
+        return {**result, "e164": "06 12 34 56 78"}
 
 
 class FakeAvailablePhoneNumberResource:
@@ -97,6 +125,86 @@ class EmptyPhoneNumberResource:
         raise AssertionError("modify should not be called")
 
 
+class BlockingAvailablePhoneNumberResource:
+    @classmethod
+    def list(cls, api_key=None, **params):
+        time.sleep(0.1)
+        return SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    phone_number="+33123456789",
+                    cost_information={
+                        "currency": "USD",
+                        "upfront_cost": "1.00000",
+                        "monthly_cost": "0.50000",
+                    },
+                )
+            ]
+        )
+
+
+class DisagreeingPhoneNumberResource(FakePhoneNumberResource):
+    @classmethod
+    def modify(cls, sid, **params):
+        return SimpleNamespace(id=sid, connection_id="different-connection")
+
+
+class FailingPhoneNumberResource(FakePhoneNumberResource):
+    error: Exception
+
+    @classmethod
+    def modify(cls, sid, **params):
+        raise cls.error
+
+
+class RetryPolicyAssertingNumberOrderResource(FakePhoneNumberOrderResource):
+    create_calls = 0
+
+    @classmethod
+    def create(cls, api_key=None, **params):
+        cls.create_calls += 1
+        assert telnyx.max_network_retries == 0
+        return super().create(api_key=api_key, **params)
+
+
+class PendingThenSuccessfulNumberOrderResource:
+    calls: list[dict] = []
+    list_calls: list[dict] = []
+    orders: list[SimpleNamespace] = []
+
+    @classmethod
+    def list(cls, api_key=None, **params):
+        cls.list_calls.append(params)
+        if len(cls.list_calls) >= 3 and cls.orders:
+            cls.orders[0].requirements_met = True
+            cls.orders[0].phone_numbers[0].status = "success"
+        customer_reference = params.get("filter[customer_reference]")
+        return SimpleNamespace(
+            data=[
+                order
+                for order in cls.orders
+                if order.customer_reference == customer_reference
+            ]
+        )
+
+    @classmethod
+    def create(cls, api_key=None, **params):
+        cls.calls.append(params)
+        order = SimpleNamespace(
+            id="order_pending_then_successful",
+            customer_reference=params["customer_reference"],
+            requirements_met=False,
+            phone_numbers=[
+                SimpleNamespace(
+                    phone_number=params["phone_numbers"][0]["phone_number"],
+                    status="pending",
+                )
+            ],
+        )
+        cls.orders.append(order)
+        return order
+
+
 @pytest.mark.anyio
 async def test_provision_number_assigns_e164_to_user(db_session, active_user) -> None:
     service = TelephonyService(db_session, provider=FakeTelephonyProvider())
@@ -107,13 +215,113 @@ async def test_provision_number_assigns_e164_to_user(db_session, active_user) ->
 
 
 @pytest.mark.anyio
+async def test_provisioned_number_is_normalized_before_persistence(
+    db_session,
+    active_user,
+) -> None:
+    service = TelephonyService(
+        db_session,
+        provider=FakeLocalFormatTelephonyProvider(),
+    )
+
+    phone_number = await service.provision_number(active_user.id, country_code="FR")
+
+    assert phone_number.e164 == "+33612345678"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "result",
+    [
+        {
+            "e164": "+442079460958",
+            "provider_number_id": "tnx-number-123",
+            "provider_connection_name": "app-disabled",
+        },
+        {
+            "e164": "+33123456789",
+            "provider_connection_name": "app-disabled",
+        },
+        {
+            "e164": "+33123456789",
+            "provider_number_id": "tnx-number-123",
+            "provider_connection_name": "unexpected-connection",
+        },
+    ],
+)
+async def test_provisioned_provider_result_must_be_valid_and_complete(
+    db_session,
+    active_user,
+    result: dict,
+) -> None:
+    class MalformedProvider(FakeTelephonyProvider):
+        async def provision_number(self, *, country_code: str) -> dict:
+            return result
+
+    service = TelephonyService(db_session, provider=MalformedProvider())
+
+    with pytest.raises(TelephonyProviderError) as exc_info:
+        await service.provision_number(active_user.id, country_code="FR")
+
+    assert exc_info.value.category == "provider_terminal"
+    assert str(exc_info.value) == "provider_terminal"
+
+
+@pytest.mark.anyio
 async def test_disable_number_switches_to_disabled_app(db_session, active_user) -> None:
     service = TelephonyService(db_session, provider=FakeTelephonyProvider())
     assigned_number = await service.provision_number(active_user.id, country_code="FR")
+    await db_session.commit()
 
     updated = await service.disable_number(assigned_number.user_id)
 
     assert updated.provider_connection_name == "app-disabled"
+
+
+@pytest.mark.anyio
+async def test_telephony_service_ends_business_transaction_before_provider_io(
+    db_session,
+    active_user,
+) -> None:
+    class TransactionCheckingProvider(FakeTelephonyProvider):
+        calls: list[str]
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def _assert_no_business_transaction(self, operation: str) -> None:
+            assert db_session.in_transaction() is False
+            self.calls.append(operation)
+
+        async def provision_number(self, *, country_code: str) -> dict:
+            self._assert_no_business_transaction("provision")
+            return {
+                "e164": "+33123456789",
+                "provider_number_id": "tnx-number-transaction",
+                "provider_connection_name": "app-disabled",
+            }
+
+        async def enable_number(self, *, provider_number_id: str) -> str:
+            self._assert_no_business_transaction("enable")
+            return "app-active"
+
+        async def disable_number(self, *, provider_number_id: str) -> str:
+            self._assert_no_business_transaction("disable")
+            return "app-disabled"
+
+    provider = TransactionCheckingProvider()
+    service = TelephonyService(db_session, provider=provider)
+    user_id = active_user.id
+
+    await service.provision_number(user_id, country_code="FR")
+    await db_session.commit()
+    enabled = await service.enable_number(user_id)
+    assert enabled.provider_connection_name == "app-active"
+    await db_session.commit()
+    disabled = await service.disable_number(user_id)
+
+    assert disabled.provider_connection_name == "app-disabled"
+    assert provider.calls == ["provision", "enable", "disable"]
 
 
 @pytest.mark.anyio
@@ -155,6 +363,7 @@ async def test_telnyx_provider_orders_number_and_sets_connection() -> None:
         == "outbox:phone-provision:evt_123"
     )
     assert FakePhoneNumberOrderResource.list_calls == [
+        {"filter[customer_reference]": "outbox:phone-provision:evt_123"},
         {"filter[customer_reference]": "outbox:phone-provision:evt_123"}
     ]
     assert FakePhoneNumberResource.modify_calls[0]["connection_id"] == "conn_disabled"
@@ -202,6 +411,96 @@ async def test_telnyx_provider_reconciles_same_operation_before_buying_again() -
     assert replay == first
     assert len(FakePhoneNumberOrderResource.calls) == 1
     assert len(FakeAvailablePhoneNumberResource.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_telnyx_pending_order_replay_activates_without_duplicate_purchase() -> None:
+    FakeAvailablePhoneNumberResource.responses = [
+        [
+            SimpleNamespace(
+                phone_number="+33123456789",
+                cost_information={
+                    "currency": "USD",
+                    "upfront_cost": "1.00000",
+                    "monthly_cost": "0.50000",
+                },
+            )
+        ]
+    ]
+    FakeAvailablePhoneNumberResource.calls = []
+    PendingThenSuccessfulNumberOrderResource.calls = []
+    PendingThenSuccessfulNumberOrderResource.list_calls = []
+    PendingThenSuccessfulNumberOrderResource.orders = []
+    FakePhoneNumberResource.list_calls = []
+    FakePhoneNumberResource.modify_calls = []
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        active_connection_id="conn_active",
+        disabled_connection_id="conn_disabled",
+        ordering_enabled=True,
+        available_phone_number_resource=FakeAvailablePhoneNumberResource,
+        phone_number_order_resource=PendingThenSuccessfulNumberOrderResource,
+        phone_number_resource=FakePhoneNumberResource,
+    )
+    operation_key = "outbox:phone-provision:pending-replay"
+
+    with pytest.raises(TelephonyProvisioningPending) as exc_info:
+        await provider.provision_number(
+            country_code="FR",
+            operation_key=operation_key,
+        )
+
+    assert exc_info.value.reason == "existing_order_pending"
+    result = await provider.provision_number(
+        country_code="FR",
+        operation_key=operation_key,
+    )
+
+    assert result == {
+        "e164": "+33123456789",
+        "provider_number_id": "pn_123",
+        "provider_connection_name": "app-disabled",
+    }
+    assert len(PendingThenSuccessfulNumberOrderResource.calls) == 1
+    assert PendingThenSuccessfulNumberOrderResource.calls[0][
+        "customer_reference"
+    ] == operation_key
+    assert len(FakeAvailablePhoneNumberResource.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_telnyx_number_order_post_runs_with_sdk_retries_disabled() -> None:
+    FakeAvailablePhoneNumberResource.responses = [
+        [
+            SimpleNamespace(
+                phone_number="+33123456789",
+                cost_information={
+                    "currency": "USD",
+                    "upfront_cost": "1.00000",
+                    "monthly_cost": "0.50000",
+                },
+            )
+        ]
+    ]
+    FakePhoneNumberOrderResource.calls = []
+    FakePhoneNumberOrderResource.orders = []
+    RetryPolicyAssertingNumberOrderResource.create_calls = 0
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        active_connection_id="conn_active",
+        disabled_connection_id="conn_disabled",
+        ordering_enabled=True,
+        available_phone_number_resource=FakeAvailablePhoneNumberResource,
+        phone_number_order_resource=RetryPolicyAssertingNumberOrderResource,
+        phone_number_resource=FakePhoneNumberResource,
+    )
+
+    await provider.provision_number(
+        country_code="FR",
+        operation_key="outbox:phone-provision:no-sdk-post-retry",
+    )
+
+    assert RetryPolicyAssertingNumberOrderResource.create_calls == 1
 
 
 @pytest.mark.anyio
@@ -378,7 +677,8 @@ async def test_telnyx_provider_tries_national_then_local_and_stops_before_orderi
         await provider.provision_number(country_code="FR")
 
     assert exc_info.value.reason == "ordering_disabled"
-    assert exc_info.value.payload["selected_candidate"]["e164"] == "+33111111111"
+    assert exc_info.value.payload["selected_candidate"]["phone_number_type"] == "local"
+    assert "e164" not in exc_info.value.payload["selected_candidate"]
     assert FakeAvailablePhoneNumberResource.calls[0]["filter[phone_number_type]"] == "national"
     assert FakeAvailablePhoneNumberResource.calls[1]["filter[phone_number_type]"] == "local"
     assert not FakePhoneNumberOrderResource.calls
@@ -414,7 +714,34 @@ async def test_telnyx_provider_logs_selected_candidate_before_review_required(ca
 
 
 @pytest.mark.anyio
-async def test_telnyx_provider_error_does_not_expose_selected_number() -> None:
+async def test_telnyx_review_payload_does_not_persist_candidate_number() -> None:
+    selected_number = "+33111111111"
+    FakeAvailablePhoneNumberResource.responses = [
+        [
+            SimpleNamespace(
+                phone_number=selected_number,
+                cost_information={
+                    "currency": "USD",
+                    "upfront_cost": "1.00000",
+                    "monthly_cost": "0.50000",
+                },
+            )
+        ]
+    ]
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        ordering_enabled=False,
+        available_phone_number_resource=FakeAvailablePhoneNumberResource,
+    )
+
+    with pytest.raises(TelephonyProvisioningReviewRequired) as exc_info:
+        await provider.provision_number(country_code="FR")
+
+    assert selected_number not in str(exc_info.value.payload)
+
+
+@pytest.mark.anyio
+async def test_telnyx_known_order_without_phone_row_is_pending_and_private() -> None:
     selected_number = "+33111111111"
     FakeAvailablePhoneNumberResource.responses = [
         [
@@ -438,12 +765,13 @@ async def test_telnyx_provider_error_does_not_expose_selected_number() -> None:
         phone_number_resource=EmptyPhoneNumberResource,
     )
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(TelephonyProvisioningPending) as exc_info:
         await provider.provision_number(
             country_code="FR",
             operation_key="outbox:phone-provision:error-path",
         )
 
+    assert exc_info.value.reason == "existing_order_pending"
     assert selected_number not in str(exc_info.value)
 
 
@@ -487,3 +815,134 @@ async def test_telnyx_provider_stops_after_three_unaffordable_candidates() -> No
     assert exc_info.value.payload["attempts"] == 3
     assert exc_info.value.payload["contact_support"] is True
     assert not FakePhoneNumberOrderResource.calls
+
+
+@pytest.mark.anyio
+async def test_telnyx_provider_rejects_valid_non_french_candidates() -> None:
+    british_candidate = SimpleNamespace(
+        phone_number="+442079460958",
+        cost_information={
+            "currency": "USD",
+            "upfront_cost": "1.00000",
+            "monthly_cost": "0.50000",
+        },
+    )
+    FakeAvailablePhoneNumberResource.responses = [
+        [british_candidate],
+        [british_candidate],
+    ]
+    FakePhoneNumberOrderResource.calls = []
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        ordering_enabled=False,
+        available_phone_number_resource=FakeAvailablePhoneNumberResource,
+        phone_number_order_resource=FakePhoneNumberOrderResource,
+        phone_number_resource=FakePhoneNumberResource,
+    )
+
+    with pytest.raises(TelephonyProvisioningReviewRequired) as exc_info:
+        await provider.provision_number(country_code="FR")
+
+    assert exc_info.value.reason == "no_affordable_number"
+    assert not FakePhoneNumberOrderResource.calls
+
+
+@pytest.mark.anyio
+async def test_telnyx_resource_calls_do_not_block_the_event_loop() -> None:
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        ordering_enabled=False,
+        available_phone_number_resource=BlockingAvailablePhoneNumberResource,
+        phone_number_order_resource=FakePhoneNumberOrderResource,
+        phone_number_resource=FakePhoneNumberResource,
+    )
+    heartbeat = asyncio.create_task(asyncio.sleep(0.02))
+
+    with pytest.raises(TelephonyProvisioningReviewRequired):
+        await provider.provision_number(country_code="FR")
+
+    assert heartbeat.done()
+
+
+@pytest.mark.anyio
+async def test_telnyx_connection_change_requires_matching_provider_response() -> None:
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        active_connection_id="conn_active",
+        phone_number_resource=DisagreeingPhoneNumberResource,
+    )
+
+    with pytest.raises(TelephonyProviderError) as exc_info:
+        await provider.enable_number(provider_number_id="pn_123")
+
+    assert type(exc_info.value) is telnyx_module.TelephonyProviderError
+    assert exc_info.value.category == "provider_retryable"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("provider_error", "expected_category"),
+    [
+        (
+            telnyx.error.RateLimitError(
+                [{"title": "rate limited secret +33123456789"}],
+                http_status=429,
+            ),
+            "provider_retryable",
+        ),
+        (
+            telnyx.error.AuthenticationError(
+                [{"title": "invalid credential sk-secret"}],
+                http_status=401,
+            ),
+            "provider_terminal",
+        ),
+        (
+            telnyx.error.APIError(
+                [{"title": "generic validation secret"}],
+                http_status=400,
+            ),
+            "provider_terminal",
+        ),
+        (
+            telnyx.error.APIError(
+                [{"title": "generic server secret"}],
+                http_status=503,
+            ),
+            "provider_retryable",
+        ),
+        (
+            telnyx.error.APIConnectionError(
+                "terminal local TLS configuration secret",
+                should_retry=False,
+            ),
+            "provider_terminal",
+        ),
+    ],
+)
+async def test_telnyx_errors_use_safe_fixed_categories(
+    provider_error: Exception,
+    expected_category: str,
+) -> None:
+    FailingPhoneNumberResource.error = provider_error
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        active_connection_id="conn_active",
+        phone_number_resource=FailingPhoneNumberResource,
+    )
+
+    with pytest.raises(TelephonyProviderError) as exc_info:
+        await provider.enable_number(provider_number_id="pn_123")
+
+    assert type(exc_info.value) is telnyx_module.TelephonyProviderError
+    assert exc_info.value.category == expected_category
+    assert str(exc_info.value) == expected_category
+
+
+def test_telnyx_sdk_uses_bounded_network_policy() -> None:
+    TelephonyTelnyx(api_key="key_123", ordering_enabled=False)
+
+    # Telnyx 2.1.6 retries POST requests as well as reads. Durable outbox retry
+    # and customer_reference reconciliation own replay safety instead.
+    assert telnyx.max_network_retries == 0
+    assert telnyx.default_http_client._timeout == (5, 30)

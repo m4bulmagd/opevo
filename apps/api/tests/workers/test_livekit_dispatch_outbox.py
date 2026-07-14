@@ -234,6 +234,30 @@ async def test_stale_eligibility_never_calls_provider(db_session, monkeypatch) -
 
 
 @pytest.mark.anyio
+async def test_disagreeing_phone_projection_never_calls_dispatch_provider(
+    db_session,
+    monkeypatch,
+) -> None:
+    call, event, _subscription = await _seed_dispatch(db_session)
+    phone = await db_session.get(PhoneNumber, call.phone_number_id)
+    phone.provider_connection_name = "app-disabled"
+    phone.is_active = True
+    await db_session.commit()
+    provider = _Provider()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_livekit_dispatch(
+            {"session_factory": session_factory, "livekit_dispatch_provider": provider},
+            event,
+        )
+
+    assert exc_info.value.error_code == "dispatch_ineligible"
+    assert provider.list_calls == []
+    assert provider.create_calls == []
+
+
+@pytest.mark.anyio
 async def test_foreign_dispatch_is_a_terminal_conflict(db_session, monkeypatch) -> None:
     _call, event, _subscription = await _seed_dispatch(db_session)
     provider = _Provider()

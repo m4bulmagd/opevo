@@ -156,10 +156,10 @@ def _make_notification_service(session, provider) -> NotificationService:
 
 
 @pytest.mark.anyio
-async def test_notifications_job_happy_path(
+async def test_notifications_job_persists_disabled_opaque_reference(
     db_session, active_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """notifications_job persists a sent notification and returns job_enqueued=True."""
+    """notifications_job persists only the dashboard reference while push is disabled."""
     call = Call(
         id=uuid4(),
         user_id=active_user.id,
@@ -191,8 +191,8 @@ async def test_notifications_job_happy_path(
 
     result = await notifications_module.notifications_job(CTX, payload)
 
-    assert result["status"] == "sent"
-    assert result["job_enqueued"] is True
+    assert result["status"] == "disabled"
+    assert result["job_enqueued"] is False
 
     notifications = (
         await db_session.execute(
@@ -201,14 +201,18 @@ async def test_notifications_job_happy_path(
     ).scalars().all()
     assert len(notifications) == 1
     assert notifications[0].notification_type == "call_completed"
-    assert notifications[0].status == "sent"
+    assert notifications[0].status == "disabled"
+    assert notifications[0].payload == {
+        "event": "call_completed",
+        "call_id": str(call.id),
+    }
 
 
 @pytest.mark.anyio
-async def test_notifications_job_provider_failure(
+async def test_notifications_job_never_calls_dormant_provider(
     db_session, active_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """notifications_job persists a failed notification when the provider raises."""
+    """Provider failures cannot leak because dormant push is never invoked."""
     call = Call(
         id=uuid4(),
         user_id=active_user.id,
@@ -240,7 +244,7 @@ async def test_notifications_job_provider_failure(
 
     result = await notifications_module.notifications_job(CTX, payload)
 
-    assert result["status"] == "failed"
+    assert result["status"] == "disabled"
     assert result["job_enqueued"] is False
 
     notifications = (
@@ -249,8 +253,12 @@ async def test_notifications_job_provider_failure(
         )
     ).scalars().all()
     assert len(notifications) == 1
-    assert notifications[0].status == "failed"
-    assert "push service unavailable" in notifications[0].payload.get("notification_error", "")
+    assert notifications[0].status == "disabled"
+    assert notifications[0].payload == {
+        "event": "call_completed",
+        "call_id": str(call.id),
+    }
+    assert "push service unavailable" not in str(notifications[0].payload)
 
 
 @pytest.mark.anyio
@@ -871,6 +879,43 @@ async def test_phone_provisioning_unexpected_failure_does_not_log_or_persist_exc
         "error_type": "RuntimeError",
     }
     assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("category", "can_retry"),
+    [
+        ("provider_retryable", True),
+        ("provider_terminal", False),
+    ],
+)
+async def test_phone_provisioning_preserves_safe_provider_category(
+    monkeypatch: pytest.MonkeyPatch,
+    category: str,
+    can_retry: bool,
+) -> None:
+    from app.providers.telephony.base import TelephonyProviderError
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    session, provisioning_repository, _notification_repository = (
+        install_phone_provisioning_job_fakes(
+            monkeypatch,
+            error=TelephonyProviderError(category),
+        )
+    )
+
+    with pytest.raises(TelephonyProviderError) as exc_info:
+        await phone_provisioning_job(
+            {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+            {"user_id": "00000000-0000-0000-0000-000000000123"},
+        )
+
+    assert exc_info.value.category == category
+    assert provisioning_repository.failed_calls[0]["reason"] == category
+    assert provisioning_repository.failed_calls[0]["payload"] == {
+        "error_type": category,
+    }
+    assert provisioning_repository.failed_calls[0]["can_retry"] is can_retry
 
 
 @pytest.mark.anyio

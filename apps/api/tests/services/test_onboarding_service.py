@@ -285,7 +285,21 @@ async def test_get_status_returns_ready_to_enable_when_setup_complete_and_routin
 
 
 @pytest.mark.anyio
-async def test_get_status_returns_live_when_routing_enabled(db_session, active_user) -> None:
+@pytest.mark.parametrize(
+    ("provider_connection_name", "is_active", "routing_enabled"),
+    [
+        ("app-active", True, True),
+        ("app-disabled", True, False),
+        ("app-active", False, False),
+    ],
+)
+async def test_get_status_requires_consistent_active_phone_projection(
+    db_session,
+    active_user,
+    provider_connection_name: str,
+    is_active: bool,
+    routing_enabled: bool,
+) -> None:
     from app.services.onboarding_service import OnboardingService
 
     phone_number_id = uuid4()
@@ -309,8 +323,8 @@ async def test_get_status_returns_live_when_routing_enabled(db_session, active_u
             country_code="FR",
             provider="telnyx",
             provider_number_id="pn_123",
-            provider_connection_name="app-active",
-            is_active=True,
+            provider_connection_name=provider_connection_name,
+            is_active=is_active,
         )
     )
     db_session.add(
@@ -338,5 +352,5 @@ async def test_get_status_returns_live_when_routing_enabled(db_session, active_u
 
     status = await OnboardingService(db_session).get_status(active_user.id)
 
-    assert status.routing_enabled is True
-    assert status.overall_status == "live"
+    assert status.routing_enabled is routing_enabled
+    assert status.overall_status == ("live" if routing_enabled else "ready_to_enable")

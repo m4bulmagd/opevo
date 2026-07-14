@@ -93,6 +93,7 @@ class OnboardingService:
             and config.is_enabled
             and phone_number is not None
             and phone_number.is_active
+            and phone_number.provider_connection_name == "app-active"
         )
         can_retry_provisioning = bool(
             provisioning is not None

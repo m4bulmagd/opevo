@@ -9,6 +9,7 @@ from app.core.database import get_session_factory
 from app.core.logging import report_safe_exception
 from app.core.redaction import safe_log_label
 from app.providers.telephony.base import (
+    TelephonyProviderError,
     TelephonyProvisioningPending,
     TelephonyProvisioningReviewRequired,
 )
@@ -61,6 +62,7 @@ async def _run_provider_attempt(
     provisioning_repo: PhoneNumberProvisioningRepository,
 ) -> None:
     review_failure: tuple[str, dict[str, Any], str] | None = None
+    provider_failure: tuple[str, bool] | None = None
     unexpected_error_type: str | None = None
     try:
         service_kwargs = {"country_code": country_code}
@@ -98,6 +100,8 @@ async def _run_provider_attempt(
         raise TelephonyProvisioningPending(reason=pending_reason) from None
     except TelephonyProvisioningReviewRequired as exc:
         review_failure = (exc.reason, dict(exc.payload), _safe_error_type(exc))
+    except TelephonyProviderError as exc:
+        provider_failure = (exc.category, exc.retryable)
     except Exception as exc:
         unexpected_error_type = _safe_error_type(exc)
     else:
@@ -144,20 +148,26 @@ async def _run_provider_attempt(
         if secondary_error_type is None:
             return
     else:
-        assert unexpected_error_type is not None
+        error_type = (
+            provider_failure[0]
+            if provider_failure is not None
+            else unexpected_error_type
+        )
+        assert error_type is not None
+        can_retry = provider_failure[1] if provider_failure is not None else True
         try:
             await provisioning_repo.mark_failed(
                 user_id=user_id,
                 target_country_code=country_code,
-                reason=unexpected_error_type,
-                payload={"error_type": unexpected_error_type},
-                can_retry=True,
+                reason=error_type,
+                payload={"error_type": error_type},
+                can_retry=can_retry,
             )
             report_safe_exception(
                 logger,
                 event="phone_provisioning_failed",
                 operation="provision_phone_number",
-                error_type=unexpected_error_type,
+                error_type=error_type,
                 user_id=user_id,
                 status="failed",
             )
@@ -165,8 +175,10 @@ async def _run_provider_attempt(
         except Exception as exc:
             secondary_error_type = _safe_error_type(exc)
         if secondary_error_type is None:
+            if provider_failure is not None:
+                raise TelephonyProviderError(provider_failure[0]) from None
             raise RuntimeError(
-                f"phone_provisioning_failed error_type={unexpected_error_type}"
+                f"phone_provisioning_failed error_type={error_type}"
             ) from None
 
     report_safe_exception(

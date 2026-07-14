@@ -72,7 +72,15 @@ The one-minute call reconciler recovers stale ending/finalizing rows using commi
 
 If the object has expired or is missing, the API returns `recording_url = null`. The call row, transcript, usage facts, and summary remain available according to their own retention rules.
 
-The recordings bucket owns the approved 30-day object lifecycle. The application does not run a duplicate recording-expiry deletion job.
+The recordings bucket owns the approved 30-day object lifecycle. The rule expires
+only objects under the `calls/` prefix, and the bucket remains private so customer
+playback requires a short-lived signed URL. Local Compose provisions the reference
+deployment from `infra/minio/recording-lifecycle.json` in the `minio-init` boundary,
+then explicitly applies private anonymous access. Production storage remains generic
+S3-compatible infrastructure: operators must provision the configured bucket, the
+same `calls/`/30-day lifecycle rule, and private access before starting the API. The
+application verifies the bucket and object but never creates buckets or runs a
+duplicate recording-expiry deletion job.
 
 ## Failure behavior
 

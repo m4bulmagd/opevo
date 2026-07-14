@@ -3,9 +3,16 @@ import io
 from functools import lru_cache
 from urllib.parse import urlparse
 
+from minio.error import InvalidResponseError, S3Error, ServerError
+from urllib3 import PoolManager
+from urllib3.util import Retry, Timeout
+
 from app.core.config import get_settings
-from app.providers.storage.base import StorageProvider
-from app.providers.storage.base import StoredObject
+from app.providers.storage.base import StorageProvider, StorageProviderError, StoredObject
+
+
+class StorageConfigurationError(RuntimeError):
+    pass
 
 
 class S3Storage(StorageProvider):
@@ -34,12 +41,24 @@ class S3Storage(StorageProvider):
         parsed = urlparse(self.endpoint_url)
         endpoint = parsed.netloc or parsed.path
         secure = parsed.scheme == "https"
+        http_client = PoolManager(
+            timeout=Timeout(connect=5, read=30),
+            retries=Retry(
+                total=2,
+                connect=2,
+                read=2,
+                status=2,
+                status_forcelist=(429, 500, 502, 503, 504),
+                backoff_factor=0.2,
+            ),
+        )
         return Minio(
             endpoint,
             access_key=self.access_key,
             secret_key=self.secret_key,
             secure=secure,
             region=self.region,
+            http_client=http_client,
         )
 
     def _get_client(self):
@@ -50,15 +69,70 @@ class S3Storage(StorageProvider):
     def _ensure_bucket_exists(self, client) -> None:
         if self._bucket_verified:
             return
-        if not client.bucket_exists(self.bucket_name):
-            client.make_bucket(self.bucket_name)
+        bucket_exists = client.bucket_exists(self.bucket_name)
+        if not bucket_exists:
+            raise StorageConfigurationError(
+                "Configured storage bucket is unavailable"
+            )
         self._bucket_verified = True
+
+    @staticmethod
+    def _raise_provider_error(error: Exception) -> None:
+        if isinstance(error, S3Error) and error.code == "NoSuchBucket":
+            raise StorageConfigurationError(
+                "Configured storage bucket is unavailable"
+            ) from None
+        if isinstance(error, S3Error):
+            status = getattr(getattr(error, "response", None), "status", None)
+            retryable_codes = {
+                "InternalError",
+                "RequestTimeout",
+                "ServiceUnavailable",
+                "SlowDown",
+                "TooManyRequests",
+            }
+            category = (
+                "provider_retryable"
+                if status == 429
+                or (isinstance(status, int) and status >= 500)
+                or error.code in retryable_codes
+                else "provider_terminal"
+            )
+        elif isinstance(error, InvalidResponseError):
+            status = error._code
+            category = (
+                "provider_retryable"
+                if status == 429 or status >= 500
+                else "provider_terminal"
+            )
+        elif isinstance(error, ServerError):
+            status = error.status_code
+            category = (
+                "provider_retryable"
+                if status == 429 or status >= 500
+                else "provider_terminal"
+            )
+        elif isinstance(error, (TimeoutError, ConnectionError, OSError)):
+            category = "provider_retryable"
+        elif isinstance(error, (TypeError, ValueError)):
+            category = "provider_terminal"
+        else:
+            category = "provider_retryable"
+        raise StorageProviderError(category) from None
+
+    async def _run_application_call(self, operation, *args, **kwargs):
+        try:
+            return await asyncio.to_thread(operation, *args, **kwargs)
+        except StorageConfigurationError:
+            raise
+        except Exception as exc:
+            self._raise_provider_error(exc)
 
     async def upload_bytes(self, *, object_key: str, data: bytes, content_type: str) -> StoredObject:
         client = self._get_client()
-        await asyncio.to_thread(self._ensure_bucket_exists, client)
+        await self._run_application_call(self._ensure_bucket_exists, client)
         data_stream = io.BytesIO(data)
-        await asyncio.to_thread(
+        await self._run_application_call(
             client.put_object,
             self.bucket_name,
             object_key,
@@ -71,13 +145,37 @@ class S3Storage(StorageProvider):
             url=f"{self.endpoint_url.rstrip('/')}/{self.bucket_name}/{object_key}",
         )
 
-    async def get_download_url(self, *, object_key: str) -> str:
+    async def get_download_url(self, *, object_key: str) -> str | None:
         client = self._get_client()
-        await asyncio.to_thread(self._ensure_bucket_exists, client)
-        return await asyncio.to_thread(
+        await self._run_application_call(self._ensure_bucket_exists, client)
+        try:
+            await asyncio.to_thread(
+                client.stat_object,
+                self.bucket_name,
+                object_key,
+            )
+        except S3Error as exc:
+            if exc.code == "NoSuchBucket":
+                raise StorageConfigurationError(
+                    "Configured storage bucket is unavailable"
+                ) from None
+            if exc.code in {"NoSuchKey", "NoSuchObject", "NoSuchVersion"}:
+                return None
+            self._raise_provider_error(exc)
+        except Exception as exc:
+            self._raise_provider_error(exc)
+        return await self._run_application_call(
             client.presigned_get_object,
             self.bucket_name,
             object_key,
+        )
+
+    async def get_bucket_lifecycle(self):
+        client = self._get_client()
+        await self._run_application_call(self._ensure_bucket_exists, client)
+        return await self._run_application_call(
+            client.get_bucket_lifecycle,
+            self.bucket_name,
         )
 
 

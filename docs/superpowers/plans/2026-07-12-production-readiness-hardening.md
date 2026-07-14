@@ -1226,17 +1226,37 @@ git commit -m "feat: enforce per-call minute and duration limits"
 
 **Files:**
 - Modify: `apps/api/pyproject.toml`
+- Modify: `apps/api/uv.lock`
+- Modify: `apps/api/app/providers/telephony/base.py`
 - Modify: `apps/api/app/providers/telephony/telnyx.py`
 - Modify: `apps/api/app/services/telephony_service.py`
+- Modify: `apps/api/app/workers/jobs/phone_provisioning.py`
+- Modify: `apps/api/app/workers/jobs/outbox_topics.py`
 - Modify: `apps/api/app/providers/storage/s3.py`
-- Modify: `apps/api/app/services/recording_service.py`
+- Modify: `apps/api/app/providers/storage/base.py`
 - Modify: `apps/api/app/services/billing_session_service.py`
+- Modify: `apps/api/app/services/billing_query_service.py`
+- Modify: `apps/api/app/routers/billing.py`
 - Modify: `apps/api/app/providers/notifications/firebase.py`
 - Modify: `apps/api/app/services/notification_service.py`
+- Modify: `apps/api/app/services/livekit_dispatch_service.py`
+- Modify: `apps/api/app/services/onboarding_service.py`
 - Modify: `apps/api/tests/telephony/test_telnyx_provider.py`
 - Modify: `apps/api/tests/providers/test_integrations.py`
+- Modify: `apps/api/tests/services/test_billing_session_service.py`
+- Modify: `apps/api/tests/billing/test_billing_api.py`
+- Modify: `apps/api/tests/livekit/test_dispatch_webhook.py`
+- Modify: `apps/api/tests/services/test_onboarding_service.py`
+- Modify: `apps/api/tests/services/test_safe_service_exceptions.py`
+- Modify: `apps/api/tests/services/test_subscription_service_sessions.py`
+- Modify: `apps/api/tests/workers/test_individual_jobs.py`
+- Modify: `apps/api/tests/workers/test_livekit_dispatch_outbox.py`
 - Create: `apps/api/tests/providers/test_s3_lifecycle.py`
 - Create: `apps/api/tests/providers/test_notification_privacy.py`
+- Modify: `compose.yaml`
+- Create: `infra/minio/recording-lifecycle.json`
+- Modify: `docs/superpowers/specs/2026-03-28-recording-lifecycle-design.md`
+- Modify: `docs/superpowers/plans/2026-07-12-production-readiness-hardening.md`
 
 **Interfaces:**
 - Produces: `normalize_french_number(value: str) -> str` using `phonenumbers` with region `FR`.
@@ -1276,7 +1296,7 @@ Expected: normalization, missing-object behavior, or event-loop assertions fail.
 
 - [ ] **Step 5: Implement adapter hardening**
 
-Add `phonenumbers`, wrap blocking SDK calls, set explicit connection/read timeouts, map retryable versus terminal provider errors, call `stat_object` before signing, and restrict bucket creation to a development initialization command.
+Add `phonenumbers`, wrap blocking SDK calls, set explicit connection/read timeouts, disable Telnyx SDK retries because Telnyx 2.1.6 retries mutating POSTs, retain at most two Stripe/MinIO retries, map retryable versus terminal provider errors, call `stat_object` before signing, and restrict bucket creation to a development initialization command.
 
 Derive `routing_enabled` only when both the agent configuration and provider-backed phone projection are active. Add reconciliation that repairs or reports disagreement rather than treating either flag as sufficient.
 
@@ -1288,7 +1308,36 @@ Document and provision a 30-day recording lifecycle rule in the selected storage
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
-git add apps/api/pyproject.toml apps/api/uv.lock apps/api/app/providers/telephony/telnyx.py apps/api/app/services/telephony_service.py apps/api/app/providers/storage/s3.py apps/api/app/services/recording_service.py apps/api/app/services/billing_session_service.py apps/api/app/providers/notifications/firebase.py apps/api/app/services/notification_service.py apps/api/tests/telephony/test_telnyx_provider.py apps/api/tests/providers/test_integrations.py apps/api/tests/providers/test_s3_lifecycle.py apps/api/tests/providers/test_notification_privacy.py
+git add apps/api/pyproject.toml apps/api/uv.lock \
+  apps/api/app/providers/telephony/base.py \
+  apps/api/app/providers/telephony/telnyx.py \
+  apps/api/app/services/telephony_service.py \
+  apps/api/app/workers/jobs/phone_provisioning.py \
+  apps/api/app/workers/jobs/outbox_topics.py \
+  apps/api/app/providers/storage/base.py \
+  apps/api/app/providers/storage/s3.py \
+  apps/api/app/services/billing_session_service.py \
+  apps/api/app/services/billing_query_service.py \
+  apps/api/app/routers/billing.py \
+  apps/api/app/providers/notifications/firebase.py \
+  apps/api/app/services/notification_service.py \
+  apps/api/app/services/livekit_dispatch_service.py \
+  apps/api/app/services/onboarding_service.py \
+  apps/api/tests/telephony/test_telnyx_provider.py \
+  apps/api/tests/providers/test_integrations.py \
+  apps/api/tests/providers/test_s3_lifecycle.py \
+  apps/api/tests/providers/test_notification_privacy.py \
+  apps/api/tests/services/test_billing_session_service.py \
+  apps/api/tests/billing/test_billing_api.py \
+  apps/api/tests/livekit/test_dispatch_webhook.py \
+  apps/api/tests/services/test_onboarding_service.py \
+  apps/api/tests/services/test_safe_service_exceptions.py \
+  apps/api/tests/services/test_subscription_service_sessions.py \
+  apps/api/tests/workers/test_individual_jobs.py \
+  apps/api/tests/workers/test_livekit_dispatch_outbox.py \
+  compose.yaml infra/minio/recording-lifecycle.json \
+  docs/superpowers/specs/2026-03-28-recording-lifecycle-design.md \
+  docs/superpowers/plans/2026-07-12-production-readiness-hardening.md
 git commit -m "fix: harden telephony billing and recording providers"
 ```
 
