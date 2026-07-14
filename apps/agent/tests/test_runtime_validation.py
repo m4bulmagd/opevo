@@ -13,7 +13,6 @@ def agent_settings() -> AgentSettings:
         livekit_api_key="livekit-api-key",
         livekit_api_secret="livekit-api-secret",
         api_base_url="https://api.example.com",
-        agent_internal_api_token=None,
         redis_url="rediss://redis.example.com/0",
         speechmatics_api_key="speechmatics-api-key",
         gemini_api_key="gemini-api-key",
@@ -67,14 +66,6 @@ def test_agent_production_does_not_require_unused_optional_providers(
     validate_agent_runtime(settings)
 
 
-def test_agent_production_does_not_require_legacy_static_api_token(
-    agent_settings: AgentSettings,
-) -> None:
-    settings = agent_settings.model_copy(update={"agent_internal_api_token": None})
-
-    validate_agent_runtime(settings)
-
-
 def test_agent_production_reports_every_missing_setting(
     agent_settings: AgentSettings,
 ) -> None:
@@ -101,7 +92,6 @@ def test_agent_development_accepts_fake_providers() -> None:
         livekit_url=None,
         livekit_api_key=None,
         livekit_api_secret=None,
-        agent_internal_api_token=None,
         speechmatics_api_key=None,
         gemini_api_key=None,
         agent_debug_streams=True,

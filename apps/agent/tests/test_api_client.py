@@ -24,10 +24,8 @@ async def test_complete_call_prefers_dispatch_token_and_excludes_auth_and_phone_
         "agent.api_client.get_settings",
         lambda: SimpleNamespace(
             api_base_url=api_url,
-            agent_internal_api_token=None,
             api_timeout_seconds=10.0,
             api_max_retries=3,
-            app_env="test",
         ),
     )
 
@@ -56,7 +54,7 @@ async def test_complete_call_prefers_dispatch_token_and_excludes_auth_and_phone_
     transport = httpx.MockTransport(handler)
     mock_client = httpx.AsyncClient(transport=transport)
 
-    client = AgentApiClient(base_url=api_url, agent_token=None, http_client=mock_client)
+    client = AgentApiClient(base_url=api_url, http_client=mock_client)
     result = await client.complete_call(payload)
 
     assert result == {
@@ -81,67 +79,15 @@ async def test_complete_call_prefers_dispatch_token_and_excludes_auth_and_phone_
 
 
 @pytest.mark.anyio
-async def test_complete_call_uses_static_token_only_in_development(
+async def test_complete_call_requires_dispatch_token(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    api_url = "http://localhost:8000"
-    monkeypatch.setattr(
-        "agent.api_client.get_settings",
-        lambda: SimpleNamespace(
-            api_base_url=api_url,
-            agent_internal_api_token="development-static-token",
-            api_timeout_seconds=10.0,
-            api_max_retries=3,
-            app_env="development",
-        ),
-    )
-    payload = {
-        "call_id": "call_xyz",
-        "duration_seconds": 45,
-    }
-    
-    request_captured = None
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal request_captured
-        request_captured = request
-        return httpx.Response(
-            200,
-            json={
-                "status": "accepted",
-                "queued": True,
-                "job_id": "call-finalization:call_xyz",
-            },
-        )
-
-    transport = httpx.MockTransport(handler)
-    mock_client = httpx.AsyncClient(transport=transport)
-
-    client = AgentApiClient(base_url=api_url, http_client=mock_client)
-    await client.complete_call(payload)
-
-    assert request_captured is not None
-    assert request_captured.headers["x-agent-token"] == "development-static-token"
-    data = json.loads(request_captured.read().decode("utf-8"))
-
-    assert data["transcript"] == []
-    assert "caller_number" not in data
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("app_env", ["test", "staging", "production"])
-async def test_complete_call_requires_dispatch_token_outside_development(
-    monkeypatch: pytest.MonkeyPatch,
-    app_env: str,
 ) -> None:
     monkeypatch.setattr(
         "agent.api_client.get_settings",
         lambda: SimpleNamespace(
             api_base_url="http://test",
-            agent_internal_api_token="legacy-static-token",
             api_timeout_seconds=10.0,
             api_max_retries=3,
-            app_env=app_env,
         ),
     )
 

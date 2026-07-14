@@ -18,7 +18,6 @@ class AgentSettings(BaseSettings):
 
     # API communication
     api_base_url: str = "http://api:8000"
-    agent_internal_api_token: str | None = None
     redis_url: str = "redis://localhost:6379/0"
 
     # AI providers
