@@ -1,0 +1,358 @@
+name: CI
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.19"
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22.19.0"
+
+jobs:
+  api:
+    name: CI / API
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17.8-bookworm
+        env:
+          POSTGRES_DB: ai_call_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ai_call_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4.7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_call_test
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_call_test
+      REDIS_URL: redis://127.0.0.1:6379/0
+      TEST_REDIS_URL: redis://127.0.0.1:6379/0
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - name: Verify lockfile
+        run: uv lock --check
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups
+      - name: Ruff
+        run: uv run --frozen --no-sync ruff check app tests
+      - name: Mypy
+        run: uv run --frozen --no-sync mypy app
+      - name: Tests on PostgreSQL
+        run: uv run --frozen --no-sync python -m pytest -q
+
+  agent:
+    name: CI / Agent
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/agent
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: apps/agent/uv.lock
+      - name: Verify lockfile
+        run: uv lock --check
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups
+      - name: Ruff
+        run: uv run --frozen --no-sync ruff check agent tests
+      - name: Mypy
+        run: uv run --frozen --no-sync mypy agent
+      - name: Tests
+        run: uv run --frozen --no-sync python -m pytest -q
+
+  web:
+    name: CI / Web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_YWEuYWEk
+      CLERK_SECRET_KEY: ci-build-only-placeholder
+      API_BASE_URL: http://127.0.0.1:8000
+      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+      NEXT_PUBLIC_REALTIME_ENABLED: "false"
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+          package-manager-cache: false
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Biome
+        run: npm run check
+      - name: TypeScript
+        run: npm run typecheck
+      - name: Tests
+        run: npm run test:ci
+      - name: Next.js build
+        run: npm run build
+
+  migrations:
+    name: CI / Migrations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17.8-bookworm
+        env:
+          POSTGRES_DB: ai_call_migrations
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ai_call_migrations"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_call_migrations
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_call_migrations
+      REDIS_URL: redis://127.0.0.1:6379/0
+      TEST_REDIS_URL: redis://127.0.0.1:6379/0
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups
+      - name: Upgrade a blank database to head
+        run: uv run --frozen --no-sync alembic -c alembic.ini upgrade head
+
+  dependency-audit:
+    name: CI / Dependency audit / ${{ matrix.application }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - application: api
+            ecosystem: python
+            working-directory: apps/api
+            lockfile: apps/api/uv.lock
+          - application: agent
+            ecosystem: python
+            working-directory: apps/agent
+            lockfile: apps/agent/uv.lock
+          - application: web
+            ecosystem: npm
+            working-directory: apps/web
+            lockfile: apps/web/package-lock.json
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install uv and Python
+        if: matrix.ecosystem == 'python'
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: ${{ matrix.lockfile }}
+      - name: Audit locked Python dependencies
+        if: matrix.ecosystem == 'python'
+        working-directory: ${{ matrix.working-directory }}
+        run: |
+          uv lock --check
+          uv sync --frozen --all-groups
+          uv export --frozen --all-groups --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/${{ matrix.application }}-requirements.txt"
+          if [ "${{ matrix.application }}" = "agent" ]; then
+            python -c 'from datetime import date; assert date.today() < date.fromisoformat("2026-08-14"), "agent dependency exceptions expired on 2026-08-14"'
+            audit_output="$(uv run --frozen --no-sync pip-audit --disable-pip --require-hashes --no-deps --progress-spinner=off --requirement "$RUNNER_TEMP/agent-requirements.txt" --ignore-vuln PYSEC-2025-217 --ignore-vuln PYSEC-2025-218 --ignore-vuln PYSEC-2026-2290 --ignore-vuln PYSEC-2026-2288 --ignore-vuln PYSEC-2026-2289 2>&1)"
+            printf '%s\n' "$audit_output"
+            if ! printf '%s\n' "$audit_output" | grep -Fxq "No known vulnerabilities found, 5 ignored"; then
+              echo "Expected exactly five reviewed agent advisories and no other findings." >&2
+              exit 1
+            fi
+          else
+            uv run --frozen --no-sync pip-audit --disable-pip --require-hashes --no-deps --progress-spinner=off --requirement "$RUNNER_TEMP/${{ matrix.application }}-requirements.txt"
+          fi
+      - name: Install Node.js
+        if: matrix.ecosystem == 'npm'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+          package-manager-cache: false
+      - name: Audit locked npm dependencies
+        if: matrix.ecosystem == 'npm'
+        working-directory: ${{ matrix.working-directory }}
+        run: |
+          npm ci
+          npm audit --audit-level=high
+
+  gitleaks:
+    name: CI / Gitleaks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan Git history
+        run: >-
+          docker run --rm
+          --user "$(id -u):$(id -g)"
+          --env HOME=/tmp
+          --volume "$PWD:/repo:ro"
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git --config=/repo/.gitleaks.toml --redact --no-banner --verbose /repo
+
+  container-scan:
+    name: CI / Container scan / ${{ matrix.application }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - application: api
+            context: apps/api
+          - application: agent
+            context: apps/agent
+          - application: web
+            context: apps/web
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build --tag "presvo-${{ matrix.application }}:${{ github.sha }}" "${{ matrix.context }}"
+      - name: Scan agent image with reviewed exceptions
+        if: matrix.application == 'agent'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: presvo-${{ matrix.application }}:${{ github.sha }}
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          version: v0.70.0
+          format: table
+          hide-progress: true
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+      - name: Scan image without exceptions
+        if: matrix.application != 'agent'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: presvo-${{ matrix.application }}:${{ github.sha }}
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          version: v0.70.0
+          format: table
+          hide-progress: true
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  ci-required:
+    name: CI / Required
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: always()
+    needs:
+      - api
+      - agent
+      - web
+      - migrations
+      - dependency-audit
+      - gitleaks
+      - container-scan
+    steps:
+      - name: Require every CI job
+        env:
+          API_RESULT: ${{ needs.api.result }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+          WEB_RESULT: ${{ needs.web.result }}
+          MIGRATIONS_RESULT: ${{ needs.migrations.result }}
+          DEPENDENCY_AUDIT_RESULT: ${{ needs['dependency-audit'].result }}
+          GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
+          CONTAINER_SCAN_RESULT: ${{ needs['container-scan'].result }}
+        run: |
+          for result in "$API_RESULT" "$AGENT_RESULT" "$WEB_RESULT" "$MIGRATIONS_RESULT" "$DEPENDENCY_AUDIT_RESULT" "$GITLEAKS_RESULT" "$CONTAINER_SCAN_RESULT"; do
+            if [ "$result" != "success" ]; then
+              echo "A required CI job did not succeed."
+              exit 1
+            fi
+          done

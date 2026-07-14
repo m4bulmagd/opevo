@@ -2,7 +2,6 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.agent_config import AgentConfig

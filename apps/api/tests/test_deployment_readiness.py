@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -10,6 +11,20 @@ from app.core.runtime_validation import validate_api_runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_postgres_driver_is_available_without_development_dependencies() -> None:
+    pyproject = tomllib.loads(
+        (REPO_ROOT / "apps" / "api" / "pyproject.toml").read_text()
+    )
+
+    runtime_dependencies = pyproject["project"]["dependencies"]
+    development_dependencies = pyproject["dependency-groups"]["dev"]
+
+    assert any(dependency.startswith("asyncpg") for dependency in runtime_dependencies)
+    assert not any(
+        dependency.startswith("asyncpg") for dependency in development_dependencies
+    )
 
 
 @pytest.fixture

@@ -9,7 +9,6 @@ from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.outbox_event import OutboxEvent
 from app.providers.summaries.base import StructuredSummary
-from app.repositories.outbox_repository import OutboxRepository
 from app.services.outbox_service import OutboxService, SUPPORTED_OUTBOX_TOPICS
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
 from app.workers.jobs import outbox_topics

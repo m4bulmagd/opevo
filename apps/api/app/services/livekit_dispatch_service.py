@@ -231,17 +231,16 @@ class LiveKitDispatchService:
             user.id
         )
         balance = await self.usage_repository.get_current_balance(user_id=user.id)
+        if phone_number is None or subscription is None or agent_config is None:
+            await self.session.commit()
+            return DispatchJoinResult("denied")
         called_number_matches = bool(
-            phone_number is not None
-            and phone_number.id == initial_phone.id
+            phone_number.id == initial_phone.id
             and phone_number.user_id == user.id
             and phone_number.e164 == normalized_called_number
         )
         eligible = bool(
-            phone_number is not None
-            and agent_config is not None
-            and subscription is not None
-            and DispatchEligibilityPolicy.can_dispatch(
+            DispatchEligibilityPolicy.can_dispatch(
                 subscription_status=subscription.status,
                 current_period_start=subscription.current_period_start,
                 current_period_end=subscription.current_period_end,

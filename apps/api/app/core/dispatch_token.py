@@ -1,4 +1,5 @@
 import time
+from typing import TypeGuard
 from uuid import UUID
 
 import jwt
@@ -25,7 +26,7 @@ class DispatchTokenConfigurationError(DispatchTokenError):
     """Dispatch token signing or verification is not configured safely."""
 
 
-def is_dispatch_secret_safe(secret: object) -> bool:
+def is_dispatch_secret_safe(secret: object) -> TypeGuard[str]:
     if not isinstance(secret, str):
         return False
     normalized = secret.strip()

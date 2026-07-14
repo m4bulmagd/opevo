@@ -447,7 +447,7 @@ async def test_provider_handler_runs_after_claim_transaction_releases_row_lock(
 ) -> None:
     from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
-    event = await _add_event(outbox_session_factory)
+    await _add_event(outbox_session_factory)
 
     async def handler(_ctx: dict, item: OutboxEvent) -> None:
         async with outbox_session_factory() as probe_session:

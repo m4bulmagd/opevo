@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -82,7 +83,7 @@ class TranscriptService:
         self,
         *,
         call_id: UUID,
-        transcript: list[TranscriptAppendRequest | dict],
+        transcript: Sequence[TranscriptAppendRequest | dict],
         expected_user_id: UUID | None = None,
         expected_agent_config_id: UUID | None = None,
     ) -> list[TranscriptAppendResult]:
@@ -135,7 +136,7 @@ class TranscriptService:
 
     @staticmethod
     def normalize_recovery(
-        transcript: list[TranscriptAppendRequest | dict],
+        transcript: Sequence[TranscriptAppendRequest | dict],
     ) -> list[TranscriptAppendRequest]:
         normalized: list[TranscriptAppendRequest] = []
         for index, raw_item in enumerate(transcript, start=1):

@@ -1,0 +1,4 @@
+title = "Presvo secret scanning policy"
+
+[extend]
+useDefault = true

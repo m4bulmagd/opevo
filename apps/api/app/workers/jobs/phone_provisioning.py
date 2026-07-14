@@ -148,13 +148,12 @@ async def _run_provider_attempt(
         if secondary_error_type is None:
             return
     else:
-        error_type = (
-            provider_failure[0]
-            if provider_failure is not None
-            else unexpected_error_type
-        )
-        assert error_type is not None
-        can_retry = provider_failure[1] if provider_failure is not None else True
+        if provider_failure is not None:
+            error_type, can_retry = provider_failure
+        else:
+            assert unexpected_error_type is not None
+            error_type = unexpected_error_type
+            can_retry = True
         try:
             await provisioning_repo.mark_failed(
                 user_id=user_id,

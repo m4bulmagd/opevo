@@ -1,19 +1,13 @@
 "use client";
 
 import { useState, useTransition } from "react";
+
 import Link from "next/link";
 
-import {
-  AlertCircle,
-  CheckCircle2,
-  LoaderCircle,
-  PhoneCall,
-  RefreshCw,
-  ShieldCheck,
-} from "lucide-react";
+import { AlertCircle, CheckCircle2, LoaderCircle, PhoneCall, RefreshCw, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
-import { retryProvisioningAction, type RetryProvisioningActionResult } from "@/app/(app)/dashboard/onboarding-actions";
+import { type RetryProvisioningActionResult, retryProvisioningAction } from "@/app/(app)/dashboard/onboarding-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,7 +40,8 @@ function getStatusPresentation(onboardingStatus: OnboardingStatus) {
     case "ready_to_enable":
       return {
         title: "Ready to enable routing",
-        description: "Your number is assigned and your setup is complete. Enable routing when you are ready to take live calls.",
+        description:
+          "Your number is assigned and your setup is complete. Enable routing when you are ready to take live calls.",
         badgeLabel: "Ready",
         badgeVariant: "default" as const,
         icon: CheckCircle2,
@@ -129,7 +124,9 @@ export function OnboardingStatusCard({ onboardingStatus, retryHandler }: Onboard
         <div className="rounded-lg border border-border/70 bg-muted/20 px-4 py-3">
           <div className="text-muted-foreground text-xs uppercase tracking-[0.14em]">Plan status</div>
           <div className="mt-1 font-medium">
-            {onboardingStatus.plan_tier ? `${onboardingStatus.plan_tier} · ${onboardingStatus.subscription_status ?? "pending"}` : "No active plan"}
+            {onboardingStatus.plan_tier
+              ? `${onboardingStatus.plan_tier} · ${onboardingStatus.subscription_status ?? "pending"}`
+              : "No active plan"}
           </div>
         </div>
         {onboardingStatus.overall_status === "provisioning_failed" ? (
@@ -145,9 +142,7 @@ export function OnboardingStatusCard({ onboardingStatus, retryHandler }: Onboard
         {onboardingStatus.can_retry_provisioning ? (
           <Button onClick={onRetry} disabled={isPending}>
             {isPending ? <Spinner data-icon="inline-start" /> : null}
-            {!isPending ? (
-              <RefreshCw className="size-4" />
-            ) : null}
+            {!isPending ? <RefreshCw className="size-4" /> : null}
             Retry provisioning
           </Button>
         ) : null}

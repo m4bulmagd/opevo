@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from decimal import Decimal, InvalidOperation
+from typing import NoReturn
 
 import phonenumbers
 import telnyx
@@ -302,7 +303,7 @@ class TelephonyTelnyx(TelephonyProvider):
         reason: str,
         country_code: str,
         order_count: int,
-    ) -> None:
+    ) -> NoReturn:
         raise TelephonyProvisioningReviewRequired(
             reason=reason,
             payload={

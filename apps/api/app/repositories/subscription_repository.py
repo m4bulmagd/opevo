@@ -138,6 +138,9 @@ class SubscriptionRepository:
             subscription = Subscription(user_id=user_id)
             self.session.add(subscription)
 
+        resolved_customer_id: str | None
+        resolved_plan_tier: str | None
+        resolved_allocated_minutes: int | None
         if is_same_subscription:
             resolved_customer_id = (
                 stripe_customer_id or subscription.stripe_customer_id

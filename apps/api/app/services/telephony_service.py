@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.phone_number import PhoneNumber
 from app.providers.telephony.base import TelephonyProvider, TelephonyProviderError
 from app.providers.telephony.telnyx import TelephonyTelnyx, normalize_french_number
 from app.repositories.phone_number_repository import PhoneNumberRepository
@@ -84,7 +85,7 @@ class TelephonyService:
         phone_number = await self.phone_number_repository.get_by_id_for_update(
             phone_number_id
         )
-        self._revalidate_phone_number(
+        phone_number = self._revalidate_phone_number(
             phone_number,
             user_id=user_id,
             provider_number_id=provider_number_id,
@@ -111,7 +112,7 @@ class TelephonyService:
         phone_number = await self.phone_number_repository.get_by_id_for_update(
             phone_number_id
         )
-        self._revalidate_phone_number(
+        phone_number = self._revalidate_phone_number(
             phone_number,
             user_id=user_id,
             provider_number_id=provider_number_id,
@@ -128,14 +129,15 @@ class TelephonyService:
 
     @staticmethod
     def _revalidate_phone_number(
-        phone_number,
+        phone_number: PhoneNumber | None,
         *,
         user_id,
         provider_number_id: str,
-    ) -> None:
+    ) -> PhoneNumber:
         if (
             phone_number is None
             or phone_number.user_id != user_id
             or phone_number.provider_number_id != provider_number_id
         ):
             raise TelephonyProviderError("provider_retryable") from None
+        return phone_number

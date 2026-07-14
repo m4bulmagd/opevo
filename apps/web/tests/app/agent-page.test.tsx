@@ -35,7 +35,9 @@ describe("agent page", () => {
     expect(screen.getByDisplayValue("Ava")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Reception for North Clinic")).toBeInTheDocument();
     expect(screen.getByText(/Enable call routing/i)).toBeInTheDocument();
-    expect(screen.getByText(/Billing, number assignment, and setup must be complete before routing can go live/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Billing, number assignment, and setup must be complete before routing can go live/i),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/^STS$/i)).not.toBeInTheDocument();
   });
 

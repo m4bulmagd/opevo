@@ -100,12 +100,12 @@ class InstrumentedAgent(Agent):
         super().__init__(**kwargs)
         self._debug_logger = debug_logger
 
-    async def stt_node(self, audio: AsyncIterable[rtc.AudioFrame], model_settings):  # type: ignore[override]
+    async def stt_node(self, audio: AsyncIterable[rtc.AudioFrame], model_settings):
         async for event in _iterate_node_output(super().stt_node(audio, model_settings)):
             self._debug_logger.log_stt_event(event)
             yield event
 
-    async def llm_node(self, chat_ctx, tools, model_settings):  # type: ignore[override]
+    async def llm_node(self, chat_ctx, tools, model_settings):
         started_at = time.perf_counter()
         text_parts: list[str] = []
         self._debug_logger.log_llm_start()
@@ -125,7 +125,7 @@ class InstrumentedAgent(Agent):
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         self._debug_logger.log_llm_complete("".join(text_parts), elapsed_ms=elapsed_ms)
 
-    async def tts_node(self, text: AsyncIterable[str], model_settings):  # type: ignore[override]
+    async def tts_node(self, text: AsyncIterable[str], model_settings):
         started_at = time.perf_counter()
         text_parts: list[str] = []
         first_frame_logged = False

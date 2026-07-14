@@ -170,11 +170,11 @@ class CallLifecycleService:
                     minutes_charged=minutes_charged,
                     stale_generation=True,
                 )
-            self._normalize_end_facts(call)
+            duration_seconds = self._normalize_end_facts(call)
 
             debit = await self.usage_accounting_service.debit_call(
                 call_id=call.id,
-                duration_seconds=call.duration_seconds,
+                duration_seconds=duration_seconds,
             )
             await self.notification_repository.get_or_create(
                 user_id=call.user_id,
@@ -238,7 +238,7 @@ class CallLifecycleService:
         )
 
     @classmethod
-    def _normalize_end_facts(cls, call) -> None:
+    def _normalize_end_facts(cls, call) -> int:
         """Fill incomplete legacy/recovery facts without using wall-clock time."""
         created_at = cls._as_utc(call.created_at)
         state_changed_at = cls._as_utc(call.state_changed_at or call.created_at)
@@ -256,6 +256,7 @@ class CallLifecycleService:
                     ended_at - timedelta(seconds=duration_seconds),
                 )
         elif started_at is None:
+            assert ended_at is not None
             if duration_seconds is None:
                 started_at = created_at
             else:
@@ -269,6 +270,8 @@ class CallLifecycleService:
             else:
                 ended_at = started_at + timedelta(seconds=duration_seconds)
 
+        assert started_at is not None
+        assert ended_at is not None
         call.started_at = started_at
         call.ended_at = ended_at
         if duration_seconds is None:
@@ -276,6 +279,7 @@ class CallLifecycleService:
                 0,
                 int((ended_at - started_at).total_seconds()),
             )
+        return call.duration_seconds
 
     async def _add_recording_stop_intent(self, call) -> None:
         if not call.recording_egress_id:

@@ -32,7 +32,12 @@ export default async function DashboardPage() {
 
   return (
     <div className="@container/main flex flex-col gap-4 md:gap-6">
-      <StatusSummaryCards agentConfig={agentConfig} onboardingStatus={onboardingStatus} calls={calls} usageSnapshot={usageSnapshot} />
+      <StatusSummaryCards
+        agentConfig={agentConfig}
+        onboardingStatus={onboardingStatus}
+        calls={calls}
+        usageSnapshot={usageSnapshot}
+      />
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] lg:gap-6">
         <section className="flex flex-col gap-4">
           <OnboardingStatusCard onboardingStatus={onboardingStatus} />

@@ -467,6 +467,25 @@ def test_agent_spans_correlate_only_valid_call_ids_without_customer_content() ->
     assert all(item[2].attributes["presvo.outcome"] == "success" for item in tracer.started)
 
 
+def test_provider_span_error_class_does_not_capture_cleared_exception() -> None:
+    observability = _load_observability()
+    tracer = _CapturingTracer()
+    observability._adapter = SimpleNamespace(tracer=tracer, provider=object())
+    sentinel = TimeoutError("PROVIDER_ACTION_SENTINEL")
+
+    with pytest.raises(TimeoutError) as captured:
+        with observability.agent_provider_span(
+            provider="livekit",
+            operation="session_start",
+            call_id=str(uuid4()),
+        ):
+            raise sentinel
+
+    assert captured.value is sentinel
+    assert tracer.started[0][2].attributes["presvo.outcome"] == "error"
+    assert tracer.started[0][2].attributes["presvo.error.class"] == "timeout"
+
+
 def test_span_recording_failure_does_not_change_application_result(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -516,6 +535,33 @@ def test_safe_reporting_failure_cannot_change_span_or_export_results(
 
     assert result == 42
     assert exporter.export([]) is SpanExportResult.FAILURE
+
+
+@pytest.mark.anyio
+async def test_provider_action_reports_worker_exception_after_except_scope_clears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observability = _load_observability()
+    sentinel = RuntimeError("PROVIDER_ACTION_SENTINEL")
+    reported: list[BaseException] = []
+    monkeypatch.setattr(
+        observability,
+        "_report_failure",
+        lambda **kwargs: reported.append(kwargs["error"]),
+    )
+
+    def fail_after_thread_handoff() -> None:
+        raise sentinel
+
+    completion = await observability._run_provider_action(
+        event="provider_action_failed",
+        operation="run_provider_action",
+        action=fail_after_thread_handoff,
+        deadline=observability.monotonic() + 1,
+    )
+
+    assert completion.is_set()
+    assert reported == [sentinel]
 
 
 @pytest.mark.anyio

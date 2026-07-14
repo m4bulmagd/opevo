@@ -2,7 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from slowapi import _rate_limit_exceeded_handler
@@ -38,6 +38,12 @@ from app.webhooks.stripe import router as stripe_webhook_router
 
 
 logger = logging.getLogger(__name__)
+
+
+def _handle_rate_limit_exception(request: Request, exc: Exception) -> Response:
+    if not isinstance(exc, RateLimitExceeded):
+        raise exc
+    return _rate_limit_exceeded_handler(request, exc)
 
 
 async def _stop_realtime_fanout(relay_task: asyncio.Task | None) -> None:
@@ -167,7 +173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.limiter = limiter
     application.add_exception_handler(
         RateLimitExceeded,
-        _rate_limit_exceeded_handler,
+        _handle_rate_limit_exception,
     )
 
     if configured_settings.cors_allowed_origins:

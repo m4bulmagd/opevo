@@ -70,5 +70,6 @@ class WebhookEventRepository:
 
         connection = await self.session.connection()
         raw_connection = await connection.get_raw_connection()
-        if not raw_connection.driver_connection.in_transaction:
+        driver_connection = raw_connection.driver_connection
+        if driver_connection is not None and not driver_connection.in_transaction:
             await connection.exec_driver_sql("BEGIN")
