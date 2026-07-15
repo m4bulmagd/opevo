@@ -3,8 +3,7 @@
 > An open-source, France-first AI voice assistant platform for handling inbound
 > business calls.
 
-**Status:** Active development. Presvo is a working pre-production MVP with a
-production-oriented architecture. Work is progressing toward a controlled
+**Status:** Active development. Presvo is a working pre-production MVP with a production-oriented architecture. Work is progressing toward a controlled
 beta, with onboarding, compliance, recovery testing, and real-provider
 certification still in progress.
 
