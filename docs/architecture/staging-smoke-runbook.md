@@ -1,6 +1,7 @@
 # Backend Staging Smoke Runbook
 
-This runbook is the exact manual verification path for `feature/backend-foundation-mvp` before merge.
+This runbook is the manual verification path for the provider-backed staging
+deployment.
 
 ## Scope
 
@@ -138,7 +139,7 @@ Expected:
 ### Tables Exist
 
 ```bash
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "\dt"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "\dt"
 ```
 
 Expected tables include:
@@ -173,7 +174,7 @@ Trigger a real `user.created` event from Clerk by creating a new test user or us
 Then verify the user exists:
 
 ```bash
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select clerk_user_id, email, status from users order by created_at desc limit 5;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select clerk_user_id, email, status from users order by created_at desc limit 5;"
 ```
 
 Expected:
@@ -193,9 +194,9 @@ The safest path is to create a real test subscription in Stripe rather than rely
 Then verify:
 
 ```bash
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select stripe_subscription_id, plan_tier, status, allocated_minutes from subscriptions order by created_at desc limit 5;"
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select e164, provider_connection_name, is_active from phone_numbers order by created_at desc limit 5;"
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select event_type, minutes_delta, balance_after from usage_ledgers order by created_at desc limit 10;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select stripe_subscription_id, plan_tier, status, allocated_minutes from subscriptions order by created_at desc limit 5;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select e164, provider_connection_name, is_active from phone_numbers order by created_at desc limit 5;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select event_type, minutes_delta, balance_after from usage_ledgers order by created_at desc limit 10;"
 ```
 
 Expected:
@@ -221,7 +222,7 @@ Trigger an `invoice.paid` event for the same Stripe subscription.
 Then verify:
 
 ```bash
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select event_type, minutes_delta, balance_after from usage_ledgers order by created_at desc limit 10;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select event_type, minutes_delta, balance_after from usage_ledgers order by created_at desc limit 10;"
 ```
 
 Expected:
@@ -282,7 +283,7 @@ Then force a disable path by driving the user balance to zero via a real complet
 Verify in the database:
 
 ```bash
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select e164, provider_connection_name, is_active from phone_numbers order by created_at desc limit 5;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select e164, provider_connection_name, is_active from phone_numbers order by created_at desc limit 5;"
 ```
 
 Expected:
@@ -328,11 +329,11 @@ Expected agent log signals:
 Complete one real forwarded call and then verify persistence:
 
 ```bash
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select livekit_room_id, caller_number, status, duration_seconds, minutes_charged, summary_text from calls order by created_at desc limit 5;"
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select summary_data from calls order by created_at desc limit 5;"
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select speaker, text, sequence_number from call_messages order by created_at desc limit 20;"
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select notification_type, status from notifications order by created_at desc limit 10;"
-docker exec ai-call-postgres psql -U postgres -d ai_call -c "select event_type, minutes_delta, balance_after from usage_ledgers order by created_at desc limit 10;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select livekit_room_id, caller_number, status, duration_seconds, minutes_charged, summary_text from calls order by created_at desc limit 5;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select summary_data from calls order by created_at desc limit 5;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select speaker, text, sequence_number from call_messages order by created_at desc limit 20;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select notification_type, status from notifications order by created_at desc limit 10;"
+docker compose -f compose.dev.yaml exec -T postgres psql -U postgres -d ai_call -c "select event_type, minutes_delta, balance_after from usage_ledgers order by created_at desc limit 10;"
 ```
 
 Expected:
@@ -449,4 +450,4 @@ After the run, update `docs/architecture/backend-context.md` with:
 - which steps passed
 - which steps failed
 - exact blocker for any failed step
-- whether the branch is ready for review and merge
+- whether the staging path is ready for the next release decision

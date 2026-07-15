@@ -3,7 +3,10 @@
 > An open-source, France-first AI voice assistant platform for handling inbound
 > business calls.
 
-**Status:** Active development. Presvo is a working pre-production MVP with a production-oriented architecture. Work is progressing toward a controlled
+**Status:** Active development.
+
+Presvo is a working pre-production MVP with a production-oriented architecture.
+Work is progressing toward a controlled
 beta, with onboarding, compliance, recovery testing, and real-provider
 certification still in progress.
 
@@ -78,9 +81,9 @@ flowchart LR
    recording disclosure, and handles the call.
 5. Transcript segments are persisted incrementally with call-scoped JWT
    authorization.
-6. Call completion is reconciled through PostgreSQL state transitions and
-   transactional outbox work for usage, summary, recording, notification, and
-   routing effects.
+6. Call completion atomically records the usage debit and pending notification
+   row, then enqueues `summary.generate`, `recording.stop`, and any required
+   `phone.disable` transactional-outbox work.
 7. The dashboard reads the durable call, transcript, summary, recording, and
    billing state from the API.
 
@@ -90,8 +93,11 @@ flowchart LR
   PostgreSQL with database-enforced idempotency.
 - **Durable calls:** transcripts are appended during the call, finalization is
   retryable, and stale calls are reconciled through an explicit state machine.
-- **Safe provider effects:** provisioning, dispatch, recording, summaries,
-  notifications, usage, and routing intent use transactional outbox delivery.
+- **Safe provider effects:** `phone.provision`, `phone.enable`, `phone.disable`,
+  `livekit.dispatch`, `summary.generate`, and `recording.stop` use
+  transactional-outbox delivery.
+- **Atomic finalization:** usage debit and the pending notification row are
+  direct writes in the same call-finalization transaction.
 - **Scoped agent access:** every call receives a short-lived dispatch JWT bound
   to its user, agent configuration, and call.
 - **Privacy-aware operations:** sensitive values are redacted, recordings stay
@@ -176,6 +182,7 @@ libs/shared/       Small cross-application Python contracts
 - [Backend context](docs/architecture/backend-context.md)
 - [Integration endpoints](docs/architecture/integration-endpoints.md)
 - [Production deployment decision](docs/architecture/production-deployment.md)
+- [CI and branch protection](docs/engineering/ci-and-branch-protection.md)
 - [Staging smoke runbook](docs/architecture/staging-smoke-runbook.md)
 - [Deployment runbook](docs/runbooks/deploy.md)
 - [Rollback runbook](docs/runbooks/rollback.md)
