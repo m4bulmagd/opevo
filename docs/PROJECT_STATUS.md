@@ -7,8 +7,7 @@ longer match the current implementation.
 
 ## Current status
 
-**Active development:** Presvo is a working pre-production MVP with a
-production-oriented architecture. Work is progressing toward a controlled
+**Active development:** Presvo is a working pre-production MVP with a production-oriented architecture. Work is progressing toward a controlled
 beta, with onboarding, compliance, recovery testing, and real-provider
 certification still in progress.
 
