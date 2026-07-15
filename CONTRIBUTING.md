@@ -53,8 +53,44 @@ The staging runbook documents the complete provider-backed path:
 
 ### API
 
+Start isolated CI-equivalent PostgreSQL and Redis services before running the
+API suite. These commands require ports `5432` and `6379` to be free; stop the
+local development stack first if it is running.
+
+```bash
+docker run --detach --rm --name presvo-api-test-postgres \
+  --env POSTGRES_DB=ai_call_test \
+  --env POSTGRES_USER=postgres \
+  --env POSTGRES_PASSWORD=postgres \
+  --publish 127.0.0.1:5432:5432 \
+  --health-cmd='pg_isready -U postgres -d ai_call_test' \
+  --health-interval=5s --health-timeout=5s --health-retries=10 \
+  postgres:17.8-bookworm
+docker run --detach --rm --name presvo-api-test-redis \
+  --publish 127.0.0.1:6379:6379 \
+  --health-cmd='redis-cli ping' \
+  --health-interval=5s --health-timeout=5s --health-retries=10 \
+  redis:7.4.7-alpine
+```
+
+Wait until both containers report `healthy`:
+
+```bash
+until docker inspect --format '{{.State.Health.Status}}' presvo-api-test-postgres | grep -qx healthy; do sleep 1; done
+until docker inspect --format '{{.State.Health.Status}}' presvo-api-test-redis | grep -qx healthy; do sleep 1; done
+```
+
+Then run the checks with the same non-secret service URLs as CI.
+`TEST_DATABASE_URL` is required; without it, the PostgreSQL integration and
+migration-proof tests intentionally skip.
+
 ```bash
 cd apps/api
+export APP_ENV=test
+export DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_call_test
+export TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_call_test
+export REDIS_URL=redis://127.0.0.1:6379/0
+export TEST_REDIS_URL=redis://127.0.0.1:6379/0
 UV_CACHE_DIR=/tmp/uv-cache uv lock --check
 UV_CACHE_DIR=/tmp/uv-cache uv sync --frozen --all-groups
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check app tests
@@ -62,7 +98,11 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
 ```
 
-The full API suite expects PostgreSQL and Redis for its integration coverage.
+Remove the isolated services when verification is complete:
+
+```bash
+docker rm --force presvo-api-test-postgres presvo-api-test-redis
+```
 
 ### Agent
 
@@ -83,8 +123,21 @@ npm ci
 npm run check
 npm run typecheck
 npm run test:ci
-npm run build
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_YWEuYWEk \
+CLERK_SECRET_KEY=ci-build-only-placeholder \
+API_BASE_URL=http://127.0.0.1:8000 \
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 \
+NEXT_PUBLIC_APP_URL=http://127.0.0.1:3000 \
+NEXT_PUBLIC_REALTIME_ENABLED=false \
+  npm run build
 ```
+
+These build-only values match CI and are not provider credentials. Real Clerk
+or other provider secrets are not required for repository verification.
+
+The complete workflow, blank-database migration check, and exact required
+GitHub ruleset checks are documented in
+[`docs/engineering/ci-and-branch-protection.md`](docs/engineering/ci-and-branch-protection.md).
 
 ## Change expectations
 

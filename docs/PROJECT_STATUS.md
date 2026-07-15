@@ -7,7 +7,10 @@ longer match the current implementation.
 
 ## Current status
 
-**Active development:** Presvo is a working pre-production MVP with a production-oriented architecture. Work is progressing toward a controlled
+**Active development.**
+
+Presvo is a working pre-production MVP with a production-oriented architecture.
+Work is progressing toward a controlled
 beta, with onboarding, compliance, recovery testing, and real-provider
 certification still in progress.
 
@@ -46,7 +49,8 @@ certification still in progress.
 | Call review | **Implemented** | Call list/detail, transcript, summary, recording availability, signed recording URLs, usage charge, and soft archive are present. |
 | Rich call-review workflow | **Partial** | Pagination contracts exist, but the web UI lacks pagination controls, inline audio playback, search, tags, notes, and structured action-item presentation. |
 | Recording lifecycle | **Implemented** | LiveKit room-composite egress, private object storage, signed access, and bucket lifecycle configuration are present. |
-| Post-call processing | **Implemented** | Transactional outbox handlers cover recording stop, summary generation, notifications, usage charging, and routing disable intent. |
+| Transactional outbox | **Implemented** | Handlers cover `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, and `recording.stop`. |
+| Call finalization effects | **Implemented** | Usage debit and the pending notification row are direct writes in the same call-finalization transaction. |
 | Live dashboard and intervention | **Partial** | An optional backend WebSocket observer exists but is disabled by default, has a documented identity-key mismatch, and has no live-call web interface. |
 | Push notifications | **Partial** | Notification records and provider boundaries exist, but private device-token delivery is not part of the launch path. |
 | Production observability and CI | **Implemented** | Readiness checks, safe logging, OpenTelemetry, metrics, pinned CI actions, dependency audits, secret scanning, and container scanning are configured. |
@@ -96,6 +100,7 @@ production-ready until all of these gates have evidence:
 - AI and recording-disclosure acknowledgement
 - Test call or browser preview
 - Readiness review and go-live action
+- Resumable failure and delayed-provisioning states
 
 ### Phase 2 — Customer workflow completion
 
