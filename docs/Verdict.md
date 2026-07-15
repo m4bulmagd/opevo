@@ -1,5 +1,13 @@
 # Verdict
 
+> [!IMPORTANT]
+> **Historical audit:** This report captured the repository before the July
+> 2026 production-hardening work. Several high-risk findings below—including
+> billing concurrency, webhook idempotency, transcript durability, call
+> reconciliation, scoped agent authentication, observability, CI, and
+> container hardening—were addressed afterward. Do not treat the scores or
+> issue list as current status; use [Project Status](PROJECT_STATUS.md) instead.
+
   Do not start over. Continue building, but do not launch this to paying public customers yet.
 
   This is a credible pre-production MVP with a sensible architecture and a meaningful test suite. It is not currently production-safe because several weaknesses

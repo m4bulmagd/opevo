@@ -186,7 +186,7 @@ Returned when the telephony provider update fails during an `is_enabled` toggle.
 
 ## Current Test Coverage
 
-The API is covered in [test_agent_config_api.py](/home/i933k/code/ai/bmad-opevo/apps/api/tests/agent/test_agent_config_api.py):
+The API is covered in [test_agent_config_api.py](../../apps/api/tests/agent/test_agent_config_api.py):
 
 - full config read
 - normal field patch
