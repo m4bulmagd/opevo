@@ -115,7 +115,8 @@ Behavior:
 
 ## Required API Config
 
-Add these values to [`apps/api/.env`](/home/i933k/code/ai/bmad-opevo/apps/api/.env):
+Create local `apps/api/.env` from the tracked
+[`apps/api/.env.example`](../../apps/api/.env.example), then add these values:
 
 ```dotenv
 STRIPE_SECRET_KEY=replace-me

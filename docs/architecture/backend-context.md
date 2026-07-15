@@ -16,26 +16,26 @@ This document captures implementation notes and staging verification for the bac
 - `PATCH /api/agent/config` now treats `is_enabled` as a synchronous telephony toggle, switching the assigned Telnyx number between `app-active` and `app-disabled` in the same request and rolling the config change back if the provider update fails.
 - New Clerk users now get a persisted default `agent_configs` row automatically, and `GET /api/agent/config` no longer depends on a frontend-synthesized fallback object.
 - `PATCH /api/agent/config` now enforces self-serve readiness gates before enabling routing: active paid subscription, successful France provisioning, assigned number readiness, and complete agent setup.
-- Contract details and usage examples for that surface are documented in [agent-config-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/agent-config-api.md).
+- Contract details and usage examples for that surface are documented in [agent-config-api.md](agent-config-api.md).
 - Call history API now exposes `GET /api/calls`, `GET /api/calls/{call_id}`, and `DELETE /api/calls/{call_id}` for authenticated users.
 - User-facing call delete is now a soft delete: deleted calls disappear from list/detail APIs, while transcript rows and recording objects remain available for admin/manual recovery later.
 - Live call recordings now use LiveKit room composite egress with `audio_only=true`, writing one mixed recording directly to the recordings bucket instead of relaying audio bytes through the agent completion API.
 - Recording timing is now tightened around the actual conversation window: SIP caller join creates and dispatches the call, agent join starts egress, and SIP caller leave attempts to stop egress early.
 - Recording retention is bucket-managed: when the recording object expires from storage lifecycle, call detail now degrades to `recording_url = null` while keeping the call and transcript.
-- Contract details and usage examples for call history are documented in [call-history-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/call-history-api.md).
+- Contract details and usage examples for call history are documented in [call-history-api.md](call-history-api.md).
 - Call summaries are now generated through a provider-agnostic summary layer, with Gemini configured as the default provider.
 - Completed calls now persist both `summary_text` and structured `summary_data` on the `calls` row.
 - Summary generation is non-blocking: if the provider fails or returns invalid output, call completion still succeeds and summary fields stay `null`.
 - Billing and usage API now exposes authenticated read endpoints for subscription state, usage balance, and usage ledger history.
 - Billing and usage API now exposes hosted Stripe action endpoints for checkout and billing portal sessions instead of mutating subscriptions directly in the app backend.
-- Contract details and usage examples for that surface are documented in [billing-usage-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/billing-usage-api.md).
-- Internal and integration surfaces are documented in [integration-endpoints.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/integration-endpoints.md).
+- Contract details and usage examples for that surface are documented in [billing-usage-api.md](billing-usage-api.md).
+- Internal and integration surfaces are documented in [integration-endpoints.md](integration-endpoints.md).
 - Realtime delivery is an optional observer and is disabled by default. With `REALTIME_ENABLED=false`, the API does not register `/ws`, construct the realtime Redis event bus, or start its fanout task. Dashboard correctness continues to rely on authenticated PostgreSQL-backed API reads and explicit route revalidation after successful mutations.
 
 ## Known Contract Drift
 
 - Product-facing docs may still describe a broader planned backend surface than what is currently implemented in `apps/api`. Treat this file and the focused docs under `docs/architecture/` as the current source for implemented backend contracts.
-- User-facing call delete is currently a soft delete, not a destructive delete. The current call-history contract is documented in [call-history-api.md](/home/i933k/code/ai/bmad-opevo/docs/architecture/call-history-api.md).
+- User-facing call delete is currently a soft delete, not a destructive delete. The current call-history contract is documented in [call-history-api.md](call-history-api.md).
 - The optional realtime endpoint is `/ws` with first-message auth, but it exists only when `REALTIME_ENABLED=true`; the normal production default returns `404`. Older product docs may still describe it as always available or use a more specific path shape.
 - Realtime must not be enabled for customer use until its identity key is made consistent. Current API and agent publishers address Redis channels with the local internal user UUID, while WebSocket authentication subscribes the connection with the Clerk subject ID. Those keys do not match, so delivery is not reliable even though both sides work independently.
 
@@ -58,7 +58,9 @@ This document captures implementation notes and staging verification for the bac
 - API Docker image build.
 - Agent Docker image build.
 - Queue-backed call finalization is now covered locally so call persistence no longer depends on the LiveKit agent surviving shutdown long enough to wait on the full API response.
-- Local infrastructure stack prepared in [compose.yaml](/home/i933k/code/ai/bmad-opevo/compose.yaml) for PostgreSQL 17.8, Redis 7.4.7, and MinIO.
+- The standalone local infrastructure and application stack is defined in
+  [compose.dev.yaml](../../compose.dev.yaml) with PostgreSQL 17.8, Redis
+  7.4.7, and MinIO.
 - LiveKit SIP participant field mapping reviewed against the official docs on 2026-03-15: `sip.phoneNumber` is the caller number for inbound trunks and `sip.trunkPhoneNumber` is the dialed trunk number.
 - Agent runtime selection is now explicit per user via `agent_config.pipeline_mode`:
   - `stt_llm_tts` remains the default and keeps Speechmatics/Deepgram + Gemini + TTS composition
@@ -84,12 +86,12 @@ Verified in staging:
   - only accept USD numbers where `upfront_cost + monthly_cost <= 2.00`
   - inspect at most 3 candidates
 - Real candidate found on 2026-03-16 without purchasing:
-  - `+33974065674`
+  - `+33******74`
   - `phone_number_type = national`
   - `upfront_cost = 1.00000 USD`
   - `monthly_cost = 0.50000 USD`
 - Subscription activation now persists even when number purchase is intentionally disabled, with a pending `phone_number_provisioning_review_required` notification instead of a `500`.
-- A real forwarded call on `+33392091999` persisted a completed `calls` row, transcript rows, a `call_completed` usage ledger entry, and a non-blocking failed notification row when Firebase credentials were not configured.
+- A real forwarded call on `+33******99` persisted a completed `calls` row, transcript rows, a `call_completed` usage ledger entry, and a non-blocking failed notification row when Firebase credentials were not configured.
 
 Not yet fully verified in staging:
 
@@ -116,7 +118,7 @@ Ready for manual execution once these external credentials and endpoints are ava
 
 - Fresh Stripe `invoice.paid` event for the persisted subscription to verify `invoice_paid_reset` in `usage_ledgers`.
 - Real Telnyx purchase and active/disabled switching once you deliberately enable ordering.
-- Real LiveKit webhook verification and agent dispatch against the purchased number `+33392091999`.
+- Real LiveKit webhook verification and agent dispatch against the purchased number `+33******99`.
 - Queue-backed finalization with the dedicated `worker` service during a real forwarded call.
 - One real forwarded call that confirms `recording_object_key` and `recording_egress_id` are persisted and that the bucket contains the mixed audio file.
 - End-to-end forwarded phone call with transcript, summary, and minute deduction for the Stripe-backed user.

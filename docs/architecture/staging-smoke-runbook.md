@@ -101,21 +101,25 @@ DEEPGRAM_API_KEY=<your-deepgram-key>
 
 ## Boot Commands
 
-From the worktree root:
+From the repository root, start the core stack first:
 
 ```bash
-cd /home/i933k/code/ai/bmad-opevo/.worktrees/backend-foundation-mvp
-docker compose up -d postgres redis minio minio-init
-docker compose --profile app up --build -d api worker agent
-docker compose --profile app logs -f api worker agent
+docker compose -f compose.dev.yaml up -d --build
+```
+
+After the core services are healthy, start the provider-backed voice worker:
+
+```bash
+docker compose -f compose.dev.yaml --profile voice up -d --build agent
+docker compose -f compose.dev.yaml --profile voice logs -f api worker agent
 ```
 
 Expected signals:
 
-- `api` runs Alembic automatically on startup
+- `migrate` exits successfully before the API and worker start
 - `api` starts `uvicorn` on port `8000`
 - `worker` starts `arq` without import or Redis connection failures
-- `agent` starts without credential or import failures
+- `agent` registers with LiveKit without credential or import failures
 
 ## Basic Boot Verification
 
@@ -205,7 +209,7 @@ Current verified staging result from 2026-03-16:
 
 - Stripe activation persisted the subscription and starter-minute allocation
 - Telnyx selection stayed in non-buying mode and found a valid national candidate:
-  - `+33974065674`
+  - `+33******74`
   - `upfront_cost = 1.00000 USD`
   - `monthly_cost = 0.50000 USD`
 - no real number order was placed while `TELNYX_ORDERING_ENABLED=false`
@@ -296,7 +300,7 @@ Then place one real inbound call through the forwarded Telnyx number.
 
 Existing purchased number available for the manual smoke path:
 
-- `+33392091999`
+- `+33******99`
 
 Current caveat:
 
@@ -305,7 +309,7 @@ Current caveat:
 Watch logs:
 
 ```bash
-docker compose --profile app logs -f api worker agent
+docker compose -f compose.dev.yaml --profile voice logs -f api worker agent
 ```
 
 Expected API log signals:
@@ -405,7 +409,7 @@ Configure one test user with:
 Then place one real inbound call for that user and watch:
 
 ```bash
-docker compose --profile app logs -f api worker agent
+docker compose -f compose.dev.yaml --profile voice logs -f api worker agent
 ```
 
 Expected evidence:
