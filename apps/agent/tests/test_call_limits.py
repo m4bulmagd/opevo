@@ -7,10 +7,22 @@ from pydantic import ValidationError
 
 from agent.schemas import DispatchMetadata
 from agent import schemas as schema_module
-from agent.session_runtime import SessionRuntime
+from agent.session_runtime import (
+    CALL_LIMIT_EXPIRY_MESSAGE,
+    CALL_LIMIT_WARNING_MESSAGE,
+    SessionRuntime,
+)
 
 
-WARNING_MESSAGE = "Attention, il vous reste une minute avant la fin de cet appel."
+WARNING_MESSAGE = "You have one minute remaining in this call."
+
+
+def test_call_limit_messages_use_approved_english_copy() -> None:
+    assert CALL_LIMIT_WARNING_MESSAGE == WARNING_MESSAGE
+    assert CALL_LIMIT_EXPIRY_MESSAGE == (
+        "The maximum call duration has been reached. "
+        "Thank you for calling. Goodbye."
+    )
 
 
 class FakeEventPublisher:

@@ -178,7 +178,7 @@ def test_send_initial_greeting_uses_say_for_standard_mode() -> None:
             make_metadata(
                 call_id="test",
                 user_id="test",
-                agent_name="Assistant",
+                agent_name="Ava",
                 owner_name="Sam",
                 pipeline_mode="stt_llm_tts",
             ),
@@ -186,8 +186,11 @@ def test_send_initial_greeting_uses_say_for_standard_mode() -> None:
     )
 
     assert session.say_calls == [
-        "Hello, I'm Assistant, an AI assistant representing Sam. This call may be recorded. How can I help you?"
+        "Hello, you've reached Sam. I'm Ava, an AI receptionist. "
+        "This call is being recorded so I can help with your request and create "
+        "a message for Sam. How can I help?"
     ]
+    assert session.say_kwargs == [{"allow_interruptions": False}]
     assert session.generate_reply_calls == []
 
 
@@ -200,7 +203,7 @@ def test_send_initial_greeting_uses_generate_reply_for_sts_mode() -> None:
             make_metadata(
                 call_id="test",
                 user_id="test",
-                agent_name="Assistant",
+                agent_name="Ava",
                 owner_name="Sam",
                 pipeline_mode="sts",
             ),
@@ -208,13 +211,26 @@ def test_send_initial_greeting_uses_generate_reply_for_sts_mode() -> None:
     )
 
     assert session.say_calls == []
-    assert len(session.generate_reply_calls) == 1
-    assert "Hello, I'm Assistant, an AI assistant representing Sam." in session.generate_reply_calls[0]["instructions"]
+    greeting = (
+        "Hello, you've reached Sam. I'm Ava, an AI receptionist. "
+        "This call is being recorded so I can help with your request and create "
+        "a message for Sam. How can I help?"
+    )
+    assert session.generate_reply_calls == [
+        {
+            "instructions": (
+                "Say exactly in English, without adding or removing words: "
+                f'"{greeting}"'
+            ),
+            "allow_interruptions": False,
+        }
+    ]
+    assert "French" not in session.generate_reply_calls[0]["instructions"]
 
 
 def test_call_limit_message_uses_generate_reply_for_sts_mode() -> None:
     session = FakeGreetingSession()
-    message = "Attention, il vous reste une minute avant la fin de cet appel."
+    message = "You have one minute remaining in this call."
 
     asyncio.run(
         _play_call_limit_message(
@@ -227,15 +243,19 @@ def test_call_limit_message_uses_generate_reply_for_sts_mode() -> None:
     assert session.say_calls == []
     assert session.generate_reply_calls == [
         {
-            "instructions": f'Say exactly in French: "{message}"',
+            "instructions": (
+                "Say exactly in English, without adding or removing words: "
+                f'"{message}"'
+            ),
             "allow_interruptions": False,
         }
     ]
+    assert "French" not in session.generate_reply_calls[0]["instructions"]
 
 
 def test_call_limit_message_disables_interruptions_for_standard_mode() -> None:
     session = FakeGreetingSession()
-    message = "Attention, il vous reste une minute avant la fin de cet appel."
+    message = "You have one minute remaining in this call."
 
     asyncio.run(
         _play_call_limit_message(
@@ -391,7 +411,10 @@ async def test_expiry_interrupts_input_and_speech_before_noninterruptible_close(
         (
             "say",
             {
-                "text": "La durée maximale de cet appel est atteinte. Merci de votre appel. Au revoir.",
+                "text": (
+                    "The maximum call duration has been reached. "
+                    "Thank you for calling. Goodbye."
+                ),
                 "allow_interruptions": False,
             },
         ),
@@ -558,12 +581,15 @@ async def test_entrypoint_registers_observability_shutdown_before_metadata_parsi
     assert shutdown_calls == [True]
 
 @pytest.mark.anyio
-async def test_entrypoint_arms_call_limit_only_after_session_start(
+async def test_entrypoint_delivers_disclosure_before_enabling_caller_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     metadata = make_metadata()
     context = FakeJobContext(metadata)
     session = FakeEntrypointSession()
+    events: list[object] = []
+    context.events = events
+    session.events = events
 
     class OrderingRuntime:
         call_limit_expired_on_start = False
@@ -586,9 +612,25 @@ async def test_entrypoint_arms_call_limit_only_after_session_start(
 
     await entrypoint(context)
 
-    assert session.events[0:2] == [
+    greeting = (
+        "Hello, you've reached Owner. I'm Agent, an AI receptionist. "
+        "This call is being recorded so I can help with your request and create "
+        "a message for Owner. How can I help?"
+    )
+    assert events == [
+        "connect",
+        ("wait_for_participant", 3),
+        ("set_audio_enabled", False),
         ("start", None),
         ("enforce_call_limit", True),
+        (
+            "say",
+            {
+                "text": greeting,
+                "allow_interruptions": False,
+            },
+        ),
+        ("set_audio_enabled", True),
     ]
 
 
@@ -627,11 +669,13 @@ async def test_entrypoint_awaits_immediate_expiry_without_initial_greeting(
         await runtime.call_limit_task
 
     greeting = (
-        "Hello, I'm Agent, an AI assistant representing Owner. "
-        "This call may be recorded. How can I help you?"
+        "Hello, you've reached Owner. I'm Agent, an AI receptionist. "
+        "This call is being recorded so I can help with your request and create "
+        "a message for Owner. How can I help?"
     )
     assert greeting not in session.say_calls
-    assert session.events[:2] == [
+    assert session.events[:3] == [
+        ("set_audio_enabled", False),
         ("start", None),
         ("enforce_call_limit", True),
     ]
@@ -678,7 +722,7 @@ async def test_entrypoint_injects_job_shutdown_into_session_runtime(
     assert captured["call_limit_started_at"] == 100.0
 
     await captured["warning_callback"](
-        "Attention, il vous reste une minute avant la fin de cet appel."
+        "You have one minute remaining in this call."
     )
     await captured["disconnect"]()
 
@@ -686,7 +730,7 @@ async def test_entrypoint_injects_job_shutdown_into_session_runtime(
         (
             "say",
             {
-                "text": "Attention, il vous reste une minute avant la fin de cet appel.",
+                "text": "You have one minute remaining in this call.",
                 "allow_interruptions": False,
             },
         ),
@@ -695,7 +739,10 @@ async def test_entrypoint_injects_job_shutdown_into_session_runtime(
         (
             "say",
             {
-                "text": "La durée maximale de cet appel est atteinte. Merci de votre appel. Au revoir.",
+                "text": (
+                    "The maximum call duration has been reached. "
+                    "Thank you for calling. Goodbye."
+                ),
                 "allow_interruptions": False,
             },
         ),

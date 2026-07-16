@@ -28,11 +28,10 @@ MAX_TRANSCRIPT_ITEMS = 2000
 DEFAULT_FINALIZE_TIMEOUT_SECONDS = 5.0
 DEFAULT_CALL_LIMIT_CLEANUP_TIMEOUT_SECONDS = 0.01
 MAX_RETRY_DELAY_SECONDS = 10
-CALL_LIMIT_WARNING_MESSAGE = (
-    "Attention, il vous reste une minute avant la fin de cet appel."
-)
+CALL_LIMIT_WARNING_MESSAGE = "You have one minute remaining in this call."
 CALL_LIMIT_EXPIRY_MESSAGE = (
-    "La durée maximale de cet appel est atteinte. Merci de votre appel. Au revoir."
+    "The maximum call duration has been reached. "
+    "Thank you for calling. Goodbye."
 )
 
 

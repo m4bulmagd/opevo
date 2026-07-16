@@ -26,6 +26,7 @@ from agent.observability import (
 )
 from agent.pipeline_factory import build_agent_runtime
 from agent.pipeline_factory import _resolve_speechmatics_turn_detection_mode
+from agent.prompt_builder import build_initial_greeting
 from agent.providers import PipelineMode
 from agent.runtime_validation import validate_agent_runtime
 from agent.safe_logging import report_safe_exception
@@ -161,17 +162,21 @@ def _register_session_handlers(session, runtime: SessionRuntime, metadata: Dispa
     _register_standard_session_handlers(session, runtime, metadata)
 
 async def _send_initial_greeting(session, metadata: DispatchMetadata) -> None:
-    greeting = (
-        f"Hello, I'm {metadata.agent_name}, an AI assistant representing "
-        f"{metadata.owner_name}. This call may be recorded. How can I help you?"
+    greeting = build_initial_greeting(
+        agent_name=metadata.agent_name,
+        owner_name=metadata.owner_name,
     )
 
     if getattr(metadata, "pipeline_mode", PipelineMode.STT_LLM_TTS.value) == PipelineMode.STS.value:
         result = session.generate_reply(
-            instructions=f'Start the conversation by saying exactly: "{greeting}"'
+            instructions=(
+                "Say exactly in English, without adding or removing words: "
+                f'"{greeting}"'
+            ),
+            allow_interruptions=False,
         )
     else:
-        result = session.say(greeting)
+        result = session.say(greeting, allow_interruptions=False)
 
     if inspect.isawaitable(result):
         await result
@@ -184,7 +189,10 @@ async def _play_call_limit_message(
 ) -> None:
     if metadata.pipeline_mode == PipelineMode.STS.value:
         result = session.generate_reply(
-            instructions=f'Say exactly in French: "{message}"',
+            instructions=(
+                "Say exactly in English, without adding or removing words: "
+                f'"{message}"'
+            ),
             allow_interruptions=False,
         )
     else:
@@ -272,6 +280,7 @@ async def entrypoint(context: JobContext) -> None:
                 duration_seconds=max(1, int(time.monotonic() - started_at)),
             )
         )
+        session.input.set_audio_enabled(False)
         with agent_provider_span(
             provider="livekit",
             operation="session_start",
@@ -302,6 +311,7 @@ async def entrypoint(context: JobContext) -> None:
                 await runtime.call_limit_task
             return
         await _send_initial_greeting(session, metadata)
+        session.input.set_audio_enabled(True)
 
 
 def prewarm_assets(proc) -> None:
