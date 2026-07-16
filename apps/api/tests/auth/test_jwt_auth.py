@@ -1,3 +1,4 @@
+import logging
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,50 @@ from app.core.dispatch_token import create_dispatch_token, verify_dispatch_token
 
 
 DISPATCH_SECRET = "dispatch-test-secret-with-enough-entropy-for-all-hmac-tests"
+
+
+@pytest.mark.anyio
+async def test_rejected_clerk_token_logs_only_safe_fixed_fields(
+    async_client,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.main import app
+
+    class RejectingAuthProvider:
+        def verify_token(self, _token: str) -> None:
+            raise jwt.PyJWTError("JWT_EXCEPTION_SENTINEL")
+
+    token = jwt.encode(
+        {
+            "sub": "JWT_SUBJECT_SENTINEL",
+            "jti": "JWT_TOKEN_SENTINEL",
+        },
+        "test-only-rejected-token-secret-with-entropy",
+        algorithm="HS256",
+    )
+    app.dependency_overrides[get_auth_provider] = RejectingAuthProvider
+    try:
+        with caplog.at_level(logging.WARNING, logger="app.core.auth"):
+            response = await async_client.get(
+                "/api/agent/config",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_auth_provider, None)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid token"}
+    for sentinel in (
+        "JWT_EXCEPTION_SENTINEL",
+        "JWT_SUBJECT_SENTINEL",
+        "JWT_TOKEN_SENTINEL",
+        token,
+    ):
+        assert sentinel not in caplog.text
+    assert "event=clerk_token_rejected" in caplog.text
+    assert "operation=verify_token" in caplog.text
+    assert "error_type=PyJWTError" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 def test_request_auth_provider_uses_app_bound_settings(settings) -> None:

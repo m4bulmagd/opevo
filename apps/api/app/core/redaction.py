@@ -73,6 +73,12 @@ _SENSITIVE_EXTRA_KEY_MARKERS = (
 _STANDARD_LOG_RECORD_KEYS = frozenset(logging.makeLogRecord({}).__dict__)
 _SAFE_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_SAFE_FIXED_AUTH_LABELS = frozenset(
+    {
+        "clerk_token_rejected",
+        "verify_token",
+    }
+)
 
 
 def redact_phone(value: str | None) -> str | None:
@@ -116,7 +122,12 @@ def _contains_sensitive_marker(value: str) -> bool:
 def safe_log_label(value: object) -> str | None:
     if not isinstance(value, str):
         return None
-    if _SAFE_LABEL.fullmatch(value) is None or _contains_sensitive_marker(value):
+    if _SAFE_LABEL.fullmatch(value) is None:
+        return None
+    if (
+        value not in _SAFE_FIXED_AUTH_LABELS
+        and _contains_sensitive_marker(value)
+    ):
         return None
     return value
 
