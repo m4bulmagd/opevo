@@ -60,7 +60,7 @@
 - Confirms the pinned voice runtime is `livekit-agents==1.4.4`.
 - Records no code changes; a failing baseline stops implementation and is diagnosed before Task 2.
 
-- [ ] **Step 1: Confirm the worktree and runtime versions**
+- [x] **Step 1: Confirm the worktree and runtime versions**
 
 ```bash
 git status --short
@@ -70,7 +70,7 @@ node --version
 
 Expected: only intentional worktree changes are present, LiveKit prints `1.4.4`, and Node is in the repository's supported `22.x` range.
 
-- [ ] **Step 2: Run the current API suite**
+- [x] **Step 2: Run the current API suite**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
@@ -78,7 +78,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m py
 
 Expected: all API tests pass. If not, record and diagnose the baseline failure; do not mix an unrelated repair into this plan.
 
-- [ ] **Step 3: Run the current agent suite**
+- [x] **Step 3: Run the current agent suite**
 
 ```bash
 cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
@@ -86,7 +86,7 @@ cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m 
 
 Expected: all agent tests pass.
 
-- [ ] **Step 4: Run the current web checks**
+- [x] **Step 4: Run the current web checks**
 
 ```bash
 cd apps/web && npm run check && npm run typecheck && npm run test:ci && npm run build
@@ -94,7 +94,7 @@ cd apps/web && npm run check && npm run typecheck && npm run test:ci && npm run 
 
 Expected: formatting/lint, TypeScript, Vitest, and the production build all pass.
 
-- [ ] **Step 5: Confirm the duplicated readiness seams before changing them**
+- [x] **Step 5: Confirm the duplicated readiness seams before changing them**
 
 ```bash
 rg -n "DispatchEligibilityPolicy|SubscriptionAccessPolicy\.can_route|_agent_setup_complete|_is_agent_setup_complete|routing_enabled" apps/api/app apps/web/src
@@ -208,7 +208,7 @@ For this task, `apps/api/app/schemas/agent_content.py` defines only these four i
 
 The future self-service plan extends the same snapshot with business profile, disclosure, forwarding, and test-call facts. It must not introduce a competing policy.
 
-- [ ] **Step 1: Write the failing happy-path and time-boundary tests**
+- [x] **Step 1: Write the failing happy-path and time-boundary tests**
 
 Create a `ready_snapshot(**overrides)` test helper with an active user, `starter` plan, active subscription, UTC period containing the fixed clock, positive balance, assigned provider number, complete agent setup, enabled agent, and `app-active` phone projection.
 
@@ -242,7 +242,7 @@ def test_period_end_is_exclusive() -> None:
     assert result.can_route is False
 ```
 
-- [ ] **Step 2: Write the failing blocker matrix**
+- [x] **Step 2: Write the failing blocker matrix**
 
 Parameterize one case for every blocker. Include naive and timezone-aware periods, case-insensitive default agent names such as `" assistant "`, whitespace-only owner context, both prompt fields empty, overlong content, missing provider ID, disabled agent, inactive phone, and wrong provider connection.
 
@@ -256,7 +256,7 @@ The matrix must prove these distinctions:
 - A disabled agent produces `AGENT_DISABLED` and stage `READY`, not `SUSPENDED`.
 - An enabled, otherwise ready agent waiting for its provider projection produces `ROUTING_PENDING`.
 
-- [ ] **Step 3: Run the new tests and verify failure**
+- [x] **Step 3: Run the new tests and verify failure**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/services/test_customer_readiness_policy.py -v
@@ -264,7 +264,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m py
 
 Expected: collection fails because `customer_readiness_policy.py` does not exist.
 
-- [ ] **Step 4: Implement normalization, blocker ordering, and stage precedence**
+- [x] **Step 4: Implement normalization, blocker ordering, and stage precedence**
 
 Use `_as_utc()` with the same behavior for naive and aware datetimes. Keep blocker ordering deterministic in the enum order shown above. Apply this exact stage precedence:
 
@@ -287,7 +287,7 @@ Agent content is setup-complete only when:
 
 Set `warnings=()` in `runtime-v1`; the field is intentionally reserved for the later activation workflow.
 
-- [ ] **Step 5: Run targeted tests and static checks**
+- [x] **Step 5: Run targeted tests and static checks**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/services/test_customer_readiness_policy.py -q
@@ -297,7 +297,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app/sch
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit the pure policy**
+- [x] **Step 6: Commit the pure policy**
 
 ```bash
 git add apps/api/app/schemas/agent_content.py apps/api/app/services/customer_readiness_policy.py apps/api/tests/services/test_customer_readiness_policy.py
@@ -355,13 +355,13 @@ class AgentConfigReadinessError(Exception):
         self.blockers = blockers
 ```
 
-- [ ] **Step 1: Write failing query-service tests**
+- [x] **Step 1: Write failing query-service tests**
 
 Use repository fakes to prove that `CustomerReadinessService.evaluate()` loads user, subscription, balance, phone, provisioning, and agent configuration once, builds the exact policy snapshot, and uses `agent_config_override` without writing it.
 
 Assert that a missing user yields `USER_INACTIVE`, not an exception, so callers receive a fail-closed result.
 
-- [ ] **Step 2: Write failing enablement API tests**
+- [x] **Step 2: Write failing enablement API tests**
 
 Add endpoint tests for:
 
@@ -384,7 +384,7 @@ Every rejected enable request must return HTTP `409` with this exact structure:
 
 Also assert the database transaction rolls back the requested `is_enabled=true` mutation and no `phone.enable` outbox event is created.
 
-- [ ] **Step 3: Run targeted tests and verify failure**
+- [x] **Step 3: Run targeted tests and verify failure**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/services/test_customer_readiness_service.py tests/agent/test_agent_config_api.py -q
@@ -392,13 +392,13 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m py
 
 Expected: new tests fail because enablement still calls `OnboardingService` and its private setup helper.
 
-- [ ] **Step 4: Implement the query service**
+- [x] **Step 4: Implement the query service**
 
 Construct repositories once in `CustomerReadinessService.__init__`. Translate absent model rows into explicit snapshot fields. Pass the provisioning status only for stage calculation; never let a provisioning row make an absent provider-backed phone count as usable.
 
 When an override is supplied, use it for `agent_config` in both the snapshot and returned context. This lets activation validate the just-mutated SQLAlchemy object inside the same transaction.
 
-- [ ] **Step 5: Replace the enablement dependency**
+- [x] **Step 5: Replace the enablement dependency**
 
 Change `AgentConfigService` to receive `readiness_service: CustomerReadinessService`. Remove imports of `OnboardingService` and `SubscriptionAccessPolicy`.
 
@@ -425,7 +425,7 @@ async def _ensure_ready_to_enable(self, user_id: UUID, config: AgentConfig) -> N
 
 The pure result makes `can_activate` authoritative; the filter only removes projection blockers from the error response. Assert in the unit test that `activation_blockers` is never empty when `can_activate` is false.
 
-- [ ] **Step 6: Wire the router and structured error**
+- [x] **Step 6: Wire the router and structured error**
 
 Construct `CustomerReadinessService(session)` in `get_agent_config_service()`. Map the exception without rendering its message:
 
@@ -440,7 +440,7 @@ except AgentConfigReadinessError as exc:
     ) from None
 ```
 
-- [ ] **Step 7: Run targeted and service tests**
+- [x] **Step 7: Run targeted and service tests**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/services/test_customer_readiness_service.py tests/agent/test_agent_config_api.py -q
@@ -449,7 +449,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check a
 
 Expected: all pass.
 
-- [ ] **Step 8: Commit query-driven enablement**
+- [x] **Step 8: Commit query-driven enablement**
 
 ```bash
 git add apps/api/app/services/customer_readiness_service.py apps/api/app/services/agent_config_service.py apps/api/app/routers/agent.py apps/api/tests/services/test_customer_readiness_service.py apps/api/tests/agent/test_agent_config_api.py
@@ -503,7 +503,7 @@ class OnboardingStatusResponse(BaseModel):
     policy_version: str
 ```
 
-- [ ] **Step 1: Replace onboarding test fixtures with the policy contract**
+- [x] **Step 1: Replace onboarding test fixtures with the policy contract**
 
 Add service and endpoint cases proving:
 
@@ -514,7 +514,7 @@ Add service and endpoint cases proving:
 - enabled setup with unconfirmed provider state is `routing_pending`;
 - only confirmed provider state is `live` and `can_route=true`.
 
-- [ ] **Step 2: Run API tests and verify failure**
+- [x] **Step 2: Run API tests and verify failure**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/services/test_onboarding_service.py tests/onboarding/test_onboarding_api.py -q
@@ -522,7 +522,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m py
 
 Expected: failures show that the old service ignores balance/period and derives its own status.
 
-- [ ] **Step 3: Refactor onboarding to use `CustomerReadinessService`**
+- [x] **Step 3: Refactor onboarding to use `CustomerReadinessService`**
 
 Inject one readiness service and use its returned context to build the response. Delete `_is_agent_setup_complete()` and `_derive_overall_status()` from `OnboardingService`.
 
@@ -540,7 +540,7 @@ evaluated_at=context.result.evaluated_at,
 policy_version=context.result.policy_version,
 ```
 
-- [ ] **Step 4: Write failing web presentation tests**
+- [x] **Step 4: Write failing web presentation tests**
 
 Update fixtures to the new contract and add assertions for exact launch copy:
 
@@ -554,7 +554,7 @@ Update fixtures to the new contract and add assertions for exact launch copy:
 
 The UI must select copy by `stage` and blocker code, never by parsing backend prose.
 
-- [ ] **Step 5: Run web tests and verify failure**
+- [x] **Step 5: Run web tests and verify failure**
 
 ```bash
 cd apps/web && npm run test -- --run tests/app/dashboard-onboarding.test.tsx tests/app/onboarding-status-card.test.tsx
@@ -562,13 +562,13 @@ cd apps/web && npm run test -- --run tests/app/dashboard-onboarding.test.tsx tes
 
 Expected: TypeScript/test failures because components still consume `overall_status` and `routing_enabled`.
 
-- [ ] **Step 6: Migrate dashboard types and components**
+- [x] **Step 6: Migrate dashboard types and components**
 
 Define string-union types for `CustomerReadinessStage` and `ReadinessBlocker` in `apps/web/src/lib/types/onboarding.ts`. Use `can_route` as the dashboard live signal. Ensure unknown future blocker codes fall back to calm generic copy without claiming the system is live.
 
 Keep all UI changes within existing components; the guided onboarding redesign belongs to the self-service activation plan.
 
-- [ ] **Step 7: Run API and web verification**
+- [x] **Step 7: Run API and web verification**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/services/test_customer_readiness_policy.py tests/services/test_customer_readiness_service.py tests/services/test_onboarding_service.py tests/onboarding/test_onboarding_api.py -q
@@ -577,7 +577,7 @@ cd apps/web && npm run check && npm run typecheck && npm run test -- --run tests
 
 Expected: all pass.
 
-- [ ] **Step 8: Commit the customer-visible readiness contract**
+- [x] **Step 8: Commit the customer-visible readiness contract**
 
 ```bash
 git add apps/api/app/schemas/onboarding.py apps/api/app/services/onboarding_service.py apps/api/tests/services/test_onboarding_service.py apps/api/tests/onboarding/test_onboarding_api.py apps/web/src/lib/types/onboarding.ts 'apps/web/src/app/(app)/dashboard/page.tsx' apps/web/src/components/dashboard/onboarding-status-card.tsx apps/web/src/components/dashboard/status-summary-cards.tsx apps/web/src/components/dashboard/setup-checklist.tsx apps/web/tests/app/dashboard-onboarding.test.tsx apps/web/tests/app/onboarding-status-card.test.tsx
@@ -604,7 +604,7 @@ git commit -m "feat: expose authoritative customer readiness"
 - LiveKit webhook admission and durable outbox dispatch use `CustomerReadinessResult.can_dispatch(called_number_matches=...)`.
 - Call-specific checks remain separate: valid active user row, accepted call lifecycle state, phone/call ownership, and matching agent-config ID.
 
-- [ ] **Step 1: Expand failing routing and dispatch matrices**
+- [x] **Step 1: Expand failing routing and dispatch matrices**
 
 In both admission and durable outbox tests, cover:
 
@@ -620,13 +620,13 @@ In both admission and durable outbox tests, cover:
 
 Add a phone-routing assertion that a zero balance or expired period produces a disable projection even if `agent_config.is_enabled` remains true.
 
-- [ ] **Step 2: Add metadata privacy and bound assertions**
+- [x] **Step 2: Add metadata privacy and bound assertions**
 
 For valid dispatch, assert `owner_name` is `user.full_name` when present and the literal `"the business"` when absent. Never fall back to `user.email`, because metadata is spoken by the agent.
 
 Keep the existing signed dispatch token and allowed-duration calculations unchanged.
 
-- [ ] **Step 3: Run targeted tests and verify failure**
+- [x] **Step 3: Run targeted tests and verify failure**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/livekit/test_dispatch_service.py tests/livekit/test_durable_dispatch_service.py tests/workers/test_livekit_dispatch_outbox.py -q
@@ -634,7 +634,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m py
 
 Expected: at least the duplicated period, setup, or owner-name cases fail before refactoring.
 
-- [ ] **Step 4: Refactor lock-sensitive paths onto the pure policy**
+- [x] **Step 4: Refactor lock-sensitive paths onto the pure policy**
 
 Build `CustomerReadinessSnapshot` from the rows already loaded under the established locks. Do not call `CustomerReadinessService` from a locked admission/dispatch transaction because it would repeat queries and could alter lock ordering.
 
@@ -656,11 +656,11 @@ eligible = bool(
 
 Delete `_agent_setup_complete()` and all imports of `OnboardingService` from worker dispatch code.
 
-- [ ] **Step 5: Remove the obsolete dispatch policy**
+- [x] **Step 5: Remove the obsolete dispatch policy**
 
 Delete `DispatchEligibilityPolicy` and its test after every caller has migrated. Keep `SubscriptionAccessPolicy` only in Stripe subscription lifecycle code and any explicitly status-only billing policy; do not use it in the four readiness consumers.
 
-- [ ] **Step 6: Run targeted, integration, and invariant checks**
+- [x] **Step 6: Run targeted, integration, and invariant checks**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/services/test_customer_readiness_policy.py tests/livekit/test_dispatch_service.py tests/livekit/test_durable_dispatch_service.py tests/workers/test_livekit_dispatch_outbox.py tests/integration/test_outbox_delivery.py tests/integration/test_livekit_dispatch_concurrency.py -q
@@ -670,7 +670,7 @@ rg -n "SubscriptionAccessPolicy\.can_route" apps/api/app/services/onboarding_ser
 
 Expected: tests pass; both invariant searches print no matches.
 
-- [ ] **Step 7: Commit the dispatch migration**
+- [x] **Step 7: Commit the dispatch migration**
 
 ```bash
 git add apps/api/app/services/livekit_dispatch_service.py apps/api/app/workers/jobs/outbox_topics.py apps/api/tests/livekit/test_dispatch_service.py apps/api/tests/livekit/test_durable_dispatch_service.py apps/api/tests/workers/test_livekit_dispatch_outbox.py apps/api/tests/integration/test_outbox_delivery.py apps/api/tests/integration/test_livekit_dispatch_concurrency.py
@@ -693,7 +693,7 @@ git commit -m "fix: align routing and dispatch readiness"
 - Production requires an explicit true value in both runtime validation and Compose interpolation.
 - The API and worker inherit the same setting because provisioning executes in the worker.
 
-- [ ] **Step 1: Write failing production-validation tests**
+- [x] **Step 1: Write failing production-validation tests**
 
 Set `telnyx_ordering_enabled=True` in the valid `base_settings` fixture, then add:
 
@@ -713,7 +713,7 @@ Add or extend the Compose contract test to assert the worker environment contain
 TELNYX_ORDERING_ENABLED: ${TELNYX_ORDERING_ENABLED:?TELNYX_ORDERING_ENABLED is required}
 ```
 
-- [ ] **Step 2: Run deployment-readiness tests and verify failure**
+- [x] **Step 2: Run deployment-readiness tests and verify failure**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/test_deployment_readiness.py -q
@@ -721,7 +721,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m py
 
 Expected: production currently accepts false and Compose omits the setting.
 
-- [ ] **Step 3: Make production fail closed**
+- [x] **Step 3: Make production fail closed**
 
 After ordinary missing-setting checks, append the variable name when the flag is false:
 
@@ -732,7 +732,7 @@ if not settings.telnyx_ordering_enabled:
 
 Add the required interpolation to the shared `x-worker-environment` block in `compose.yaml`. Keep the `.env.example` value false and add a comment stating that it prevents real purchases in development and must be explicitly true in staging/production.
 
-- [ ] **Step 4: Verify runtime and rendered Compose behavior**
+- [x] **Step 4: Verify runtime and rendered Compose behavior**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/test_deployment_readiness.py -q
@@ -741,7 +741,7 @@ rg -nF 'TELNYX_ORDERING_ENABLED: ${TELNYX_ORDERING_ENABLED:?TELNYX_ORDERING_ENAB
 
 Expected: tests pass and the exact required Compose interpolation appears once in the shared worker environment. The deployment smoke test in the AWS staging plan will render the complete Compose environment and prove omission fails before any service starts.
 
-- [ ] **Step 5: Commit the production ordering gate**
+- [x] **Step 5: Commit the production ordering gate**
 
 ```bash
 git add apps/api/app/core/runtime_validation.py apps/api/tests/test_deployment_readiness.py compose.yaml apps/api/.env.example
@@ -773,17 +773,17 @@ git commit -m "fix: require telnyx ordering in production"
 
 All request and metadata models reject extra keys. Oversized values return Pydantic validation errors; they are never truncated.
 
-- [ ] **Step 1: Write failing API request tests**
+- [x] **Step 1: Write failing API request tests**
 
 Add parameterized PATCH tests for every field at its maximum and maximum plus one. Assert maximum values are accepted, oversized values return HTTP `422`, whitespace around accepted values is stripped before persistence, and an unknown key returns `422`.
 
 Also add a test that a legacy oversized row can still be fetched for correction but cannot be enabled. Its readiness blocker must be `agent_content_invalid`.
 
-- [ ] **Step 2: Write failing dispatch-boundary tests**
+- [x] **Step 2: Write failing dispatch-boundary tests**
 
 Construct `LiveKitDispatchMetadata` and agent `DispatchMetadata` at each limit and one character above it. Assert both processes accept the boundary and reject the overflow. Cover `owner_name` separately because it comes from the synced user profile, not `AgentConfigPatchRequest`.
 
-- [ ] **Step 3: Run targeted tests and verify failure**
+- [x] **Step 3: Run targeted tests and verify failure**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/agent/test_agent_config_api.py tests/livekit/test_durable_dispatch_service.py -q
@@ -792,7 +792,7 @@ cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m 
 
 Expected: oversized values are currently accepted.
 
-- [ ] **Step 4: Create shared API content types**
+- [x] **Step 4: Create shared API content types**
 
 Extend the constants created in Task 2 with Pydantic annotated types in `apps/api/app/schemas/agent_content.py`:
 
@@ -840,13 +840,13 @@ KnowledgeBase = Annotated[
 
 Use these types in request and API dispatch models. Add `ConfigDict(extra="forbid")` to `AgentConfigPatchRequest`. Keep response fields permissive enough to display a legacy invalid row for correction; readiness remains the activation gate.
 
-- [ ] **Step 5: Mirror defense-in-depth validation in the agent process**
+- [x] **Step 5: Mirror defense-in-depth validation in the agent process**
 
 The agent is separately deployed, so repeat named constants in `apps/agent/agent/schemas.py` and apply the same `StringConstraints`. Restrict `pipeline_mode` to `Literal["stt_llm_tts", "sts"]` instead of arbitrary text.
 
 Do not import API application modules into the agent image. The cross-process tests, serialized dispatch validation, and named constants make drift visible.
 
-- [ ] **Step 6: Verify schema and pipeline behavior**
+- [x] **Step 6: Verify schema and pipeline behavior**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/services/test_customer_readiness_policy.py tests/agent/test_agent_config_api.py tests/livekit/test_durable_dispatch_service.py -q
@@ -857,7 +857,7 @@ cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
 
 Expected: all pass.
 
-- [ ] **Step 7: Commit the content boundaries**
+- [x] **Step 7: Commit the content boundaries**
 
 ```bash
 git add apps/api/app/schemas/agent_content.py apps/api/app/schemas/agent.py apps/api/app/schemas/livekit.py apps/api/tests/agent/test_agent_config_api.py apps/api/tests/livekit/test_durable_dispatch_service.py apps/agent/agent/schemas.py apps/agent/tests/test_call_limits.py apps/agent/tests/test_pipeline_factory.py
@@ -889,7 +889,7 @@ def build_initial_greeting(*, agent_name: str, owner_name: str) -> str: ...
 
 `build_system_prompt()` always emits these sections in this order: mandatory role, instruction priority, conversation behavior, uncertainty and message-taking flow, safety/privacy boundaries, voice-output rules, delimited owner instructions, delimited owner context, and delimited knowledge base.
 
-- [ ] **Step 1: Replace prompt-builder tests with mandatory-policy tests**
+- [x] **Step 1: Replace prompt-builder tests with mandatory-policy tests**
 
 Add deterministic tests proving:
 
@@ -901,7 +901,7 @@ Add deterministic tests proving:
 - output is plain text for voice, brief, and asks one question at a time;
 - no French launch copy remains.
 
-- [ ] **Step 2: Add exact fallback assertions**
+- [x] **Step 2: Add exact fallback assertions**
 
 The constructed prompt must include all of these rules regardless of customer configuration:
 
@@ -914,7 +914,7 @@ The constructed prompt must include all of these rules regardless of customer co
 7. Never invent an answer, appointment, transfer, completed action, price, policy, or availability.
 8. For emergencies or immediate danger, direct the caller to the appropriate emergency service; do not claim Presvo has contacted anyone.
 
-- [ ] **Step 3: Add exact greeting tests**
+- [x] **Step 3: Add exact greeting tests**
 
 Assert:
 
@@ -928,7 +928,7 @@ assert build_initial_greeting(agent_name="Ava", owner_name="Sam") == (
 
 Also test `owner_name="the business"`. This is the approved product draft for implementation, but public release still requires qualified French/EU legal review.
 
-- [ ] **Step 4: Run prompt tests and verify failure**
+- [x] **Step 4: Run prompt tests and verify failure**
 
 ```bash
 cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/test_prompt_builder.py -q
@@ -936,7 +936,7 @@ cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m 
 
 Expected: empty system prompts currently omit mandatory output and guardrail rules, and the greeting helper is absent.
 
-- [ ] **Step 5: Rebuild the prompt with fixed templates and explicit delimiters**
+- [x] **Step 5: Rebuild the prompt with fixed templates and explicit delimiters**
 
 Use ordinary fixed section templates, not customer-controlled headings. The instruction-priority section must include this exact meaning:
 
@@ -951,7 +951,7 @@ Escape all customer blocks with `html.escape(value, quote=False)` before interpo
 
 The knowledge rule must say “approved business information,” not only “knowledge base,” because owner context and owner instructions are also approved sources.
 
-- [ ] **Step 6: Run targeted tests and static checks**
+- [x] **Step 6: Run targeted tests and static checks**
 
 ```bash
 cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/test_prompt_builder.py tests/test_pipeline_factory.py -q
@@ -961,7 +961,7 @@ cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
 
 Expected: all pass.
 
-- [ ] **Step 7: Commit the mandatory policy**
+- [x] **Step 7: Commit the mandatory policy**
 
 ```bash
 git add apps/agent/agent/prompt_builder.py apps/agent/tests/test_prompt_builder.py
@@ -985,7 +985,7 @@ git commit -m "fix: enforce mandatory receptionist behavior"
 - STS mode uses `session.generate_reply(instructions=..., allow_interruptions=False)` with an exact English utterance instruction.
 - Existing room recording remains unchanged and includes the disclosure.
 
-- [ ] **Step 1: Update failing greeting tests**
+- [x] **Step 1: Update failing greeting tests**
 
 Assert both pipeline modes receive the exact greeting from Task 8 and `allow_interruptions=False`. Assert the STS instruction says `Say exactly in English` and contains no French directive.
 
@@ -999,7 +999,7 @@ In the entrypoint test, record session events and prove this order:
 
 No other agent utterance may be emitted before the greeting in a non-expired eligible call.
 
-- [ ] **Step 2: Update failing call-limit language tests**
+- [x] **Step 2: Update failing call-limit language tests**
 
 Use these exact constants:
 
@@ -1013,7 +1013,7 @@ CALL_LIMIT_EXPIRY_MESSAGE = (
 
 Assert standard and STS delivery disables interruptions and STS uses `Say exactly in English`.
 
-- [ ] **Step 3: Run tests and verify failure**
+- [x] **Step 3: Run tests and verify failure**
 
 ```bash
 cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/test_main.py tests/test_call_limits.py tests/test_session_runtime.py -q
@@ -1021,7 +1021,7 @@ cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m 
 
 Expected: current greeting says “may be recorded,” allows interruption in standard mode, and limit messages are French.
 
-- [ ] **Step 4: Implement the greeting and language changes**
+- [x] **Step 4: Implement the greeting and language changes**
 
 Import `build_initial_greeting` into `main.py`. Do not duplicate greeting text in runtime code. Preserve the existing `session.start(..., record={...})` settings and API-side room recording trigger.
 
@@ -1031,7 +1031,7 @@ Use this STS instruction shape for greeting and limit messages:
 instructions=f'Say exactly in English, without adding or removing words: "{message}"'
 ```
 
-- [ ] **Step 5: Verify no French operational speech remains**
+- [x] **Step 5: Verify no French operational speech remains**
 
 ```bash
 rg -n "Attention|Au revoir|Say exactly in French|may be recorded" apps/agent/agent apps/agent/tests
@@ -1040,7 +1040,7 @@ cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m 
 
 Expected: the search prints no matches and tests pass.
 
-- [ ] **Step 6: Commit the launch speech contract**
+- [x] **Step 6: Commit the launch speech contract**
 
 ```bash
 git add apps/agent/agent/main.py apps/agent/agent/session_runtime.py apps/agent/tests/test_main.py apps/agent/tests/test_call_limits.py apps/agent/tests/test_session_runtime.py
@@ -1058,7 +1058,7 @@ git commit -m "fix: disclose ai recording before conversation"
 
 **Execution model:** Deterministic prompt tests always block CI. Live model evaluations skip when LiveKit credentials or an explicit evaluation model are absent, but must run and pass in credentialed staging certification.
 
-- [ ] **Step 1: Verify the installed testing API before writing tests**
+- [x] **Step 1: Verify the installed testing API before writing tests**
 
 ```bash
 cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -c "import importlib.metadata as m; print(m.version('livekit-agents'))"
@@ -1068,7 +1068,7 @@ cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -c 
 
 Expected: version `1.4.4`; `AgentSession.run` and `inference.LLM` exist. Compare the signatures with the official guide before copying its expectation helpers. If the package and current guide disagree, follow the pinned package behavior and record the compatibility decision in the commit message/body; do not guess an API.
 
-- [ ] **Step 2: Register the evaluation marker**
+- [x] **Step 2: Register the evaluation marker**
 
 Add:
 
@@ -1079,7 +1079,7 @@ markers = [
 ]
 ```
 
-- [ ] **Step 3: Create the credential guard and test agent**
+- [x] **Step 3: Create the credential guard and test agent**
 
 At module load, read `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and `LIVEKIT_EVAL_MODEL`. Skip the module with a clear reason unless all three exist. Do not print their values.
 
@@ -1096,7 +1096,7 @@ async with (
 
 Use `result.expect`/`judge` exactly as supported by 1.4.4 after Step 1 verification. These tests do not join a room and do not place calls.
 
-- [ ] **Step 4: Add the four launch behavior evaluations**
+- [x] **Step 4: Add the four launch behavior evaluations**
 
 Create these tests with narrow judge intents:
 
@@ -1107,7 +1107,7 @@ Create these tests with narrow judge intents:
 
 Do not assert exact generated prose beyond mandatory facts; use semantic judges for behavior and deterministic tests for exact greeting/prompt text.
 
-- [ ] **Step 5: Prove secretless CI behavior**
+- [x] **Step 5: Prove secretless CI behavior**
 
 ```bash
 cd apps/agent && env -u LIVEKIT_API_KEY -u LIVEKIT_API_SECRET -u LIVEKIT_EVAL_MODEL UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/evals/test_receptionist_behavior.py -q
@@ -1124,7 +1124,7 @@ cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m 
 
 Expected: four behavior evaluations pass using secrets supplied by the staging secret store and the explicitly configured production-equivalent model. Never place credentials on the command line or in the repository.
 
-- [ ] **Step 7: Commit the evaluation harness**
+- [x] **Step 7: Commit the evaluation harness**
 
 ```bash
 git add apps/agent/pyproject.toml apps/agent/tests/evals/test_receptionist_behavior.py
@@ -1140,7 +1140,7 @@ git commit -m "test: evaluate receptionist safety behavior"
 
 **Interface:** A rejected Clerk JWT logs only fixed labels and the exception class through `report_safe_exception`; it never decodes the token without verification for observability.
 
-- [ ] **Step 1: Write a failing sentinel-log test**
+- [x] **Step 1: Write a failing sentinel-log test**
 
 Use a fake provider that raises a `jwt.PyJWTError` whose message contains `JWT_EXCEPTION_SENTINEL`. Supply a bearer token containing `JWT_TOKEN_SENTINEL` and fake unverified claim values such as `JWT_SUBJECT_SENTINEL`.
 
@@ -1154,7 +1154,7 @@ error_type=PyJWTError
 
 Keep the client response as HTTP `401` with `detail="Invalid token"`.
 
-- [ ] **Step 2: Run the auth test and verify failure**
+- [x] **Step 2: Run the auth test and verify failure**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/auth/test_jwt_auth.py -q
@@ -1162,7 +1162,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m py
 
 Expected: current logging renders the exception and decoded unverified claim values.
 
-- [ ] **Step 3: Replace the unsafe logging branch**
+- [x] **Step 3: Replace the unsafe logging branch**
 
 Import `report_safe_exception` from `app.core.logging`, delete the unverified `jwt.decode()` block, and use:
 
@@ -1181,7 +1181,7 @@ except jwt.PyJWTError as exc:
     ) from None
 ```
 
-- [ ] **Step 4: Run auth and redaction tests**
+- [x] **Step 4: Run auth and redaction tests**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest tests/auth/test_jwt_auth.py tests/test_redaction.py tests/services/test_safe_service_exceptions.py -q
@@ -1189,7 +1189,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m py
 
 Expected: all pass and no sentinel appears in captured logs.
 
-- [ ] **Step 5: Commit the authentication log fix**
+- [x] **Step 5: Commit the authentication log fix**
 
 ```bash
 git add apps/api/app/core/auth.py apps/api/tests/auth/test_jwt_auth.py
@@ -1203,7 +1203,7 @@ git commit -m "fix: redact rejected clerk token logs"
 - Modify: `docs/superpowers/plans/2026-07-16-runtime-correctness-and-voice-safety.md` — check completed boxes and append command evidence only.
 - Modify if behavior changed during implementation: `docs/superpowers/specs/2026-07-16-self-service-production-launch-design.md` — record an explicit design amendment, never silently rewrite approval history.
 
-- [ ] **Step 1: Run the complete API quality gate**
+- [x] **Step 1: Run the complete API quality gate**
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check app tests
@@ -1213,7 +1213,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m py
 
 Expected: all commands exit zero.
 
-- [ ] **Step 2: Run the complete deterministic agent quality gate**
+- [x] **Step 2: Run the complete deterministic agent quality gate**
 
 ```bash
 cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check agent tests
@@ -1231,7 +1231,7 @@ cd apps/agent && UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m 
 
 Expected: four evaluations pass in the credentialed staging environment. A skip does not satisfy this release gate.
 
-- [ ] **Step 4: Run the complete web quality gate**
+- [x] **Step 4: Run the complete web quality gate**
 
 ```bash
 cd apps/web && npm run check && npm run typecheck && npm run test:ci && npm run build
@@ -1239,7 +1239,7 @@ cd apps/web && npm run check && npm run typecheck && npm run test:ci && npm run 
 
 Expected: all commands exit zero.
 
-- [ ] **Step 5: Prove the single-readiness invariant**
+- [x] **Step 5: Prove the single-readiness invariant**
 
 ```bash
 rg -n "DispatchEligibilityPolicy|_agent_setup_complete|_is_agent_setup_complete|_derive_overall_status" apps/api/app apps/api/tests
@@ -1249,7 +1249,7 @@ rg -n "CustomerReadinessPolicy|CustomerReadinessService" apps/api/app/services/o
 
 Expected: the first two searches print no matches. The third prints policy/service use in all four readiness consumers.
 
-- [ ] **Step 6: Prove configuration, language, and log-safety invariants**
+- [x] **Step 6: Prove configuration, language, and log-safety invariants**
 
 ```bash
 rg -n "TELNYX_ORDERING_ENABLED" compose.yaml apps/api/.env.example apps/api/app/core/runtime_validation.py apps/api/tests/test_deployment_readiness.py
@@ -1259,7 +1259,7 @@ rg -n "verify_signature.*False|unverified_payload|Rejected Clerk token" apps/api
 
 Expected: Telnyx matches exist in all four required locations; the language and unsafe-auth searches print no matches.
 
-- [ ] **Step 7: Review the Gate 1 traceability matrix**
+- [x] **Step 7: Review the Gate 1 traceability matrix**
 
 | Approved requirement | Evidence |
 |---|---|
@@ -1273,7 +1273,7 @@ Expected: Telnyx matches exist in all four required locations; the language and 
 
 Every row must link to a passing test or command in the implementation handoff. Missing evidence blocks completion.
 
-- [ ] **Step 8: Inspect the final diff for scope and sensitive data**
+- [x] **Step 8: Inspect the final diff for scope and sensitive data**
 
 ```bash
 BASE_SHA=$(git merge-base HEAD main)
@@ -1285,7 +1285,7 @@ git diff "$BASE_SHA"...HEAD -- apps/api apps/agent apps/web docs/superpowers
 
 Expected: no whitespace errors, no secrets or generated artifacts, no appointment/retention/onboarding-wizard scope, and only intentional files changed.
 
-- [ ] **Step 9: Commit verification evidence**
+- [x] **Step 9: Commit verification evidence**
 
 ```bash
 git add docs/superpowers/plans/2026-07-16-runtime-correctness-and-voice-safety.md docs/superpowers/specs/2026-07-16-self-service-production-launch-design.md
@@ -1306,3 +1306,52 @@ This plan is complete only when:
 - the implementation handoff identifies any legal-copy review still required before public release.
 
 Passing this plan satisfies the approved design's Gate 1, not overall production readiness. Continue with the AWS Ireland staging foundation plan from `docs/superpowers/plans/2026-07-16-self-service-production-program-roadmap.md` only after this gate is evidenced.
+
+## Verification Evidence — 2026-07-16
+
+Branch: `feat/runtime-safety`
+
+Merge base with `main`: `c5a5994cb1162d7f3e600cf6fc25ab54cc01e430`
+
+### Deterministic quality gates
+
+- API Ruff: `ruff check app tests` passed.
+- API mypy: `mypy app` passed for 107 source files.
+- API pytest: 790 passed, 58 skipped, and 3 warnings in 62.54 seconds. The warnings are existing `aiosqlite` connection-worker teardown warnings after an event loop closes; they remain test-harness debt.
+- Agent Ruff: `ruff check agent tests` passed.
+- Agent mypy: `mypy agent tests/evals/test_receptionist_behavior.py` passed for 16 source files.
+- Deterministic agent pytest: 172 passed and 4 credentialed evaluations were deselected.
+- Secretless evaluation check: the 4 LiveKit evaluations skipped cleanly with exit code zero when `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and `LIVEKIT_EVAL_MODEL` were unset.
+- Web Biome: 93 files checked with no fixes.
+- Web TypeScript: `tsc --noEmit` passed.
+- Web Vitest: 13 files and 55 tests passed.
+- Web production build: passed under Node 22.23.1 using the repository's non-secret CI build placeholders. A first run without required Clerk/API build settings failed closed as designed.
+
+### Credentialed behavior gate
+
+The four LiveKit semantic evaluations were not run because `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and `LIVEKIT_EVAL_MODEL` are absent from this environment. This remains an open release gate; a skip does not satisfy it. Run the Task 12 Step 3 command in the approved Ireland staging environment with a production-equivalent model supplied by the staging secret store.
+
+### Invariant evidence
+
+- Searches for `DispatchEligibilityPolicy`, `_agent_setup_complete`, `_is_agent_setup_complete`, `_derive_overall_status`, and `SubscriptionAccessPolicy.can_route` returned no matches in runtime-readiness consumers.
+- `CustomerReadinessPolicy` or `CustomerReadinessService` is present in onboarding, activation, provider projection, and LiveKit dispatch consumers.
+- `TELNYX_ORDERING_ENABLED` is present in Compose, the API environment example, production runtime validation, and deployment-readiness tests.
+- Searches for obsolete French/conditional-recording speech and unsafe unverified JWT logging returned no matches.
+- `git diff --check main...HEAD` passed. The pre-evidence branch diff contained 52 intentional files, 3,264 insertions, and 861 deletions; no high-risk secret signature was found.
+- Appointment-related additions are limited to mandatory no-promise policy text and evaluation coverage. No booking, retention automation, or onboarding-wizard implementation was added.
+
+### Requirement traceability
+
+| Approved requirement | Passing evidence |
+|---|---|
+| One readiness result drives UI, activation, provider projection, and dispatch | [Readiness policy matrix](../../../apps/api/tests/services/test_customer_readiness_policy.py), [readiness query tests](../../../apps/api/tests/services/test_customer_readiness_service.py), [agent activation tests](../../../apps/api/tests/agent/test_agent_config_api.py), [phone projection tests](../../../apps/api/tests/workers/test_phone_routing_readiness.py), and the single-readiness invariant searches above |
+| Zero-minute and subscription-period behavior is truthful | [Readiness policy matrix](../../../apps/api/tests/services/test_customer_readiness_policy.py), [onboarding service tests](../../../apps/api/tests/services/test_onboarding_service.py), and [dispatch outbox tests](../../../apps/api/tests/workers/test_livekit_dispatch_outbox.py) |
+| Production orders real numbers only when explicitly enabled | [Deployment readiness tests](../../../apps/api/tests/test_deployment_readiness.py), shared API/worker runtime validation, and rendered Compose assertions |
+| Prompt inputs cannot bypass safety or exceed bounds | [API boundary tests](../../../apps/api/tests/agent/test_agent_config_api.py), [dispatch metadata tests](../../../apps/api/tests/livekit/test_durable_dispatch_service.py), [agent schema tests](../../../apps/agent/tests/test_call_limits.py), and [prompt injection tests](../../../apps/agent/tests/test_prompt_builder.py) |
+| AI/recording disclosure is first and English | [Exact greeting and entrypoint-order tests](../../../apps/agent/tests/test_main.py) plus the empty obsolete-speech invariant search |
+| Unknown requests become safe messages without promises | [Deterministic mandatory prompt tests](../../../apps/agent/tests/test_prompt_builder.py) pass; [four LiveKit behavior evaluations](../../../apps/agent/tests/evals/test_receptionist_behavior.py) exist but remain pending in credentialed staging |
+| Rejected tokens do not leak unverified data | [JWT sentinel-log test](../../../apps/api/tests/auth/test_jwt_auth.py) and [safe-label regression coverage](../../../apps/api/tests/test_redaction.py) |
+
+### Public-release note
+
+The approved English AI/recording disclosure is implemented and tested, but qualified French/EU legal review of the exact disclosure and consent handling is still required before public release.
