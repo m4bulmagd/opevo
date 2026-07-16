@@ -42,10 +42,15 @@ function buildOnboardingStatus(overrides: Record<string, unknown> = {}) {
     minutes_remaining: 183,
     phone_number: null,
     phone_number_status: "provisioning",
-    routing_enabled: false,
     agent_setup_complete: false,
-    overall_status: "provisioning_number",
     can_retry_provisioning: false,
+    stage: "number_provisioning",
+    can_activate: false,
+    can_route: false,
+    blockers: ["phone_missing", "agent_setup_incomplete", "agent_disabled"],
+    warnings: [],
+    evaluated_at: "2026-07-16T12:00:00Z",
+    policy_version: "runtime-v1",
     ...overrides,
   };
 }
@@ -73,16 +78,16 @@ describe("dashboard onboarding", () => {
     render(await Page());
 
     expect(screen.getByText(/Number provisioning in progress/i)).toBeInTheDocument();
-    expect(screen.getByText(/assigning your French number now/i)).toBeInTheDocument();
+    expect(screen.getByText(/assigning your Irish number now/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Retry provisioning/i })).not.toBeInTheDocument();
   });
 
-  it("shows retry and support guidance when provisioning fails", async () => {
+  it("shows retry and self-service guidance when provisioning fails", async () => {
     getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
     getOnboardingStatusMock.mockResolvedValueOnce(
       buildOnboardingStatus({
         phone_number_status: "failed",
-        overall_status: "provisioning_failed",
+        stage: "number_provisioning_failed",
         can_retry_provisioning: true,
       }),
     );
@@ -94,17 +99,19 @@ describe("dashboard onboarding", () => {
 
     expect(screen.getByText(/Provisioning needs attention/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Retry provisioning/i })).toBeInTheDocument();
-    expect(screen.getByText(/Contact support if this keeps happening/i)).toBeInTheDocument();
+    expect(screen.getByText(/setup will remain safely offline/i)).toBeInTheDocument();
+    expect(screen.queryByText(/contact support/i)).not.toBeInTheDocument();
   });
 
   it("shows the assigned number when routing is ready to enable", async () => {
     getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
     getOnboardingStatusMock.mockResolvedValueOnce(
       buildOnboardingStatus({
-        phone_number: "+33123456789",
+        phone_number: "+35315551234",
         phone_number_status: "ready",
         agent_setup_complete: true,
-        overall_status: "ready_to_enable",
+        stage: "ready",
+        can_activate: true,
       }),
     );
     listCallsMock.mockResolvedValueOnce([]);
@@ -113,19 +120,21 @@ describe("dashboard onboarding", () => {
     const { default: Page } = await import("@/app/(app)/dashboard/page");
     render(await Page());
 
-    expect(screen.getByText(/Ready to enable routing/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/\+33123456789/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Ready to go live/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/\+35315551234/i).length).toBeGreaterThan(0);
   });
 
   it("keeps live status distinct from ready-to-enable", async () => {
     getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig({ is_enabled: true }));
     getOnboardingStatusMock.mockResolvedValueOnce(
       buildOnboardingStatus({
-        phone_number: "+33123456789",
+        phone_number: "+35315551234",
         phone_number_status: "ready",
-        routing_enabled: true,
         agent_setup_complete: true,
-        overall_status: "live",
+        stage: "live",
+        can_activate: true,
+        can_route: true,
+        blockers: [],
       }),
     );
     listCallsMock.mockResolvedValueOnce([]);
@@ -134,7 +143,7 @@ describe("dashboard onboarding", () => {
     const { default: Page } = await import("@/app/(app)/dashboard/page");
     render(await Page());
 
-    expect(screen.getByText(/Routing is live/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Ready to enable routing/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Your receptionist is live/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Ready to go live/i)).not.toBeInTheDocument();
   });
 });

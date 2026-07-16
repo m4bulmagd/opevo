@@ -9,21 +9,25 @@ import type { CallHistoryListItem } from "@/lib/types/calls";
 import type { OnboardingStatus } from "@/lib/types/onboarding";
 
 function getLaunchBadge(onboardingStatus: OnboardingStatus) {
-  switch (onboardingStatus.overall_status) {
+  switch (onboardingStatus.stage) {
     case "live":
       return { label: "Live", variant: "default" as const };
-    case "ready_to_enable":
+    case "ready":
       return { label: "Ready", variant: "default" as const };
-    case "provisioning_failed":
+    case "routing_pending":
+      return { label: "Updating", variant: "secondary" as const };
+    case "number_provisioning_failed":
       return { label: "Action needed", variant: "secondary" as const };
-    case "provisioning_number":
+    case "number_provisioning":
       return { label: "Provisioning", variant: "secondary" as const };
-    case "setup_required":
+    case "receptionist_setup_required":
       return { label: "Setup", variant: "secondary" as const };
-    case "subscription_active":
-      return { label: "Subscribed", variant: "secondary" as const };
+    case "suspended":
+      return { label: "Paused", variant: "secondary" as const };
+    case "subscription_required":
+      return { label: "Plan needed", variant: "secondary" as const };
     default:
-      return { label: "Draft", variant: "secondary" as const };
+      return { label: "Offline", variant: "secondary" as const };
   }
 }
 

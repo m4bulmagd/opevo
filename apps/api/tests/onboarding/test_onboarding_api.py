@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -29,10 +30,15 @@ class FakeOnboardingService:
             minutes_remaining=60,
             phone_number="+33123456789",
             phone_number_status="ready",
-            routing_enabled=False,
             agent_setup_complete=True,
-            overall_status="ready_to_enable",
             can_retry_provisioning=False,
+            stage="ready",
+            can_activate=True,
+            can_route=False,
+            blockers=["agent_disabled"],
+            warnings=[],
+            evaluated_at=datetime(2026, 7, 16, 12, 0, tzinfo=UTC),
+            policy_version="runtime-v1",
         )
 
     async def retry_provisioning(self, user_id, *, arq_pool):
@@ -64,10 +70,15 @@ async def test_get_onboarding_status_returns_expected_fields() -> None:
     assert response.minutes_remaining == 60
     assert response.phone_number == "+33123456789"
     assert response.phone_number_status == "ready"
-    assert response.routing_enabled is False
     assert response.agent_setup_complete is True
-    assert response.overall_status == "ready_to_enable"
     assert response.can_retry_provisioning is False
+    assert response.stage == "ready"
+    assert response.can_activate is True
+    assert response.can_route is False
+    assert response.blockers == ["agent_disabled"]
+    assert response.warnings == []
+    assert response.evaluated_at == datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+    assert response.policy_version == "runtime-v1"
 
 
 @pytest.mark.anyio

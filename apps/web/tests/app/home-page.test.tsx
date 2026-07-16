@@ -39,10 +39,15 @@ describe("dashboard page", () => {
       minutes_remaining: 0,
       phone_number: null,
       phone_number_status: "missing",
-      routing_enabled: false,
       agent_setup_complete: false,
-      overall_status: "not_subscribed",
       can_retry_provisioning: false,
+      stage: "subscription_required",
+      can_activate: false,
+      can_route: false,
+      blockers: ["subscription_missing", "minutes_exhausted"],
+      warnings: [],
+      evaluated_at: "2026-07-16T12:00:00Z",
+      policy_version: "runtime-v1",
     });
     listCallsMock.mockResolvedValueOnce([]);
     getUsageSnapshotMock.mockResolvedValueOnce({
@@ -59,7 +64,7 @@ describe("dashboard page", () => {
 
     expect(screen.getByText(/Setup checklist/i)).toBeInTheDocument();
     expect(screen.getByText(/Activate billing/i)).toBeInTheDocument();
-    expect(screen.getByText(/Start your setup/i)).toBeInTheDocument();
+    expect(screen.getByText(/Choose your plan/i)).toBeInTheDocument();
     expect(screen.getByText(/No calls yet/i)).toBeInTheDocument();
     expect(screen.getAllByText(/No active plan/i).length).toBeGreaterThan(0);
   });
@@ -77,12 +82,17 @@ describe("dashboard page", () => {
       subscription_status: "active",
       plan_tier: "starter",
       minutes_remaining: 183,
-      phone_number: "+33123456789",
+      phone_number: "+35315551234",
       phone_number_status: "ready",
-      routing_enabled: true,
       agent_setup_complete: true,
-      overall_status: "live",
       can_retry_provisioning: false,
+      stage: "live",
+      can_activate: true,
+      can_route: true,
+      blockers: [],
+      warnings: [],
+      evaluated_at: "2026-07-16T12:00:00Z",
+      policy_version: "runtime-v1",
     });
     listCallsMock.mockResolvedValueOnce([
       {

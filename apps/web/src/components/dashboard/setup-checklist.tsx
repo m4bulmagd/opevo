@@ -19,24 +19,24 @@ function getChecklistSteps(agentConfig: AgentConfig | null, onboardingStatus: On
     {
       title: "Activate billing",
       description: "Subscribe to the starter plan to unlock automatic number provisioning.",
-      complete: onboardingStatus.subscription_status === "active",
+      complete: ["active", "trialing"].includes(onboardingStatus.subscription_status ?? ""),
     },
     {
-      title: "Provision your French number",
+      title: "Provision your Irish number",
       description: "Wait for the app to assign your live number before you enable routing.",
       complete: onboardingStatus.phone_number_status === "ready",
     },
     {
-      title: "Finish agent setup",
-      description: "Add a non-default agent name, business context, and prompt or knowledge base.",
+      title: "Finish receptionist setup",
+      description: "Add a receptionist name, business context, and call-handling instructions.",
       complete:
         onboardingStatus.agent_setup_complete &&
         Boolean(agentConfig?.agent_name?.trim() && agentConfig.owner_context?.trim()),
     },
     {
-      title: "Enable your agent",
+      title: "Enable your receptionist",
       description: "Switch routing live only after billing, number assignment, and setup are all complete.",
-      complete: onboardingStatus.routing_enabled,
+      complete: onboardingStatus.can_route,
     },
   ];
 }
@@ -92,7 +92,7 @@ export function SetupChecklist({
       </CardContent>
       <CardFooter>
         <Button asChild>
-          <Link href="/dashboard/agent">Open agent settings</Link>
+          <Link href="/dashboard/agent">Open receptionist settings</Link>
         </Button>
       </CardFooter>
     </Card>
