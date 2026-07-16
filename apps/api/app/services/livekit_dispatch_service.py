@@ -16,8 +16,11 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.providers.telephony.telnyx import normalize_french_number
-from app.services.dispatch_eligibility_policy import DispatchEligibilityPolicy
 from app.services.call_lifecycle_service import CallLifecycleService
+from app.services.customer_readiness_policy import CustomerReadinessPolicy
+from app.services.customer_readiness_service import (
+    build_customer_readiness_snapshot,
+)
 from app.services.livekit_recording_service import LiveKitRecordingService
 from app.services.outbox_service import OutboxService
 from app.services.realtime_service import RealtimeService
@@ -75,21 +78,6 @@ def _constraint_name(error: IntegrityError) -> str | None:
     if message == "UNIQUE constraint failed: calls.livekit_room_id":
         return ROOM_IDENTITY_CONSTRAINT
     return None
-
-
-def _agent_setup_complete(config) -> bool:
-    if config is None:
-        return False
-    agent_name = (config.agent_name or "").strip()
-    owner_context = (config.owner_context or "").strip()
-    system_prompt = (config.system_prompt or "").strip()
-    knowledge_base = (config.knowledge_base or "").strip()
-    return bool(
-        agent_name
-        and agent_name != "Assistant"
-        and owner_context
-        and (system_prompt or knowledge_base)
-    )
 
 
 class LiveKitDispatchService:
@@ -239,21 +227,19 @@ class LiveKitDispatchService:
             and phone_number.user_id == user.id
             and phone_number.e164 == normalized_called_number
         )
-        eligible = bool(
-            DispatchEligibilityPolicy.can_dispatch(
-                subscription_status=subscription.status,
-                current_period_start=subscription.current_period_start,
-                current_period_end=subscription.current_period_end,
+        readiness = CustomerReadinessPolicy.evaluate(
+            build_customer_readiness_snapshot(
+                user=user,
+                subscription=subscription,
                 balance=balance,
-                phone_active=bool(
-                    phone_number.is_active
-                    and phone_number.provider_connection_name == "app-active"
-                ),
-                agent_enabled=agent_config.is_enabled,
-                setup_complete=_agent_setup_complete(agent_config),
-                called_number_matches=called_number_matches,
-                now=self.now_provider(),
-            )
+                phone_number=phone_number,
+                provisioning=None,
+                agent_config=agent_config,
+            ),
+            now=self.now_provider(),
+        )
+        eligible = readiness.can_dispatch(
+            called_number_matches=called_number_matches
         )
         if not eligible:
             await self.session.commit()

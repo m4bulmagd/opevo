@@ -9,9 +9,32 @@ from app.models.usage_ledger import UsageLedger
 
 
 @pytest.mark.anyio
-async def test_routing_stays_disabled_before_subscription_period_starts(
+@pytest.mark.parametrize(
+    ("period_start", "period_end", "balance"),
+    [
+        (
+            datetime(2098, 1, 1, tzinfo=UTC),
+            datetime(2099, 1, 1, tzinfo=UTC),
+            60,
+        ),
+        (
+            datetime(2020, 1, 1, tzinfo=UTC),
+            datetime(2021, 1, 1, tzinfo=UTC),
+            60,
+        ),
+        (
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2099, 1, 1, tzinfo=UTC),
+            0,
+        ),
+    ],
+)
+async def test_routing_stays_disabled_without_current_financial_access(
     db_session,
     active_user,
+    period_start: datetime,
+    period_end: datetime,
+    balance: int,
 ) -> None:
     from app.workers.jobs.outbox_topics import _routing_snapshot
 
@@ -23,16 +46,16 @@ async def test_routing_stays_disabled_before_subscription_period_starts(
             plan_tier="starter",
             status="active",
             allocated_minutes=60,
-            current_period_start=datetime(2098, 1, 1, tzinfo=UTC),
-            current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
+            current_period_start=period_start,
+            current_period_end=period_end,
         )
     )
     db_session.add(
         UsageLedger(
             user_id=active_user.id,
             event_type="subscription_activated",
-            minutes_delta=60,
-            balance_after=60,
+            minutes_delta=balance,
+            balance_after=balance,
         )
     )
     db_session.add(

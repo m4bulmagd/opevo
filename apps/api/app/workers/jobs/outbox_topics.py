@@ -11,31 +11,32 @@ from app.models.phone_number import PhoneNumber
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
 from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
+from app.providers.summaries.gemini import GeminiSummaryProvider
 from app.providers.telephony.base import TelephonyProviderError
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
+from app.repositories.message_repository import MessageRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
 )
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.user_repository import UserRepository
-from app.repositories.message_repository import MessageRepository
 from app.repositories.usage_repository import UsageRepository
 from app.schemas.livekit import LiveKitDispatchMetadata
-from app.services.dispatch_eligibility_policy import DispatchEligibilityPolicy
+from app.services.customer_readiness_policy import CustomerReadinessPolicy
+from app.services.customer_readiness_service import (
+    build_customer_readiness_snapshot,
+)
 from app.services.livekit_dispatch_service import (
-    _agent_setup_complete,
     calculate_allowed_duration,
     expected_agent_identity,
 )
 from app.services.livekit_dispatch_lock import livekit_dispatch_lock
 from app.services.livekit_recording_service import LiveKitRecordingService
-from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.summary_service import SummaryService
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
-from app.providers.summaries.gemini import GeminiSummaryProvider
 
 
 @dataclass(frozen=True)
@@ -154,16 +155,29 @@ async def deliver_phone_routing(
 
 
 async def _routing_snapshot(session, user_id: UUID) -> _RoutingSnapshot | None:
-    context = await CustomerReadinessService(session).evaluate(user_id)
-    phone_number = context.phone_number
+    phone_number = await PhoneNumberRepository(session).get_by_user_id(user_id)
     if phone_number is None:
         return None
     if not phone_number.provider_number_id:
         raise OutboxDeliveryError("provider_terminal", retryable=False)
+    user = await UserRepository(session).get_by_id(user_id)
+    subscription = await SubscriptionRepository(session).get_by_user_id(user_id)
+    agent_config = await AgentConfigRepository(session).get_by_user_id(user_id)
+    balance = await UsageRepository(session).get_current_balance(user_id=user_id)
+    readiness = CustomerReadinessPolicy.evaluate(
+        build_customer_readiness_snapshot(
+            user=user,
+            subscription=subscription,
+            balance=balance,
+            phone_number=phone_number,
+            provisioning=None,
+            agent_config=agent_config,
+        )
+    )
     return _RoutingSnapshot(
         phone_number_id=phone_number.id,
         provider_number_id=phone_number.provider_number_id,
-        should_enable=context.result.should_enable_phone,
+        should_enable=readiness.should_enable_phone,
         is_active=phone_number.is_active,
         provider_connection_name=phone_number.provider_connection_name,
     )
@@ -316,23 +330,22 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
             and phone.user_id == call.user_id
             and bool(phone.e164)
         )
+        readiness = CustomerReadinessPolicy.evaluate(
+            build_customer_readiness_snapshot(
+                user=user,
+                subscription=subscription,
+                balance=balance,
+                phone_number=phone,
+                provisioning=None,
+                agent_config=agent_config,
+            )
+        )
         eligible = bool(
             user.status == "active"
             and call.status in {"pending", "connected"}
             and agent_config.id == call.agent_config_id
-            and DispatchEligibilityPolicy.can_dispatch(
-                subscription_status=subscription.status,
-                current_period_start=subscription.current_period_start,
-                current_period_end=subscription.current_period_end,
-                balance=balance,
-                phone_active=bool(
-                    phone is not None
-                    and phone.is_active
-                    and phone.provider_connection_name == "app-active"
-                ),
-                agent_enabled=agent_config.is_enabled,
-                setup_complete=_agent_setup_complete(agent_config),
-                called_number_matches=called_number_matches,
+            and readiness.can_dispatch(
+                called_number_matches=called_number_matches
             )
         )
         if not eligible:
@@ -363,7 +376,7 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
                     maximum=settings.max_call_duration_seconds,
                 ),
                 agent_name=agent_config.agent_name,
-                owner_name=user.full_name or user.email,
+                owner_name=(user.full_name or "").strip() or "the business",
                 owner_context=agent_config.owner_context,
                 system_prompt=agent_config.system_prompt,
                 knowledge_base=agent_config.knowledge_base,
