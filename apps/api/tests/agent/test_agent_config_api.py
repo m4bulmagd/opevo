@@ -1,5 +1,7 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.agent_config import AgentConfig
@@ -7,6 +9,7 @@ from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
+from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 
 
@@ -43,7 +46,13 @@ async def seed_agent_config(
     await engine.dispose()
 
 
-async def seed_phone_number(database_url: str, *, clerk_user_id: str, is_active: bool) -> None:
+async def seed_phone_number(
+    database_url: str,
+    *,
+    clerk_user_id: str,
+    is_active: bool,
+    provider_number_id: str | None = "pn_123",
+) -> None:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
@@ -56,7 +65,7 @@ async def seed_phone_number(database_url: str, *, clerk_user_id: str, is_active:
                 e164="+33123456789",
                 country_code="FR",
                 provider="telnyx",
-                provider_number_id="pn_123",
+                provider_number_id=provider_number_id,
                 provider_connection_name="app-active" if is_active else "app-disabled",
                 is_active=is_active,
             )
@@ -65,13 +74,22 @@ async def seed_phone_number(database_url: str, *, clerk_user_id: str, is_active:
     await engine.dispose()
 
 
-async def seed_subscription(database_url: str, *, clerk_user_id: str, status: str = "active", plan_tier: str = "starter") -> None:
+async def seed_subscription(
+    database_url: str,
+    *,
+    clerk_user_id: str,
+    status: str = "active",
+    plan_tier: str = "starter",
+    current_period_start: datetime | None = None,
+    current_period_end: datetime | None = None,
+) -> None:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = (
             await session.execute(select(User).where(User.clerk_user_id == clerk_user_id))
         ).scalar_one()
+        now = datetime.now(UTC)
         session.add(
             Subscription(
                 user_id=user.id,
@@ -80,8 +98,33 @@ async def seed_subscription(database_url: str, *, clerk_user_id: str, status: st
                 plan_tier=plan_tier,
                 status=status,
                 allocated_minutes=60,
-                current_period_start=None,
-                current_period_end=None,
+                current_period_start=current_period_start or now - timedelta(days=1),
+                current_period_end=current_period_end or now + timedelta(days=1),
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+
+async def seed_usage_balance(
+    database_url: str,
+    *,
+    clerk_user_id: str,
+    balance: int,
+) -> None:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = (
+            await session.execute(select(User).where(User.clerk_user_id == clerk_user_id))
+        ).scalar_one()
+        session.add(
+            UsageLedger(
+                user_id=user.id,
+                event_type="invoice_paid_reset",
+                source_id=f"balance_{clerk_user_id}_{balance}",
+                minutes_delta=balance,
+                balance_after=balance,
             )
         )
         await session.commit()
@@ -147,6 +190,15 @@ async def fetch_outbox_event(database_url: str) -> OutboxEvent:
         event = (await session.execute(select(OutboxEvent))).scalar_one()
     await engine.dispose()
     return event
+
+
+async def fetch_outbox_event_count(database_url: str) -> int:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        count = await session.scalar(select(func.count(OutboxEvent.id)))
+    await engine.dispose()
+    return int(count or 0)
 
 
 @pytest.mark.anyio
@@ -267,6 +319,11 @@ async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes
         clerk_user_id="user_agent_cfg",
         status=subscription_status,
     )
+    await seed_usage_balance(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        balance=60,
+    )
     await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
 
     from app.main import app
@@ -314,6 +371,11 @@ async def test_patch_agent_config_toggle_without_phone_number_returns_409(
         is_enabled=False,
     )
     await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_usage_balance(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        balance=60,
+    )
 
     response = await async_client.patch(
         "/api/agent/config",
@@ -322,7 +384,11 @@ async def test_patch_agent_config_toggle_without_phone_number_returns_409(
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "Agent setup incomplete"
+    assert response.json()["detail"] == {
+        "code": "agent_not_ready",
+        "blockers": ["phone_missing"],
+    }
+    assert await fetch_outbox_event_count(client_database_url) == 0
 
 
 @pytest.mark.anyio
@@ -340,6 +406,11 @@ async def test_patch_agent_config_enable_without_active_subscription_returns_409
         is_enabled=False,
     )
     await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_usage_balance(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        balance=60,
+    )
     await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
 
     response = await async_client.patch(
@@ -349,11 +420,172 @@ async def test_patch_agent_config_enable_without_active_subscription_returns_409
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "Agent setup incomplete"
+    assert response.json()["detail"] == {
+        "code": "agent_not_ready",
+        "blockers": ["subscription_missing"],
+    }
+    assert await fetch_outbox_event_count(client_database_url) == 0
 
 
 @pytest.mark.anyio
-async def test_patch_agent_config_enable_without_successful_provisioning_returns_409(
+async def test_patch_agent_config_enable_with_zero_balance_returns_blocker_and_rolls_back(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+) -> None:
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        email="agent@example.com",
+        agent_name="Presvo Front Desk",
+        owner_context="Dental office reception",
+        system_prompt="Handle inbound calls professionally.",
+        knowledge_base="Open weekdays",
+        is_enabled=False,
+    )
+    await seed_phone_number(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        is_active=False,
+    )
+    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_provisioning(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        status="succeeded",
+    )
+    await seed_usage_balance(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        balance=0,
+    )
+
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"},
+        json={"is_enabled": True},
+    )
+
+    config = await fetch_agent_config(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "agent_not_ready",
+        "blockers": ["minutes_exhausted"],
+    }
+    assert config.is_enabled is False
+    assert await fetch_outbox_event_count(client_database_url) == 0
+
+
+@pytest.mark.anyio
+async def test_patch_agent_config_enable_with_expired_period_returns_blocker_and_rolls_back(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+) -> None:
+    now = datetime.now(UTC)
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        email="agent@example.com",
+        agent_name="Presvo Front Desk",
+        owner_context="Dental office reception",
+        system_prompt="Handle inbound calls professionally.",
+        knowledge_base="Open weekdays",
+        is_enabled=False,
+    )
+    await seed_phone_number(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        is_active=False,
+    )
+    await seed_subscription(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        current_period_start=now - timedelta(days=2),
+        current_period_end=now - timedelta(days=1),
+    )
+    await seed_provisioning(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        status="succeeded",
+    )
+    await seed_usage_balance(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        balance=60,
+    )
+
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"},
+        json={"is_enabled": True},
+    )
+
+    config = await fetch_agent_config(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "agent_not_ready",
+        "blockers": ["subscription_period_inactive"],
+    }
+    assert config.is_enabled is False
+    assert await fetch_outbox_event_count(client_database_url) == 0
+
+
+@pytest.mark.anyio
+async def test_patch_agent_config_enable_with_default_name_is_case_insensitive(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+) -> None:
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        email="agent@example.com",
+        agent_name=" assistant ",
+        owner_context="Dental office reception",
+        system_prompt="Handle inbound calls professionally.",
+        knowledge_base="Open weekdays",
+        is_enabled=False,
+    )
+    await seed_phone_number(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        is_active=False,
+    )
+    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_provisioning(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        status="succeeded",
+    )
+    await seed_usage_balance(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        balance=60,
+    )
+
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"},
+        json={"is_enabled": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "agent_not_ready",
+        "blockers": ["agent_setup_incomplete"],
+    }
+    assert await fetch_outbox_event_count(client_database_url) == 0
+
+
+@pytest.mark.anyio
+async def test_patch_agent_config_enable_without_provider_number_id_returns_409(
     async_client, client_database_url, rs256_clerk_token_for
 ) -> None:
     await seed_agent_config(
@@ -366,9 +598,19 @@ async def test_patch_agent_config_enable_without_successful_provisioning_returns
         knowledge_base="Open weekdays",
         is_enabled=False,
     )
-    await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_phone_number(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        is_active=False,
+        provider_number_id=None,
+    )
     await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
     await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="failed", can_retry=True)
+    await seed_usage_balance(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        balance=60,
+    )
 
     response = await async_client.patch(
         "/api/agent/config",
@@ -377,7 +619,11 @@ async def test_patch_agent_config_enable_without_successful_provisioning_returns
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "Agent setup incomplete"
+    assert response.json()["detail"] == {
+        "code": "agent_not_ready",
+        "blockers": ["phone_provider_id_missing"],
+    }
+    assert await fetch_outbox_event_count(client_database_url) == 0
 
 
 @pytest.mark.anyio
@@ -397,6 +643,11 @@ async def test_patch_agent_config_enable_with_incomplete_setup_returns_409(
     await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
     await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
     await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
+    await seed_usage_balance(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        balance=60,
+    )
 
     response = await async_client.patch(
         "/api/agent/config",
@@ -405,7 +656,11 @@ async def test_patch_agent_config_enable_with_incomplete_setup_returns_409(
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "Agent setup incomplete"
+    assert response.json()["detail"] == {
+        "code": "agent_not_ready",
+        "blockers": ["agent_setup_incomplete"],
+    }
+    assert await fetch_outbox_event_count(client_database_url) == 0
 
 
 @pytest.mark.anyio
@@ -429,6 +684,11 @@ async def test_patch_agent_config_commit_survives_redis_wakeup_failure(
     await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
     await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
     await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
+    await seed_usage_balance(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        balance=60,
+    )
 
     from app.main import app
     original_pool = getattr(app.state, "arq_pool", None)
