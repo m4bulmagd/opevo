@@ -6,9 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_config import AgentConfig
 from app.repositories.agent_config_repository import AgentConfigRepository
-from app.services.onboarding_service import OnboardingService
+from app.services.customer_readiness_policy import ReadinessBlocker
+from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.outbox_service import OutboxService
-from app.services.subscription_access_policy import SubscriptionAccessPolicy
 
 
 class AgentConfigNotFoundError(Exception):
@@ -24,7 +24,9 @@ class AgentConfigTelephonySyncError(Exception):
 
 
 class AgentConfigReadinessError(Exception):
-    pass
+    def __init__(self, blockers: tuple[str, ...]) -> None:
+        super().__init__("Agent configuration is not ready to enable")
+        self.blockers = blockers
 
 
 logger = logging.getLogger(__name__)
@@ -35,12 +37,12 @@ class AgentConfigService:
         self,
         session: AsyncSession,
         agent_config_repository: AgentConfigRepository,
-        onboarding_service: OnboardingService,
+        readiness_service: CustomerReadinessService,
         arq_pool=None,
     ) -> None:
         self.session = session
         self.agent_config_repository = agent_config_repository
-        self.onboarding_service = onboarding_service
+        self.readiness_service = readiness_service
         self.outbox_service = OutboxService(session)
         self.arq_pool = arq_pool
 
@@ -100,13 +102,23 @@ class AgentConfigService:
         return config
 
     async def _ensure_ready_to_enable(self, user_id: UUID, config: AgentConfig) -> None:
-        status = await self.onboarding_service.get_status(user_id)
-        if not SubscriptionAccessPolicy.can_route(
-            status.subscription_status or "",
-            None,
-        ):
-            raise AgentConfigReadinessError
-        if status.phone_number_status != "ready":
-            raise AgentConfigReadinessError
-        if not self.onboarding_service._is_agent_setup_complete(config):
-            raise AgentConfigReadinessError
+        context = await self.readiness_service.evaluate(
+            user_id,
+            agent_config_override=config,
+        )
+        if context.result.can_activate:
+            return
+
+        projection_blockers = {
+            ReadinessBlocker.AGENT_DISABLED,
+            ReadinessBlocker.PHONE_INACTIVE,
+            ReadinessBlocker.PHONE_PROJECTION_INACTIVE,
+        }
+        activation_blockers = tuple(
+            blocker.value
+            for blocker in context.result.blockers
+            if blocker not in projection_blockers
+        )
+        if not activation_blockers:
+            raise RuntimeError("readiness denied activation without a blocker")
+        raise AgentConfigReadinessError(activation_blockers)

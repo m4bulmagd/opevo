@@ -26,8 +26,8 @@ from app.services.agent_config_service import (
 from app.repositories.call_repository import CallTransitionError
 from app.repositories.message_repository import MessageRepository
 from app.services.call_lifecycle_service import CallLifecycleService
+from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.outbox_service import OutboxService
-from app.services.onboarding_service import OnboardingService
 from app.services.transcript_service import (
     TranscriptCallNotFoundError,
     TranscriptCallNotAcceptingError,
@@ -105,7 +105,7 @@ def get_agent_config_service(
     return AgentConfigService(
         session,
         agent_config_repository=AgentConfigRepository(session),
-        onboarding_service=OnboardingService(session),
+        readiness_service=CustomerReadinessService(session),
         arq_pool=getattr(request.app.state, "arq_pool", None),
     )
 
@@ -149,8 +149,11 @@ async def patch_agent_config(
     except AgentConfigReadinessError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Agent setup incomplete",
-        ) from exc
+            detail={
+                "code": "agent_not_ready",
+                "blockers": list(exc.blockers),
+            },
+        ) from None
     except AgentConfigTelephonySyncError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
