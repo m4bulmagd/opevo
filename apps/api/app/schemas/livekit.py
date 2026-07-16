@@ -1,4 +1,14 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.agent_content import (
+    AgentName,
+    KnowledgeBase,
+    OwnerContext,
+    OwnerName,
+    SystemPrompt,
+)
 
 
 class LiveKitDispatchMetadata(BaseModel):
@@ -10,10 +20,10 @@ class LiveKitDispatchMetadata(BaseModel):
     agent_identity: str
     minutes_remaining: int
     allowed_duration_seconds: int = Field(gt=0)
-    agent_name: str
-    owner_name: str
-    owner_context: str | None = None
-    system_prompt: str
-    knowledge_base: str
-    pipeline_mode: str
+    agent_name: AgentName
+    owner_name: OwnerName
+    owner_context: OwnerContext | None = None
+    system_prompt: SystemPrompt
+    knowledge_base: KnowledgeBase
+    pipeline_mode: Literal["stt_llm_tts", "sts"]
     dispatch_token: str

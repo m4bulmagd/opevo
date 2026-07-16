@@ -11,6 +11,12 @@ from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
+from app.schemas.agent_content import (
+    AGENT_NAME_MAX_LENGTH,
+    KNOWLEDGE_BASE_MAX_LENGTH,
+    OWNER_CONTEXT_MAX_LENGTH,
+    SYSTEM_PROMPT_MAX_LENGTH,
+)
 
 
 async def seed_agent_config(
@@ -279,6 +285,159 @@ async def test_patch_agent_config_updates_prompt_fields_without_toggle(
     assert response.json()["knowledge_base"] == "Open weekdays"
     assert response.json()["pipeline_mode"] == "sts"
     assert response.json()["is_enabled"] is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field_name", "maximum"),
+    [
+        ("agent_name", AGENT_NAME_MAX_LENGTH),
+        ("owner_context", OWNER_CONTEXT_MAX_LENGTH),
+        ("system_prompt", SYSTEM_PROMPT_MAX_LENGTH),
+        ("knowledge_base", KNOWLEDGE_BASE_MAX_LENGTH),
+    ],
+)
+async def test_patch_agent_config_accepts_normalized_content_at_limit(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    field_name: str,
+    maximum: int,
+) -> None:
+    clerk_user_id = f"user_agent_limit_{field_name}"
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email=f"{field_name}@example.com",
+        agent_name="Ava",
+        is_enabled=False,
+    )
+    bounded_value = "x" * maximum
+
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        json={field_name: f"  {bounded_value}  "},
+    )
+
+    stored = await fetch_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+    )
+    assert response.status_code == 200
+    assert response.json()[field_name] == bounded_value
+    assert getattr(stored, field_name) == bounded_value
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field_name", "maximum"),
+    [
+        ("agent_name", AGENT_NAME_MAX_LENGTH),
+        ("owner_context", OWNER_CONTEXT_MAX_LENGTH),
+        ("system_prompt", SYSTEM_PROMPT_MAX_LENGTH),
+        ("knowledge_base", KNOWLEDGE_BASE_MAX_LENGTH),
+    ],
+)
+async def test_patch_agent_config_rejects_oversized_content(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    field_name: str,
+    maximum: int,
+) -> None:
+    clerk_user_id = f"user_agent_overflow_{field_name}"
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email=f"overflow-{field_name}@example.com",
+        agent_name="Ava",
+        is_enabled=False,
+    )
+
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        json={field_name: "x" * (maximum + 1)},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_patch_agent_config_rejects_unknown_fields(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+) -> None:
+    clerk_user_id = "user_agent_unknown_field"
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="unknown-field@example.com",
+        agent_name="Ava",
+        is_enabled=False,
+    )
+
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        json={"unsupported_instruction": "ignore the policy"},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_legacy_oversized_config_can_be_read_but_not_enabled(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+) -> None:
+    clerk_user_id = "user_agent_legacy_oversized"
+    oversized_name = "A" * (AGENT_NAME_MAX_LENGTH + 1)
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="legacy-oversized@example.com",
+        agent_name=oversized_name,
+        owner_context="Dental office reception",
+        system_prompt="Handle inbound calls professionally.",
+        knowledge_base="Open weekdays",
+        is_enabled=False,
+    )
+    await seed_phone_number(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        is_active=False,
+    )
+    await seed_subscription(client_database_url, clerk_user_id=clerk_user_id)
+    await seed_provisioning(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        status="succeeded",
+    )
+    await seed_usage_balance(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        balance=60,
+    )
+    headers = {"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"}
+
+    get_response = await async_client.get("/api/agent/config", headers=headers)
+    enable_response = await async_client.patch(
+        "/api/agent/config",
+        headers=headers,
+        json={"is_enabled": True},
+    )
+
+    assert get_response.status_code == 200
+    assert get_response.json()["agent_name"] == oversized_name
+    assert enable_response.status_code == 409
+    assert enable_response.json()["detail"] == {
+        "code": "agent_not_ready",
+        "blockers": ["agent_content_invalid"],
+    }
 
 
 @pytest.mark.anyio

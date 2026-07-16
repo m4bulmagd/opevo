@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -12,7 +13,14 @@ from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
-from app.schemas.agent_content import AGENT_NAME_MAX_LENGTH
+from app.schemas.agent_content import (
+    AGENT_NAME_MAX_LENGTH,
+    KNOWLEDGE_BASE_MAX_LENGTH,
+    OWNER_CONTEXT_MAX_LENGTH,
+    OWNER_NAME_MAX_LENGTH,
+    SYSTEM_PROMPT_MAX_LENGTH,
+)
+from app.schemas.livekit import LiveKitDispatchMetadata
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 from app.workers.jobs.outbox_topics import deliver_recording_stop
 
@@ -184,6 +192,59 @@ def _sip_join(*, room: str = "room-1", trunk: str | None = "+33999888777") -> di
             "attributes": attributes,
         },
     }
+
+
+def _dispatch_metadata_payload(**overrides) -> dict:
+    defaults = {
+        "call_id": "call-1",
+        "user_id": "user-1",
+        "agent_config_id": "config-1",
+        "agent_identity": "agent-call-1",
+        "agent_name": "Ava",
+        "owner_name": "Sam",
+        "owner_context": "Dental reception",
+        "system_prompt": "Handle calls professionally.",
+        "knowledge_base": "Open weekdays.",
+        "pipeline_mode": "stt_llm_tts",
+        "minutes_remaining": 60,
+        "allowed_duration_seconds": 3600,
+        "dispatch_token": "dispatch-token",
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+@pytest.mark.parametrize(
+    ("field_name", "maximum"),
+    [
+        ("agent_name", AGENT_NAME_MAX_LENGTH),
+        ("owner_name", OWNER_NAME_MAX_LENGTH),
+        ("owner_context", OWNER_CONTEXT_MAX_LENGTH),
+        ("system_prompt", SYSTEM_PROMPT_MAX_LENGTH),
+        ("knowledge_base", KNOWLEDGE_BASE_MAX_LENGTH),
+    ],
+)
+def test_api_dispatch_metadata_normalizes_and_bounds_customer_content(
+    field_name: str,
+    maximum: int,
+) -> None:
+    bounded_value = "x" * maximum
+    metadata = LiveKitDispatchMetadata.model_validate(
+        _dispatch_metadata_payload(**{field_name: f"  {bounded_value}  "})
+    )
+
+    assert getattr(metadata, field_name) == bounded_value
+    with pytest.raises(ValidationError):
+        LiveKitDispatchMetadata.model_validate(
+            _dispatch_metadata_payload(**{field_name: "x" * (maximum + 1)})
+        )
+
+
+def test_api_dispatch_metadata_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError):
+        LiveKitDispatchMetadata.model_validate(
+            _dispatch_metadata_payload(untrusted_extra="value")
+        )
 
 
 @pytest.mark.anyio

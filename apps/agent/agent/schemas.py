@@ -1,9 +1,53 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 
 TranscriptSpeaker = Literal["CALLER", "AGENT"]
+
+AGENT_NAME_MAX_LENGTH = 80
+OWNER_NAME_MAX_LENGTH = 255
+OWNER_CONTEXT_MAX_LENGTH = 4_000
+SYSTEM_PROMPT_MAX_LENGTH = 8_000
+KNOWLEDGE_BASE_MAX_LENGTH = 32_000
+
+AgentName = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=AGENT_NAME_MAX_LENGTH,
+    ),
+]
+OwnerName = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=OWNER_NAME_MAX_LENGTH,
+    ),
+]
+OwnerContext = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        max_length=OWNER_CONTEXT_MAX_LENGTH,
+    ),
+]
+SystemPrompt = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        max_length=SYSTEM_PROMPT_MAX_LENGTH,
+    ),
+]
+KnowledgeBase = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        max_length=KNOWLEDGE_BASE_MAX_LENGTH,
+    ),
+]
 
 
 class DispatchMetadata(BaseModel):
@@ -13,12 +57,12 @@ class DispatchMetadata(BaseModel):
     user_id: str = Field(min_length=1)
     agent_config_id: str = Field(min_length=1)
     agent_identity: str = Field(min_length=1)
-    agent_name: str = Field(min_length=1)
-    owner_name: str = Field(min_length=1)
-    owner_context: str | None = None
-    system_prompt: str
-    knowledge_base: str
-    pipeline_mode: str = Field(min_length=1)
+    agent_name: AgentName
+    owner_name: OwnerName
+    owner_context: OwnerContext | None = None
+    system_prompt: SystemPrompt
+    knowledge_base: KnowledgeBase
+    pipeline_mode: Literal["stt_llm_tts", "sts"]
     minutes_remaining: int = Field(ge=0)
     allowed_duration_seconds: int = Field(gt=0)
     dispatch_token: str = Field(min_length=1)

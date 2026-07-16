@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from agent.schemas import DispatchMetadata
+from agent import schemas as schema_module
 from agent.session_runtime import SessionRuntime
 
 
@@ -72,6 +73,35 @@ def test_dispatch_metadata_requires_a_positive_allowed_duration() -> None:
 
     with pytest.raises(ValidationError):
         DispatchMetadata.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "constant_name", "expected_maximum"),
+    [
+        ("agent_name", "AGENT_NAME_MAX_LENGTH", 80),
+        ("owner_name", "OWNER_NAME_MAX_LENGTH", 255),
+        ("owner_context", "OWNER_CONTEXT_MAX_LENGTH", 4_000),
+        ("system_prompt", "SYSTEM_PROMPT_MAX_LENGTH", 8_000),
+        ("knowledge_base", "KNOWLEDGE_BASE_MAX_LENGTH", 32_000),
+    ],
+)
+def test_agent_dispatch_metadata_normalizes_and_bounds_customer_content(
+    field_name: str,
+    constant_name: str,
+    expected_maximum: int,
+) -> None:
+    assert getattr(schema_module, constant_name) == expected_maximum
+    bounded_value = "x" * expected_maximum
+    metadata = make_metadata(**{field_name: f"  {bounded_value}  "})
+
+    assert getattr(metadata, field_name) == bounded_value
+    with pytest.raises(ValidationError):
+        make_metadata(**{field_name: "x" * (expected_maximum + 1)})
+
+
+def test_agent_dispatch_metadata_rejects_unknown_pipeline_mode() -> None:
+    with pytest.raises(ValidationError):
+        make_metadata(pipeline_mode="custom")
 
 
 @pytest.mark.anyio

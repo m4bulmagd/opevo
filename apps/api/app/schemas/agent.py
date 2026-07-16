@@ -2,6 +2,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.agent_content import (
+    AgentName,
+    KnowledgeBase,
+    OwnerContext,
+    SystemPrompt,
+)
+
 
 class AgentConfigResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -15,9 +22,11 @@ class AgentConfigResponse(BaseModel):
 
 
 class AgentConfigPatchRequest(BaseModel):
-    agent_name: str | None = None
-    owner_context: str | None = None
-    system_prompt: str | None = None
-    knowledge_base: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    agent_name: AgentName | None = None
+    owner_context: OwnerContext | None = None
+    system_prompt: SystemPrompt | None = None
+    knowledge_base: KnowledgeBase | None = None
     pipeline_mode: Literal["stt_llm_tts", "sts"] | None = None
     is_enabled: bool | None = None
