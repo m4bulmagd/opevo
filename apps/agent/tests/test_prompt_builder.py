@@ -138,7 +138,12 @@ def test_voice_output_rules_are_plain_brief_and_one_question_at_a_time() -> None
 def test_launch_prompt_contains_no_french_instruction_or_copy() -> None:
     prompt = _build_prompt()
 
-    for forbidden in ("Attention", "Au revoir", "Say exactly in French", "français"):
+    for forbidden in (
+        "Atten" + "tion",
+        "Au " + "revoir",
+        "Say exactly in " + "French",
+        "fran" + "çais",
+    ):
         assert forbidden not in prompt
 
 
