@@ -49,6 +49,7 @@ def base_settings() -> Settings:
         telnyx_api_key="telnyx-api-key",
         telnyx_active_connection_id="telnyx-active-connection",
         telnyx_disabled_connection_id="telnyx-disabled-connection",
+        telnyx_ordering_enabled=True,
         storage_bucket_name="recordings",
         s3_endpoint_url="https://storage.example.com",
         s3_access_key="storage-access-key",
@@ -112,6 +113,15 @@ def test_production_rejects_missing_clerk_verification_source(base_settings: Set
     message = str(exc_info.value)
     assert "CLERK_JWT_KEY" in message
     assert "CLERK_JWKS_URL" in message
+
+
+def test_production_rejects_disabled_telnyx_ordering(
+    base_settings: Settings,
+) -> None:
+    settings = base_settings.model_copy(update={"telnyx_ordering_enabled": False})
+
+    with pytest.raises(RuntimeError, match="TELNYX_ORDERING_ENABLED"):
+        validate_api_runtime(settings)
 
 
 @pytest.mark.parametrize(
@@ -419,6 +429,18 @@ def test_compose_separates_required_production_inputs_from_local_services() -> N
     assert 'MINIO_ROOT_PASSWORD: minioadmin' in compose_dev
     assert "migrate:" in compose_dev
     assert "service_completed_successfully" in compose_dev
+
+
+def test_compose_requires_explicit_telnyx_ordering_for_worker_and_api() -> None:
+    compose = (REPO_ROOT / "compose.yaml").read_text()
+    required_setting = (
+        "TELNYX_ORDERING_ENABLED: "
+        "${TELNYX_ORDERING_ENABLED:?TELNYX_ORDERING_ENABLED is required}"
+    )
+
+    assert compose.count(required_setting) == 1
+    worker_environment = compose.split("x-api-environment:", maxsplit=1)[0]
+    assert required_setting in worker_environment
 
 
 def test_development_services_load_local_env_files_without_empty_secret_overrides() -> None:

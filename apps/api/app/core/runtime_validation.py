@@ -62,6 +62,9 @@ def validate_api_runtime(settings: Settings) -> None:
     if _is_missing(settings.clerk_jwt_key) and _is_missing(settings.clerk_jwks_url):
         missing.append("CLERK_JWT_KEY or CLERK_JWKS_URL")
 
+    if not settings.telnyx_ordering_enabled:
+        missing.append("TELNYX_ORDERING_ENABLED")
+
     if not _is_missing(settings.summary_provider):
         if settings.summary_provider == "gemini":
             missing.extend(_require(settings, ("gemini_api_key",)))

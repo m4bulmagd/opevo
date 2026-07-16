@@ -1,5 +1,6 @@
 import importlib
 import inspect
+from types import SimpleNamespace
 
 import pytest
 from arq.connections import RedisSettings
@@ -58,3 +59,20 @@ async def test_worker_startup_initializes_safe_logging(monkeypatch) -> None:
     await arq_worker.WorkerSettings.on_startup({})
 
     assert setup_calls == [True]
+
+
+@pytest.mark.anyio
+async def test_worker_startup_rejects_unsafe_runtime_before_jobs(
+    monkeypatch,
+) -> None:
+    settings = SimpleNamespace(otel_exporter_otlp_endpoint=None)
+    monkeypatch.setattr(arq_worker, "get_settings", lambda: settings)
+
+    def reject_runtime(actual_settings) -> None:
+        assert actual_settings is settings
+        raise RuntimeError("TELNYX_ORDERING_ENABLED")
+
+    monkeypatch.setattr(arq_worker, "validate_api_runtime", reject_runtime)
+
+    with pytest.raises(RuntimeError, match="TELNYX_ORDERING_ENABLED"):
+        await arq_worker.WorkerSettings.on_startup({})
