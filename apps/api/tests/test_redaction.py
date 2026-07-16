@@ -5,7 +5,7 @@ from uuid import UUID
 import pytest
 
 from app.core.logging import report_safe_exception, setup_logging
-from app.core.redaction import SafeExtraFilter, redact_phone
+from app.core.redaction import SafeExtraFilter, redact_phone, safe_log_label
 from app.workers.jobs.outbox_delivery import emit_outbox_terminal_failure_metric
 
 
@@ -20,6 +20,13 @@ class SecretBearingObject:
 
     def __str__(self) -> str:
         return "CUSTOM_OBJECT_AUTHORIZATION_SENTINEL"
+
+
+def test_safe_log_label_allows_only_fixed_auth_token_labels() -> None:
+    assert safe_log_label("clerk_token_rejected") == "clerk_token_rejected"
+    assert safe_log_label("verify_token") == "verify_token"
+    assert safe_log_label("JWT_TOKEN_SENTINEL") is None
+    assert safe_log_label("customer_token_value") is None
 
 
 def render_log_record(
