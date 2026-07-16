@@ -154,6 +154,11 @@ def test_pipeline_factory_accepts_sts_mode() -> None:
     assert config["sts_provider"] == "gemini"
 
 
+def test_pipeline_factory_rejects_unknown_pipeline_mode() -> None:
+    with pytest.raises(ValueError, match="Unsupported pipeline mode"):
+        build_pipeline_config({"pipeline_mode": "custom"})
+
+
 def test_pipeline_factory_rejects_removed_openai_provider() -> None:
     try:
         build_agent_runtime(
