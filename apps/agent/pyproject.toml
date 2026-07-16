@@ -52,6 +52,11 @@ check_untyped_defs = true
 show_error_codes = true
 warn_unused_ignores = true
 
+[tool.pytest.ini_options]
+markers = [
+  "livekit_eval: credentialed LiveKit model behavior evaluation",
+]
+
 [[tool.mypy.overrides]]
 module = ["speechmatics.voice._smart_turn"]
 ignore_missing_imports = true
