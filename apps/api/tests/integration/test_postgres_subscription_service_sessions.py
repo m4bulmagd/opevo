@@ -87,6 +87,8 @@ async def test_billing_and_onboarding_share_a_real_postgres_async_session(
                 plan_tier="starter",
                 status="trialing",
                 allocated_minutes=60,
+                current_period_start=datetime(2026, 1, 1, tzinfo=UTC),
+                current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
             )
         )
         session.add(
@@ -105,7 +107,8 @@ async def test_billing_and_onboarding_share_a_real_postgres_async_session(
     assert usage.minutes_remaining == 60
     assert usage.subscription_status == "trialing"
     assert onboarding.subscription_status == "trialing"
-    assert onboarding.overall_status == "subscription_active"
+    assert onboarding.stage == "number_provisioning"
+    assert onboarding.can_route is False
 
 
 @pytest.mark.anyio

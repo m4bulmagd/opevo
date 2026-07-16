@@ -28,7 +28,7 @@ export default async function DashboardPage() {
     getUsageSnapshot(),
   ]);
 
-  const isLive = onboardingStatus.routing_enabled;
+  const isLive = onboardingStatus.can_route;
 
   return (
     <div className="@container/main flex flex-col gap-4 md:gap-6">

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -9,18 +10,24 @@ class OnboardingStatusResponse(BaseModel):
     minutes_remaining: int
     phone_number: str | None
     phone_number_status: Literal["missing", "provisioning", "ready", "failed"]
-    routing_enabled: bool
     agent_setup_complete: bool
-    overall_status: Literal[
-        "not_subscribed",
-        "subscription_active",
-        "provisioning_number",
-        "setup_required",
-        "ready_to_enable",
-        "live",
-        "provisioning_failed",
-    ]
     can_retry_provisioning: bool
+    stage: Literal[
+        "subscription_required",
+        "number_provisioning",
+        "number_provisioning_failed",
+        "receptionist_setup_required",
+        "ready",
+        "routing_pending",
+        "live",
+        "suspended",
+    ]
+    can_activate: bool
+    can_route: bool
+    blockers: list[str]
+    warnings: list[str]
+    evaluated_at: datetime
+    policy_version: str
 
 
 class RetryProvisioningResponse(BaseModel):

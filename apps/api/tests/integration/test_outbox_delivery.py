@@ -581,6 +581,7 @@ async def _seed_routing_state(
     *,
     subscription_status: str,
     phone_active: bool,
+    period_start: datetime = datetime(2026, 1, 1, tzinfo=UTC),
 ) -> UUID:
     async with session_factory() as session:
         user = User(
@@ -597,6 +598,8 @@ async def _seed_routing_state(
                 plan_tier="starter",
                 status=subscription_status,
                 allocated_minutes=60,
+                current_period_start=period_start,
+                current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
             )
         )
         session.add(

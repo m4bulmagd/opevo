@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -32,6 +33,11 @@ class UserLookupRepository:
             return self.result
         return await self.guard.operation(self.result)
 
+    async def get_by_id(self, _user_id):
+        if self.guard is None:
+            return self.result
+        return await self.guard.operation(self.result)
+
 
 class UsageRepository:
     def __init__(self, balance: int, guard: SingleSessionGuard | None = None) -> None:
@@ -61,6 +67,9 @@ async def test_billing_query_runs_same_session_reads_sequentially() -> None:
 async def test_onboarding_runs_same_session_reads_sequentially() -> None:
     guard = SingleSessionGuard()
     service = OnboardingService(
+        user_repository=UserLookupRepository(
+            SimpleNamespace(status="active"), guard
+        ),
         subscription_repository=UserLookupRepository(None, guard),
         usage_repository=UsageRepository(0, guard),
         phone_number_repository=UserLookupRepository(None, guard),
@@ -70,7 +79,7 @@ async def test_onboarding_runs_same_session_reads_sequentially() -> None:
 
     status = await service.get_status("user-id")
 
-    assert status.overall_status == "not_subscribed"
+    assert status.stage == "subscription_required"
 
 
 @pytest.mark.anyio
@@ -92,9 +101,15 @@ async def test_onboarding_routes_only_with_central_subscription_access(
     subscription_status: str,
     has_access: bool,
 ) -> None:
-    subscription = SimpleNamespace(status=subscription_status, plan_tier="starter")
+    subscription = SimpleNamespace(
+        status=subscription_status,
+        plan_tier="starter",
+        current_period_start=datetime(2026, 1, 1, tzinfo=UTC),
+        current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
+    )
     phone_number = SimpleNamespace(
         e164="+33123456789",
+        provider_number_id="pn_123",
         is_active=True,
         provider_connection_name="app-active",
     )
@@ -110,6 +125,7 @@ async def test_onboarding_routes_only_with_central_subscription_access(
         knowledge_base="Open weekdays.",
     )
     service = OnboardingService(
+        user_repository=UserLookupRepository(SimpleNamespace(status="active")),
         subscription_repository=UserLookupRepository(subscription),
         usage_repository=UsageRepository(60),
         phone_number_repository=UserLookupRepository(phone_number),
@@ -119,15 +135,21 @@ async def test_onboarding_routes_only_with_central_subscription_access(
 
     status = await service.get_status("user-id")
 
-    assert status.routing_enabled is has_access
-    assert (status.overall_status == "live") is has_access
+    assert status.can_route is has_access
+    assert (status.stage == "live") is has_access
 
 
 @pytest.mark.anyio
 async def test_trialing_subscription_can_retry_failed_provisioning() -> None:
-    subscription = SimpleNamespace(status="trialing", plan_tier="starter")
+    subscription = SimpleNamespace(
+        status="trialing",
+        plan_tier="starter",
+        current_period_start=datetime(2026, 1, 1, tzinfo=UTC),
+        current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
+    )
     provisioning = SimpleNamespace(status="failed", can_retry=True)
     service = OnboardingService(
+        user_repository=UserLookupRepository(SimpleNamespace(status="active")),
         subscription_repository=UserLookupRepository(subscription),
         usage_repository=UsageRepository(60),
         phone_number_repository=UserLookupRepository(None),
@@ -149,8 +171,18 @@ async def test_onboarding_is_not_live_when_routing_flags_diverge(
     config_enabled: bool,
     phone_active: bool,
 ) -> None:
-    subscription = SimpleNamespace(status="active", plan_tier="starter")
-    phone_number = SimpleNamespace(e164="+33123456789", is_active=phone_active)
+    subscription = SimpleNamespace(
+        status="active",
+        plan_tier="starter",
+        current_period_start=datetime(2026, 1, 1, tzinfo=UTC),
+        current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
+    )
+    phone_number = SimpleNamespace(
+        e164="+33123456789",
+        provider_number_id="pn_123",
+        provider_connection_name="app-active",
+        is_active=phone_active,
+    )
     provisioning = SimpleNamespace(status="succeeded", can_retry=False)
     config = SimpleNamespace(
         is_enabled=config_enabled,
@@ -160,6 +192,7 @@ async def test_onboarding_is_not_live_when_routing_flags_diverge(
         knowledge_base="Open weekdays.",
     )
     service = OnboardingService(
+        user_repository=UserLookupRepository(SimpleNamespace(status="active")),
         subscription_repository=UserLookupRepository(subscription),
         usage_repository=UsageRepository(60),
         phone_number_repository=UserLookupRepository(phone_number),
@@ -169,5 +202,5 @@ async def test_onboarding_is_not_live_when_routing_flags_diverge(
 
     status = await service.get_status("user-id")
 
-    assert status.routing_enabled is False
-    assert status.overall_status == "ready_to_enable"
+    assert status.can_route is False
+    assert status.stage != "live"

@@ -4,7 +4,17 @@ import { useState, useTransition } from "react";
 
 import Link from "next/link";
 
-import { AlertCircle, CheckCircle2, LoaderCircle, PhoneCall, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  CirclePause,
+  CreditCard,
+  LoaderCircle,
+  PhoneCall,
+  RefreshCw,
+  Settings2,
+  ShieldCheck,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { type RetryProvisioningActionResult, retryProvisioningAction } from "@/app/(app)/dashboard/onboarding-actions";
@@ -12,77 +22,157 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
-import type { OnboardingStatus } from "@/lib/types/onboarding";
+import type { OnboardingStatus, ReadinessBlocker } from "@/lib/types/onboarding";
 
 type OnboardingStatusCardProps = {
   onboardingStatus: OnboardingStatus;
   retryHandler?: () => Promise<RetryProvisioningActionResult>;
 };
 
+type StatusAction = "billing" | "receptionist" | null;
+
+const SUBSCRIPTION_BLOCKERS = new Set<ReadinessBlocker>([
+  "subscription_missing",
+  "plan_unsupported",
+  "subscription_status_ineligible",
+  "subscription_period_missing",
+  "subscription_period_inactive",
+]);
+
+function getSuspendedPresentation(onboardingStatus: OnboardingStatus) {
+  if (onboardingStatus.blockers.includes("minutes_exhausted")) {
+    return {
+      title: "No minutes remaining",
+      description: "Add minutes or restore your plan in billing before calls can be answered.",
+      badgeLabel: "Paused",
+      badgeVariant: "secondary" as const,
+      icon: CirclePause,
+      action: "billing" as const,
+    };
+  }
+
+  if (onboardingStatus.blockers.some((blocker) => SUBSCRIPTION_BLOCKERS.has(blocker))) {
+    return {
+      title: "Subscription needs attention",
+      description: "Review your subscription in billing before your receptionist can answer calls.",
+      badgeLabel: "Paused",
+      badgeVariant: "secondary" as const,
+      icon: CreditCard,
+      action: "billing" as const,
+    };
+  }
+
+  return {
+    title: "Your receptionist is safely offline",
+    description: "Presvo found an account condition that needs attention before calls can go live.",
+    badgeLabel: "Offline",
+    badgeVariant: "secondary" as const,
+    icon: CirclePause,
+    action: null,
+  };
+}
+
 function getStatusPresentation(onboardingStatus: OnboardingStatus) {
-  switch (onboardingStatus.overall_status) {
-    case "provisioning_number":
+  switch (onboardingStatus.stage) {
+    case "number_provisioning":
       return {
         title: "Number provisioning in progress",
-        description: "We’re assigning your French number now. Check back shortly before enabling routing.",
+        description: "We’re assigning your Irish number now. This usually finishes automatically.",
         badgeLabel: "Provisioning",
         badgeVariant: "secondary" as const,
         icon: LoaderCircle,
+        action: "receptionist" as const,
       };
-    case "provisioning_failed":
+    case "number_provisioning_failed":
       return {
         title: "Provisioning needs attention",
-        description: "Your subscription is active, but we could not finish assigning a number yet.",
+        description: "Retry provisioning. If the issue continues, your setup will remain safely offline.",
         badgeLabel: "Action needed",
         badgeVariant: "secondary" as const,
         icon: AlertCircle,
+        action: null,
       };
-    case "ready_to_enable":
+    case "receptionist_setup_required":
       return {
-        title: "Ready to enable routing",
-        description:
-          "Your number is assigned and your setup is complete. Enable routing when you are ready to take live calls.",
+        title: "Complete your receptionist setup",
+        description: "Your number is ready. Add your business context and call-handling instructions next.",
+        badgeLabel: "Setup required",
+        badgeVariant: "secondary" as const,
+        icon: Settings2,
+        action: "receptionist" as const,
+      };
+    case "ready":
+      return {
+        title: "Ready to go live",
+        description: "Your number and receptionist setup are complete. Turn it on when you’re ready.",
         badgeLabel: "Ready",
         badgeVariant: "default" as const,
         icon: CheckCircle2,
+        action: "receptionist" as const,
+      };
+    case "routing_pending":
+      return {
+        title: "Routing update in progress",
+        description: "Presvo is applying your routing update. Calls stay safely offline until every check passes.",
+        badgeLabel: "Updating",
+        badgeVariant: "secondary" as const,
+        icon: LoaderCircle,
+        action: null,
       };
     case "live":
       return {
-        title: "Routing is live",
-        description: "Your number is active and inbound calls should route through the agent now.",
+        title: "Your receptionist is live",
+        description: "Calls to your Presvo number can now be answered by your receptionist.",
         badgeLabel: "Live",
         badgeVariant: "default" as const,
         icon: ShieldCheck,
+        action: "receptionist" as const,
       };
-    case "setup_required":
+    case "subscription_required":
       return {
-        title: "Complete your agent setup",
-        description: "Your number is ready. Finish the agent details before enabling routing.",
-        badgeLabel: "Setup required",
+        title: "Choose your plan",
+        description: "Activate the starter plan to begin automatic Irish number provisioning.",
+        badgeLabel: "Plan required",
         badgeVariant: "secondary" as const,
-        icon: PhoneCall,
+        icon: CreditCard,
+        action: "billing" as const,
       };
-    case "subscription_active":
-      return {
-        title: "Subscription active",
-        description: "Your plan is active. The next step is automatic number provisioning.",
-        badgeLabel: "Subscribed",
-        badgeVariant: "secondary" as const,
-        icon: PhoneCall,
-      };
+    case "suspended":
+      return getSuspendedPresentation(onboardingStatus);
     default:
       return {
-        title: "Start your setup",
-        description: "Subscribe to the starter plan to begin automatic French number provisioning.",
-        badgeLabel: "Not subscribed",
+        title: "Your receptionist is safely offline",
+        description: "Refresh your dashboard before enabling calls.",
+        badgeLabel: "Offline",
         badgeVariant: "secondary" as const,
         icon: PhoneCall,
+        action: null,
       };
   }
 }
 
+function StatusActionLink({ action }: { action: StatusAction }) {
+  if (action === "billing") {
+    return (
+      <Button asChild>
+        <Link href="/dashboard/billing">Manage billing</Link>
+      </Button>
+    );
+  }
+
+  if (action === "receptionist") {
+    return (
+      <Button asChild variant="secondary">
+        <Link href="/dashboard/agent">Open receptionist settings</Link>
+      </Button>
+    );
+  }
+
+  return null;
+}
+
 export function OnboardingStatusCard({ onboardingStatus, retryHandler }: OnboardingStatusCardProps) {
-  const { title, description, badgeLabel, badgeVariant, icon: Icon } = getStatusPresentation(onboardingStatus);
+  const { title, description, badgeLabel, badgeVariant, icon: Icon, action } = getStatusPresentation(onboardingStatus);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -99,6 +189,8 @@ export function OnboardingStatusCard({ onboardingStatus, retryHandler }: Onboard
       toast.error(result.message);
     });
   };
+
+  const hasFooter = action !== null || onboardingStatus.can_retry_provisioning || feedback !== null;
 
   return (
     <Card>
@@ -129,25 +221,24 @@ export function OnboardingStatusCard({ onboardingStatus, retryHandler }: Onboard
               : "No active plan"}
           </div>
         </div>
-        {onboardingStatus.overall_status === "provisioning_failed" ? (
-          <div className="rounded-lg border border-border/70 bg-muted/20 px-4 py-3 text-muted-foreground text-sm sm:col-span-2">
-            Contact support if this keeps happening.
-          </div>
-        ) : null}
       </CardContent>
-      <CardFooter className="flex flex-wrap gap-2">
-        <Button asChild variant="secondary">
-          <Link href="/dashboard/agent">Open agent settings</Link>
-        </Button>
-        {onboardingStatus.can_retry_provisioning ? (
-          <Button onClick={onRetry} disabled={isPending}>
-            {isPending ? <Spinner data-icon="inline-start" /> : null}
-            {!isPending ? <RefreshCw className="size-4" /> : null}
-            Retry provisioning
-          </Button>
-        ) : null}
-        {feedback ? <p className="text-muted-foreground text-sm">{feedback}</p> : null}
-      </CardFooter>
+      {hasFooter ? (
+        <CardFooter className="flex flex-wrap gap-2">
+          <StatusActionLink action={action} />
+          {onboardingStatus.can_retry_provisioning ? (
+            <Button onClick={onRetry} disabled={isPending}>
+              {isPending ? <Spinner data-icon="inline-start" /> : null}
+              {!isPending ? <RefreshCw data-icon="inline-start" /> : null}
+              Retry provisioning
+            </Button>
+          ) : null}
+          {feedback ? (
+            <p aria-live="polite" className="text-muted-foreground text-sm">
+              {feedback}
+            </p>
+          ) : null}
+        </CardFooter>
+      ) : null}
     </Card>
   );
 }

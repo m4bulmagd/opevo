@@ -30,10 +30,9 @@ from app.services.livekit_dispatch_service import (
     expected_agent_identity,
 )
 from app.services.livekit_dispatch_lock import livekit_dispatch_lock
-from app.services.onboarding_service import OnboardingService
 from app.services.livekit_recording_service import LiveKitRecordingService
+from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.summary_service import SummaryService
-from app.services.subscription_access_policy import SubscriptionAccessPolicy
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
 from app.providers.summaries.gemini import GeminiSummaryProvider
@@ -155,29 +154,16 @@ async def deliver_phone_routing(
 
 
 async def _routing_snapshot(session, user_id: UUID) -> _RoutingSnapshot | None:
-    phone_number = await PhoneNumberRepository(session).get_by_user_id(user_id)
+    context = await CustomerReadinessService(session).evaluate(user_id)
+    phone_number = context.phone_number
     if phone_number is None:
         return None
     if not phone_number.provider_number_id:
         raise OutboxDeliveryError("provider_terminal", retryable=False)
-    subscription = await SubscriptionRepository(session).get_by_user_id(user_id)
-    agent_config = await AgentConfigRepository(session).get_by_user_id(user_id)
-    balance = await UsageRepository(session).get_current_balance(user_id=user_id)
-    should_enable = bool(
-        subscription is not None
-        and SubscriptionAccessPolicy.can_route(
-            subscription.status,
-            subscription.current_period_end,
-        )
-        and balance > 0
-        and agent_config is not None
-        and agent_config.is_enabled
-        and OnboardingService._is_agent_setup_complete(agent_config)
-    )
     return _RoutingSnapshot(
         phone_number_id=phone_number.id,
         provider_number_id=phone_number.provider_number_id,
-        should_enable=should_enable,
+        should_enable=context.result.should_enable_phone,
         is_active=phone_number.is_active,
         provider_connection_name=phone_number.provider_connection_name,
     )
