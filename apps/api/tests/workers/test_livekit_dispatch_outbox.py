@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.agent_config import AgentConfig
@@ -10,6 +11,7 @@ from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.providers.livekit_dispatch.base import LiveKitDispatch
+from app.schemas.agent_content import AGENT_NAME_MAX_LENGTH
 from app.services.outbox_service import OutboxService
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
 from app.workers.jobs.outbox_topics import deliver_livekit_dispatch
@@ -60,11 +62,15 @@ class _ForeignCreateProvider(_Provider):
         )
 
 
-async def _seed_dispatch(db_session):
+async def _seed_dispatch(db_session, *, owner_name: str | None = None):
     from app.models.user import User
 
     now = datetime.now(UTC)
-    user = User(clerk_user_id="outbox-user", email="outbox@example.com")
+    user = User(
+        clerk_user_id="outbox-user",
+        email="outbox@example.com",
+        full_name=owner_name,
+    )
     db_session.add(user)
     await db_session.flush()
     phone = PhoneNumber(
@@ -130,11 +136,24 @@ async def _seed_dispatch(db_session):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("owner_name", "expected_owner_name"),
+    [
+        ("Sam Rivera", "Sam Rivera"),
+        (None, "the business"),
+        ("  ", "the business"),
+    ],
+)
 async def test_dispatch_handler_creates_and_persists_provider_identity(
     db_session,
     monkeypatch,
+    owner_name: str | None,
+    expected_owner_name: str,
 ) -> None:
-    call, event, _subscription = await _seed_dispatch(db_session)
+    call, event, _subscription = await _seed_dispatch(
+        db_session,
+        owner_name=owner_name,
+    )
     provider = _Provider()
     monkeypatch.setenv("LIVEKIT_AGENT_NAME", "configured-worker")
     monkeypatch.setenv("MAX_CALL_DURATION_SECONDS", "900")
@@ -161,6 +180,7 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
     assert metadata["agent_name"] == "Ava"
     assert metadata["call_id"] == str(call.id)
     assert metadata["agent_identity"] == f"agent-call-{call.id}"
+    assert metadata["owner_name"] == expected_owner_name
     assert metadata["dispatch_token"] == "dispatch-jwt"
     assert metadata["minutes_remaining"] == 60
     assert metadata["allowed_duration_seconds"] == 900
@@ -245,9 +265,59 @@ async def test_create_then_timeout_reconciles_to_one_effective_dispatch(
 
 
 @pytest.mark.anyio
-async def test_stale_eligibility_never_calls_provider(db_session, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "ineligible_case",
+    [
+        "zero_balance",
+        "missing_period",
+        "expired_period",
+        "unsupported_plan",
+        "incomplete_agent",
+        "oversized_agent_content",
+        "disabled_agent",
+        "inactive_phone",
+        "inactive_phone_projection",
+        "missing_provider_id",
+        "called_number_mismatch",
+    ],
+)
+async def test_stale_readiness_never_calls_provider(
+    db_session,
+    monkeypatch,
+    ineligible_case: str,
+) -> None:
     _call, event, subscription = await _seed_dispatch(db_session)
-    subscription.current_period_end = datetime.now(UTC) - timedelta(seconds=1)
+    config = await db_session.scalar(select(AgentConfig))
+    phone = await db_session.scalar(select(PhoneNumber))
+    usage = await db_session.scalar(select(UsageLedger))
+    assert config is not None
+    assert phone is not None
+    assert usage is not None
+
+    if ineligible_case == "zero_balance":
+        usage.balance_after = 0
+    elif ineligible_case == "missing_period":
+        subscription.current_period_start = None
+    elif ineligible_case == "expired_period":
+        subscription.current_period_end = datetime.now(UTC) - timedelta(seconds=1)
+    elif ineligible_case == "unsupported_plan":
+        await db_session.execute(text("PRAGMA ignore_check_constraints = ON"))
+        subscription.plan_tier = "enterprise"
+    elif ineligible_case == "incomplete_agent":
+        config.owner_context = ""
+    elif ineligible_case == "oversized_agent_content":
+        config.agent_name = "A" * (AGENT_NAME_MAX_LENGTH + 1)
+    elif ineligible_case == "disabled_agent":
+        config.is_enabled = False
+    elif ineligible_case == "inactive_phone":
+        phone.is_active = False
+    elif ineligible_case == "inactive_phone_projection":
+        phone.provider_connection_name = "app-disabled"
+    elif ineligible_case == "missing_provider_id":
+        phone.provider_number_id = None
+    elif ineligible_case == "called_number_mismatch":
+        phone.e164 = ""
+
     await db_session.commit()
     provider = _Provider()
     monkeypatch.setattr(

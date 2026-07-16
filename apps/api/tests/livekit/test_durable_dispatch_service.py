@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.agent_config import AgentConfig
@@ -12,6 +12,7 @@ from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
+from app.schemas.agent_content import AGENT_NAME_MAX_LENGTH
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 from app.workers.jobs.outbox_topics import deliver_recording_stop
 
@@ -336,11 +337,58 @@ async def test_missing_trunk_or_forged_sip_attributes_create_no_intent(
 
 
 @pytest.mark.anyio
-async def test_ineligible_subscription_creates_no_call_or_outbox(db_session) -> None:
+@pytest.mark.parametrize(
+    "ineligible_case",
+    [
+        "zero_balance",
+        "missing_period",
+        "expired_period",
+        "unsupported_plan",
+        "incomplete_agent",
+        "oversized_agent_content",
+        "disabled_agent",
+        "inactive_phone",
+        "inactive_phone_projection",
+        "missing_provider_id",
+        "called_number_mismatch",
+    ],
+)
+async def test_readiness_blocker_creates_no_call_or_outbox(
+    db_session,
+    ineligible_case: str,
+) -> None:
     await _seed_eligible_user(db_session)
     subscription = await db_session.scalar(select(Subscription))
+    config = await db_session.scalar(select(AgentConfig))
+    phone = await db_session.scalar(select(PhoneNumber))
+    usage = await db_session.scalar(select(UsageLedger))
     assert subscription is not None
-    subscription.current_period_end = datetime.now(UTC) - timedelta(seconds=1)
+    assert config is not None
+    assert phone is not None
+    assert usage is not None
+
+    if ineligible_case == "zero_balance":
+        usage.balance_after = 0
+    elif ineligible_case == "missing_period":
+        subscription.current_period_start = None
+    elif ineligible_case == "expired_period":
+        subscription.current_period_end = datetime.now(UTC) - timedelta(seconds=1)
+    elif ineligible_case == "unsupported_plan":
+        await db_session.execute(text("PRAGMA ignore_check_constraints = ON"))
+        subscription.plan_tier = "enterprise"
+    elif ineligible_case == "incomplete_agent":
+        config.owner_context = ""
+    elif ineligible_case == "oversized_agent_content":
+        config.agent_name = "A" * (AGENT_NAME_MAX_LENGTH + 1)
+    elif ineligible_case == "disabled_agent":
+        config.is_enabled = False
+    elif ineligible_case == "inactive_phone":
+        phone.is_active = False
+    elif ineligible_case == "inactive_phone_projection":
+        phone.provider_connection_name = "app-disabled"
+    elif ineligible_case == "missing_provider_id":
+        phone.provider_number_id = None
+
     await db_session.commit()
     service = LiveKitDispatchService(
         db_session,
@@ -349,7 +397,15 @@ async def test_ineligible_subscription_creates_no_call_or_outbox(db_session) -> 
         recording_service=_Recording(),
     )
 
-    result = await service.handle_participant_joined(_sip_join())
+    result = await service.handle_participant_joined(
+        _sip_join(
+            trunk=(
+                "+35315550000"
+                if ineligible_case == "called_number_mismatch"
+                else "+33999888777"
+            )
+        )
+    )
 
     assert result.status == "denied"
     assert await db_session.scalar(select(func.count()).select_from(Call)) == 0

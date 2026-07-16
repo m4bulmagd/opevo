@@ -34,6 +34,58 @@ class CustomerReadinessContext:
     agent_config: AgentConfig | None
 
 
+def build_customer_readiness_snapshot(
+    *,
+    user: User | None,
+    subscription: Subscription | None,
+    balance: int,
+    phone_number: PhoneNumber | None,
+    provisioning: PhoneNumberProvisioning | None,
+    agent_config: AgentConfig | None,
+) -> CustomerReadinessSnapshot:
+    return CustomerReadinessSnapshot(
+        user_status=user.status if user is not None else None,
+        plan_tier=subscription.plan_tier if subscription is not None else None,
+        subscription_status=(
+            subscription.status if subscription is not None else None
+        ),
+        current_period_start=(
+            subscription.current_period_start if subscription is not None else None
+        ),
+        current_period_end=(
+            subscription.current_period_end if subscription is not None else None
+        ),
+        balance=balance,
+        provisioning_status=(
+            provisioning.status if provisioning is not None else None
+        ),
+        phone_present=phone_number is not None,
+        phone_provider_id_present=bool(
+            phone_number is not None
+            and phone_number.provider_number_id
+            and phone_number.provider_number_id.strip()
+        ),
+        phone_active=bool(phone_number is not None and phone_number.is_active),
+        phone_connection_name=(
+            phone_number.provider_connection_name
+            if phone_number is not None
+            else None
+        ),
+        agent_present=agent_config is not None,
+        agent_enabled=bool(agent_config is not None and agent_config.is_enabled),
+        agent_name=(agent_config.agent_name if agent_config is not None else None),
+        owner_context=(
+            agent_config.owner_context if agent_config is not None else None
+        ),
+        system_prompt=(
+            agent_config.system_prompt if agent_config is not None else None
+        ),
+        knowledge_base=(
+            agent_config.knowledge_base if agent_config is not None else None
+        ),
+    )
+
+
 class CustomerReadinessService:
     def __init__(
         self,
@@ -90,48 +142,13 @@ class CustomerReadinessService:
         if agent_config is None:
             agent_config = await self.agent_config_repository.get_by_user_id(user_id)
 
-        snapshot = CustomerReadinessSnapshot(
-            user_status=user.status if user is not None else None,
-            plan_tier=subscription.plan_tier if subscription is not None else None,
-            subscription_status=(
-                subscription.status if subscription is not None else None
-            ),
-            current_period_start=(
-                subscription.current_period_start if subscription is not None else None
-            ),
-            current_period_end=(
-                subscription.current_period_end if subscription is not None else None
-            ),
+        snapshot = build_customer_readiness_snapshot(
+            user=user,
+            subscription=subscription,
             balance=balance,
-            provisioning_status=(
-                provisioning.status if provisioning is not None else None
-            ),
-            phone_present=phone_number is not None,
-            phone_provider_id_present=bool(
-                phone_number is not None
-                and phone_number.provider_number_id
-                and phone_number.provider_number_id.strip()
-            ),
-            phone_active=bool(
-                phone_number is not None and phone_number.is_active
-            ),
-            phone_connection_name=(
-                phone_number.provider_connection_name
-                if phone_number is not None
-                else None
-            ),
-            agent_present=agent_config is not None,
-            agent_enabled=bool(agent_config is not None and agent_config.is_enabled),
-            agent_name=(agent_config.agent_name if agent_config is not None else None),
-            owner_context=(
-                agent_config.owner_context if agent_config is not None else None
-            ),
-            system_prompt=(
-                agent_config.system_prompt if agent_config is not None else None
-            ),
-            knowledge_base=(
-                agent_config.knowledge_base if agent_config is not None else None
-            ),
+            phone_number=phone_number,
+            provisioning=provisioning,
+            agent_config=agent_config,
         )
         result = CustomerReadinessPolicy.evaluate(snapshot, now=now)
         return CustomerReadinessContext(
