@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
-from app.models.subscription import Subscription
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.customer_activation_repository import (
@@ -35,39 +34,6 @@ from app.services.customer_readiness_service import (
     build_customer_readiness_snapshot,
 )
 from app.services.customer_readiness_policy import CustomerReadinessPolicy
-from app.services.subscription_access_policy import SubscriptionAccessPolicy
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
-
-
-def subscription_is_eligible(
-    subscription: Subscription | None,
-    *,
-    evaluated_at: datetime,
-) -> bool:
-    if subscription is None:
-        return False
-    if subscription.plan_tier != CustomerReadinessPolicy.SUPPORTED_PLAN:
-        return False
-    if not SubscriptionAccessPolicy.can_route(
-        subscription.status,
-        subscription.current_period_end,
-    ):
-        return False
-    if (
-        subscription.current_period_start is None
-        or subscription.current_period_end is None
-    ):
-        return False
-    return (
-        _as_utc(subscription.current_period_start)
-        <= evaluated_at
-        < _as_utc(subscription.current_period_end)
-    )
 
 
 class ActivationSnapshotService:
@@ -117,7 +83,7 @@ class ActivationSnapshotService:
         user_id: UUID,
         now: datetime | None = None,
     ) -> ActivationSnapshotResponse:
-        evaluated_at = _as_utc(now or datetime.now(UTC))
+        evaluation_time = now or datetime.now(UTC)
         user = await self.user_repository.get_by_id(user_id)
         profile = await self.business_profile_repository.get_by_user_id(user_id)
         activation = await self.activation_repository.get_by_user_id(user_id)
@@ -151,12 +117,10 @@ class ActivationSnapshotService:
                 forwarding_verified=activation_prerequisites.forwarding_verified,
                 go_live_approved=activation_prerequisites.go_live_approved,
             ),
-            now=evaluated_at,
+            now=evaluation_time,
         )
-        billing_eligible = subscription_is_eligible(
-            subscription,
-            evaluated_at=evaluated_at,
-        )
+        evaluated_at = readiness.evaluated_at
+        billing_eligible = readiness.subscription_eligible
         facts = ActivationFacts(
             profile_confirmed=bool(
                 profile is not None
@@ -273,9 +237,8 @@ class ActivationSnapshotService:
             ),
         )
 
-    @classmethod
+    @staticmethod
     def _window_is_open(
-        cls,
         activation: CustomerActivation | None,
         now: datetime,
     ) -> bool:
@@ -287,9 +250,13 @@ class ActivationSnapshotService:
         ):
             return False
         return (
-            _as_utc(activation.verification_window_started_at)
+            CustomerReadinessPolicy._as_utc(
+                activation.verification_window_started_at
+            )
             <= now
-            < _as_utc(activation.verification_window_expires_at)
+            < CustomerReadinessPolicy._as_utc(
+                activation.verification_window_expires_at
+            )
         )
 
     @staticmethod

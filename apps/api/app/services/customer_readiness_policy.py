@@ -72,6 +72,7 @@ class CustomerReadinessSnapshot:
 @dataclass(frozen=True, slots=True)
 class CustomerReadinessResult:
     stage: CustomerReadinessStage
+    subscription_eligible: bool
     can_provision_number: bool
     can_activate: bool
     should_enable_phone: bool
@@ -90,14 +91,18 @@ class CustomerReadinessPolicy:
     ELIGIBLE_SUBSCRIPTION_STATUSES = frozenset({"active", "trialing"})
     SUPPORTED_PLAN = "starter"
 
-    _ACCESS_BLOCKERS = frozenset(
+    _SUBSCRIPTION_BLOCKERS = frozenset(
         {
-            ReadinessBlocker.USER_INACTIVE,
             ReadinessBlocker.SUBSCRIPTION_MISSING,
             ReadinessBlocker.PLAN_UNSUPPORTED,
             ReadinessBlocker.SUBSCRIPTION_STATUS_INELIGIBLE,
             ReadinessBlocker.SUBSCRIPTION_PERIOD_MISSING,
             ReadinessBlocker.SUBSCRIPTION_PERIOD_INACTIVE,
+        }
+    )
+    _ACCESS_BLOCKERS = _SUBSCRIPTION_BLOCKERS | frozenset(
+        {
+            ReadinessBlocker.USER_INACTIVE,
             ReadinessBlocker.MINUTES_EXHAUSTED,
         }
     )
@@ -153,6 +158,7 @@ class CustomerReadinessPolicy:
         cls._evaluate_activation(snapshot, found)
 
         blockers = tuple(blocker for blocker in ReadinessBlocker if blocker in found)
+        subscription_eligible = not bool(found & cls._SUBSCRIPTION_BLOCKERS)
         can_provision_number = not bool(found & cls._ACCESS_BLOCKERS)
         can_activate = not bool(found & cls._ACTIVATION_BLOCKERS)
         should_enable_phone = can_activate and snapshot.agent_enabled
@@ -169,6 +175,7 @@ class CustomerReadinessPolicy:
         )
         return CustomerReadinessResult(
             stage=stage,
+            subscription_eligible=subscription_eligible,
             can_provision_number=can_provision_number,
             can_activate=can_activate,
             should_enable_phone=should_enable_phone,
