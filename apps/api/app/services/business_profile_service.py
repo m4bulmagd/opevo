@@ -91,7 +91,9 @@ class BusinessProfileService:
         profile = await self.profile_repository.get_or_create_for_update(user_id)
         activation = await self.activation_repository.get_or_create_for_update(user_id)
         missing = tuple(
-            field for field in REQUIRED_PROFILE_FIELDS if not getattr(profile, field)
+            field
+            for field in REQUIRED_PROFILE_FIELDS
+            if self._is_missing_required_value(getattr(profile, field))
         )
         if missing:
             raise BusinessProfileIncompleteError(missing)
@@ -103,6 +105,10 @@ class BusinessProfileService:
         await self.session.commit()
         await self.session.refresh(activation)
         return activation
+
+    @staticmethod
+    def _is_missing_required_value(value: object) -> bool:
+        return not value or isinstance(value, str) and not value.strip()
 
     @staticmethod
     def _invalidate_routing_state(activation: CustomerActivation) -> None:

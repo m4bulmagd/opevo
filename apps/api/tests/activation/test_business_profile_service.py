@@ -139,6 +139,30 @@ async def test_confirm_profile_reports_every_missing_required_field(
 
 
 @pytest.mark.anyio
+async def test_confirm_profile_rejects_stored_whitespace_required_text(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    service = build_profile_service(db_session)
+    profile = await service.save_draft(active_user.id, complete_profile_draft())
+    whitespace_fields = (
+        "owner_name",
+        "business_name",
+        "business_type",
+        "public_description",
+        "receptionist_name",
+    )
+    for field in whitespace_fields:
+        setattr(profile, field, " \t\n ")
+    await db_session.commit()
+
+    with pytest.raises(BusinessProfileIncompleteError) as exc_info:
+        await service.confirm_profile(active_user.id)
+
+    assert exc_info.value.fields == whitespace_fields
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("operation", ["save", "confirm"])
 async def test_profile_commands_reject_unknown_user(
     db_session: AsyncSession,

@@ -36,11 +36,25 @@ INSTRUCTIONS_MAX_LENGTH = 2_000
 ESCALATION_NOTES_MAX_LENGTH = 2_000
 
 
+def _strip_nonblank_text(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("Text must not be blank")
+    return normalized
+
+
 class FaqItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=FAQ_QUESTION_MAX_LENGTH)
     answer: str = Field(min_length=1, max_length=FAQ_ANSWER_MAX_LENGTH)
+
+    @field_validator("question", "answer", mode="before")
+    @classmethod
+    def normalize_required_text(cls, value: object) -> object:
+        return _strip_nonblank_text(value)
 
 
 class OpeningInterval(BaseModel):
@@ -48,6 +62,15 @@ class OpeningInterval(BaseModel):
 
     start: time
     end: time
+
+    @field_validator("start", "end")
+    @classmethod
+    def require_local_minute_precision(cls, value: time) -> time:
+        if value.utcoffset() is not None:
+            raise ValueError("Opening interval times must be timezone-naive")
+        if value.second != 0 or value.microsecond != 0:
+            raise ValueError("Opening interval times must use whole minutes")
+        return value
 
     @model_validator(mode="after")
     def require_forward_interval(self) -> Self:
@@ -124,6 +147,20 @@ class BusinessProfileDraft(BaseModel):
         default=None,
         max_length=ESCALATION_NOTES_MAX_LENGTH,
     )
+
+    @field_validator(
+        "owner_name",
+        "business_name",
+        "business_type",
+        "public_description",
+        "receptionist_name",
+        mode="before",
+    )
+    @classmethod
+    def normalize_required_text(cls, value: object) -> object:
+        if value is None:
+            return None
+        return _strip_nonblank_text(value)
 
     @field_validator("timezone")
     @classmethod

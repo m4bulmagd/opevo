@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from datetime import UTC, time
 
 import pytest
 from pydantic import ValidationError
@@ -169,6 +170,39 @@ def test_business_hours_require_forward_intervals() -> None:
         BusinessHours.model_validate(hours)
 
 
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        ("09:00:30", "09:00:45"),
+        (time(9, 0, 0, 1), time(10, 0, 0, 1)),
+    ],
+    ids=["seconds", "microseconds"],
+)
+def test_business_hours_reject_sub_minute_precision(
+    start: str | time,
+    end: str | time,
+) -> None:
+    hours = complete_business_hours()
+    hours["monday"] = {
+        "closed": False,
+        "intervals": [{"start": start, "end": end}],
+    }
+
+    with pytest.raises(ValidationError, match="whole minutes"):
+        BusinessHours.model_validate(hours)
+
+
+def test_business_hours_reject_offset_aware_times() -> None:
+    hours = complete_business_hours()
+    hours["monday"] = {
+        "closed": False,
+        "intervals": [{"start": time(9, tzinfo=UTC), "end": time(18, tzinfo=UTC)}],
+    }
+
+    with pytest.raises(ValidationError, match="timezone-naive"):
+        BusinessHours.model_validate(hours)
+
+
 @pytest.mark.parametrize("number", ["0612345678", "+33 6 12 34 56 78"])
 def test_profile_normalizes_french_number(number: str) -> None:
     draft = complete_profile_draft(existing_phone_e164=number)
@@ -194,6 +228,75 @@ def test_profile_rejects_twenty_one_faqs() -> None:
 
     with pytest.raises(ValidationError, match="at most 20"):
         complete_profile_draft(faqs=faqs)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "owner_name",
+        "business_name",
+        "business_type",
+        "public_description",
+        "receptionist_name",
+    ],
+)
+def test_required_profile_text_rejects_whitespace_only(field: str) -> None:
+    with pytest.raises(ValidationError, match="must not be blank"):
+        complete_profile_draft(**{field: " \t\n "})
+
+
+@pytest.mark.parametrize(
+    ("field", "limit"),
+    [
+        ("owner_name", NAME_MAX_LENGTH),
+        ("business_name", NAME_MAX_LENGTH),
+        ("receptionist_name", NAME_MAX_LENGTH),
+        ("business_type", BUSINESS_TYPE_MAX_LENGTH),
+        ("public_description", PUBLIC_DESCRIPTION_MAX_LENGTH),
+    ],
+)
+def test_required_profile_text_trims_before_enforcing_maximum(
+    field: str,
+    limit: int,
+) -> None:
+    normalized = "x" * limit
+
+    assert (
+        getattr(complete_profile_draft(**{field: f"  {normalized}  "}), field)
+        == normalized
+    )
+
+    with pytest.raises(ValidationError, match=f"at most {limit}"):
+        complete_profile_draft(**{field: f"  {normalized}x  "})
+
+
+@pytest.mark.parametrize("field", ["question", "answer"])
+def test_faq_required_text_rejects_whitespace_only(field: str) -> None:
+    faq = {"question": "Question", "answer": "Réponse"} | {field: " \t\n "}
+
+    with pytest.raises(ValidationError, match="must not be blank"):
+        complete_profile_draft(faqs=[faq])
+
+
+@pytest.mark.parametrize(
+    ("field", "limit"),
+    [
+        ("question", FAQ_QUESTION_MAX_LENGTH),
+        ("answer", FAQ_ANSWER_MAX_LENGTH),
+    ],
+)
+def test_faq_required_text_trims_before_enforcing_maximum(
+    field: str,
+    limit: int,
+) -> None:
+    normalized = "x" * limit
+    faq = {"question": "Question", "answer": "Réponse"} | {field: f"  {normalized}  "}
+
+    assert getattr(complete_profile_draft(faqs=[faq]).faqs[0], field) == normalized
+
+    faq[field] = f"  {normalized}x  "
+    with pytest.raises(ValidationError, match=f"at most {limit}"):
+        complete_profile_draft(faqs=[faq])
 
 
 @pytest.mark.parametrize(
