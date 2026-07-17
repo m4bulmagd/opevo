@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     telnyx_active_connection_id: str | None = None
     telnyx_disabled_connection_id: str | None = None
     telnyx_ordering_enabled: bool = False
+    carrier_lookup_mode: Literal["fake", "telnyx"] = "fake"
     gemini_api_key: str | None = None
     summary_provider: str = "gemini"
     summary_model: str = "gemini-2.5-flash"

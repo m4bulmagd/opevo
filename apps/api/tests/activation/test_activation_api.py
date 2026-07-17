@@ -1,9 +1,12 @@
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.user import User
+from app.providers.carrier_lookup.base import CarrierLookupResult
 from app.schemas.business_profile import WEEKDAYS
 from app.services.activation_snapshot_service import ActivationSnapshotUnavailableError
 
@@ -65,6 +68,17 @@ async def _seed_user(
     await engine.dispose()
 
 
+async def _load_internal_user_id(database_url: str, clerk_user_id: str):
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user_id = await session.scalar(
+            select(User.id).where(User.clerk_user_id == clerk_user_id)
+        )
+    await engine.dispose()
+    return user_id
+
+
 async def _bootstrap_clerk_user(
     async_client,
     *,
@@ -98,6 +112,7 @@ class SuccessfulProfileCommandService:
     [
         ("GET", "/api/activation", None),
         ("PUT", "/api/business-profile", {}),
+        ("POST", "/api/activation/lookup-carrier", None),
         ("POST", "/api/activation/confirm-profile", None),
     ],
 )
@@ -118,6 +133,7 @@ async def test_activation_routes_require_authentication(
     [
         ("GET", "/api/activation", None),
         ("PUT", "/api/business-profile", {}),
+        ("POST", "/api/activation/lookup-carrier", None),
         ("POST", "/api/activation/confirm-profile", None),
     ],
 )
@@ -177,6 +193,164 @@ async def test_profile_first_api_round_trip(
     assert confirmed.json()["activation"]["profile_confirmed_at"] is not None
     assert resumed.status_code == 200
     assert resumed.json()["stage"] == "payment_required"
+
+
+@pytest.mark.anyio
+async def test_carrier_lookup_returns_normalized_detection_without_confirming_it(
+    async_client,
+    client_database_url: str,
+    rs256_clerk_token_for,
+    complete_profile_payload: dict[str, object],
+) -> None:
+    await _seed_user(
+        client_database_url,
+        clerk_user_id="user_carrier_lookup_success",
+        email="carrier-lookup-success@example.com",
+    )
+    headers = {
+        "Authorization": (
+            f"Bearer {rs256_clerk_token_for('user_carrier_lookup_success')}"
+        )
+    }
+    saved = await async_client.put(
+        "/api/business-profile",
+        json=complete_profile_payload | {"confirmed_carrier": "free"},
+        headers=headers,
+    )
+
+    response = await async_client.post(
+        "/api/activation/lookup-carrier",
+        headers=headers,
+    )
+    snapshot = await async_client.get("/api/activation", headers=headers)
+
+    assert saved.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["normalized_number"] == "+33612345678"
+    assert response.json()["country_code"] == "FR"
+    assert response.json()["carrier_name"] == "Orange"
+    assert response.json()["normalized_carrier"] == "orange"
+    assert response.json()["number_type"] == "mobile"
+    assert response.json()["looked_up_at"] is not None
+    assert snapshot.json()["profile"]["detected_carrier"] == "orange"
+    assert snapshot.json()["profile"]["carrier_lookup_status"] == "succeeded"
+    assert snapshot.json()["profile"]["confirmed_carrier"] == "free"
+
+
+@pytest.mark.anyio
+async def test_lookup_failure_returns_safe_manual_fallback_and_profile_put_still_confirms(
+    async_client,
+    test_app,
+    client_database_url: str,
+    rs256_clerk_token_for,
+    complete_profile_payload: dict[str, object],
+) -> None:
+    from app.routers.activation import get_carrier_lookup_service
+    from app.services.carrier_lookup_service import CarrierLookupUnavailableError
+
+    class FailingLookupService:
+        async def lookup_for_user(self, user_id):
+            raise CarrierLookupUnavailableError("provider credential secret")
+
+    await _seed_user(
+        client_database_url,
+        clerk_user_id="user_carrier_lookup_failure",
+        email="carrier-lookup-failure@example.com",
+    )
+    headers = {
+        "Authorization": (
+            f"Bearer {rs256_clerk_token_for('user_carrier_lookup_failure')}"
+        )
+    }
+    await async_client.put(
+        "/api/business-profile",
+        json=complete_profile_payload | {"confirmed_carrier": None},
+        headers=headers,
+    )
+    test_app.dependency_overrides[get_carrier_lookup_service] = (
+        FailingLookupService
+    )
+    try:
+        failed = await async_client.post(
+            "/api/activation/lookup-carrier",
+            headers=headers,
+        )
+    finally:
+        test_app.dependency_overrides.pop(get_carrier_lookup_service, None)
+
+    manually_confirmed = await async_client.put(
+        "/api/business-profile",
+        json=complete_profile_payload | {"confirmed_carrier": "sfr"},
+        headers=headers,
+    )
+
+    assert failed.status_code == 503
+    assert failed.json() == {
+        "detail": {
+            "code": "carrier_lookup_unavailable",
+            "manual_selection_allowed": True,
+        }
+    }
+    assert "provider" not in failed.text.lower()
+    assert "secret" not in failed.text.lower()
+    assert manually_confirmed.status_code == 200
+    assert manually_confirmed.json()["confirmed_carrier"] == "sfr"
+
+
+@pytest.mark.anyio
+async def test_carrier_lookup_uses_only_authenticated_internal_user_ownership(
+    async_client,
+    test_app,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    from app.routers.activation import get_carrier_lookup_service
+
+    class CapturingLookupService:
+        def __init__(self) -> None:
+            self.user_ids: list[object] = []
+
+        async def lookup_for_user(self, user_id):
+            self.user_ids.append(user_id)
+            return CarrierLookupResult(
+                normalized_number="+33612345678",
+                country_code="FR",
+                carrier_name="Orange",
+                normalized_carrier="orange",
+                number_type="mobile",
+                looked_up_at=datetime.now(UTC),
+            )
+
+    await _seed_user(
+        client_database_url,
+        clerk_user_id="carrier_owner_a",
+        email="carrier-owner-a@example.com",
+    )
+    await _seed_user(
+        client_database_url,
+        clerk_user_id="carrier_owner_b",
+        email="carrier-owner-b@example.com",
+    )
+    expected_user_id = await _load_internal_user_id(
+        client_database_url,
+        "carrier_owner_b",
+    )
+    service = CapturingLookupService()
+    test_app.dependency_overrides[get_carrier_lookup_service] = lambda: service
+    try:
+        response = await async_client.post(
+            "/api/activation/lookup-carrier",
+            headers={
+                "Authorization": (
+                    f"Bearer {rs256_clerk_token_for('carrier_owner_b')}"
+                )
+            },
+        )
+    finally:
+        test_app.dependency_overrides.pop(get_carrier_lookup_service, None)
+
+    assert response.status_code == 200
+    assert service.user_ids == [expected_user_id]
 
 
 @pytest.mark.anyio
