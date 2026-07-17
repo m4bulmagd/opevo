@@ -2,6 +2,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import extract_primary_email
 from app.repositories.agent_config_repository import AgentConfigRepository
+from app.repositories.business_profile_repository import BusinessProfileRepository
+from app.repositories.customer_activation_repository import (
+    CustomerActivationRepository,
+)
 from app.repositories.user_repository import UserRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
 
@@ -11,6 +15,8 @@ class AuthService:
         self.session = session
         self.user_repository = UserRepository(session)
         self.agent_config_repository = AgentConfigRepository(session)
+        self.business_profile_repository = BusinessProfileRepository(session)
+        self.customer_activation_repository = CustomerActivationRepository(session)
         self.webhook_event_repository = WebhookEventRepository(session)
 
     async def sync_clerk_user(
@@ -38,6 +44,8 @@ class AuthService:
                 email=extract_primary_email(user_data),
             )
             await self.agent_config_repository.create_default(user.id)
+            await self.business_profile_repository.get_or_create_for_update(user.id)
+            await self.customer_activation_repository.get_or_create_for_update(user.id)
 
         await self.session.commit()
         return True
