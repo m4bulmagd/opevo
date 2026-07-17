@@ -215,10 +215,16 @@ Do not expose or persist the raw Telnyx object.
 
 - [ ] **Step 4: Implement the Telnyx and deterministic fake adapters**
 
-The Telnyx adapter calls `client.number_lookup.retrieve(phone_number=e164)` in
-`asyncio.to_thread`. Map network, timeout, and rate-limit errors to retryable;
-map authentication and invalid-request errors to terminal. Return only the six
-contract fields.
+Presvo is locked to `telnyx==2.1.6`, which exposes resource classes rather than
+the newer `Telnyx(...).number_lookup` client surface. The adapter must therefore
+call `telnyx.NumberLookup.retrieve(phone_number=e164, api_key=api_key)` in
+`asyncio.to_thread`, preferably through an injected resource for deterministic
+tests. Map `telnyx.error.APIConnectionError`, `TimeoutError`, `RateLimitError`,
+and `ServiceUnavailableError` to retryable; map authentication, permission,
+invalid-request, invalid-parameters, and resource-not-found errors to terminal.
+Do not mutate the module-global Telnyx API key. Return only the six contract
+fields. If the pinned SDK is upgraded later, update this adapter and plan
+together rather than mixing both SDK generations.
 
 ```python
 class FakeCarrierLookupProvider:
