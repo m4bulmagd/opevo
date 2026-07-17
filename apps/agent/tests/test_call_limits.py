@@ -20,8 +20,7 @@ WARNING_MESSAGE = "You have one minute remaining in this call."
 def test_call_limit_messages_use_approved_english_copy() -> None:
     assert CALL_LIMIT_WARNING_MESSAGE == WARNING_MESSAGE
     assert CALL_LIMIT_EXPIRY_MESSAGE == (
-        "The maximum call duration has been reached. "
-        "Thank you for calling. Goodbye."
+        "The maximum call duration has been reached. Thank you for calling. Goodbye."
     )
 
 
@@ -90,7 +89,7 @@ def test_dispatch_metadata_requires_a_positive_allowed_duration() -> None:
 @pytest.mark.parametrize(
     ("field_name", "constant_name", "expected_maximum"),
     [
-        ("agent_name", "AGENT_NAME_MAX_LENGTH", 80),
+        ("agent_name", "AGENT_NAME_MAX_LENGTH", 100),
         ("owner_name", "OWNER_NAME_MAX_LENGTH", 255),
         ("owner_context", "OWNER_CONTEXT_MAX_LENGTH", 4_000),
         ("system_prompt", "SYSTEM_PROMPT_MAX_LENGTH", 8_000),
@@ -117,7 +116,9 @@ def test_agent_dispatch_metadata_rejects_unknown_pipeline_mode() -> None:
 
 
 @pytest.mark.anyio
-async def test_call_limit_warns_at_sixty_seconds_and_preserves_expiry_deadline() -> None:
+async def test_call_limit_warns_at_sixty_seconds_and_preserves_expiry_deadline() -> (
+    None
+):
     clock = AdvancingClock()
     warnings: list[tuple[float, str]] = []
     disconnect_times: list[float] = []
@@ -266,7 +267,9 @@ async def test_delayed_warning_wake_past_deadline_disconnects_without_warning() 
 
 
 @pytest.mark.anyio
-async def test_call_limit_does_not_warn_when_allowance_is_exactly_ninety_seconds() -> None:
+async def test_call_limit_does_not_warn_when_allowance_is_exactly_ninety_seconds() -> (
+    None
+):
     clock = AdvancingClock()
     warnings: list[str] = []
     disconnect_times: list[float] = []
@@ -426,9 +429,7 @@ async def test_cancellation_resistant_warning_never_delays_expiry_or_finalize(
             assert warning_cancelled.is_set()
             assert disconnect_times == [120.0]
             assert timer.done()
-            assert fatal_shutdown_reasons == [
-                "call_limit_child_cleanup_timeout"
-            ]
+            assert fatal_shutdown_reasons == ["call_limit_child_cleanup_timeout"]
             await asyncio.wait_for(
                 runtime.finalize(metadata, duration_seconds=120),
                 timeout=0.1,

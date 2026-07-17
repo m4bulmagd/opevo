@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models.agent_config import AgentConfig
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.services.customer_readiness_policy import ReadinessBlocker
@@ -23,6 +24,10 @@ class AgentConfigTelephonySyncError(Exception):
     pass
 
 
+class AgentConfigContentManagedError(Exception):
+    pass
+
+
 class AgentConfigReadinessError(Exception):
     def __init__(self, blockers: tuple[str, ...]) -> None:
         super().__init__("Agent configuration is not ready to enable")
@@ -30,6 +35,9 @@ class AgentConfigReadinessError(Exception):
 
 
 logger = logging.getLogger(__name__)
+PROFILE_MANAGED_CONTENT_FIELDS = frozenset(
+    {"agent_name", "owner_context", "system_prompt", "knowledge_base"}
+)
 
 
 class AgentConfigService:
@@ -50,8 +58,16 @@ class AgentConfigService:
         return await self.agent_config_repository.get_or_create_default(user_id)
 
     async def update_by_user_id(
-        self, user_id: UUID, updates: dict[str, object]
+        self,
+        user_id: UUID,
+        updates: dict[str, object],
+        *,
+        requested_fields: set[str] | None = None,
     ) -> AgentConfig:
+        if get_settings().activation_flow_enabled and PROFILE_MANAGED_CONTENT_FIELDS & (
+            requested_fields if requested_fields is not None else updates.keys()
+        ):
+            raise AgentConfigContentManagedError
         config = await self.get_by_user_id(user_id)
         if not updates:
             return config
@@ -68,12 +84,12 @@ class AgentConfigService:
                 if bool(requested_enabled):
                     await self._ensure_ready_to_enable(user_id, config)
                 await self.outbox_service.add(
-                    topic=("phone.enable" if bool(requested_enabled) else "phone.disable"),
+                    topic=(
+                        "phone.enable" if bool(requested_enabled) else "phone.disable"
+                    ),
                     aggregate_type="user",
                     aggregate_id=user_id,
-                    idempotency_key=(
-                        f"agent-config:{config.id}:routing:{uuid4().hex}"
-                    ),
+                    idempotency_key=(f"agent-config:{config.id}:routing:{uuid4().hex}"),
                     payload={"user_id": str(user_id)},
                 )
             await self.session.commit()

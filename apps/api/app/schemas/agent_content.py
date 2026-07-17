@@ -3,7 +3,7 @@ from typing import Annotated
 from pydantic import StringConstraints
 
 
-AGENT_NAME_MAX_LENGTH = 80
+AGENT_NAME_MAX_LENGTH = 100
 OWNER_NAME_MAX_LENGTH = 255
 OWNER_CONTEXT_MAX_LENGTH = 4_000
 SYSTEM_PROMPT_MAX_LENGTH = 8_000

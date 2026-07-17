@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_profile import BusinessProfile
 from app.models.phone_number import PhoneNumber
+from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.customer_activation_repository import (
     CustomerActivationRepository,
@@ -15,6 +16,9 @@ from app.services.business_profile_service import (
     BusinessProfileIncompleteError,
     BusinessProfileNotFoundError,
     BusinessProfileService,
+)
+from app.services.receptionist_projection_service import (
+    ReceptionistProjectionTooLargeError,
 )
 from app.services.routing_fingerprint import routing_fingerprint
 
@@ -80,6 +84,88 @@ async def test_save_draft_persists_normalized_profile_without_confirming(
     assert activation is not None
     assert activation.profile_confirmed_revision is None
     assert activation.profile_confirmed_at is None
+
+
+@pytest.mark.anyio
+async def test_save_draft_projects_exact_runtime_fields_in_same_transaction(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    config = await AgentConfigRepository(db_session).create_default(active_user.id)
+    config.agent_name = "Existing receptionist"
+    config.owner_context = "legacy owner context"
+    config.system_prompt = "legacy system prompt"
+    config.knowledge_base = "legacy knowledge"
+    config.pipeline_mode = "sts"
+    config.is_enabled = True
+    await db_session.commit()
+
+    saved = await build_profile_service(db_session).save_draft(
+        active_user.id,
+        complete_profile_draft(),
+    )
+
+    stored_config = await AgentConfigRepository(db_session).get_by_user_id(
+        active_user.id
+    )
+    assert stored_config is not None
+    assert stored_config.agent_name == "Léa"
+    assert stored_config.business_display_name == "Atelier Martin"
+    assert "Owner name: Camille Martin" in stored_config.owner_context
+    assert "Business name: Atelier Martin" in stored_config.owner_context
+    assert stored_config.system_prompt == ""
+    assert "Opening hours:" in stored_config.knowledge_base
+    assert stored_config.profile_projection_revision == saved.content_revision
+    assert stored_config.pipeline_mode == "sts"
+    assert stored_config.is_enabled is True
+
+
+@pytest.mark.anyio
+async def test_projection_failure_rolls_back_profile_and_activation_changes(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    service = build_profile_service(db_session)
+    original = await service.save_draft(active_user.id, complete_profile_draft())
+    activation = await CustomerActivationRepository(
+        db_session
+    ).get_or_create_for_update(active_user.id)
+    activation.verification_status = "succeeded"
+    activation.verified_routing_fingerprint = "verified"
+    await db_session.commit()
+    original_description = original.public_description
+    original_phone = original.existing_phone_e164
+    original_content_revision = original.content_revision
+    original_routing_revision = original.routing_revision
+    oversized_draft = complete_profile_draft().model_copy(
+        update={
+            "public_description": "x" * 4_000,
+            "existing_phone_e164": "+33144556677",
+        }
+    )
+
+    with pytest.raises(ReceptionistProjectionTooLargeError):
+        await service.save_draft(active_user.id, oversized_draft)
+
+    stored_profile = await BusinessProfileRepository(db_session).get_by_user_id(
+        active_user.id
+    )
+    stored_activation = await CustomerActivationRepository(db_session).get_by_user_id(
+        active_user.id
+    )
+    stored_config = await AgentConfigRepository(db_session).get_by_user_id(
+        active_user.id
+    )
+    assert stored_profile is not None
+    assert stored_activation is not None
+    assert stored_config is not None
+    assert stored_profile.public_description == original_description
+    assert stored_profile.existing_phone_e164 == original_phone
+    assert stored_profile.content_revision == original_content_revision
+    assert stored_profile.routing_revision == original_routing_revision
+    assert stored_activation.verification_status == "succeeded"
+    assert stored_activation.verified_routing_fingerprint == "verified"
+    assert stored_config.profile_projection_revision == original_content_revision
 
 
 @pytest.mark.anyio

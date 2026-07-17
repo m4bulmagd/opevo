@@ -5,12 +5,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
+from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.customer_activation_repository import (
     CustomerActivationRepository,
 )
 from app.repositories.user_repository import UserRepository
 from app.schemas.business_profile import BusinessProfileDraft
+from app.services.receptionist_projection_service import (
+    ReceptionistProjectionService,
+)
 
 
 ROUTING_FIELDS = ("existing_phone_e164", "confirmed_carrier")
@@ -43,44 +47,61 @@ class BusinessProfileService:
         self.user_repository = UserRepository(session)
         self.profile_repository = BusinessProfileRepository(session)
         self.activation_repository = CustomerActivationRepository(session)
+        self.agent_config_repository = AgentConfigRepository(session)
+        self.projection_service = ReceptionistProjectionService()
 
     async def save_draft(
         self,
         user_id: UUID,
         draft: BusinessProfileDraft,
     ) -> BusinessProfile:
-        user = await self.user_repository.get_by_id_for_update(user_id)
-        if user is None:
-            raise BusinessProfileNotFoundError
-        profile = await self.profile_repository.get_or_create_for_update(user_id)
-        activation = await self.activation_repository.get_or_create_for_update(user_id)
-        updates = draft.to_storage_dict()
-        replacing_phone = bool(
-            profile.existing_phone_e164 is not None
-            and profile.existing_phone_e164 != updates["existing_phone_e164"]
-        )
-        if replacing_phone:
-            updates |= {
-                "detected_carrier": None,
-                "detected_number_type": None,
-                "carrier_lookup_status": None,
-                "carrier_looked_up_at": None,
-                "confirmed_carrier": None,
+        try:
+            user = await self.user_repository.get_by_id_for_update(user_id)
+            if user is None:
+                raise BusinessProfileNotFoundError
+            profile = await self.profile_repository.get_or_create_for_update(user_id)
+            activation = await self.activation_repository.get_or_create_for_update(
+                user_id
+            )
+            updates = draft.to_storage_dict()
+            replacing_phone = bool(
+                profile.existing_phone_e164 is not None
+                and profile.existing_phone_e164 != updates["existing_phone_e164"]
+            )
+            if replacing_phone:
+                updates |= {
+                    "detected_carrier": None,
+                    "detected_number_type": None,
+                    "carrier_lookup_status": None,
+                    "carrier_looked_up_at": None,
+                    "confirmed_carrier": None,
+                }
+
+            changed = {
+                name
+                for name, value in updates.items()
+                if getattr(profile, name) != value
             }
+            routing_changed = bool(changed & set(ROUTING_FIELDS))
+            for name, value in updates.items():
+                setattr(profile, name, value)
+            if changed:
+                profile.content_revision += 1
+            if routing_changed:
+                profile.routing_revision += 1
+                self._invalidate_routing_state(activation)
 
-        changed = {
-            name for name, value in updates.items() if getattr(profile, name) != value
-        }
-        routing_changed = bool(changed & set(ROUTING_FIELDS))
-        for name, value in updates.items():
-            setattr(profile, name, value)
-        if changed:
-            profile.content_revision += 1
-        if routing_changed:
-            profile.routing_revision += 1
-            self._invalidate_routing_state(activation)
-
-        await self.session.commit()
+            config = (
+                await self.agent_config_repository.get_or_create_default_for_update(
+                    user_id
+                )
+            )
+            self.projection_service.project(profile, config)
+            await self.session.flush()
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
         await self.session.refresh(profile)
         return profile
 

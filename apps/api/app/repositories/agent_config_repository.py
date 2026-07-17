@@ -22,8 +22,16 @@ class AgentConfigRepository:
             return config
         return await self.create_default(user_id)
 
+    async def get_or_create_default_for_update(self, user_id: UUID) -> AgentConfig:
+        config = await self.get_by_user_id_for_update(user_id)
+        if config is not None:
+            return config
+        return await self.create_default(user_id)
+
     async def get_by_user_id(self, user_id: UUID | str) -> AgentConfig | None:
-        result = await self.session.execute(select(AgentConfig).where(AgentConfig.user_id == user_id))
+        result = await self.session.execute(
+            select(AgentConfig).where(AgentConfig.user_id == user_id)
+        )
         return result.scalar_one_or_none()
 
     async def get_by_id(self, agent_config_id: UUID) -> AgentConfig | None:
@@ -47,7 +55,9 @@ class AgentConfigRepository:
         )
         return result.scalar_one_or_none()
 
-    async def update_fields(self, config: AgentConfig, updates: dict[str, object]) -> AgentConfig:
+    async def update_fields(
+        self, config: AgentConfig, updates: dict[str, object]
+    ) -> AgentConfig:
         for field, value in updates.items():
             setattr(config, field, value)
         await self.session.flush()
