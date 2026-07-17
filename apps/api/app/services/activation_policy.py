@@ -93,13 +93,6 @@ class ActivationPolicy:
                 next_action="complete_forwarding_verification",
                 blockers=(),
             )
-        if not facts.forwarding_verified:
-            return ActivationDecision(
-                stage=ActivationStage.FORWARDING_REQUIRED,
-                completed_milestones=completed_milestones,
-                next_action="configure_forwarding",
-                blockers=("forwarding_not_verified",),
-            )
         if facts.go_live_pending:
             return ActivationDecision(
                 stage=ActivationStage.ACTIVATING,

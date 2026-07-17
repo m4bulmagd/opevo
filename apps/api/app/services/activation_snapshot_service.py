@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
+from app.models.subscription import Subscription
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.customer_activation_repository import (
@@ -32,10 +33,41 @@ from app.services.activation_policy import ActivationFacts, ActivationPolicy
 from app.services.customer_readiness_service import (
     activation_readiness_prerequisites,
     build_customer_readiness_snapshot,
-    business_profile_is_complete,
 )
 from app.services.customer_readiness_policy import CustomerReadinessPolicy
-from app.services.routing_fingerprint import routing_fingerprint
+from app.services.subscription_access_policy import SubscriptionAccessPolicy
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def subscription_is_eligible(
+    subscription: Subscription | None,
+    *,
+    evaluated_at: datetime,
+) -> bool:
+    if subscription is None:
+        return False
+    if subscription.plan_tier != CustomerReadinessPolicy.SUPPORTED_PLAN:
+        return False
+    if not SubscriptionAccessPolicy.can_route(
+        subscription.status,
+        subscription.current_period_end,
+    ):
+        return False
+    if (
+        subscription.current_period_start is None
+        or subscription.current_period_end is None
+    ):
+        return False
+    return (
+        _as_utc(subscription.current_period_start)
+        <= evaluated_at
+        < _as_utc(subscription.current_period_end)
+    )
 
 
 class ActivationSnapshotService:
@@ -85,7 +117,7 @@ class ActivationSnapshotService:
         user_id: UUID,
         now: datetime | None = None,
     ) -> ActivationSnapshotResponse:
-        evaluated_at = self._as_utc(now or datetime.now(UTC))
+        evaluated_at = _as_utc(now or datetime.now(UTC))
         user = await self.user_repository.get_by_id(user_id)
         profile = await self.business_profile_repository.get_by_user_id(user_id)
         activation = await self.activation_repository.get_by_user_id(user_id)
@@ -95,7 +127,7 @@ class ActivationSnapshotService:
         phone = await self.phone_number_repository.get_by_user_id(user_id)
         agent_config = await self.agent_config_repository.get_by_user_id(user_id)
 
-        activation_values = activation_readiness_prerequisites(
+        activation_prerequisites = activation_readiness_prerequisites(
             profile=profile,
             activation=activation,
             phone_number=phone,
@@ -110,21 +142,25 @@ class ActivationSnapshotService:
                 provisioning=provisioning,
                 agent_config=agent_config,
                 activation_required=True,
-                business_profile_complete=activation_values[0],
-                profile_projection_current=activation_values[1],
-                forwarding_verified=activation_values[2],
-                go_live_approved=activation_values[3],
+                business_profile_complete=(
+                    activation_prerequisites.business_profile_complete
+                ),
+                profile_projection_current=(
+                    activation_prerequisites.profile_projection_current
+                ),
+                forwarding_verified=activation_prerequisites.forwarding_verified,
+                go_live_approved=activation_prerequisites.go_live_approved,
             ),
             now=evaluated_at,
         )
-        billing_eligible = readiness.can_provision_number
-        current_fingerprint = (
-            routing_fingerprint(profile, phone) if profile is not None else None
+        billing_eligible = subscription_is_eligible(
+            subscription,
+            evaluated_at=evaluated_at,
         )
         facts = ActivationFacts(
             profile_confirmed=bool(
                 profile is not None
-                and business_profile_is_complete(profile)
+                and activation_prerequisites.business_profile_complete
                 and activation is not None
                 and activation.profile_confirmed_at is not None
             ),
@@ -141,19 +177,13 @@ class ActivationSnapshotService:
                 activation,
                 evaluated_at,
             ),
-            forwarding_verified=bool(
-                activation is not None
-                and activation.forwarding_verified_at is not None
-                and activation.verified_routing_fingerprint == current_fingerprint
-            ),
+            forwarding_verified=activation_prerequisites.forwarding_verified,
             go_live_pending=bool(
-                activation is not None
-                and activation.go_live_approved_at is not None
+                activation_prerequisites.go_live_approved
+                and activation is not None
                 and activation.activated_at is None
             ),
-            go_live_approved=bool(
-                activation is not None and activation.go_live_approved_at is not None
-            ),
+            go_live_approved=activation_prerequisites.go_live_approved,
             runtime_ready=readiness.can_route,
             runtime_blockers=tuple(str(blocker) for blocker in readiness.blockers),
         )
@@ -257,16 +287,10 @@ class ActivationSnapshotService:
         ):
             return False
         return (
-            cls._as_utc(activation.verification_window_started_at)
+            _as_utc(activation.verification_window_started_at)
             <= now
-            < cls._as_utc(activation.verification_window_expires_at)
+            < _as_utc(activation.verification_window_expires_at)
         )
-
-    @staticmethod
-    def _as_utc(value: datetime) -> datetime:
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
 
     @staticmethod
     def _require_session(session: AsyncSession | None) -> AsyncSession:

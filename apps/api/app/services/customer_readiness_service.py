@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
@@ -22,7 +23,6 @@ from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
-from app.core.config import get_settings
 from app.services.business_profile_service import REQUIRED_PROFILE_FIELDS
 from app.services.customer_readiness_policy import (
     CustomerReadinessPolicy,
@@ -45,6 +45,15 @@ class CustomerReadinessContext:
     activation: CustomerActivation | None
 
 
+@dataclass(frozen=True, slots=True)
+class ActivationReadinessPrerequisites:
+    business_profile_complete: bool
+    profile_projection_current: bool
+    current_routing_fingerprint: str | None
+    forwarding_verified: bool
+    go_live_approved: bool
+
+
 def business_profile_is_complete(profile: BusinessProfile | None) -> bool:
     if profile is None:
         return False
@@ -64,7 +73,7 @@ def activation_readiness_prerequisites(
     activation: CustomerActivation | None,
     phone_number: PhoneNumber | None,
     agent_config: AgentConfig | None,
-) -> tuple[bool, bool, bool, bool]:
+) -> ActivationReadinessPrerequisites:
     profile_complete = business_profile_is_complete(profile)
     projection_current = bool(
         profile is not None
@@ -74,19 +83,27 @@ def activation_readiness_prerequisites(
     current_fingerprint = (
         routing_fingerprint(profile, phone_number) if profile is not None else None
     )
+    verified_fingerprint = (
+        activation.verified_routing_fingerprint
+        if activation is not None
+        else None
+    )
     forwarding_verified = bool(
         activation is not None
         and activation.forwarding_verified_at is not None
-        and activation.verified_routing_fingerprint == current_fingerprint
+        and verified_fingerprint is not None
+        and current_fingerprint is not None
+        and verified_fingerprint == current_fingerprint
     )
     go_live_approved = bool(
         activation is not None and activation.go_live_approved_at is not None
     )
-    return (
-        profile_complete,
-        projection_current,
-        forwarding_verified,
-        go_live_approved,
+    return ActivationReadinessPrerequisites(
+        business_profile_complete=profile_complete,
+        profile_projection_current=projection_current,
+        current_routing_fingerprint=current_fingerprint,
+        forwarding_verified=forwarding_verified,
+        go_live_approved=go_live_approved,
     )
 
 
@@ -226,7 +243,13 @@ class CustomerReadinessService:
 
         business_profile = None
         activation = None
-        activation_values = (False, False, False, False)
+        activation_prerequisites = ActivationReadinessPrerequisites(
+            business_profile_complete=False,
+            profile_projection_current=False,
+            current_routing_fingerprint=None,
+            forwarding_verified=False,
+            go_live_approved=False,
+        )
         if self.activation_flow_enabled:
             if self.business_profile_repository is None or self.activation_repository is None:
                 raise RuntimeError("activation repositories are required")
@@ -234,7 +257,7 @@ class CustomerReadinessService:
                 user_id
             )
             activation = await self.activation_repository.get_by_user_id(user_id)
-            activation_values = activation_readiness_prerequisites(
+            activation_prerequisites = activation_readiness_prerequisites(
                 profile=business_profile,
                 activation=activation,
                 phone_number=phone_number,
@@ -249,10 +272,14 @@ class CustomerReadinessService:
             provisioning=provisioning,
             agent_config=agent_config,
             activation_required=self.activation_flow_enabled,
-            business_profile_complete=activation_values[0],
-            profile_projection_current=activation_values[1],
-            forwarding_verified=activation_values[2],
-            go_live_approved=activation_values[3],
+            business_profile_complete=(
+                activation_prerequisites.business_profile_complete
+            ),
+            profile_projection_current=(
+                activation_prerequisites.profile_projection_current
+            ),
+            forwarding_verified=activation_prerequisites.forwarding_verified,
+            go_live_approved=activation_prerequisites.go_live_approved,
         )
         result = CustomerReadinessPolicy.evaluate(snapshot, now=now)
         return CustomerReadinessContext(

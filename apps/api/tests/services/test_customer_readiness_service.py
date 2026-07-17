@@ -1,3 +1,4 @@
+from dataclasses import FrozenInstanceError, is_dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -14,7 +15,10 @@ from app.services.customer_readiness_policy import (
     CustomerReadinessStage,
     ReadinessBlocker,
 )
-from app.services.customer_readiness_service import CustomerReadinessService
+from app.services.customer_readiness_service import (
+    CustomerReadinessService,
+    activation_readiness_prerequisites,
+)
 
 
 NOW = datetime(2026, 7, 16, 12, tzinfo=UTC)
@@ -254,3 +258,27 @@ async def test_enabled_activation_flow_loads_prerequisites_once_and_blocks_stale
     for repository in repositories.values():
         if hasattr(repository, "calls"):
             assert repository.calls == [user.id]
+
+
+def test_activation_prerequisites_are_named_immutable_and_reject_null_fingerprints() -> None:
+    activation = CustomerActivation(
+        user_id=uuid4(),
+        forwarding_verified_at=NOW,
+        verified_routing_fingerprint=None,
+    )
+
+    prerequisites = activation_readiness_prerequisites(
+        profile=None,
+        activation=activation,
+        phone_number=None,
+        agent_config=None,
+    )
+
+    assert is_dataclass(prerequisites)
+    assert prerequisites.current_routing_fingerprint is None
+    assert prerequisites.business_profile_complete is False
+    assert prerequisites.profile_projection_current is False
+    assert prerequisites.forwarding_verified is False
+    assert prerequisites.go_live_approved is False
+    with pytest.raises(FrozenInstanceError):
+        prerequisites.forwarding_verified = True
