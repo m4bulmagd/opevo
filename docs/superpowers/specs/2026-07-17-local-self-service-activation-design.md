@@ -243,8 +243,27 @@ projection used by call dispatch and the voice agent.
 
 Saving guided profile content updates that projection through one application
 service: receptionist name maps to the runtime agent name, and approved business
-facts map to owner context and knowledge content. Activation does not expose a
-raw system-prompt editor. Mandatory system behavior remains separate from the
+facts map to owner context and knowledge content. Resumable incomplete drafts are
+projected safely: missing values use stable `Not provided` labels, a missing
+receptionist name preserves the existing/default agent name, and generated
+content never contains the literal string `None`. The projection revision still
+advances with the authoritative profile revision so later readiness checks can
+detect stale runtime content.
+
+Introduce `activation_flow_enabled=false` with this projection slice rather
+than waiting for the readiness slice. While the flag is false, the legacy agent
+configuration PATCH endpoint remains backward compatible. When it is true,
+customer PATCH attempts that include `agent_name`, `owner_context`,
+`system_prompt`, or `knowledge_base` fail with HTTP 409 and the stable code
+`agent_content_managed_by_profile`; non-projected fields keep their existing
+behavior. This only moves the default-off guard earlier and does not enable the
+activation journey.
+
+Normal dispatch uses `AgentConfig.business_display_name` for the spoken business
+identity. The existing user-name fallback is permitted only for legacy rows
+while the flag is false; an enabled activation flow with no projected business
+name fails dispatch configuration closed. Activation does not expose a raw
+system-prompt editor. Mandatory system behavior remains separate from the
 customer projection and cannot be overridden by profile content.
 
 The projection version participates in readiness so a stale or failed projection
