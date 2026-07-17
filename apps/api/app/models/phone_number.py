@@ -9,7 +9,13 @@ from app.models import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class PhoneNumber(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "phone_numbers"
 
-    user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False, index=True)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
     e164: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
     country_code: Mapped[str] = mapped_column(String(2), nullable=False)
     provider: Mapped[str] = mapped_column(String(50), nullable=False, default="telnyx")

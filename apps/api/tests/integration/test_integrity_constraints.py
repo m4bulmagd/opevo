@@ -14,8 +14,11 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.models import Base
+from app.models.business_profile import BusinessProfile
 from app.models.call import Call
 from app.models.call_message import CallMessage
+from app.models.customer_activation import CustomerActivation
+from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
@@ -303,3 +306,31 @@ async def test_nonnegative_checks_reject_negative_values(
     user = await _create_user(postgres_session_factory, suffix="nonnegative")
 
     assert await _commit_one(postgres_session_factory, instance_factory(user.id)) is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "instance_factory",
+    [
+        lambda user_id: PhoneNumber(
+            user_id=user_id,
+            e164=f"+33{uuid4().int % 10**9:09d}",
+            country_code="FR",
+        ),
+        lambda user_id: BusinessProfile(user_id=user_id),
+        lambda user_id: CustomerActivation(user_id=user_id),
+    ],
+    ids=["phone_number", "business_profile", "customer_activation"],
+)
+async def test_activation_owner_race_commits_exactly_one_row(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+    instance_factory,
+) -> None:
+    user = await _create_user(postgres_session_factory, suffix="activation_owner")
+
+    results = await asyncio.gather(
+        _commit_one(postgres_session_factory, instance_factory(user.id)),
+        _commit_one(postgres_session_factory, instance_factory(user.id)),
+    )
+
+    assert sorted(results) == [False, True]

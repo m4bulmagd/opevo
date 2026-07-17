@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, Uuid
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -11,6 +11,8 @@ class AgentConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False, unique=True, index=True)
     agent_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Assistant")
+    business_display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    profile_projection_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     owner_context: Mapped[str | None] = mapped_column(Text, nullable=True)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
     knowledge_base: Mapped[str] = mapped_column(Text, nullable=False, default="")
