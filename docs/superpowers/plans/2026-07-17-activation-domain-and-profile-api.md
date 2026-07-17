@@ -559,7 +559,10 @@ git commit -m "feat: validate resumable business profiles"
 **Files:**
 - Create: `apps/api/app/services/receptionist_projection_service.py`
 - Create: `apps/api/tests/activation/test_receptionist_projection_service.py`
+- Modify: `apps/api/app/core/config.py`
+- Modify: `apps/api/app/routers/agent.py`
 - Modify: `apps/api/app/services/business_profile_service.py`
+- Modify: `apps/api/app/services/agent_config_service.py`
 - Modify: `apps/api/app/repositories/agent_config_repository.py`
 - Modify: `apps/api/app/schemas/agent_content.py`
 - Modify: `apps/api/app/workers/jobs/outbox_topics.py`
@@ -591,7 +594,9 @@ def test_projection_uses_guided_labels_and_no_system_prompt() -> None:
 Add tests that output remains within `OWNER_CONTEXT_MAX_LENGTH` and
 `KNOWLEDGE_BASE_MAX_LENGTH`, that customer text is preserved as data, and that
 the projector raises `ReceptionistProjectionTooLargeError` instead of truncating
-silently.
+silently. Add an incomplete-draft case proving missing values render as stable
+`Not provided` data, a missing receptionist name preserves the existing/default
+agent name, and no projection field contains the literal string `None`.
 
 - [ ] **Step 2: Run the focused test and observe the missing service**
 
@@ -610,29 +615,36 @@ Expected: FAIL with a missing projection service.
 @dataclass(frozen=True, slots=True)
 class ReceptionistProjection:
     agent_name: str
-    business_display_name: str
+    business_display_name: str | None
     owner_context: str
     system_prompt: str
     knowledge_base: str
     profile_projection_revision: int
 
 
-def build_receptionist_projection(profile: BusinessProfile) -> ReceptionistProjection:
+def projection_value(value: str | None) -> str:
+    return value if value is not None else "Not provided"
+
+
+def build_receptionist_projection(
+    profile: BusinessProfile,
+    config: AgentConfig,
+) -> ReceptionistProjection:
     owner_context = "\n".join(
         (
-            f"Owner name: {profile.owner_name}",
-            f"Business name: {profile.business_name}",
-            f"Business type: {profile.business_type}",
-            f"Public description: {profile.public_description}",
-            f"Timezone: {profile.timezone}",
+            f"Owner name: {projection_value(profile.owner_name)}",
+            f"Business name: {projection_value(profile.business_name)}",
+            f"Business type: {projection_value(profile.business_type)}",
+            f"Public description: {projection_value(profile.public_description)}",
+            f"Timezone: {projection_value(profile.timezone)}",
         )
     )
     knowledge = render_profile_knowledge(profile)
     if len(owner_context) > OWNER_CONTEXT_MAX_LENGTH or len(knowledge) > KNOWLEDGE_BASE_MAX_LENGTH:
         raise ReceptionistProjectionTooLargeError
     return ReceptionistProjection(
-        agent_name=str(profile.receptionist_name),
-        business_display_name=str(profile.business_name),
+        agent_name=profile.receptionist_name or config.agent_name,
+        business_display_name=profile.business_name,
         owner_context=owner_context,
         system_prompt="",
         knowledge_base=knowledge,
@@ -642,7 +654,10 @@ def build_receptionist_projection(profile: BusinessProfile) -> ReceptionistProje
 
 `render_profile_knowledge` must emit stable labeled sections for opening hours,
 FAQs, special instructions, and escalation notes. It must not interpolate any
-mandatory policy language.
+mandatory policy language. Replace missing draft values with the stable data
+label `Not provided`; never stringify Python `None`. Implement the public
+`ReceptionistProjectionService.project(profile, config) -> AgentConfig`
+interface from the task contract, using the deterministic builder internally.
 
 Align the existing API and agent `AGENT_NAME_MAX_LENGTH` constants from 80 to
 the approved 100-character receptionist-name bound. Update the agent boundary
@@ -654,16 +669,24 @@ an otherwise valid profile.
 After updating the profile and before committing, lock or create `AgentConfig`,
 build the projection, and write exactly the six projection fields. A projection
 failure rolls back the profile save. Keep the existing agent PATCH endpoint for
-backward compatibility while the rollout flag is false; when activation is
-enabled, reject customer writes to projected content with a stable conflict
-code.
+backward compatibility while the rollout flag is false.
+
+Move `activation_flow_enabled: bool = False` into `Settings` in this task so the
+guard exists before it is consumed. When enabled, PATCH requests containing any
+of `agent_name`, `owner_context`, `system_prompt`, or `knowledge_base` must fail
+with HTTP 409 and detail code `agent_content_managed_by_profile`; PATCHes that
+only contain non-projected fields retain their existing behavior. Add a default-
+false settings assertion plus endpoint tests for both flag states. This moves a
+default-off prerequisite forward from Task 4 and does not enable activation.
 
 When building normal LiveKit dispatch metadata, use
 `agent_config.business_display_name` as the existing `owner_name`/greeting
-value, with the current `user.full_name` fallback only for legacy rows while
-the rollout flag is false. Add a dispatch payload test proving the greeting
-uses the business name while the owner's name remains bounded inside owner
-context.
+value. Use the current `user.full_name` fallback only for legacy rows while the
+rollout flag is false; when the flag is true, a missing projected business name
+must fail dispatch configuration closed. Add dispatch payload tests proving the
+greeting uses the business name, the owner's name remains bounded inside owner
+context, the legacy fallback remains default-off compatible, and enabled mode
+fails closed without a business name.
 
 - [ ] **Step 5: Run profile, agent-config, and readiness regression tests**
 
@@ -685,8 +708,10 @@ Expected: PASS.
 - [ ] **Step 6: Commit the runtime projection**
 
 ```bash
-git add apps/api/app/services/receptionist_projection_service.py \
+git add apps/api/app/core/config.py apps/api/app/routers/agent.py \
+  apps/api/app/services/receptionist_projection_service.py \
   apps/api/app/services/business_profile_service.py \
+  apps/api/app/services/agent_config_service.py \
   apps/api/app/repositories/agent_config_repository.py \
   apps/api/app/schemas/agent_content.py \
   apps/api/app/workers/jobs/outbox_topics.py \
@@ -782,8 +807,8 @@ Do not infer stages from nullable frontend fields.
 
 - [ ] **Step 4: Extend central readiness behind the rollout flag**
 
-Add `activation_flow_enabled: bool = False` to `Settings`. Add these blocker
-codes:
+Use `activation_flow_enabled: bool = False`, introduced in Task 3, to gate the
+readiness extension. Add these blocker codes:
 
 ```python
 BUSINESS_PROFILE_INCOMPLETE = "business_profile_incomplete"
