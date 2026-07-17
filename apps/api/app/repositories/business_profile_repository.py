@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_profile import BusinessProfile
+from app.models.user import User
 
 
 class BusinessProfileRepository:
@@ -17,6 +18,9 @@ class BusinessProfileRepository:
         return result.scalar_one_or_none()
 
     async def get_or_create_for_update(self, user_id: UUID) -> BusinessProfile:
+        await self.session.scalar(
+            select(User.id).where(User.id == user_id).with_for_update()
+        )
         result = await self.session.execute(
             select(BusinessProfile)
             .where(BusinessProfile.user_id == user_id)

@@ -1,6 +1,8 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activation_event import ActivationEvent
@@ -19,22 +21,32 @@ class ActivationEventRepository:
         idempotency_key: str,
         metadata: dict,
     ) -> ActivationEvent:
-        result = await self.session.execute(
-            select(ActivationEvent).where(
+        event_id = uuid4()
+        values = {
+            "id": event_id,
+            "user_id": user_id,
+            "activation_id": activation_id,
+            "event_type": event_type,
+            "idempotency_key": idempotency_key,
+            "event_metadata": metadata,
+        }
+        dialect_name = self.session.bind.dialect.name
+        insert = sqlite_insert if dialect_name == "sqlite" else postgresql_insert
+        statement = (
+            insert(ActivationEvent)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["idempotency_key"])
+            .returning(ActivationEvent.id)
+        )
+        inserted_id = await self.session.scalar(statement)
+        durable_id = inserted_id or await self.session.scalar(
+            select(ActivationEvent.id).where(
                 ActivationEvent.idempotency_key == idempotency_key
             )
         )
-        event = result.scalar_one_or_none()
-        if event is not None:
-            return event
-
-        event = ActivationEvent(
-            user_id=user_id,
-            activation_id=activation_id,
-            event_type=event_type,
-            idempotency_key=idempotency_key,
-            event_metadata=metadata,
-        )
-        self.session.add(event)
-        await self.session.flush()
+        if durable_id is None:
+            raise RuntimeError("Activation event insert did not produce a durable row")
+        event = await self.session.get(ActivationEvent, durable_id)
+        if event is None:
+            raise RuntimeError("Activation event row could not be loaded")
         return event

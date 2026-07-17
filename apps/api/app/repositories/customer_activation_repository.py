@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.customer_activation import CustomerActivation
+from app.models.user import User
 
 
 class CustomerActivationRepository:
@@ -17,6 +18,9 @@ class CustomerActivationRepository:
         return result.scalar_one_or_none()
 
     async def get_or_create_for_update(self, user_id: UUID) -> CustomerActivation:
+        await self.session.scalar(
+            select(User.id).where(User.id == user_id).with_for_update()
+        )
         result = await self.session.execute(
             select(CustomerActivation)
             .where(CustomerActivation.user_id == user_id)
