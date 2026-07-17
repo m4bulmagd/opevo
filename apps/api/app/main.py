@@ -19,6 +19,7 @@ from app.core.observability import (
 from app.core.rate_limit import limiter
 from app.core.redis import RedisEventBus, create_arq_pool
 from app.core.runtime_validation import validate_api_runtime
+from app.routers.activation import router as activation_router
 from app.routers.agent import router as agent_router
 from app.routers.billing import router as billing_router
 from app.routers.calls import router as calls_router
@@ -190,6 +191,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_headers=["*"],
         )
 
+    application.include_router(activation_router)
     application.include_router(agent_router)
     application.include_router(billing_router)
     application.include_router(calls_router)
