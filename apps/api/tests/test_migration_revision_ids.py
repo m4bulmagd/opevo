@@ -18,3 +18,4 @@ def test_alembic_revision_ids_fit_version_table() -> None:
     assert len(revision_ids) == len(set(revision_ids))
     assert all(len(revision_id) <= 32 for revision_id in revision_ids)
     assert "0007_production_integrity" in revision_ids
+    assert "0012_customer_activation" in revision_ids

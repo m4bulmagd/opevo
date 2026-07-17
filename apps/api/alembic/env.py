@@ -9,9 +9,12 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.models import Base
+from app.models.activation_event import ActivationEvent
 from app.models.agent_config import AgentConfig
+from app.models.business_profile import BusinessProfile
 from app.models.call import Call
 from app.models.call_message import CallMessage
+from app.models.customer_activation import CustomerActivation
 from app.models.notification import Notification
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
