@@ -38,6 +38,11 @@ def ready_snapshot(**overrides: object) -> CustomerReadinessSnapshot:
         "owner_context": "Sam runs a plumbing business in Lyon.",
         "system_prompt": "Keep answers concise.",
         "knowledge_base": "Open weekdays from nine to five.",
+        "activation_required": False,
+        "business_profile_complete": False,
+        "profile_projection_current": False,
+        "forwarding_verified": False,
+        "go_live_approved": False,
     }
     values.update(overrides)
     return CustomerReadinessSnapshot(**values)  # type: ignore[arg-type]
@@ -63,7 +68,63 @@ def test_live_snapshot_can_activate_route_and_dispatch() -> None:
     assert result.blockers == ()
     assert result.warnings == ()
     assert result.evaluated_at == NOW
-    assert result.policy_version == "runtime-v1"
+    assert result.policy_version == "runtime-v2"
+
+
+def test_flag_off_ignores_activation_prerequisites() -> None:
+    result = evaluate(
+        activation_required=False,
+        business_profile_complete=False,
+        profile_projection_current=False,
+        forwarding_verified=False,
+        go_live_approved=False,
+    )
+
+    assert result.can_activate is True
+    assert result.should_enable_phone is True
+    assert result.can_route is True
+    assert not {
+        ReadinessBlocker.BUSINESS_PROFILE_INCOMPLETE,
+        ReadinessBlocker.PROFILE_PROJECTION_STALE,
+        ReadinessBlocker.FORWARDING_NOT_VERIFIED,
+        ReadinessBlocker.GO_LIVE_NOT_APPROVED,
+    } & set(result.blockers)
+
+
+@pytest.mark.parametrize(
+    ("field", "blocker"),
+    [
+        (
+            "business_profile_complete",
+            ReadinessBlocker.BUSINESS_PROFILE_INCOMPLETE,
+        ),
+        (
+            "profile_projection_current",
+            ReadinessBlocker.PROFILE_PROJECTION_STALE,
+        ),
+        ("forwarding_verified", ReadinessBlocker.FORWARDING_NOT_VERIFIED),
+        ("go_live_approved", ReadinessBlocker.GO_LIVE_NOT_APPROVED),
+    ],
+)
+def test_flag_on_activation_prerequisite_blocks_enable_and_routing(
+    field: str,
+    blocker: ReadinessBlocker,
+) -> None:
+    prerequisites = {
+        "activation_required": True,
+        "business_profile_complete": True,
+        "profile_projection_current": True,
+        "forwarding_verified": True,
+        "go_live_approved": True,
+    }
+    prerequisites[field] = False
+
+    result = evaluate(**prerequisites)
+
+    assert blocker in result.blockers
+    assert result.can_activate is False
+    assert result.should_enable_phone is False
+    assert result.can_route is False
 
 
 def test_period_end_is_exclusive() -> None:

@@ -26,6 +26,10 @@ class ReadinessBlocker(StrEnum):
     AGENT_DISABLED = "agent_disabled"
     PHONE_INACTIVE = "phone_inactive"
     PHONE_PROJECTION_INACTIVE = "phone_projection_inactive"
+    BUSINESS_PROFILE_INCOMPLETE = "business_profile_incomplete"
+    PROFILE_PROJECTION_STALE = "profile_projection_stale"
+    FORWARDING_NOT_VERIFIED = "forwarding_not_verified"
+    GO_LIVE_NOT_APPROVED = "go_live_not_approved"
 
 
 class CustomerReadinessStage(StrEnum):
@@ -58,6 +62,11 @@ class CustomerReadinessSnapshot:
     owner_context: str | None
     system_prompt: str | None
     knowledge_base: str | None
+    activation_required: bool
+    business_profile_complete: bool
+    profile_projection_current: bool
+    forwarding_verified: bool
+    go_live_approved: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +86,7 @@ class CustomerReadinessResult:
 
 
 class CustomerReadinessPolicy:
-    POLICY_VERSION = "runtime-v1"
+    POLICY_VERSION = "runtime-v2"
     ELIGIBLE_SUBSCRIPTION_STATUSES = frozenset({"active", "trialing"})
     SUPPORTED_PLAN = "starter"
 
@@ -99,6 +108,10 @@ class CustomerReadinessPolicy:
             ReadinessBlocker.AGENT_CONFIG_MISSING,
             ReadinessBlocker.AGENT_SETUP_INCOMPLETE,
             ReadinessBlocker.AGENT_CONTENT_INVALID,
+            ReadinessBlocker.BUSINESS_PROFILE_INCOMPLETE,
+            ReadinessBlocker.PROFILE_PROJECTION_STALE,
+            ReadinessBlocker.FORWARDING_NOT_VERIFIED,
+            ReadinessBlocker.GO_LIVE_NOT_APPROVED,
         }
     )
     _RECEPTIONIST_BLOCKERS = frozenset(
@@ -137,6 +150,7 @@ class CustomerReadinessPolicy:
                 found.add(ReadinessBlocker.PHONE_PROJECTION_INACTIVE)
 
         cls._evaluate_agent(snapshot, found)
+        cls._evaluate_activation(snapshot, found)
 
         blockers = tuple(blocker for blocker in ReadinessBlocker if blocker in found)
         can_provision_number = not bool(found & cls._ACCESS_BLOCKERS)
@@ -221,6 +235,22 @@ class CustomerReadinessPolicy:
             found.add(ReadinessBlocker.AGENT_CONTENT_INVALID)
         if not snapshot.agent_enabled:
             found.add(ReadinessBlocker.AGENT_DISABLED)
+
+    @staticmethod
+    def _evaluate_activation(
+        snapshot: CustomerReadinessSnapshot,
+        found: set[ReadinessBlocker],
+    ) -> None:
+        if not snapshot.activation_required:
+            return
+        if not snapshot.business_profile_complete:
+            found.add(ReadinessBlocker.BUSINESS_PROFILE_INCOMPLETE)
+        if not snapshot.profile_projection_current:
+            found.add(ReadinessBlocker.PROFILE_PROJECTION_STALE)
+        if not snapshot.forwarding_verified:
+            found.add(ReadinessBlocker.FORWARDING_NOT_VERIFIED)
+        if not snapshot.go_live_approved:
+            found.add(ReadinessBlocker.GO_LIVE_NOT_APPROVED)
 
     @classmethod
     def _derive_stage(
