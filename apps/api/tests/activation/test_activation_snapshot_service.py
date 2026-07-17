@@ -11,7 +11,10 @@ from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.services.activation_policy import ActivationStage
-from app.services.activation_snapshot_service import ActivationSnapshotService
+from app.services.activation_snapshot_service import (
+    ActivationSnapshotService,
+    ActivationSnapshotUnavailableError,
+)
 from app.services.routing_fingerprint import routing_fingerprint
 
 
@@ -225,6 +228,21 @@ async def test_get_returns_safe_profile_required_snapshot_for_missing_domain_row
     assert snapshot.billing.eligible is False
     assert snapshot.number.assigned_e164 is None
     assert snapshot.blockers == ["profile_not_confirmed"]
+
+
+@pytest.mark.anyio
+async def test_get_rejects_missing_authoritative_user_before_loading_aggregates() -> None:
+    user_id = uuid4()
+    empty_records = (None, None, None, None, None, None, None)
+    service, repositories = build_service(records=empty_records, balance=0)
+
+    with pytest.raises(ActivationSnapshotUnavailableError):
+        await service.get(user_id, now=NOW)
+
+    assert repositories["user_repository"].calls == [user_id]
+    for name, repository in repositories.items():
+        if name != "user_repository":
+            assert repository.calls == []
 
 
 @pytest.mark.anyio
