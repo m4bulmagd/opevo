@@ -125,11 +125,12 @@ async def test_projection_failure_rolls_back_profile_and_activation_changes(
     db_session: AsyncSession,
     active_user,
 ) -> None:
+    user_id = active_user.id
     service = build_profile_service(db_session)
-    original = await service.save_draft(active_user.id, complete_profile_draft())
+    original = await service.save_draft(user_id, complete_profile_draft())
     activation = await CustomerActivationRepository(
         db_session
-    ).get_or_create_for_update(active_user.id)
+    ).get_or_create_for_update(user_id)
     activation.verification_status = "succeeded"
     activation.verified_routing_fingerprint = "verified"
     await db_session.commit()
@@ -145,17 +146,13 @@ async def test_projection_failure_rolls_back_profile_and_activation_changes(
     )
 
     with pytest.raises(ReceptionistProjectionTooLargeError):
-        await service.save_draft(active_user.id, oversized_draft)
+        await service.save_draft(user_id, oversized_draft)
 
-    stored_profile = await BusinessProfileRepository(db_session).get_by_user_id(
-        active_user.id
-    )
+    stored_profile = await BusinessProfileRepository(db_session).get_by_user_id(user_id)
     stored_activation = await CustomerActivationRepository(db_session).get_by_user_id(
-        active_user.id
+        user_id
     )
-    stored_config = await AgentConfigRepository(db_session).get_by_user_id(
-        active_user.id
-    )
+    stored_config = await AgentConfigRepository(db_session).get_by_user_id(user_id)
     assert stored_profile is not None
     assert stored_activation is not None
     assert stored_config is not None

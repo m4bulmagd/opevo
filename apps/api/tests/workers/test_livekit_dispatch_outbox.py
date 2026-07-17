@@ -221,6 +221,7 @@ async def test_dispatch_greeting_uses_projected_business_name_and_bounds_owner_c
         owner_name="Morgan Rivera",
         business_display_name="Atelier Nord",
     )
+    call_id = call.id
     config = await db_session.scalar(select(AgentConfig))
     assert config is not None
     config.owner_context = "Owner name: Morgan Rivera\nBusiness name: Atelier Nord"
@@ -243,7 +244,10 @@ async def test_dispatch_greeting_uses_projected_business_name_and_bounds_owner_c
         "Owner name: Morgan Rivera\nBusiness name: Atelier Nord"
     )
     assert "Morgan Rivera" not in metadata["owner_name"]
-    assert call.livekit_dispatch_id == "dispatch-1"
+    db_session.expire_all()
+    stored_call = await db_session.get(Call, call_id)
+    assert stored_call is not None
+    assert stored_call.livekit_dispatch_id == "dispatch-1"
 
 
 @pytest.mark.anyio
