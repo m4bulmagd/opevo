@@ -181,6 +181,31 @@ async def test_get_loads_each_authoritative_row_once_and_returns_active_snapshot
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("user_status", "balance", "runtime_blocker"),
+    [
+        ("disabled", 30, "user_inactive"),
+        ("active", 0, "minutes_exhausted"),
+    ],
+)
+async def test_runtime_failures_do_not_change_paid_subscription_eligibility(
+    user_status: str,
+    balance: int,
+    runtime_blocker: str,
+) -> None:
+    records = build_records()
+    records[0].status = user_status
+    service, _repositories = build_service(records=records, balance=balance)
+
+    snapshot = await service.get(records[0].id, now=NOW)
+
+    assert snapshot.billing.eligible is True
+    assert snapshot.stage is ActivationStage.RUNTIME_PAUSED
+    assert runtime_blocker in snapshot.blockers
+    assert runtime_blocker in snapshot.runtime_readiness.blockers
+
+
+@pytest.mark.anyio
 async def test_get_returns_safe_profile_required_snapshot_for_missing_domain_rows() -> None:
     user = User(
         id=uuid4(),
