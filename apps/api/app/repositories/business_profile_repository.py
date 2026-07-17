@@ -17,6 +17,18 @@ class BusinessProfileRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_user_id_for_update(
+        self,
+        user_id: UUID,
+    ) -> BusinessProfile | None:
+        result = await self.session.execute(
+            select(BusinessProfile)
+            .where(BusinessProfile.user_id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
     async def get_or_create_for_update(self, user_id: UUID) -> BusinessProfile:
         await self.session.scalar(
             select(User.id).where(User.id == user_id).with_for_update()

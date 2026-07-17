@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.core.database import get_session
-from app.schemas.activation import ActivationSnapshotResponse
+from app.schemas.activation import ActivationSnapshotResponse, CarrierLookupResponse
 from app.schemas.business_profile import BusinessProfileDraft, BusinessProfileResponse
 from app.services.activation_snapshot_service import (
     ActivationSnapshotService,
@@ -15,6 +15,10 @@ from app.services.business_profile_service import (
     BusinessProfileIncompleteError,
     BusinessProfileNotFoundError,
     BusinessProfileService,
+)
+from app.services.carrier_lookup_service import (
+    CarrierLookupService,
+    CarrierLookupUnavailableError,
 )
 from app.services.receptionist_projection_service import (
     ReceptionistProjectionTooLargeError,
@@ -34,6 +38,12 @@ def get_business_profile_service(
     session: AsyncSession = Depends(get_session),
 ) -> BusinessProfileService:
     return BusinessProfileService(session)
+
+
+def get_carrier_lookup_service(
+    session: AsyncSession = Depends(get_session),
+) -> CarrierLookupService:
+    return CarrierLookupService(session)
 
 
 @router.get("/api/activation", response_model=ActivationSnapshotResponse)
@@ -60,6 +70,27 @@ async def put_business_profile(
             detail={"code": "profile_projection_too_large"},
         ) from None
     return BusinessProfileResponse.model_validate(profile)
+
+
+@router.post(
+    "/api/activation/lookup-carrier",
+    response_model=CarrierLookupResponse,
+)
+async def lookup_carrier(
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    service: CarrierLookupService = Depends(get_carrier_lookup_service),
+) -> CarrierLookupResponse:
+    try:
+        result = await service.lookup_for_user(identity.internal_user_id)
+    except CarrierLookupUnavailableError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "carrier_lookup_unavailable",
+                "manual_selection_allowed": True,
+            },
+        ) from None
+    return CarrierLookupResponse.model_validate(result)
 
 
 @router.post(

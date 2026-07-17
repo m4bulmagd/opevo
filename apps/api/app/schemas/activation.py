@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.providers.carrier_lookup.base import CarrierCode
 from app.schemas.business_profile import (
     BusinessProfileConstraints,
     BusinessProfileResponse,
@@ -41,6 +42,17 @@ class ActivationNumberResponse(BaseModel):
     provider_ready: bool
     provisioning_status: str | None
     can_retry: bool
+
+
+class CarrierLookupResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    normalized_number: str
+    country_code: str
+    carrier_name: str | None
+    normalized_carrier: CarrierCode
+    number_type: str | None
+    looked_up_at: datetime
 
 
 class RuntimeReadinessResponse(BaseModel):
