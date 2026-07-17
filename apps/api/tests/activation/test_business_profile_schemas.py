@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from datetime import UTC, time
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import ValidationError
@@ -197,6 +198,18 @@ def test_business_hours_reject_offset_aware_times() -> None:
     hours["monday"] = {
         "closed": False,
         "intervals": [{"start": time(9, tzinfo=UTC), "end": time(18, tzinfo=UTC)}],
+    }
+
+    with pytest.raises(ValidationError, match="timezone-naive"):
+        BusinessHours.model_validate(hours)
+
+
+def test_business_hours_reject_named_timezone_times_without_date_offset() -> None:
+    hours = complete_business_hours()
+    paris = ZoneInfo("Europe/Paris")
+    hours["monday"] = {
+        "closed": False,
+        "intervals": [{"start": time(9, tzinfo=paris), "end": time(18, tzinfo=paris)}],
     }
 
     with pytest.raises(ValidationError, match="timezone-naive"):

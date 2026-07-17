@@ -66,7 +66,7 @@ class OpeningInterval(BaseModel):
     @field_validator("start", "end")
     @classmethod
     def require_local_minute_precision(cls, value: time) -> time:
-        if value.utcoffset() is not None:
+        if value.tzinfo is not None:
             raise ValueError("Opening interval times must be timezone-naive")
         if value.second != 0 or value.microsecond != 0:
             raise ValueError("Opening interval times must use whole minutes")
