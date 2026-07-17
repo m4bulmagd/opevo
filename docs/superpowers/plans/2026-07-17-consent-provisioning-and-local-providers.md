@@ -216,10 +216,11 @@ Do not expose or persist the raw Telnyx object.
 - [ ] **Step 4: Implement the Telnyx and deterministic fake adapters**
 
 Presvo is locked to `telnyx==2.1.6`, which exposes resource classes rather than
-the newer `Telnyx(...).number_lookup` client surface. The adapter must therefore
-call `telnyx.NumberLookup.retrieve(phone_number=e164, api_key=api_key)` in
-`asyncio.to_thread`, preferably through an injected resource for deterministic
-tests. Map `telnyx.error.APIConnectionError`, `TimeoutError`, `RateLimitError`,
+the newer `Telnyx(...).number_lookup` client surface. Its `APIResource.retrieve`
+signature is `retrieve(id, api_key=None, **params)`, so the adapter must call
+`telnyx.NumberLookup.retrieve(e164, api_key=api_key)` in `asyncio.to_thread`,
+preferably through an injected resource for deterministic tests. Map
+`telnyx.error.APIConnectionError`, `TimeoutError`, `RateLimitError`,
 and `ServiceUnavailableError` to retryable; map authentication, permission,
 invalid-request, invalid-parameters, and resource-not-found errors to terminal.
 Do not mutate the module-global Telnyx API key. Return only the six contract
