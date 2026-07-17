@@ -38,7 +38,7 @@ class FakeOnboardingService:
             blockers=["agent_disabled"],
             warnings=[],
             evaluated_at=datetime(2026, 7, 16, 12, 0, tzinfo=UTC),
-            policy_version="runtime-v1",
+            policy_version="runtime-v2",
         )
 
     async def retry_provisioning(self, user_id, *, arq_pool):
@@ -78,7 +78,7 @@ async def test_get_onboarding_status_returns_expected_fields() -> None:
     assert response.blockers == ["agent_disabled"]
     assert response.warnings == []
     assert response.evaluated_at == datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
-    assert response.policy_version == "runtime-v1"
+    assert response.policy_version == "runtime-v2"
 
 
 @pytest.mark.anyio
