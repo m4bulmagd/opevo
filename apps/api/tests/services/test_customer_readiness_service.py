@@ -275,7 +275,7 @@ def test_activation_prerequisites_are_named_immutable_and_reject_null_fingerprin
     )
 
     assert is_dataclass(prerequisites)
-    assert prerequisites.current_routing_fingerprint is None
+    assert not hasattr(prerequisites, "current_routing_fingerprint")
     assert prerequisites.business_profile_complete is False
     assert prerequisites.profile_projection_current is False
     assert prerequisites.forwarding_verified is False

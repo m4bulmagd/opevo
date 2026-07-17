@@ -49,7 +49,6 @@ class CustomerReadinessContext:
 class ActivationReadinessPrerequisites:
     business_profile_complete: bool
     profile_projection_current: bool
-    current_routing_fingerprint: str | None
     forwarding_verified: bool
     go_live_approved: bool
 
@@ -101,7 +100,6 @@ def activation_readiness_prerequisites(
     return ActivationReadinessPrerequisites(
         business_profile_complete=profile_complete,
         profile_projection_current=projection_current,
-        current_routing_fingerprint=current_fingerprint,
         forwarding_verified=forwarding_verified,
         go_live_approved=go_live_approved,
     )
@@ -246,7 +244,6 @@ class CustomerReadinessService:
         activation_prerequisites = ActivationReadinessPrerequisites(
             business_profile_complete=False,
             profile_projection_current=False,
-            current_routing_fingerprint=None,
             forwarding_verified=False,
             go_live_approved=False,
         )

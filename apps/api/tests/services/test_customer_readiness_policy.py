@@ -59,6 +59,7 @@ def test_live_snapshot_can_activate_route_and_dispatch() -> None:
     result = evaluate()
 
     assert result.stage is CustomerReadinessStage.LIVE
+    assert result.subscription_eligible is True
     assert result.can_provision_number is True
     assert result.can_activate is True
     assert result.should_enable_phone is True
@@ -69,6 +70,25 @@ def test_live_snapshot_can_activate_route_and_dispatch() -> None:
     assert result.warnings == ()
     assert result.evaluated_at == NOW
     assert result.policy_version == "runtime-v2"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "runtime_blocker"),
+    [
+        ({"user_status": "disabled"}, ReadinessBlocker.USER_INACTIVE),
+        ({"balance": 0}, ReadinessBlocker.MINUTES_EXHAUSTED),
+    ],
+)
+def test_runtime_access_blockers_do_not_change_subscription_eligibility(
+    overrides: dict[str, object],
+    runtime_blocker: ReadinessBlocker,
+) -> None:
+    result = evaluate(**overrides)
+
+    assert result.subscription_eligible is True
+    assert runtime_blocker in result.blockers
+    assert result.can_provision_number is False
+    assert result.can_route is False
 
 
 def test_flag_off_ignores_activation_prerequisites() -> None:
