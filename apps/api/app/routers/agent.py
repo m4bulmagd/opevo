@@ -17,6 +17,7 @@ from app.schemas.agent_runtime import (
 from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionResponse
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.services.agent_config_service import (
+    AgentConfigContentManagedError,
     AgentConfigNotFoundError,
     AgentConfigPhoneNumberNotFoundError,
     AgentConfigReadinessError,
@@ -135,7 +136,13 @@ async def patch_agent_config(
         config = await service.update_by_user_id(
             identity.internal_user_id,
             payload.model_dump(exclude_none=True),
+            requested_fields=payload.model_fields_set,
         )
+    except AgentConfigContentManagedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "agent_content_managed_by_profile"},
+        ) from None
     except AgentConfigNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -238,9 +245,7 @@ async def complete_call(
                 topic="summary.generate",
                 aggregate_type="call-summary",
                 aggregate_id=call_id,
-                idempotency_key=(
-                    f"summary.generate:{call_id}:v{transcript_version}"
-                ),
+                idempotency_key=(f"summary.generate:{call_id}:v{transcript_version}"),
                 payload={"call_id": str(call_id)},
             )
         await session.commit()

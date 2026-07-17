@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.config import Settings, get_settings
 from app.models.agent_config import AgentConfig
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
@@ -17,6 +18,19 @@ from app.schemas.agent_content import (
     OWNER_CONTEXT_MAX_LENGTH,
     SYSTEM_PROMPT_MAX_LENGTH,
 )
+
+
+def test_activation_flow_defaults_off() -> None:
+    settings = Settings(
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+    )
+
+    assert settings.activation_flow_enabled is False
+
+
+def test_api_agent_name_limit_matches_profile_receptionist_name_bound() -> None:
+    assert AGENT_NAME_MAX_LENGTH == 100
 
 
 async def seed_agent_config(
@@ -63,7 +77,9 @@ async def seed_phone_number(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = (
-            await session.execute(select(User).where(User.clerk_user_id == clerk_user_id))
+            await session.execute(
+                select(User).where(User.clerk_user_id == clerk_user_id)
+            )
         ).scalar_one()
         session.add(
             PhoneNumber(
@@ -93,7 +109,9 @@ async def seed_subscription(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = (
-            await session.execute(select(User).where(User.clerk_user_id == clerk_user_id))
+            await session.execute(
+                select(User).where(User.clerk_user_id == clerk_user_id)
+            )
         ).scalar_one()
         now = datetime.now(UTC)
         session.add(
@@ -122,7 +140,9 @@ async def seed_usage_balance(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = (
-            await session.execute(select(User).where(User.clerk_user_id == clerk_user_id))
+            await session.execute(
+                select(User).where(User.clerk_user_id == clerk_user_id)
+            )
         ).scalar_one()
         session.add(
             UsageLedger(
@@ -137,15 +157,21 @@ async def seed_usage_balance(
     await engine.dispose()
 
 
-async def seed_provisioning(database_url: str, *, clerk_user_id: str, status: str, can_retry: bool = False) -> None:
+async def seed_provisioning(
+    database_url: str, *, clerk_user_id: str, status: str, can_retry: bool = False
+) -> None:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = (
-            await session.execute(select(User).where(User.clerk_user_id == clerk_user_id))
+            await session.execute(
+                select(User).where(User.clerk_user_id == clerk_user_id)
+            )
         ).scalar_one()
         phone_number = (
-            await session.execute(select(PhoneNumber).where(PhoneNumber.user_id == user.id))
+            await session.execute(
+                select(PhoneNumber).where(PhoneNumber.user_id == user.id)
+            )
         ).scalar_one_or_none()
         session.add(
             PhoneNumberProvisioning(
@@ -248,7 +274,9 @@ async def test_get_agent_config_returns_bootstrapped_default_config(
 
     response = await async_client.get(
         "/api/agent/config",
-        headers={"authorization": f"Bearer {rs256_clerk_token_for('user_bootstrap_cfg')}"},
+        headers={
+            "authorization": f"Bearer {rs256_clerk_token_for('user_bootstrap_cfg')}"
+        },
     )
 
     assert response.status_code == 200
@@ -285,6 +313,81 @@ async def test_patch_agent_config_updates_prompt_fields_without_toggle(
     assert response.json()["knowledge_base"] == "Open weekdays"
     assert response.json()["pipeline_mode"] == "sts"
     assert response.json()["is_enabled"] is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("agent_name", "Reception"),
+        ("owner_context", "Owner context"),
+        ("system_prompt", "Customer prompt"),
+        ("knowledge_base", "Customer knowledge"),
+    ],
+)
+async def test_activation_flow_rejects_profile_managed_content_patch(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    monkeypatch,
+    field_name: str,
+    value: str,
+) -> None:
+    clerk_user_id = f"user_managed_{field_name}"
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email=f"managed-{field_name}@example.com",
+        agent_name="Ava",
+        owner_context="Original owner context",
+        system_prompt="Original system prompt",
+        knowledge_base="Original knowledge",
+        is_enabled=False,
+    )
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        response = await async_client.patch(
+            "/api/agent/config",
+            headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+            json={field_name: value},
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {"code": "agent_content_managed_by_profile"}
+
+
+@pytest.mark.anyio
+async def test_activation_flow_allows_non_projected_patch_fields(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    monkeypatch,
+) -> None:
+    clerk_user_id = "user_managed_non_projected"
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="managed-non-projected@example.com",
+        agent_name="Ava",
+        pipeline_mode="stt_llm_tts",
+        is_enabled=False,
+    )
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        response = await async_client.patch(
+            "/api/agent/config",
+            headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+            json={"pipeline_mode": "sts"},
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 200
+    assert response.json()["pipeline_mode"] == "sts"
 
 
 @pytest.mark.anyio
@@ -472,7 +575,9 @@ async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes
         knowledge_base="Open weekdays",
         is_enabled=False,
     )
-    await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_phone_number(
+        client_database_url, clerk_user_id="user_agent_cfg", is_active=False
+    )
     await seed_subscription(
         client_database_url,
         clerk_user_id="user_agent_cfg",
@@ -483,7 +588,9 @@ async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes
         clerk_user_id="user_agent_cfg",
         balance=60,
     )
-    await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
+    await seed_provisioning(
+        client_database_url, clerk_user_id="user_agent_cfg", status="succeeded"
+    )
 
     from app.main import app
     from app.providers.telephony.telnyx import get_telephony_provider
@@ -493,14 +600,20 @@ async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes
     try:
         response = await async_client.patch(
             "/api/agent/config",
-            headers={"authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"},
+            headers={
+                "authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"
+            },
             json={"is_enabled": True},
         )
     finally:
         app.dependency_overrides.pop(get_telephony_provider, None)
 
-    config = await fetch_agent_config(client_database_url, clerk_user_id="user_agent_cfg")
-    phone_number = await fetch_phone_number(client_database_url, clerk_user_id="user_agent_cfg")
+    config = await fetch_agent_config(
+        client_database_url, clerk_user_id="user_agent_cfg"
+    )
+    phone_number = await fetch_phone_number(
+        client_database_url, clerk_user_id="user_agent_cfg"
+    )
 
     assert response.status_code == 200
     assert response.json()["is_enabled"] is True
@@ -564,13 +677,17 @@ async def test_patch_agent_config_enable_without_active_subscription_returns_409
         knowledge_base="Open weekdays",
         is_enabled=False,
     )
-    await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_phone_number(
+        client_database_url, clerk_user_id="user_agent_cfg", is_active=False
+    )
     await seed_usage_balance(
         client_database_url,
         clerk_user_id="user_agent_cfg",
         balance=60,
     )
-    await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
+    await seed_provisioning(
+        client_database_url, clerk_user_id="user_agent_cfg", status="succeeded"
+    )
 
     response = await async_client.patch(
         "/api/agent/config",
@@ -764,7 +881,12 @@ async def test_patch_agent_config_enable_without_provider_number_id_returns_409(
         provider_number_id=None,
     )
     await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
-    await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="failed", can_retry=True)
+    await seed_provisioning(
+        client_database_url,
+        clerk_user_id="user_agent_cfg",
+        status="failed",
+        can_retry=True,
+    )
     await seed_usage_balance(
         client_database_url,
         clerk_user_id="user_agent_cfg",
@@ -799,9 +921,13 @@ async def test_patch_agent_config_enable_with_incomplete_setup_returns_409(
         knowledge_base="",
         is_enabled=False,
     )
-    await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_phone_number(
+        client_database_url, clerk_user_id="user_agent_cfg", is_active=False
+    )
     await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
-    await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
+    await seed_provisioning(
+        client_database_url, clerk_user_id="user_agent_cfg", status="succeeded"
+    )
     await seed_usage_balance(
         client_database_url,
         clerk_user_id="user_agent_cfg",
@@ -840,9 +966,13 @@ async def test_patch_agent_config_commit_survives_redis_wakeup_failure(
         knowledge_base="Open weekdays",
         is_enabled=False,
     )
-    await seed_phone_number(client_database_url, clerk_user_id="user_agent_cfg", is_active=False)
+    await seed_phone_number(
+        client_database_url, clerk_user_id="user_agent_cfg", is_active=False
+    )
     await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
-    await seed_provisioning(client_database_url, clerk_user_id="user_agent_cfg", status="succeeded")
+    await seed_provisioning(
+        client_database_url, clerk_user_id="user_agent_cfg", status="succeeded"
+    )
     await seed_usage_balance(
         client_database_url,
         clerk_user_id="user_agent_cfg",
@@ -850,19 +980,26 @@ async def test_patch_agent_config_commit_survives_redis_wakeup_failure(
     )
 
     from app.main import app
+
     original_pool = getattr(app.state, "arq_pool", None)
     app.state.arq_pool = FailingPool()
     try:
         response = await async_client.patch(
             "/api/agent/config",
-            headers={"authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"},
+            headers={
+                "authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"
+            },
             json={"is_enabled": True},
         )
     finally:
         app.state.arq_pool = original_pool
 
-    config = await fetch_agent_config(client_database_url, clerk_user_id="user_agent_cfg")
-    phone_number = await fetch_phone_number(client_database_url, clerk_user_id="user_agent_cfg")
+    config = await fetch_agent_config(
+        client_database_url, clerk_user_id="user_agent_cfg"
+    )
+    phone_number = await fetch_phone_number(
+        client_database_url, clerk_user_id="user_agent_cfg"
+    )
 
     event = await fetch_outbox_event(client_database_url)
     assert response.status_code == 200

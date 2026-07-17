@@ -78,9 +78,9 @@ async def deliver_phone_provision(
     session_factory = ctx.get("session_factory") or get_session_factory()
     async with session_factory() as session:
         phone_number = await PhoneNumberRepository(session).get_by_user_id(user_id)
-        provisioning = await PhoneNumberProvisioningRepository(
-            session
-        ).get_by_user_id(user_id)
+        provisioning = await PhoneNumberProvisioningRepository(session).get_by_user_id(
+            user_id
+        )
         await session.commit()
     if phone_number is None:
         retryable = bool(
@@ -197,9 +197,7 @@ async def deliver_livekit_dispatch(
             provider = LiveKitDispatchAPIProvider()
 
         try:
-            dispatches = await provider.list_dispatches(
-                room_name=snapshot.room_name
-            )
+            dispatches = await provider.list_dispatches(room_name=snapshot.room_name)
         except ValueError:
             raise OutboxDeliveryError(
                 "dispatch_configuration",
@@ -308,12 +306,12 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
             if call.phone_number_id is not None
             else None
         )
-        subscription = await SubscriptionRepository(
-            session
-        ).get_by_user_id_for_update(call.user_id)
-        agent_config = await AgentConfigRepository(
-            session
-        ).get_by_user_id_for_update(call.user_id)
+        subscription = await SubscriptionRepository(session).get_by_user_id_for_update(
+            call.user_id
+        )
+        agent_config = await AgentConfigRepository(session).get_by_user_id_for_update(
+            call.user_id
+        )
         balance = await UsageRepository(session).get_current_balance(
             user_id=call.user_id
         )
@@ -344,9 +342,7 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
             user.status == "active"
             and call.status in {"pending", "connected"}
             and agent_config.id == call.agent_config_id
-            and readiness.can_dispatch(
-                called_number_matches=called_number_matches
-            )
+            and readiness.can_dispatch(called_number_matches=called_number_matches)
         )
         if not eligible:
             await session.rollback()
@@ -360,6 +356,9 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
             worker_name = settings.livekit_agent_name.strip()
             if not worker_name:
                 raise ValueError("LiveKit agent worker name is not configured")
+            business_display_name = (agent_config.business_display_name or "").strip()
+            if settings.activation_flow_enabled and not business_display_name:
+                raise ValueError("Projected business display name is not configured")
             dispatch_token = create_dispatch_token(
                 call_id=str(call.id),
                 user_id=str(call.user_id),
@@ -376,7 +375,11 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
                     maximum=settings.max_call_duration_seconds,
                 ),
                 agent_name=agent_config.agent_name,
-                owner_name=(user.full_name or "").strip() or "the business",
+                owner_name=(
+                    business_display_name
+                    or (user.full_name or "").strip()
+                    or "the business"
+                ),
                 owner_context=agent_config.owner_context,
                 system_prompt=agent_config.system_prompt,
                 knowledge_base=agent_config.knowledge_base,
@@ -490,9 +493,7 @@ async def deliver_summary_generate(
             await session.rollback()
             raise OutboxDeliveryError("provider_terminal", retryable=False)
         messages = await MessageRepository(session).list_by_call_id(call_id)
-        transcript_max_sequence = (
-            messages[-1].sequence_number if messages else 0
-        )
+        transcript_max_sequence = messages[-1].sequence_number if messages else 0
         if (
             call.summary_transcript_max_sequence is not None
             and call.summary_transcript_max_sequence >= transcript_max_sequence
@@ -501,8 +502,7 @@ async def deliver_summary_generate(
             await session.commit()
             return
         transcript = [
-            {"speaker": message.speaker, "text": message.text}
-            for message in messages
+            {"speaker": message.speaker, "text": message.text} for message in messages
         ]
         await session.commit()
 
@@ -522,9 +522,9 @@ async def deliver_summary_generate(
         if call is None:
             await session.rollback()
             raise OutboxDeliveryError("provider_terminal", retryable=False)
-        durable_max_sequence = await MessageRepository(
-            session
-        ).max_sequence_by_call_id(call_id)
+        durable_max_sequence = await MessageRepository(session).max_sequence_by_call_id(
+            call_id
+        )
         if durable_max_sequence != transcript_max_sequence:
             await session.rollback()
             raise OutboxDeliveryError("summary_stale", retryable=True)

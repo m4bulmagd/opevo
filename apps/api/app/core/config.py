@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     otel_service_name: str = "presvo-api"
     otel_exporter_otlp_endpoint: str | None = None
     realtime_enabled: bool = False
+    activation_flow_enabled: bool = False
     cors_allowed_origins: str | None = None
     clerk_issuer: str = ""
     clerk_audience: str | None = None

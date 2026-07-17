@@ -18,7 +18,9 @@ from app.workers.jobs.outbox_topics import deliver_livekit_dispatch
 
 
 class _Provider:
-    def __init__(self, *, timeout_after_create: bool = False, always_fail: bool = False):
+    def __init__(
+        self, *, timeout_after_create: bool = False, always_fail: bool = False
+    ):
         self.dispatches: list[LiveKitDispatch] = []
         self.list_calls: list[str] = []
         self.create_calls: list[dict] = []
@@ -62,7 +64,12 @@ class _ForeignCreateProvider(_Provider):
         )
 
 
-async def _seed_dispatch(db_session, *, owner_name: str | None = None):
+async def _seed_dispatch(
+    db_session,
+    *,
+    owner_name: str | None = None,
+    business_display_name: str | None = None,
+):
     from app.models.user import User
 
     now = datetime.now(UTC)
@@ -85,6 +92,7 @@ async def _seed_dispatch(db_session, *, owner_name: str | None = None):
     config = AgentConfig(
         user_id=user.id,
         agent_name="Ava",
+        business_display_name=business_display_name,
         owner_context="Sam at Bakery",
         system_prompt="Be concise",
         knowledge_base="Hours 9-5",
@@ -201,6 +209,79 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
     }
     assert "+33999888777" not in provider.create_calls[0]["metadata"]
     assert "+33123456789" not in provider.create_calls[0]["metadata"]
+
+
+@pytest.mark.anyio
+async def test_dispatch_greeting_uses_projected_business_name_and_bounds_owner_context(
+    db_session,
+    monkeypatch,
+) -> None:
+    call, event, _subscription = await _seed_dispatch(
+        db_session,
+        owner_name="Morgan Rivera",
+        business_display_name="Atelier Nord",
+    )
+    config = await db_session.scalar(select(AgentConfig))
+    assert config is not None
+    config.owner_context = "Owner name: Morgan Rivera\nBusiness name: Atelier Nord"
+    await db_session.commit()
+    provider = _Provider()
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    await deliver_livekit_dispatch(
+        {"session_factory": session_factory, "livekit_dispatch_provider": provider},
+        event,
+    )
+
+    metadata = json.loads(provider.create_calls[0]["metadata"])
+    assert metadata["owner_name"] == "Atelier Nord"
+    assert metadata["owner_context"] == (
+        "Owner name: Morgan Rivera\nBusiness name: Atelier Nord"
+    )
+    assert "Morgan Rivera" not in metadata["owner_name"]
+    assert call.livekit_dispatch_id == "dispatch-1"
+
+
+@pytest.mark.anyio
+async def test_activation_flow_missing_business_name_fails_dispatch_closed(
+    db_session,
+    monkeypatch,
+) -> None:
+    _call, event, _subscription = await _seed_dispatch(
+        db_session,
+        owner_name="Legacy Owner",
+        business_display_name=None,
+    )
+    provider = _Provider()
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    try:
+        with pytest.raises(OutboxDeliveryError) as exc_info:
+            await deliver_livekit_dispatch(
+                {
+                    "session_factory": session_factory,
+                    "livekit_dispatch_provider": provider,
+                },
+                event,
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert exc_info.value.error_code == "dispatch_configuration"
+    assert exc_info.value.retryable is False
+    assert provider.list_calls == []
+    assert provider.create_calls == []
 
 
 @pytest.mark.anyio
@@ -424,7 +505,10 @@ async def test_malformed_foreign_aggregate_is_terminal(db_session) -> None:
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await deliver_livekit_dispatch(
-            {"session_factory": session_factory, "livekit_dispatch_provider": _Provider()},
+            {
+                "session_factory": session_factory,
+                "livekit_dispatch_provider": _Provider(),
+            },
             event,
         )
 
@@ -433,7 +517,9 @@ async def test_malformed_foreign_aggregate_is_terminal(db_session) -> None:
 
 
 @pytest.mark.anyio
-async def test_sixth_provider_failure_atomically_fails_call(db_session, monkeypatch) -> None:
+async def test_sixth_provider_failure_atomically_fails_call(
+    db_session, monkeypatch
+) -> None:
     call, event, _subscription = await _seed_dispatch(db_session)
     provider = _Provider(always_fail=True)
     monkeypatch.setattr(
@@ -498,7 +584,9 @@ async def test_terminal_invalid_payload_releases_authoritative_aggregate_call(
 
 
 @pytest.mark.anyio
-async def test_terminal_dispatch_failure_never_overturns_connected_call(db_session) -> None:
+async def test_terminal_dispatch_failure_never_overturns_connected_call(
+    db_session,
+) -> None:
     call, event, _subscription = await _seed_dispatch(db_session)
     call.status = "connected"
     await db_session.commit()
