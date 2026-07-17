@@ -36,6 +36,10 @@ from app.services.customer_readiness_service import (
 from app.services.customer_readiness_policy import CustomerReadinessPolicy
 
 
+class ActivationSnapshotUnavailableError(Exception):
+    pass
+
+
 class ActivationSnapshotService:
     def __init__(
         self,
@@ -85,6 +89,8 @@ class ActivationSnapshotService:
     ) -> ActivationSnapshotResponse:
         evaluation_time = now or datetime.now(UTC)
         user = await self.user_repository.get_by_id(user_id)
+        if user is None:
+            raise ActivationSnapshotUnavailableError
         profile = await self.business_profile_repository.get_by_user_id(user_id)
         activation = await self.activation_repository.get_by_user_id(user_id)
         subscription = await self.subscription_repository.get_by_user_id(user_id)

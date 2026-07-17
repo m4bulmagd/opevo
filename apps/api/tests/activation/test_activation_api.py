@@ -5,6 +5,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.user import User
 from app.schemas.business_profile import WEEKDAYS
+from app.services.activation_snapshot_service import ActivationSnapshotUnavailableError
+
+
+PROFILE_COMMAND_MISSING_USER_CASES = (
+    ("PUT", "/api/business-profile", {}),
+    ("POST", "/api/activation/confirm-profile", None),
+)
 
 
 def _complete_business_hours() -> dict[str, dict[str, object]]:
@@ -70,6 +77,19 @@ async def _bootstrap_clerk_user(
         headers=signed_clerk_headers,
     )
     assert response.status_code == 202
+
+
+class MissingUserSnapshotService:
+    async def get(self, user_id):
+        raise ActivationSnapshotUnavailableError("secret missing-user detail")
+
+
+class SuccessfulProfileCommandService:
+    def __init__(self) -> None:
+        self.confirmed_user_ids: list[object] = []
+
+    async def confirm_profile(self, user_id):
+        self.confirmed_user_ids.append(user_id)
 
 
 @pytest.mark.anyio
@@ -325,10 +345,7 @@ async def test_profile_projection_size_failure_uses_stable_error_code(
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("method", "path", "json"),
-    [
-        ("PUT", "/api/business-profile", {}),
-        ("POST", "/api/activation/confirm-profile", None),
-    ],
+    PROFILE_COMMAND_MISSING_USER_CASES,
 )
 async def test_profile_commands_translate_missing_internal_user_to_stable_conflict(
     async_client,
@@ -373,6 +390,81 @@ async def test_profile_commands_translate_missing_internal_user_to_stable_confli
 
     assert response.status_code == 409
     assert response.json() == {"detail": {"code": "profile_unavailable"}}
+
+
+@pytest.mark.anyio
+async def test_get_activation_translates_missing_user_snapshot_race(
+    async_client,
+    test_app,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    from app.routers.activation import get_activation_snapshot_service
+
+    await _seed_user(
+        client_database_url,
+        clerk_user_id="user_deleted_before_snapshot",
+        email="deleted-before-snapshot@example.com",
+    )
+    test_app.dependency_overrides[get_activation_snapshot_service] = (
+        MissingUserSnapshotService
+    )
+    try:
+        response = await async_client.get(
+            "/api/activation",
+            headers={
+                "Authorization": (
+                    f"Bearer {rs256_clerk_token_for('user_deleted_before_snapshot')}"
+                )
+            },
+        )
+    finally:
+        test_app.dependency_overrides.pop(get_activation_snapshot_service, None)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "profile_unavailable"}}
+    assert "secret missing-user detail" not in response.text
+
+
+@pytest.mark.anyio
+async def test_confirm_profile_translates_missing_user_during_snapshot_refresh(
+    async_client,
+    test_app,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    from app.routers.activation import (
+        get_activation_snapshot_service,
+        get_business_profile_service,
+    )
+
+    await _seed_user(
+        client_database_url,
+        clerk_user_id="user_deleted_after_confirmation",
+        email="deleted-after-confirmation@example.com",
+    )
+    command_service = SuccessfulProfileCommandService()
+    test_app.dependency_overrides[get_business_profile_service] = lambda: command_service
+    test_app.dependency_overrides[get_activation_snapshot_service] = (
+        MissingUserSnapshotService
+    )
+    try:
+        response = await async_client.post(
+            "/api/activation/confirm-profile",
+            headers={
+                "Authorization": (
+                    f"Bearer {rs256_clerk_token_for('user_deleted_after_confirmation')}"
+                )
+            },
+        )
+    finally:
+        test_app.dependency_overrides.pop(get_business_profile_service, None)
+        test_app.dependency_overrides.pop(get_activation_snapshot_service, None)
+
+    assert len(command_service.confirmed_user_ids) == 1
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "profile_unavailable"}}
+    assert "secret missing-user detail" not in response.text
 
 
 @pytest.mark.anyio
