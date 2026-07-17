@@ -4,6 +4,8 @@ from uuid import uuid4
 import pytest
 
 from app.models.agent_config import AgentConfig
+from app.models.business_profile import BusinessProfile
+from app.models.customer_activation import CustomerActivation
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
@@ -102,6 +104,9 @@ def build_service(
     phone,
     provisioning,
     agent_config,
+    activation_flow_enabled: bool = False,
+    profile=None,
+    activation=None,
 ):
     repositories = {
         "user_repository": FakeUserRepository(user),
@@ -111,7 +116,16 @@ def build_service(
         "provisioning_repository": FakeByUserRepository(provisioning),
         "agent_config_repository": FakeByUserRepository(agent_config),
     }
-    return CustomerReadinessService(**repositories), repositories
+    if activation_flow_enabled:
+        repositories["business_profile_repository"] = FakeByUserRepository(profile)
+        repositories["activation_repository"] = FakeByUserRepository(activation)
+    return (
+        CustomerReadinessService(
+            **repositories,
+            activation_flow_enabled=activation_flow_enabled,
+        ),
+        repositories,
+    )
 
 
 @pytest.mark.anyio
@@ -191,3 +205,52 @@ async def test_missing_user_returns_fail_closed_readiness_result() -> None:
     assert ReadinessBlocker.USER_INACTIVE in context.result.blockers
     assert context.result.can_activate is False
     assert context.result.can_route is False
+
+
+@pytest.mark.anyio
+async def test_enabled_activation_flow_loads_prerequisites_once_and_blocks_stale_projection() -> None:
+    user, subscription, phone, provisioning, agent_config = build_records()
+    profile = BusinessProfile(
+        user_id=user.id,
+        owner_name="Sam",
+        business_name="Sam Plumbing",
+        business_type="Plumber",
+        public_description="Emergency and maintenance plumbing.",
+        timezone="Europe/Paris",
+        business_hours={"monday": {"closed": True, "intervals": []}},
+        existing_phone_e164="+33612345678",
+        confirmed_carrier="orange",
+        receptionist_name="Ava",
+        content_revision=3,
+        routing_revision=2,
+    )
+    activation = CustomerActivation(
+        user_id=user.id,
+        profile_confirmed_revision=3,
+        profile_confirmed_at=NOW,
+        forwarding_verified_at=NOW,
+        verified_routing_fingerprint="stale",
+        go_live_approved_at=NOW,
+        activated_at=NOW,
+    )
+    agent_config.profile_projection_revision = 2
+    service, repositories = build_service(
+        user=user,
+        subscription=subscription,
+        balance=30,
+        phone=phone,
+        provisioning=provisioning,
+        agent_config=agent_config,
+        activation_flow_enabled=True,
+        profile=profile,
+        activation=activation,
+    )
+
+    context = await service.evaluate(user.id, now=NOW)
+
+    assert ReadinessBlocker.PROFILE_PROJECTION_STALE in context.result.blockers
+    assert ReadinessBlocker.FORWARDING_NOT_VERIFIED in context.result.blockers
+    assert context.result.can_route is False
+    for repository in repositories.values():
+        if hasattr(repository, "calls"):
+            assert repository.calls == [user.id]

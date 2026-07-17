@@ -4,11 +4,17 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_config import AgentConfig
+from app.models.business_profile import BusinessProfile
+from app.models.customer_activation import CustomerActivation
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.repositories.agent_config_repository import AgentConfigRepository
+from app.repositories.business_profile_repository import BusinessProfileRepository
+from app.repositories.customer_activation_repository import (
+    CustomerActivationRepository,
+)
 from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
 )
@@ -16,11 +22,14 @@ from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
+from app.core.config import get_settings
+from app.services.business_profile_service import REQUIRED_PROFILE_FIELDS
 from app.services.customer_readiness_policy import (
     CustomerReadinessPolicy,
     CustomerReadinessResult,
     CustomerReadinessSnapshot,
 )
+from app.services.routing_fingerprint import routing_fingerprint
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +41,53 @@ class CustomerReadinessContext:
     phone_number: PhoneNumber | None
     provisioning: PhoneNumberProvisioning | None
     agent_config: AgentConfig | None
+    business_profile: BusinessProfile | None
+    activation: CustomerActivation | None
+
+
+def business_profile_is_complete(profile: BusinessProfile | None) -> bool:
+    if profile is None:
+        return False
+    return all(
+        not _is_missing_required_value(getattr(profile, field))
+        for field in REQUIRED_PROFILE_FIELDS
+    )
+
+
+def _is_missing_required_value(value: object) -> bool:
+    return not value or isinstance(value, str) and not value.strip()
+
+
+def activation_readiness_prerequisites(
+    *,
+    profile: BusinessProfile | None,
+    activation: CustomerActivation | None,
+    phone_number: PhoneNumber | None,
+    agent_config: AgentConfig | None,
+) -> tuple[bool, bool, bool, bool]:
+    profile_complete = business_profile_is_complete(profile)
+    projection_current = bool(
+        profile is not None
+        and agent_config is not None
+        and agent_config.profile_projection_revision == profile.content_revision
+    )
+    current_fingerprint = (
+        routing_fingerprint(profile, phone_number) if profile is not None else None
+    )
+    forwarding_verified = bool(
+        activation is not None
+        and activation.forwarding_verified_at is not None
+        and activation.verified_routing_fingerprint == current_fingerprint
+    )
+    go_live_approved = bool(
+        activation is not None and activation.go_live_approved_at is not None
+    )
+    return (
+        profile_complete,
+        projection_current,
+        forwarding_verified,
+        go_live_approved,
+    )
 
 
 def build_customer_readiness_snapshot(
@@ -42,6 +98,11 @@ def build_customer_readiness_snapshot(
     phone_number: PhoneNumber | None,
     provisioning: PhoneNumberProvisioning | None,
     agent_config: AgentConfig | None,
+    activation_required: bool = False,
+    business_profile_complete: bool = False,
+    profile_projection_current: bool = False,
+    forwarding_verified: bool = False,
+    go_live_approved: bool = False,
 ) -> CustomerReadinessSnapshot:
     return CustomerReadinessSnapshot(
         user_status=user.status if user is not None else None,
@@ -83,6 +144,11 @@ def build_customer_readiness_snapshot(
         knowledge_base=(
             agent_config.knowledge_base if agent_config is not None else None
         ),
+        activation_required=activation_required,
+        business_profile_complete=business_profile_complete,
+        profile_projection_current=profile_projection_current,
+        forwarding_verified=forwarding_verified,
+        go_live_approved=go_live_approved,
     )
 
 
@@ -97,7 +163,12 @@ class CustomerReadinessService:
         phone_number_repository: PhoneNumberRepository | None = None,
         provisioning_repository: PhoneNumberProvisioningRepository | None = None,
         agent_config_repository: AgentConfigRepository | None = None,
+        business_profile_repository: BusinessProfileRepository | None = None,
+        activation_repository: CustomerActivationRepository | None = None,
+        activation_flow_enabled: bool | None = None,
     ) -> None:
+        if activation_flow_enabled is None:
+            activation_flow_enabled = get_settings().activation_flow_enabled
         if user_repository is None:
             user_repository = UserRepository(self._require_session(session))
         if subscription_repository is None:
@@ -118,6 +189,14 @@ class CustomerReadinessService:
             agent_config_repository = AgentConfigRepository(
                 self._require_session(session)
             )
+        if activation_flow_enabled and business_profile_repository is None:
+            business_profile_repository = BusinessProfileRepository(
+                self._require_session(session)
+            )
+        if activation_flow_enabled and activation_repository is None:
+            activation_repository = CustomerActivationRepository(
+                self._require_session(session)
+            )
 
         self.user_repository = user_repository
         self.subscription_repository = subscription_repository
@@ -125,6 +204,9 @@ class CustomerReadinessService:
         self.phone_number_repository = phone_number_repository
         self.provisioning_repository = provisioning_repository
         self.agent_config_repository = agent_config_repository
+        self.business_profile_repository = business_profile_repository
+        self.activation_repository = activation_repository
+        self.activation_flow_enabled = activation_flow_enabled
 
     async def evaluate(
         self,
@@ -142,6 +224,23 @@ class CustomerReadinessService:
         if agent_config is None:
             agent_config = await self.agent_config_repository.get_by_user_id(user_id)
 
+        business_profile = None
+        activation = None
+        activation_values = (False, False, False, False)
+        if self.activation_flow_enabled:
+            if self.business_profile_repository is None or self.activation_repository is None:
+                raise RuntimeError("activation repositories are required")
+            business_profile = await self.business_profile_repository.get_by_user_id(
+                user_id
+            )
+            activation = await self.activation_repository.get_by_user_id(user_id)
+            activation_values = activation_readiness_prerequisites(
+                profile=business_profile,
+                activation=activation,
+                phone_number=phone_number,
+                agent_config=agent_config,
+            )
+
         snapshot = build_customer_readiness_snapshot(
             user=user,
             subscription=subscription,
@@ -149,6 +248,11 @@ class CustomerReadinessService:
             phone_number=phone_number,
             provisioning=provisioning,
             agent_config=agent_config,
+            activation_required=self.activation_flow_enabled,
+            business_profile_complete=activation_values[0],
+            profile_projection_current=activation_values[1],
+            forwarding_verified=activation_values[2],
+            go_live_approved=activation_values[3],
         )
         result = CustomerReadinessPolicy.evaluate(snapshot, now=now)
         return CustomerReadinessContext(
@@ -159,6 +263,8 @@ class CustomerReadinessService:
             phone_number=phone_number,
             provisioning=provisioning,
             agent_config=agent_config,
+            business_profile=business_profile,
+            activation=activation,
         )
 
     @staticmethod
