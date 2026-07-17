@@ -254,13 +254,7 @@ class BillingService:
         phone_number = await self.phone_number_repository.get_by_user_id(
             subscription.user_id
         )
-        if grant.first_activation and phone_number is None:
-            await self._add_phone_intent(
-                topic="phone.provision",
-                user_id=subscription.user_id,
-                idempotency_key=f"stripe:invoice:{invoice_id}:phone.provision",
-            )
-        elif phone_number is not None:
+        if phone_number is not None:
             await self._add_phone_intent(
                 topic="phone.enable",
                 user_id=subscription.user_id,

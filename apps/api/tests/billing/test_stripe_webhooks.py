@@ -14,7 +14,7 @@ from app.models.user import User
 from app.models.usage_ledger import UsageLedger
 from app.models.webhook_event import WebhookEvent
 
-from tests.fakes import MockArqPool, ReviewRequiredTelephonyProvider
+from tests.fakes import MockArqPool
 
 
 async def _post_stripe_event(async_client, signed_stripe_headers_factory, payload: dict):
@@ -208,7 +208,7 @@ async def test_stripe_webhook_has_no_telnyx_provider_dependency(
 
 
 @pytest.mark.anyio
-async def test_subscription_activation_persists_subscription_and_support_notification_when_provisioning_needs_review(
+async def test_first_paid_invoice_grants_minutes_without_ordering_number(
     async_client,
     client_database_url,
     signed_stripe_headers_factory,
@@ -224,7 +224,13 @@ async def test_subscription_activation_persists_subscription_and_support_notific
 
 
 
-    async def fetch_state() -> tuple[list[Subscription], list[Notification], list[UsageLedger], list[PhoneNumber]]:
+    async def fetch_state() -> tuple[
+        list[Subscription],
+        list[Notification],
+        list[UsageLedger],
+        list[PhoneNumber],
+        list[OutboxEvent],
+    ]:
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
@@ -232,8 +238,9 @@ async def test_subscription_activation_persists_subscription_and_support_notific
             notifications = list((await session.execute(select(Notification))).scalars())
             ledgers = list((await session.execute(select(UsageLedger))).scalars())
             phone_numbers = list((await session.execute(select(PhoneNumber))).scalars())
+            outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
         await engine.dispose()
-        return subscriptions, notifications, ledgers, phone_numbers
+        return subscriptions, notifications, ledgers, phone_numbers, outbox_events
 
     await seed_user()
 
@@ -257,29 +264,20 @@ async def test_subscription_activation_persists_subscription_and_support_notific
     
     assert response.status_code == 202
     
-    assert len(pool.enqueued_jobs) == 1
-    assert pool.enqueued_jobs[0][0] == "outbox_delivery_job"
-    
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
-    
-    engine = create_async_engine(client_database_url, future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    
-    await outbox_delivery_job({
-        "telephony_provider": ReviewRequiredTelephonyProvider(),
-        "session_factory": session_factory
-    })
-    
-    await engine.dispose()
+    assert pool.enqueued_jobs == []
 
-    subscriptions, notifications, ledgers, phone_numbers = await fetch_state()
+    subscriptions, notifications, ledgers, phone_numbers, outbox_events = (
+        await fetch_state()
+    )
 
     assert response.status_code == 202
     assert subscriptions[0].plan_tier == "starter"
-    assert notifications[0].notification_type == "phone_number_provisioning_review_required"
-    assert notifications[0].payload["contact_support"] is True
+    assert notifications == []
     assert ledgers[0].event_type == "subscription_activated"
+    assert ledgers[0].minutes_delta == 60
+    assert ledgers[0].balance_after == 60
     assert not phone_numbers
+    assert outbox_events == []
 
 
 @pytest.mark.anyio
@@ -324,17 +322,29 @@ async def test_invoice_paid_resets_minutes(
                     balance_after=120,
                 )
             )
+            session.add(
+                PhoneNumber(
+                    user_id=user.id,
+                    e164="+35315550101",
+                    country_code="IE",
+                    provider="telnyx",
+                    provider_number_id="pn_existing_renewal",
+                    provider_connection_name="app-disabled",
+                    is_active=False,
+                )
+            )
             await session.commit()
         await engine.dispose()
 
-    async def fetch_ledgers() -> list[UsageLedger]:
+    async def fetch_state() -> tuple[list[UsageLedger], list[OutboxEvent]]:
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
             result = await session.execute(select(UsageLedger).order_by(UsageLedger.created_at.asc()))
             rows = list(result.scalars())
+            outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
         await engine.dispose()
-        return rows
+        return rows, outbox_events
 
     await seed_subscription()
 
@@ -345,11 +355,15 @@ async def test_invoice_paid_resets_minutes(
     )
 
     assert response.status_code == 202
-    assert (await fetch_ledgers())[-1].event_type == "invoice_paid_reset"
+    ledgers, outbox_events = await fetch_state()
+    assert ledgers[-1].event_type == "invoice_paid_reset"
+    assert len(outbox_events) == 1
+    assert outbox_events[0].topic == "phone.enable"
+    assert outbox_events[0].idempotency_key == "stripe:invoice:in_123:phone.enable"
 
 
 @pytest.mark.anyio
-async def test_invoice_paid_bootstraps_subscription_activation_and_enqueues_provisioning(
+async def test_invoice_paid_bootstraps_subscription_without_ordering_number(
     async_client,
     client_database_url,
     signed_stripe_headers_factory,
@@ -363,14 +377,19 @@ async def test_invoice_paid_bootstraps_subscription_activation_and_enqueues_prov
             await session.commit()
         await engine.dispose()
 
-    async def fetch_state() -> tuple[list[Subscription], list[UsageLedger]]:
+    async def fetch_state() -> tuple[
+        list[Subscription],
+        list[UsageLedger],
+        list[OutboxEvent],
+    ]:
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
             subscriptions = list((await session.execute(select(Subscription))).scalars())
             ledgers = list((await session.execute(select(UsageLedger))).scalars())
+            outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
         await engine.dispose()
-        return subscriptions, ledgers
+        return subscriptions, ledgers, outbox_events
 
     await seed_user()
 
@@ -395,7 +414,7 @@ async def test_invoice_paid_bootstraps_subscription_activation_and_enqueues_prov
 
     assert response.status_code == 202
 
-    subscriptions, ledgers = await fetch_state()
+    subscriptions, ledgers, outbox_events = await fetch_state()
     assert subscriptions[0].stripe_subscription_id == "sub_123"
     assert subscriptions[0].plan_tier == "starter"
     assert subscriptions[0].status == "active"
@@ -403,12 +422,12 @@ async def test_invoice_paid_bootstraps_subscription_activation_and_enqueues_prov
     assert ledgers[-1].event_type == "subscription_activated"
     assert ledgers[-1].minutes_delta == 60
     assert ledgers[-1].balance_after == 60
-    assert len(pool.enqueued_jobs) == 1
-    assert pool.enqueued_jobs[0][0] == "outbox_delivery_job"
+    assert outbox_events == []
+    assert pool.enqueued_jobs == []
 
 
 @pytest.mark.anyio
-async def test_distinct_webhook_events_for_one_invoice_grant_and_provision_once(
+async def test_distinct_webhook_events_grant_one_invoice_without_ordering_number(
     async_client,
     client_database_url,
     signed_stripe_headers_factory,
@@ -461,13 +480,15 @@ async def test_distinct_webhook_events_for_one_invoice_grant_and_provision_once(
                 )
             ).scalars()
         )
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
     await engine.dispose()
 
     assert first_response.status_code == second_response.status_code == 202
     assert len(ledgers) == 1
     assert ledgers[0].event_type == "subscription_activated"
     assert ledgers[0].source_id == first_payload["data"]["object"]["id"]
-    assert [job[0] for job in pool.enqueued_jobs] == ["outbox_delivery_job"]
+    assert outbox_events == []
+    assert pool.enqueued_jobs == []
 
 
 @pytest.mark.anyio
@@ -477,11 +498,11 @@ async def test_distinct_webhook_events_for_one_invoice_grant_and_provision_once(
         ("customer.subscription.created", "active", 0, 0),
         ("customer.subscription.updated", "past_due", 1, 0),
         ("customer.subscription.deleted", "canceled", 1, 0),
-        ("invoice.paid", "active", 1, 1),
+        ("invoice.paid", "active", 0, 1),
         ("invoice.payment_failed", "past_due", 1, 0),
     ],
 )
-async def test_every_supported_stripe_lifecycle_event_is_replay_safe(
+async def test_every_supported_stripe_lifecycle_event_is_replay_safe_without_provisioning(
     async_client,
     client_database_url,
     signed_stripe_headers_factory,
@@ -517,6 +538,21 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe(
                     ),
                 )
             )
+        if event_type in {
+            "customer.subscription.deleted",
+            "invoice.payment_failed",
+        }:
+            session.add(
+                PhoneNumber(
+                    user_id=user.id,
+                    e164="+35315550103",
+                    country_code="IE",
+                    provider="telnyx",
+                    provider_number_id="pn_existing_payment_reconciliation",
+                    provider_connection_name="app-active",
+                    is_active=True,
+                )
+            )
         await session.commit()
     await engine.dispose()
 
@@ -537,7 +573,7 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe(
     from app.main import app
 
     pool = MockArqPool()
-    app.state.arq_pool = None if event_type == "invoice.paid" else pool
+    app.state.arq_pool = pool
 
     first = await async_client.post(
         "/webhooks/stripe",
@@ -552,11 +588,7 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe(
 
     assert first.status_code == 202
     assert replay.status_code == 202
-    expected_jobs = (
-        [("outbox_delivery_job", {})]
-        if expected_outbox and event_type != "invoice.paid"
-        else []
-    )
+    expected_jobs = [("outbox_delivery_job", {})] if expected_outbox else []
     assert pool.enqueued_jobs == expected_jobs
 
     engine = create_async_engine(client_database_url, future=True)
@@ -580,22 +612,17 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe(
     assert len(webhook_events) == 1
     assert len(outbox_events) == expected_outbox
     assert len(ledgers) == expected_ledger
+    assert all(intent.topic != "phone.provision" for intent in outbox_events)
     if outbox_events:
         intent = outbox_events[0]
-        expected_topic = (
-            "phone.provision" if event_type == "invoice.paid" else "phone.disable"
-        )
-        assert intent.topic == expected_topic
+        assert intent.topic == "phone.disable"
         assert intent.aggregate_type == "user"
         assert intent.aggregate_id == subscription.user_id
-        if event_type == "invoice.paid":
-            assert intent.idempotency_key == "stripe:invoice:in_123:phone.provision"
-        else:
-            assert intent.idempotency_key == f"stripe:{event_type}:{event_id}"
+        assert intent.idempotency_key == f"stripe:{event_type}:{event_id}"
 
 
 @pytest.mark.anyio
-async def test_invoice_outbox_commit_survives_redis_wakeup_failure(
+async def test_invoice_enable_outbox_commit_survives_redis_wakeup_failure(
     async_client,
     client_database_url,
     signed_stripe_headers_factory,
@@ -608,7 +635,20 @@ async def test_invoice_outbox_commit_survives_redis_wakeup_failure(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_123", email="redis-down@example.com"))
+        user = User(clerk_user_id="user_123", email="redis-down@example.com")
+        session.add(user)
+        await session.flush()
+        session.add(
+            PhoneNumber(
+                user_id=user.id,
+                e164="+35315550102",
+                country_code="IE",
+                provider="telnyx",
+                provider_number_id="pn_existing_redis_failure",
+                provider_connection_name="app-disabled",
+                is_active=False,
+            )
+        )
         await session.commit()
     await engine.dispose()
 
@@ -635,6 +675,7 @@ async def test_invoice_outbox_commit_survives_redis_wakeup_failure(
     async with session_factory() as session:
         event = await session.scalar(select(OutboxEvent))
         assert event is not None
+        assert event.topic == "phone.enable"
         assert event.status == "pending"
     await engine.dispose()
 
