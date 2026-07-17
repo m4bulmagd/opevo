@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.models import Base
+from app.models.activation_event import ActivationEvent
 from app.models.business_profile import BusinessProfile
 from app.models.call import Call
 from app.models.call_message import CallMessage
@@ -23,6 +24,11 @@ from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.models.webhook_event import WebhookEvent
+from app.repositories.activation_event_repository import ActivationEventRepository
+from app.repositories.business_profile_repository import BusinessProfileRepository
+from app.repositories.customer_activation_repository import (
+    CustomerActivationRepository,
+)
 from app.repositories.webhook_event_repository import WebhookEventRepository
 
 
@@ -95,6 +101,38 @@ async def _commit_one(
             await session.rollback()
             return False
         return True
+
+
+async def _wait_for_two_lock_waiters(
+    observer: AsyncSession,
+    *,
+    backend_pids: tuple[int, int],
+) -> None:
+    activity = []
+    for _ in range(200):
+        activity = list(
+            (
+                await observer.execute(
+                    text(
+                        "SELECT application_name, state, wait_event_type, "
+                        "wait_event, query FROM pg_stat_activity "
+                        "WHERE pid IN (:first_pid, :second_pid)"
+                    ),
+                    {
+                        "first_pid": backend_pids[0],
+                        "second_pid": backend_pids[1],
+                    },
+                )
+            ).all()
+        )
+        waiter_count = sum(row.wait_event_type == "Lock" for row in activity)
+        if waiter_count == 2:
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail(
+        "Concurrent repository calls did not both reach a database lock: "
+        f"activity={activity!r}"
+    )
 
 
 @pytest.mark.anyio
@@ -334,3 +372,133 @@ async def test_activation_owner_race_commits_exactly_one_row(
     )
 
     assert sorted(results) == [False, True]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("table_name", "repository_type", "model_type"),
+    [
+        (
+            "business_profiles",
+            BusinessProfileRepository,
+            BusinessProfile,
+        ),
+        (
+            "customer_activations",
+            CustomerActivationRepository,
+            CustomerActivation,
+        ),
+    ],
+    ids=["business_profile", "customer_activation"],
+)
+async def test_activation_get_or_create_race_returns_one_durable_row_to_both_callers(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+    table_name,
+    repository_type,
+    model_type,
+) -> None:
+    user = await _create_user(postgres_session_factory, suffix="activation_create")
+    backend_pid_queue: asyncio.Queue[int] = asyncio.Queue()
+
+    async def get_or_create():
+        async with postgres_session_factory() as session:
+            backend_pid = await session.scalar(select(func.pg_backend_pid()))
+            assert backend_pid is not None
+            await backend_pid_queue.put(backend_pid)
+            record = await repository_type(session).get_or_create_for_update(user.id)
+            await session.commit()
+            return record.id
+
+    async with postgres_session_factory() as gate_session:
+        await gate_session.execute(text(f"LOCK TABLE {table_name} IN SHARE MODE"))
+        tasks = [
+            asyncio.create_task(get_or_create()),
+            asyncio.create_task(get_or_create()),
+        ]
+        backend_pids = (
+            await backend_pid_queue.get(),
+            await backend_pid_queue.get(),
+        )
+        await _wait_for_two_lock_waiters(
+            gate_session,
+            backend_pids=backend_pids,
+        )
+        await gate_session.commit()
+        record_ids = await asyncio.gather(*tasks)
+
+    assert record_ids[0] == record_ids[1]
+    async with postgres_session_factory() as session:
+        durable_count = await session.scalar(
+            select(func.count())
+            .select_from(model_type)
+            .where(model_type.user_id == user.id)
+        )
+    assert durable_count == 1
+
+
+@pytest.mark.anyio
+async def test_activation_event_append_race_returns_first_durable_event_to_both_callers(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    user = await _create_user(postgres_session_factory, suffix="activation_event")
+    async with postgres_session_factory() as session:
+        activation = await CustomerActivationRepository(
+            session
+        ).get_or_create_for_update(user.id)
+        await session.commit()
+        activation_id = activation.id
+
+    idempotency_key = f"activation-event:{uuid4().hex}"
+    backend_pid_queue: asyncio.Queue[int] = asyncio.Queue()
+
+    async def append(caller: str):
+        async with postgres_session_factory() as session:
+            backend_pid = await session.scalar(select(func.pg_backend_pid()))
+            assert backend_pid is not None
+            await backend_pid_queue.put(backend_pid)
+            event = await ActivationEventRepository(session).append(
+                user_id=user.id,
+                activation_id=activation_id,
+                event_type=f"profile_confirmed_{caller}",
+                idempotency_key=idempotency_key,
+                metadata={"caller": caller},
+            )
+            await session.commit()
+            return event.id, event.event_type, event.event_metadata
+
+    async with postgres_session_factory() as gate_session:
+        await gate_session.execute(
+            text("LOCK TABLE activation_events IN SHARE MODE")
+        )
+        tasks = [
+            asyncio.create_task(append("a")),
+            asyncio.create_task(append("b")),
+        ]
+        backend_pids = (
+            await backend_pid_queue.get(),
+            await backend_pid_queue.get(),
+        )
+        await _wait_for_two_lock_waiters(
+            gate_session,
+            backend_pids=backend_pids,
+        )
+        await gate_session.commit()
+        returned_events = await asyncio.gather(*tasks)
+
+    assert returned_events[0] == returned_events[1]
+    assert returned_events[0][1:] in (
+        ("profile_confirmed_a", {"caller": "a"}),
+        ("profile_confirmed_b", {"caller": "b"}),
+    )
+    async with postgres_session_factory() as session:
+        durable_events = list(
+            (
+                await session.execute(
+                    select(ActivationEvent).where(
+                        ActivationEvent.idempotency_key == idempotency_key
+                    )
+                )
+            ).scalars()
+        )
+    assert len(durable_events) == 1
+    assert durable_events[0].id == returned_events[0][0]

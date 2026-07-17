@@ -307,7 +307,7 @@ async def test_postgresql_blank_to_head_backfills_all_states_and_enforces_constr
 
         await migration_engine.dispose()
         migration_engine = None
-        run_alembic("head")
+        run_alembic("0011_call_state_machine")
         migration_engine = create_async_engine(migration_url)
         expected = {
             "pending": created_at,
