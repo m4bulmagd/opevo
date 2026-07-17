@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -30,6 +31,7 @@ def _load_migration():
     assert spec is not None and spec.loader is not None
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.context = SimpleNamespace(is_offline_mode=lambda: False)
     return module
 
 

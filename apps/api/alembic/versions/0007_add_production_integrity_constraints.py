@@ -7,7 +7,7 @@ Create Date: 2026-07-13 12:00:00
 
 from collections.abc import Sequence
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
@@ -136,7 +136,8 @@ def upgrade() -> None:
     # source_id is introduced below as nullable, so it cannot contain legacy
     # duplicates. Every condition possible in the pre-migration schema is
     # checked before the first DDL statement.
-    _run_preflight(op.get_bind())
+    if not context.is_offline_mode():
+        _run_preflight(op.get_bind())
 
     op.add_column(
         "usage_ledgers",

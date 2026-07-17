@@ -7,7 +7,7 @@ Create Date: 2026-07-17 12:00:00
 
 from collections.abc import Sequence
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
@@ -33,7 +33,8 @@ def _run_preflight(connection) -> None:
 
 
 def upgrade() -> None:
-    _run_preflight(op.get_bind())
+    if not context.is_offline_mode():
+        _run_preflight(op.get_bind())
 
     op.create_table(
         "business_profiles",
