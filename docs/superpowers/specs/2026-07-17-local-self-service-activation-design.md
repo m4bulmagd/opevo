@@ -5,6 +5,11 @@
 Approved product and architecture design based on repository exploration and the
 product decisions made through 2026-07-17. Implementation has not started.
 
+Implementation-plan review clarified one existing-state mismatch: the local
+MinIO stack currently installs a 30-day expiration rule. Because automatic
+retention was explicitly deferred, this slice removes that rule and preserves
+recordings until user deletion or a later approved retention policy.
+
 This document specializes the broader
 `2026-07-16-self-service-production-launch-design.md` for the next local-first
 product slice. Where the two designs differ, this document establishes the
@@ -615,6 +620,10 @@ analytics, pagination redesign, and full call-detail redesign remain separate.
 - French business numbers are normalized and validated server-side.
 - Original recordings remain available for normal calls until user deletion or
   a future retention policy removes them.
+- The repository's existing local MinIO 30-day expiration rule is removed in
+  this slice so local behavior does not silently enforce a retention decision
+  that has been deferred. Any future automatic retention policy requires its
+  own approved product/legal decision and implementation.
 - The current user-triggered deletion path is a product dependency and must not
   be described as permanent until database and object-storage purge is proven.
 - Verification sessions create no recording, transcript, summary, normal call
