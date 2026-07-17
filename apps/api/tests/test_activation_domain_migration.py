@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -29,6 +30,7 @@ def _load_migration():
     assert spec is not None and spec.loader is not None
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.context = SimpleNamespace(is_offline_mode=lambda: False)
     return module
 
 
@@ -111,6 +113,37 @@ def test_activation_revision_follows_call_state_machine() -> None:
 
     assert migration.revision == "0012_customer_activation"
     assert migration.down_revision == "0011_call_state_machine"
+
+
+def test_offline_upgrade_generates_full_chain_through_activation_head() -> None:
+    environment = {
+        **os.environ,
+        "DATABASE_URL": (
+            "postgresql+asyncpg://migration:password@database.example/presvo"
+        ),
+    }
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            "alembic.ini",
+            "upgrade",
+            "head",
+            "--sql",
+        ],
+        cwd=MIGRATION_PATH.parents[2],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert "0011_call_state_machine -> 0012_customer_activation" in output
+    assert "version_num='0012_customer_activation'" in output
 
 
 def test_upgrade_preflights_duplicate_phone_owners_before_ddl(monkeypatch) -> None:

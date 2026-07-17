@@ -1,6 +1,6 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from sqlalchemy import Column
@@ -20,6 +20,7 @@ def _load_migration() -> ModuleType:
     assert spec.loader is not None
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.context = SimpleNamespace(is_offline_mode=lambda: False)
     return module
 
 
