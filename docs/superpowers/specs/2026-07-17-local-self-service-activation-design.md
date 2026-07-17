@@ -85,6 +85,8 @@ builder remain later product work.
 - A dedicated five-milestone activation interface.
 - A minimal post-activation dashboard handoff that makes call summaries and
   outcomes clear.
+- A development-only local identity adapter for provider-free manual and
+  browser testing.
 - Deterministic local billing, telephony, and verification substitutes.
 - Automated coverage of state transitions, failures, concurrency, and the
   browser-level happy path.
@@ -446,6 +448,8 @@ allows another window. Duplicate webhook or completion events are idempotent.
 Local development must complete the whole journey without purchasing a number
 or deploying infrastructure:
 
+- a local identity adapter bootstraps one deterministic development user and
+  issues only the fixed local credential accepted by the development API;
 - fake billing activates the starter subscription deterministically;
 - fake provisioning assigns a reserved, non-routable test number;
 - fake carrier lookup returns configurable normalized results or controlled
@@ -456,7 +460,8 @@ or deploying infrastructure:
 
 Development controls are registered only in an explicit local/test environment.
 They are absent in production routing, not merely hidden in the UI. Production
-startup fails closed if fake billing or telephony is selected.
+startup fails closed if local identity, fake billing, or fake telephony is
+selected. The local credential is never accepted when Clerk mode is active.
 
 Selecting real Telnyx, Stripe, or LiveKit behavior requires explicit settings
 and credentials. Credentialed provider evaluations remain optional during local
@@ -604,6 +609,9 @@ analytics, pagination redesign, and full call-detail redesign remain separate.
 ## Privacy and Security
 
 - Every activation API requires authenticated user ownership.
+- Local identity mode is server-configured, development-only, uses no
+  customer-selected identity, and is rejected by both API and web production
+  startup validation.
 - French business numbers are normalized and validated server-side.
 - Original recordings remain available for normal calls until user deletion or
   a future retention policy removes them.
@@ -655,6 +663,8 @@ automatically.
 ### API and services
 
 - Authentication and cross-account isolation for every endpoint.
+- Local identity acceptance in development and unconditional rejection in
+  production or Clerk mode.
 - Canonical snapshot precedence and stable blocker codes.
 - Carrier lookup success, normalization, fallback, timeout, rate limit, and
   provider failure.
@@ -737,6 +747,8 @@ The slice is complete when:
 - every expected failure produces a safe customer next action;
 - real provider calls are disabled by default locally and fake providers cannot
   be enabled in production;
+- the provider-free browser journey does not require Clerk, and local identity
+  mode cannot start in production;
 - the dashboard accurately reports answering state and exposes summary,
   structured outcome, follow-up, original audio, and deletion controls;
 - all deterministic API, agent, web, and browser tests pass;
