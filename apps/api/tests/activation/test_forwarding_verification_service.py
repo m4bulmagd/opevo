@@ -120,7 +120,6 @@ async def test_window_is_exactly_ten_minutes_and_records_one_safe_event(
     [
         ("user_inactive", "user_inactive"),
         ("profile_unconfirmed", "profile_not_confirmed"),
-        ("profile_stale", "profile_confirmation_stale"),
         ("profile_missing_carrier", "profile_incomplete"),
         ("phone_not_ready", "phone_not_ready"),
         ("provisioning_missing", "provisioning_not_succeeded"),
@@ -141,8 +140,6 @@ async def test_open_requires_current_provider_ready_provisioned_state(
         active_user.status = "disabled"
     elif case == "profile_unconfirmed":
         activation.profile_confirmed_at = None
-    elif case == "profile_stale":
-        activation.profile_confirmed_revision = profile.content_revision - 1
     elif case == "profile_missing_carrier":
         profile.confirmed_carrier = None
     elif case == "phone_not_ready":
@@ -239,6 +236,55 @@ async def test_current_success_cannot_be_reopened_or_mutated(
     assert as_utc(activation.forwarding_verified_at) == FIXED_NOW - timedelta(
         minutes=1
     )
+
+
+@pytest.mark.anyio
+async def test_stale_success_can_be_reopened_after_assigned_number_changes(
+    db_session,
+    active_user,
+) -> None:
+    profile, activation, phone, _provisioning = await _seed_provisioned_customer(
+        db_session, active_user
+    )
+    verified_fingerprint = routing_fingerprint(profile, phone)
+    activation.verification_status = "succeeded"
+    activation.verification_session_id = "stale-succeeded-session"
+    activation.verification_routing_fingerprint = verified_fingerprint
+    activation.verified_routing_fingerprint = verified_fingerprint
+    activation.forwarding_verified_at = FIXED_NOW - timedelta(minutes=1)
+    phone.e164 = ALTERNATE_PRESVO_NUMBER
+    await db_session.commit()
+
+    reopened = await _service(db_session).open_window(active_user.id)
+
+    assert reopened.verification_status == "open"
+    assert reopened.verification_window_started_at == FIXED_NOW
+    assert reopened.verification_session_id is None
+    assert reopened.verified_routing_fingerprint is None
+    assert reopened.forwarding_verified_at is None
+    assert len(await _events(db_session, "verification_window_opened")) == 1
+
+
+@pytest.mark.anyio
+async def test_content_only_edit_after_confirmation_remains_eligible_to_open(
+    db_session,
+    active_user,
+) -> None:
+    profile, activation, _phone, _provisioning = (
+        await _seed_provisioned_customer(db_session, active_user)
+    )
+    confirmed_revision = activation.profile_confirmed_revision
+    routing_revision = profile.routing_revision
+    profile.public_description = "Dépannage, installation et conseil."
+    profile.content_revision += 1
+    await db_session.commit()
+
+    opened = await _service(db_session).open_window(active_user.id)
+
+    assert activation.profile_confirmed_revision == confirmed_revision
+    assert profile.routing_revision == routing_revision
+    assert opened.verification_status == "open"
+    assert opened.verification_window_started_at == FIXED_NOW
 
 
 @pytest.mark.anyio
