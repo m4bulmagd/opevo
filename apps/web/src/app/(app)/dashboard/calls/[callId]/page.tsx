@@ -2,8 +2,10 @@ import { notFound } from "next/navigation";
 
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { CallDetailCard } from "@/components/calls/call-detail-card";
+import { DeleteCallDialog } from "@/components/calls/delete-call-dialog";
 import { RecordingPanel } from "@/components/calls/recording-panel";
 import { TranscriptPanel } from "@/components/calls/transcript-panel";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { BackendApiError } from "@/lib/api/backend-client";
 import { getCallDetail } from "@/lib/api/calls";
 import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
@@ -31,6 +33,13 @@ export default async function CallDetailPage({ params }: { params: Promise<{ cal
         </div>
         <aside className="flex flex-col gap-4 md:gap-6">
           <RecordingPanel recordingUrl={call.recording_url} />
+          {call.status === "completed" || call.status === "failed" ? (
+            <DeleteCallDialog callId={call.id} />
+          ) : (
+            <Alert>
+              <AlertDescription>Remove call will be available after the call completes.</AlertDescription>
+            </Alert>
+          )}
         </aside>
       </div>
     );

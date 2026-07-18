@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { canEnterDashboard } from "@/app/(activation)/activate/_components/stage-router";
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { AgentSnapshotCard } from "@/components/dashboard/agent-snapshot-card";
+import { AnsweringStatusBanner } from "@/components/dashboard/answering-status-banner";
 import { OnboardingStatusCard } from "@/components/dashboard/onboarding-status-card";
 import { RecentCallsList } from "@/components/dashboard/recent-calls-list";
 import { SetupChecklist } from "@/components/dashboard/setup-checklist";
@@ -41,6 +42,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="@container/main flex flex-col gap-4 md:gap-6">
+      <AnsweringStatusBanner onboardingStatus={onboardingStatus} />
       <StatusSummaryCards
         agentConfig={agentConfig}
         onboardingStatus={onboardingStatus}

@@ -94,7 +94,7 @@ describe("dashboard page", () => {
       subscription_status: "active",
       plan_tier: "starter",
       minutes_remaining: 183,
-      phone_number: "+35315551234",
+      phone_number: "+3315551234",
       phone_number_status: "ready",
       agent_setup_complete: true,
       can_retry_provisioning: false,

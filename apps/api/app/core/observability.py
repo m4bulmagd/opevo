@@ -50,13 +50,16 @@ _UNSAFE_OTLP_HTTP_LOG_TEMPLATES = frozenset(
 
 _PROVIDER_OPERATIONS = {
     "telnyx": frozenset({"provision_number", "enable_number", "disable_number"}),
-    "s3": frozenset({"upload_bytes", "get_download_url", "get_bucket_lifecycle"}),
+    "s3": frozenset(
+        {"upload_bytes", "get_download_url", "delete_object", "get_bucket_lifecycle"}
+    ),
     "livekit": frozenset(
         {
             "list_dispatches",
             "create_dispatch",
             "start_recording",
             "stop_recording",
+            "ensure_recording_not_running",
             "ensure_recording_stopped",
         }
     ),

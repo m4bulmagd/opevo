@@ -9,7 +9,12 @@ from app.core.rate_limit import limiter
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.core.database import get_session
 from app.schemas.calls import CallDetailResponse, CallHistoryListResponse
-from app.services.call_history_service import CallHistoryNotFoundError, CallHistoryService
+from app.services.call_history_service import (
+    CallDeleteActiveError,
+    CallDeleteRetryableError,
+    CallHistoryNotFoundError,
+    CallHistoryService,
+)
 from app.services.recording_service import RecordingService, get_recording_service
 
 
@@ -51,7 +56,9 @@ async def get_call(
 
 
 @router.delete("/{call_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("60/minute")
 async def delete_call(
+    request: Request,
     call_id: UUID,
     identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_history_service),
@@ -60,4 +67,14 @@ async def delete_call(
         await service.delete_call(identity.internal_user_id, call_id)
     except CallHistoryNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found") from exc
+    except CallDeleteActiveError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "call_delete_active"},
+        ) from None
+    except CallDeleteRetryableError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "call_delete_retryable"},
+        ) from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)

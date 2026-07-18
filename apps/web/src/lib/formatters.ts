@@ -27,7 +27,7 @@ export function formatMinutes(value: number | null) {
 }
 
 export function formatPhoneNumber(value: string | null) {
-  return value ?? "Unknown caller";
+  return value ?? "Private caller";
 }
 
 export function toTitleCase(value: string | null | undefined) {

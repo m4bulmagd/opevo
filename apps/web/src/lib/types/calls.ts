@@ -1,4 +1,14 @@
-export type CallHistoryListItem = {
+export type CallSummaryStatus = "processing" | "ready" | "unavailable";
+
+export type CallSummaryFields = {
+  summary_status: CallSummaryStatus;
+  caller_intent: string | null;
+  action_items: string[] | null;
+  sentiment: string | null;
+  follow_up_required: boolean | null;
+};
+
+export type CallHistoryListItem = CallSummaryFields & {
   id: string;
   status: string;
   caller_number: string | null;
@@ -21,7 +31,7 @@ export type CallTranscriptLine = {
   created_at: string;
 };
 
-export type CallDetail = {
+export type CallDetail = CallSummaryFields & {
   id: string;
   status: string;
   caller_number: string | null;

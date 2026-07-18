@@ -22,8 +22,8 @@ function getChecklistSteps(agentConfig: AgentConfig | null, onboardingStatus: On
       complete: ["active", "trialing"].includes(onboardingStatus.subscription_status ?? ""),
     },
     {
-      title: "Provision your Irish number",
-      description: "Wait for the app to assign your live number before you enable routing.",
+      title: "Set up your Presvo number",
+      description: "Wait for Presvo to assign your number before you enable routing.",
       complete: onboardingStatus.phone_number_status === "ready",
     },
     {
@@ -92,7 +92,7 @@ export function SetupChecklist({
       </CardContent>
       <CardFooter>
         <Button asChild>
-          <Link href="/dashboard/agent">Open receptionist settings</Link>
+          <Link href="/activate">Review activation</Link>
         </Button>
       </CardFooter>
     </Card>

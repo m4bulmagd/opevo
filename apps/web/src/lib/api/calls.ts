@@ -14,7 +14,7 @@ export async function getCallDetail(callId: string) {
   return backendFetch<CallDetail>(`/api/calls/${callId}`);
 }
 
-export async function archiveCall(callId: string) {
+export async function deleteCall(callId: string) {
   return backendFetch<void>(`/api/calls/${callId}`, {
     method: "DELETE",
   });

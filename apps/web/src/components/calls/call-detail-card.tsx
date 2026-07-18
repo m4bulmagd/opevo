@@ -1,3 +1,4 @@
+import { CallOutcome } from "@/components/calls/call-outcome";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCallTime, formatDuration, formatMinutes, formatPhoneNumber } from "@/lib/formatters";
@@ -26,8 +27,14 @@ export function CallDetailCard({ call }: { call: CallDetail }) {
           </div>
         </div>
         <div className="rounded-lg border px-3 py-3">
-          <p className="text-muted-foreground text-xs">Summary</p>
-          <p className="mt-2 text-sm">{call.summary_text ?? "No summary available for this call."}</p>
+          <CallOutcome
+            summaryText={call.summary_text}
+            summary_status={call.summary_status}
+            caller_intent={call.caller_intent}
+            action_items={call.action_items}
+            sentiment={call.sentiment}
+            follow_up_required={call.follow_up_required}
+          />
         </div>
       </CardContent>
     </Card>

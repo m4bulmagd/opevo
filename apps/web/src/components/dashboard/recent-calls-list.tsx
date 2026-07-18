@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { AudioLines, Phone } from "lucide-react";
 
+import { CallOutcome } from "@/components/calls/call-outcome";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
@@ -52,9 +53,14 @@ export function RecentCallsList({ calls }: { calls: CallHistoryListItem[] }) {
                   <span>·</span>
                   <span>{call.has_recording ? "Recording available" : "No recording"}</span>
                 </div>
-                <p className="line-clamp-2 text-muted-foreground text-sm">
-                  {call.summary_text ?? "No summary yet for this conversation."}
-                </p>
+                <CallOutcome
+                  summaryText={call.summary_text}
+                  summary_status={call.summary_status}
+                  caller_intent={call.caller_intent}
+                  action_items={call.action_items}
+                  sentiment={call.sentiment}
+                  follow_up_required={call.follow_up_required}
+                />
               </Link>
             ))}
           </div>

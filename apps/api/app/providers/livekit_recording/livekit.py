@@ -130,13 +130,34 @@ class LiveKitRecordingProvider(RecordingProvider):
 
     @instrument_provider("livekit", "ensure_recording_stopped")
     async def ensure_stopped(self, egress_id: str) -> None:
+        await self._ensure_terminal_status(
+            egress_id,
+            accepted_terminal_statuses=self._SUCCESSFUL_TERMINAL_STATUSES,
+        )
+
+    @instrument_provider("livekit", "ensure_recording_not_running")
+    async def ensure_not_running(self, egress_id: str) -> None:
+        await self._ensure_terminal_status(
+            egress_id,
+            accepted_terminal_statuses=(
+                self._SUCCESSFUL_TERMINAL_STATUSES
+                | self._FAILED_TERMINAL_STATUSES
+            ),
+        )
+
+    async def _ensure_terminal_status(
+        self,
+        egress_id: str,
+        *,
+        accepted_terminal_statuses: frozenset,
+    ) -> None:
         info = await self._get_egress(egress_id)
         if info is None:
             raise LiveKitRecordingProviderError(
                 "provider_retryable",
                 error_class="unavailable",
             )
-        if info.status in self._SUCCESSFUL_TERMINAL_STATUSES:
+        if info.status in accepted_terminal_statuses:
             return
         self._raise_for_failed_terminal(info.status)
         if info.status not in self._STOPPABLE_STATUSES:
@@ -152,7 +173,7 @@ class LiveKitRecordingProvider(RecordingProvider):
                 "provider_retryable",
                 error_class="unavailable",
             )
-        if refreshed.status in self._SUCCESSFUL_TERMINAL_STATUSES:
+        if refreshed.status in accepted_terminal_statuses:
             return
         self._raise_for_failed_terminal(refreshed.status)
         raise LiveKitRecordingProviderError(

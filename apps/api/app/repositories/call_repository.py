@@ -127,7 +127,7 @@ class CallRepository:
     async def get_by_id_for_update(self, call_id: UUID) -> Call | None:
         result = await self.session.execute(
             select(Call)
-            .where(Call.id == call_id)
+            .where(Call.id == call_id, Call.deleted_at.is_(None))
             .with_for_update()
             .execution_options(populate_existing=True)
         )
@@ -144,6 +144,7 @@ class CallRepository:
             .where(
                 Call.status == "pending",
                 Call.state_changed_at <= stale_before,
+                Call.deleted_at.is_(None),
             )
             .order_by(Call.state_changed_at, Call.id)
             .limit(limit)
@@ -161,6 +162,7 @@ class CallRepository:
         result = await self.session.execute(
             select(Call)
             .where(
+                Call.deleted_at.is_(None),
                 or_(
                     (Call.status == "connected")
                     & (Call.state_changed_at <= connected_before),
@@ -226,6 +228,17 @@ class CallRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_id_for_user_including_deleted(
+        self,
+        call_id: UUID,
+        *,
+        user_id: UUID,
+    ) -> Call | None:
+        result = await self.session.execute(
+            select(Call).where(Call.id == call_id, Call.user_id == user_id)
+        )
+        return result.scalar_one_or_none()
+
     async def create_pending(
         self,
         *,
@@ -259,6 +272,7 @@ class CallRepository:
                 Call.livekit_room_id == room_name,
                 Call.status == "pending",
                 Call.recording_egress_id.is_(None),
+                Call.deleted_at.is_(None),
             )
         )
         return result.scalar_one_or_none()
@@ -267,7 +281,11 @@ class CallRepository:
         now = datetime.now(timezone.utc)
         result = await self.session.execute(
             update(Call)
-            .where(Call.id == call_id, Call.status == "pending")
+            .where(
+                Call.id == call_id,
+                Call.status == "pending",
+                Call.deleted_at.is_(None),
+            )
             .values(
                 status="connected",
                 started_at=now,
@@ -290,6 +308,7 @@ class CallRepository:
                 Call.id == call_id,
                 Call.recording_egress_id.is_(None),
                 Call.status == "connected",
+                Call.deleted_at.is_(None),
             )
             .with_for_update()
             .execution_options(populate_existing=True)
@@ -355,6 +374,18 @@ class CallRepository:
         return call
 
     async def soft_delete(self, call: Call) -> Call:
+        call.deleted_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return call
+
+    async def purge_customer_content(self, call: Call) -> Call:
+        call.caller_number = None
+        call.summary_text = None
+        call.summary_data = None
+        call.summary_transcript_max_sequence = None
+        call.recording_object_key = None
+        call.recording_url = None
+        call.recording_egress_id = None
         call.deleted_at = datetime.now(timezone.utc)
         await self.session.flush()
         return call

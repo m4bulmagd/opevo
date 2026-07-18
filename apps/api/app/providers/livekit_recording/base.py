@@ -17,3 +17,6 @@ class RecordingProvider:
 
     async def ensure_stopped(self, egress_id: str) -> None:
         raise NotImplementedError
+
+    async def ensure_not_running(self, egress_id: str) -> None:
+        raise NotImplementedError

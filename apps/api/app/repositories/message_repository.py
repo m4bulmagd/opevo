@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,6 +60,9 @@ class MessageRepository:
             .order_by(CallMessage.sequence_number.asc(), CallMessage.created_at.asc())
         )
         return list(result.scalars())
+
+    async def delete_by_call_id(self, call_id: UUID) -> None:
+        await self.session.execute(delete(CallMessage).where(CallMessage.call_id == call_id))
 
     async def max_sequence_by_call_id(self, call_id: UUID) -> int:
         value = await self.session.scalar(

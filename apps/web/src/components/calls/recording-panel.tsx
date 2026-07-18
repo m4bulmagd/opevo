@@ -1,8 +1,5 @@
-import Link from "next/link";
-
 import { AudioLines } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function RecordingPanel({ recordingUrl }: { recordingUrl: string | null }) {
@@ -10,17 +7,18 @@ export function RecordingPanel({ recordingUrl }: { recordingUrl: string | null }
     <Card>
       <CardHeader>
         <CardTitle>Recording</CardTitle>
-        <CardDescription>
-          Fresh signed recording access is shown here when the object is still available.
-        </CardDescription>
+        <CardDescription>Play the original call audio through a fresh private link.</CardDescription>
       </CardHeader>
       <CardContent>
         {recordingUrl ? (
-          <Button asChild>
-            <Link href={recordingUrl} target="_blank" rel="noreferrer">
-              Open recording
-            </Link>
-          </Button>
+          // biome-ignore lint/a11y/useMediaCaption: The adjacent call transcript provides the text alternative.
+          <audio
+            aria-label="Original call recording"
+            className="w-full"
+            controls
+            preload="metadata"
+            src={recordingUrl}
+          />
         ) : (
           <div className="flex items-center gap-2 rounded-lg border border-dashed px-4 py-4 text-muted-foreground text-sm">
             <AudioLines className="size-4" />

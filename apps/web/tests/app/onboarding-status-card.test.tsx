@@ -94,7 +94,7 @@ describe("onboarding status card", () => {
     render(
       <OnboardingStatusCard
         onboardingStatus={buildOnboardingStatus({
-          phone_number: "+35315551234",
+          phone_number: "+3315551234",
           phone_number_status: "ready",
           agent_setup_complete: true,
           stage: "routing_pending",
