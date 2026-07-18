@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 from app.core.database import get_session_factory
+from app.core.config import get_settings
 from app.core.logging import report_safe_exception
 from app.core.redaction import safe_log_label
 from app.providers.telephony.base import (
@@ -13,6 +14,7 @@ from app.providers.telephony.base import (
     TelephonyProvisioningPending,
     TelephonyProvisioningReviewRequired,
 )
+from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
@@ -233,10 +235,10 @@ async def phone_provisioning_job(
             )
             return
 
-        telephony_service = TelephonyService(
-            session,
-            provider=ctx.get("telephony_provider"),
-        )
+        provider = ctx.get("telephony_provider")
+        if provider is None:
+            provider = create_telephony_provider(get_settings())
+        telephony_service = TelephonyService(session, provider=provider)
         provisioning = await provisioning_repo.mark_running(
             user_id=user_id,
             target_country_code=country_code,

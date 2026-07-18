@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     telnyx_disabled_connection_id: str | None = None
     telnyx_ordering_enabled: bool = False
     carrier_lookup_mode: Literal["fake", "telnyx"] = "fake"
+    telephony_mode: Literal["fake", "telnyx"] = "fake"
+    billing_mode: Literal["fake", "stripe"] = "fake"
     gemini_api_key: str | None = None
     summary_provider: str = "gemini"
     summary_model: str = "gemini-2.5-flash"

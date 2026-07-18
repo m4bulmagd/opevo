@@ -13,6 +13,7 @@ from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
 from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
 from app.providers.summaries.gemini import GeminiSummaryProvider
 from app.providers.telephony.base import TelephonyProviderError
+from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
 from app.repositories.message_repository import MessageRepository
@@ -125,9 +126,7 @@ async def deliver_phone_routing(
 
     provider = ctx.get("telephony_provider")
     if provider is None:
-        from app.providers.telephony.telnyx import TelephonyTelnyx
-
-        provider = TelephonyTelnyx()
+        provider = create_telephony_provider(get_settings())
     try:
         if snapshot.should_enable:
             provider_connection_name = await provider.enable_number(

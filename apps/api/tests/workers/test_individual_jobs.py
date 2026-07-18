@@ -778,6 +778,45 @@ async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_de
 
 
 @pytest.mark.anyio
+async def test_phone_provisioning_job_defaults_to_local_factory_without_credentials(
+    db_session,
+    active_user,
+) -> None:
+    from app.models.phone_number_provisioning import PhoneNumberProvisioning
+    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+
+    user_id = active_user.id
+    active_user.country_code = "FR"
+    await db_session.commit()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    operation_key = "activation:phone.provision:local-default"
+
+    await phone_provisioning_job(
+        {"session_factory": session_factory},
+        {"user_id": str(user_id)},
+        provider_operation_key=operation_key,
+    )
+
+    db_session.expire_all()
+    provisioning = await db_session.scalar(
+        select(PhoneNumberProvisioning).where(
+            PhoneNumberProvisioning.user_id == user_id
+        )
+    )
+    phone_number = await db_session.scalar(
+        select(PhoneNumber).where(PhoneNumber.user_id == user_id)
+    )
+    assert provisioning is not None
+    assert provisioning.status == "succeeded"
+    assert provisioning.provider_operation_key == operation_key
+    assert phone_number is not None
+    assert phone_number.e164.startswith("+339")
+    assert phone_number.provider_number_id.startswith("fake-")
+    assert phone_number.provider_connection_name == "app-disabled"
+    assert phone_number.is_active is False
+
+
+@pytest.mark.anyio
 async def test_phone_provisioning_reuses_first_provider_key_across_customer_retry(
     db_session, active_user
 ) -> None:

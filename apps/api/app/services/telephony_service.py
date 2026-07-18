@@ -1,15 +1,21 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models.phone_number import PhoneNumber
 from app.providers.telephony.base import TelephonyProvider, TelephonyProviderError
-from app.providers.telephony.telnyx import TelephonyTelnyx, normalize_french_number
+from app.providers.telephony.factory import create_telephony_provider
+from app.providers.telephony.telnyx import normalize_french_number
 from app.repositories.phone_number_repository import PhoneNumberRepository
 
 
 class TelephonyService:
     def __init__(self, session: AsyncSession, provider: TelephonyProvider | None = None) -> None:
         self.session = session
-        self.provider = provider or TelephonyTelnyx()
+        self.provider = (
+            provider
+            if provider is not None
+            else create_telephony_provider(get_settings())
+        )
         self.phone_number_repository = PhoneNumberRepository(session)
 
     async def provision_number(
