@@ -303,9 +303,11 @@ async def test_activation_flow_denies_before_go_live_and_admits_after_provider_s
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("invalidation", ["activation_pending", "routing_changed"])
 async def test_livekit_outbox_rechecks_current_activation_prerequisites(
     db_session,
     monkeypatch,
+    invalidation: str,
 ) -> None:
     from app.core.config import get_settings
     from app.workers.jobs.outbox_delivery import OutboxDeliveryError
@@ -315,7 +317,7 @@ async def test_livekit_outbox_rechecks_current_activation_prerequisites(
     get_settings.cache_clear()
     try:
         user, phone, config = await _seed_eligible_user(db_session)
-        profile, _activation = await _seed_verified_activation(
+        profile, activation = await _seed_verified_activation(
             db_session,
             user=user,
             phone=phone,
@@ -335,8 +337,11 @@ async def test_livekit_outbox_rechecks_current_activation_prerequisites(
         call = (await db_session.scalars(select(Call))).one()
         call_id = call.id
 
-        profile.existing_phone_e164 = "+33199000201"
-        profile.routing_revision += 1
+        if invalidation == "activation_pending":
+            activation.activated_at = None
+        else:
+            profile.existing_phone_e164 = "+33199000201"
+            profile.routing_revision += 1
         await db_session.commit()
         session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 

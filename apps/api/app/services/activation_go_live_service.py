@@ -38,6 +38,7 @@ _GO_LIVE_PROJECTION_BLOCKERS = frozenset(
         ReadinessBlocker.PHONE_INACTIVE,
         ReadinessBlocker.PHONE_PROJECTION_INACTIVE,
         ReadinessBlocker.GO_LIVE_NOT_APPROVED,
+        ReadinessBlocker.GO_LIVE_NOT_ACTIVATED,
     }
 )
 _TERMINAL_FAILURE_CODE = "routing_provider_terminal"
@@ -139,6 +140,30 @@ class ActivationGoLiveService:
             if activation is None:
                 raise ActivationGoLiveBlockedError(("business_profile_incomplete",))
 
+            actual_readiness = evaluate_customer_readiness(
+                user=user,
+                subscription=subscription,
+                balance=balance,
+                phone_number=phone,
+                provisioning=provisioning,
+                agent_config=config,
+                business_profile=profile,
+                activation=activation,
+                activation_required=True,
+                now=self.now_provider(),
+            )
+
+            if activation.activated_at is not None and actual_readiness.can_route:
+                await self.session.commit()
+                return await self.snapshot_service.get(user_id)
+            if (
+                activation.go_live_requested_at is not None
+                and activation.go_live_approved_at is not None
+                and activation.activated_at is None
+            ):
+                await self.session.commit()
+                return await self.snapshot_service.get(user_id)
+
             readiness = evaluate_customer_readiness(
                 user=user,
                 subscription=subscription,
@@ -153,17 +178,6 @@ class ActivationGoLiveService:
                 go_live_approved_override=True,
                 now=self.now_provider(),
             )
-
-            if activation.activated_at is not None and readiness.can_route:
-                await self.session.commit()
-                return await self.snapshot_service.get(user_id)
-            if (
-                activation.go_live_requested_at is not None
-                and activation.go_live_approved_at is not None
-                and activation.activated_at is None
-            ):
-                await self.session.commit()
-                return await self.snapshot_service.get(user_id)
 
             blockers = tuple(
                 blocker.value

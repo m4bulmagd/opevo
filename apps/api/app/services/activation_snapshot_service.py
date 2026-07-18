@@ -130,6 +130,7 @@ class ActivationSnapshotService:
                 ),
                 forwarding_verified=activation_prerequisites.forwarding_verified,
                 go_live_approved=activation_prerequisites.go_live_approved,
+                go_live_activated=activation_prerequisites.go_live_activated,
             ),
             now=evaluation_time,
         )

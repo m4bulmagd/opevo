@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.models.activation_event import ActivationEvent
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
+from app.models.call import Call
 from app.models.customer_activation import CustomerActivation
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
@@ -19,7 +20,11 @@ from app.services.activation_go_live_service import (
     ActivationGoLiveService,
     fail_current_go_live_attempt,
 )
+from app.repositories.agent_config_repository import AgentConfigRepository
+from app.services.agent_config_service import AgentConfigService
+from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.forwarding_verification_service import as_utc
+from app.services.livekit_dispatch_service import LiveKitDispatchService
 from app.services.routing_fingerprint import routing_fingerprint
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
 from app.workers.jobs.outbox_topics import deliver_phone_routing
@@ -65,6 +70,53 @@ class _RoutingProvider:
     async def disable_number(self, *, provider_number_id: str) -> str:
         self.disabled.append(provider_number_id)
         return "app-disabled"
+
+
+class _StateChangingRoutingProvider(_RoutingProvider):
+    def __init__(self, session_factory, user_id) -> None:
+        super().__init__()
+        self.session_factory = session_factory
+        self.user_id = user_id
+        self.external_connection_name = "app-disabled"
+        self.compensation_failures_remaining = 1
+
+    async def enable_number(self, *, provider_number_id: str) -> str:
+        self.enabled.append(provider_number_id)
+        self.external_connection_name = "app-active"
+        async with self.session_factory() as session:
+            profile = await session.scalar(
+                select(BusinessProfile).where(BusinessProfile.user_id == self.user_id)
+            )
+            assert profile is not None
+            profile.existing_phone_e164 = "+33199000101"
+            profile.routing_revision += 1
+            await session.commit()
+        return self.external_connection_name
+
+    async def disable_number(self, *, provider_number_id: str) -> str:
+        self.disabled.append(provider_number_id)
+        if self.compensation_failures_remaining:
+            self.compensation_failures_remaining -= 1
+            from app.providers.telephony.base import TelephonyProviderError
+
+            raise TelephonyProviderError("provider_terminal")
+        self.external_connection_name = "app-disabled"
+        return self.external_connection_name
+
+
+def _sip_join(*, room: str) -> dict:
+    return {
+        "event": "participant_joined",
+        "room": {"name": room},
+        "participant": {
+            "identity": "caller",
+            "kind": "SIP",
+            "attributes": {
+                "sip.phoneNumber": "+33123456789",
+                "sip.trunkPhoneNumber": PRESVO_NUMBER,
+            },
+        },
+    }
 
 
 async def _seed_ready_customer(db_session, user):
@@ -209,6 +261,51 @@ async def test_go_live_records_one_pending_attempt_and_returns_activating(
 
 
 @pytest.mark.anyio
+async def test_old_active_projection_cannot_admit_calls_before_attempt_succeeds(
+    db_session,
+    active_user,
+) -> None:
+    _profile, activation, phone, config = await _seed_ready_customer(
+        db_session, active_user
+    )
+    phone.provider_connection_name = "app-active"
+    phone.is_active = True
+    await db_session.commit()
+
+    snapshot = await ActivationGoLiveService(
+        db_session,
+        now_provider=lambda: FIXED_NOW,
+    ).go_live(active_user.id, arq_pool=None)
+    dispatch = LiveKitDispatchService(
+        db_session,
+        realtime_service=None,
+        recording_service=object(),
+    )
+
+    result = await dispatch.handle_participant_joined(
+        _sip_join(room="room-before-current-go-live-success")
+    )
+
+    await db_session.refresh(activation)
+    await db_session.refresh(config)
+    assert snapshot.stage == "activating"
+    assert snapshot.runtime_readiness.can_route is False
+    assert "go_live_not_activated" in snapshot.runtime_readiness.blockers
+    assert activation.activated_at is None
+    assert config.is_enabled is True
+    assert result.status == "denied"
+    assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.topic == "livekit.dispatch")
+        )
+        == 0
+    )
+
+
+@pytest.mark.anyio
 async def test_pending_go_live_replay_is_idempotent_and_does_not_wake_again(
     db_session,
     active_user,
@@ -343,6 +440,80 @@ async def test_provider_projection_activates_only_the_current_attempt(
     assert await fail_current_go_live_attempt(db_session, event=current_event) is False
     await db_session.refresh(stored_activation)
     assert stored_activation.activated_at is not None
+
+
+@pytest.mark.anyio
+async def test_go_live_after_disable_starts_fresh_attempt_from_actual_state(
+    db_session,
+    active_user,
+) -> None:
+    _profile, activation, phone, config = await _seed_ready_customer(
+        db_session, active_user
+    )
+    previous_attempt_at = FIXED_NOW - timedelta(minutes=10)
+    activation.go_live_requested_at = previous_attempt_at
+    activation.go_live_approved_at = previous_attempt_at
+    activation.activated_at = FIXED_NOW - timedelta(minutes=9)
+    phone.provider_connection_name = "app-active"
+    phone.is_active = True
+    config.is_enabled = True
+    await db_session.commit()
+    activation_id = activation.id
+    config_id = config.id
+
+    await AgentConfigService(
+        db_session,
+        AgentConfigRepository(db_session),
+        CustomerReadinessService(db_session),
+    ).update_by_user_id(
+        active_user.id,
+        {"is_enabled": False},
+        requested_fields={"is_enabled"},
+    )
+    stale_disable = (
+        await db_session.scalars(
+            select(OutboxEvent).where(OutboxEvent.topic == "phone.disable")
+        )
+    ).one()
+
+    snapshot = await ActivationGoLiveService(
+        db_session,
+        now_provider=lambda: FIXED_NOW,
+    ).go_live(active_user.id, arq_pool=None)
+
+    await db_session.refresh(activation)
+    await db_session.refresh(config)
+    assert snapshot.stage == "activating"
+    assert activation.go_live_requested_at is not None
+    assert as_utc(activation.go_live_requested_at) > previous_attempt_at
+    assert activation.activated_at is None
+    assert config.is_enabled is True
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.topic == "phone.enable")
+        )
+        == 1
+    )
+
+    provider = _RoutingProvider()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    await deliver_phone_routing(
+        {"session_factory": session_factory, "telephony_provider": provider},
+        stale_disable,
+    )
+
+    db_session.expire_all()
+    stored_activation = await db_session.get(CustomerActivation, activation_id)
+    stored_config = await db_session.get(AgentConfig, config_id)
+    assert stored_activation is not None
+    assert stored_config is not None
+    assert stored_activation.go_live_requested_at is not None
+    assert stored_activation.activated_at is None
+    assert stored_config.is_enabled is True
+    assert provider.enabled == ["fake-number-go-live"]
+    assert provider.disabled == []
 
 
 @pytest.mark.anyio
@@ -538,3 +709,79 @@ async def test_current_attempt_fails_safely_if_phone_disappears_before_delivery(
     assert stored is not None
     assert stored.go_live_requested_at is None
     assert stored.last_failure_code == "routing_provider_terminal"
+
+
+@pytest.mark.anyio
+async def test_post_enable_ineligibility_compensates_and_retries_failed_disable(
+    db_session,
+    active_user,
+) -> None:
+    _profile, activation, phone, config = await _seed_ready_customer(
+        db_session, active_user
+    )
+    await ActivationGoLiveService(
+        db_session,
+        now_provider=lambda: FIXED_NOW,
+    ).go_live(active_user.id, arq_pool=None)
+    event = (await db_session.scalars(select(OutboxEvent))).one()
+    event_id = event.id
+    activation_id = activation.id
+    phone_id = phone.id
+    config_id = config.id
+    await db_session.commit()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    provider = _StateChangingRoutingProvider(session_factory, active_user.id)
+    current_time = datetime.now(UTC) + timedelta(seconds=5)
+    ctx = {
+        "session_factory": session_factory,
+        "outbox_handlers": {"phone.enable": deliver_phone_routing},
+        "telephony_provider": provider,
+        "outbox_now": lambda: current_time,
+        "outbox_terminal_failure_metric": lambda *_args: None,
+    }
+
+    first = await outbox_delivery_job(ctx)
+
+    db_session.expire_all()
+    after_failed_compensation = await db_session.get(
+        CustomerActivation, activation_id
+    )
+    pending_event = await db_session.get(OutboxEvent, event_id)
+    projected_phone = await db_session.get(PhoneNumber, phone_id)
+    assert after_failed_compensation is not None
+    assert pending_event is not None
+    assert projected_phone is not None
+    assert first == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
+    assert provider.enabled == ["fake-number-go-live"]
+    assert provider.disabled == ["fake-number-go-live"]
+    assert provider.external_connection_name == "app-active"
+    assert after_failed_compensation.go_live_requested_at is not None
+    assert after_failed_compensation.activated_at is None
+    assert pending_event.status == "pending"
+    assert projected_phone.provider_connection_name == "app-active"
+    assert projected_phone.is_active is True
+
+    current_time = as_utc(pending_event.next_attempt_at)
+    second = await outbox_delivery_job(ctx)
+
+    db_session.expire_all()
+    stored_activation = await db_session.get(CustomerActivation, activation_id)
+    stored_event = await db_session.get(OutboxEvent, event_id)
+    stored_phone = await db_session.get(PhoneNumber, phone_id)
+    stored_config = await db_session.get(AgentConfig, config_id)
+    assert stored_activation is not None
+    assert stored_event is not None
+    assert stored_phone is not None
+    assert stored_config is not None
+    assert second == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
+    assert provider.enabled == ["fake-number-go-live"]
+    assert provider.disabled == ["fake-number-go-live", "fake-number-go-live"]
+    assert provider.external_connection_name == "app-disabled"
+    assert stored_phone.provider_connection_name == "app-disabled"
+    assert stored_phone.is_active is False
+    assert stored_activation.go_live_requested_at is None
+    assert stored_activation.go_live_approved_at is None
+    assert stored_activation.activated_at is None
+    assert stored_activation.last_failure_code == "routing_provider_terminal"
+    assert stored_config.is_enabled is False
+    assert stored_event.status == "failed"

@@ -211,7 +211,7 @@ async def test_get_loads_each_authoritative_row_once_and_returns_active_snapshot
     assert snapshot.number.assigned_e164 == "+33912345678"
     assert snapshot.number.provider_ready is True
     assert snapshot.runtime_readiness.can_route is True
-    assert snapshot.runtime_readiness.policy_version == "runtime-v2"
+    assert snapshot.runtime_readiness.policy_version == "runtime-v3"
     assert "last_error_payload" not in snapshot.model_dump_json()
     assert "secret_provider_detail" not in snapshot.model_dump_json()
     for repository in repositories.values():
