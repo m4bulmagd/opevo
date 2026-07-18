@@ -2,10 +2,10 @@ import { AgentRuntimeCard } from "@/components/agent/agent-runtime-card";
 import { AgentSettingsForm } from "@/components/agent/agent-settings-form";
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { getAgentConfig } from "@/lib/api/agent";
-import { isClerkConfigured } from "@/lib/auth/clerk-config";
+import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 
 export default async function AgentPage() {
-  if (!isClerkConfigured) {
+  if (!isAppAuthConfigured) {
     return (
       <ClerkSetupNotice
         title="Agent settings are unavailable"

@@ -1,10 +1,10 @@
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { CallsTable } from "@/components/calls/calls-table";
 import { listCalls } from "@/lib/api/calls";
-import { isClerkConfigured } from "@/lib/auth/clerk-config";
+import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 
 export default async function CallsPage() {
-  if (!isClerkConfigured) {
+  if (!isAppAuthConfigured) {
     return (
       <ClerkSetupNotice
         title="Call history is unavailable"

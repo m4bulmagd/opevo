@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
-import { isClerkConfigured, shouldUseClerkMiddleware } from "@/lib/auth/clerk-config";
+import { shouldWrapClerk } from "@/lib/auth/clerk-config";
 
-const isProtectedRoute = createRouteMatcher(["/dashboard(.*)"]);
+const isProtectedRoute = createRouteMatcher(["/activate(.*)", "/dashboard(.*)"]);
 
 const authProxy = clerkMiddleware(async (auth, request) => {
   if (isProtectedRoute(request)) {
@@ -12,10 +12,7 @@ const authProxy = clerkMiddleware(async (auth, request) => {
   }
 });
 
-export default shouldUseClerkMiddleware({
-  nodeEnv: process.env.NODE_ENV,
-  clerkConfigured: isClerkConfigured,
-})
+export default shouldWrapClerk
   ? authProxy
   : () => {
       return NextResponse.next();

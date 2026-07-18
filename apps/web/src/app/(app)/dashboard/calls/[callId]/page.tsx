@@ -6,10 +6,10 @@ import { RecordingPanel } from "@/components/calls/recording-panel";
 import { TranscriptPanel } from "@/components/calls/transcript-panel";
 import { BackendApiError } from "@/lib/api/backend-client";
 import { getCallDetail } from "@/lib/api/calls";
-import { isClerkConfigured } from "@/lib/auth/clerk-config";
+import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 
 export default async function CallDetailPage({ params }: { params: Promise<{ callId: string }> }) {
-  if (!isClerkConfigured) {
+  if (!isAppAuthConfigured) {
     return (
       <ClerkSetupNotice
         title="Call details are unavailable"
