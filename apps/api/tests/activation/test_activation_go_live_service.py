@@ -21,6 +21,7 @@ from app.services.activation_go_live_service import (
     fail_current_go_live_attempt,
 )
 from app.repositories.agent_config_repository import AgentConfigRepository
+from app.repositories.outbox_repository import OutboxRepository
 from app.services.agent_config_service import AgentConfigService
 from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.forwarding_verification_service import as_utc
@@ -136,6 +137,24 @@ class _ProviderIdentityChangingRoutingProvider(_RoutingProvider):
         return "app-disabled"
 
 
+class _ProviderIdentityChangingWithFailedCompensation(
+    _ProviderIdentityChangingRoutingProvider
+):
+    def __init__(self, session_factory, phone_number_id) -> None:
+        super().__init__(session_factory, phone_number_id)
+        self.compensation_failures_remaining = 1
+
+    async def disable_number(self, *, provider_number_id: str) -> str:
+        self.disabled.append(provider_number_id)
+        if self.compensation_failures_remaining:
+            self.compensation_failures_remaining -= 1
+            from app.providers.telephony.base import TelephonyProviderError
+
+            raise TelephonyProviderError("provider_terminal")
+        self.externally_active.discard(provider_number_id)
+        return "app-disabled"
+
+
 def _sip_join(*, room: str) -> dict:
     return {
         "event": "participant_joined",
@@ -149,6 +168,18 @@ def _sip_join(*, room: str) -> dict:
             },
         },
     }
+
+
+async def _claim_event(db_session, event_id):
+    event = await db_session.get(OutboxEvent, event_id)
+    assert event is not None
+    claimed = await OutboxRepository(db_session).claim_batch(
+        limit=1,
+        now=as_utc(event.next_attempt_at) + timedelta(seconds=1),
+    )
+    await db_session.commit()
+    assert [item.id for item in claimed] == [event_id]
+    return claimed[0]
 
 
 async def _seed_ready_customer(db_session, user):
@@ -429,6 +460,7 @@ async def test_provider_projection_activates_only_the_current_attempt(
     phone_id = phone.id
     user_id = active_user.id
     await db_session.commit()
+    event = await _claim_event(db_session, event_id)
     provider = _RoutingProvider()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
@@ -531,6 +563,7 @@ async def test_go_live_after_disable_starts_fresh_attempt_from_actual_state(
 
     provider = _RoutingProvider()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    stale_disable = await _claim_event(db_session, stale_disable.id)
     await deliver_phone_routing(
         {"session_factory": session_factory, "telephony_provider": provider},
         stale_disable,
@@ -925,6 +958,7 @@ async def test_provider_identity_change_compensates_old_id_before_retry_success(
     assert projected_phone is not None
     assert first == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
     assert pending.status == "pending"
+    assert pending.routing_target_provider_number_id is None
     assert pending_activation.activated_at is None
     assert projected_phone.provider_number_id == "fake-number-replacement"
     assert projected_phone.provider_connection_name == "app-disabled"
@@ -944,9 +978,79 @@ async def test_provider_identity_change_compensates_old_id_before_retry_success(
     assert stored_phone is not None
     assert second == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
     assert stored_event.status == "delivered"
+    assert stored_event.routing_target_provider_number_id is None
     assert stored_activation.activated_at is not None
     assert stored_phone.provider_connection_name == "app-active"
     assert stored_phone.is_active is True
     assert provider.enabled == ["fake-number-go-live", "fake-number-replacement"]
     assert provider.disabled == ["fake-number-go-live"]
+    assert provider.externally_active == {"fake-number-replacement"}
+
+
+@pytest.mark.anyio
+async def test_provider_identity_change_retains_old_id_until_compensation_succeeds(
+    db_session,
+    active_user,
+) -> None:
+    _profile, activation, phone, _config = await _seed_ready_customer(
+        db_session, active_user
+    )
+    await ActivationGoLiveService(
+        db_session,
+        now_provider=lambda: FIXED_NOW,
+    ).go_live(active_user.id, arq_pool=None)
+    event = (await db_session.scalars(select(OutboxEvent))).one()
+    event_id = event.id
+    activation_id = activation.id
+    phone_id = phone.id
+    await db_session.commit()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    provider = _ProviderIdentityChangingWithFailedCompensation(
+        session_factory,
+        phone_id,
+    )
+    current_time = datetime.now(UTC) + timedelta(seconds=5)
+    ctx = {
+        "session_factory": session_factory,
+        "outbox_handlers": {"phone.enable": deliver_phone_routing},
+        "telephony_provider": provider,
+        "outbox_now": lambda: current_time,
+        "outbox_terminal_failure_metric": lambda *_args: None,
+    }
+
+    first = await outbox_delivery_job(ctx)
+
+    db_session.expire_all()
+    pending = await db_session.get(OutboxEvent, event_id)
+    pending_activation = await db_session.get(CustomerActivation, activation_id)
+    assert pending is not None
+    assert pending_activation is not None
+    assert first == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
+    assert pending.status == "pending"
+    assert (
+        pending.routing_target_provider_number_id == "fake-number-go-live"
+    )
+    assert pending_activation.activated_at is None
+    assert provider.enabled == ["fake-number-go-live"]
+    assert provider.disabled == ["fake-number-go-live"]
+    assert provider.externally_active == {"fake-number-go-live"}
+
+    current_time = as_utc(pending.next_attempt_at)
+    second = await outbox_delivery_job(ctx)
+
+    db_session.expire_all()
+    stored_event = await db_session.get(OutboxEvent, event_id)
+    stored_activation = await db_session.get(CustomerActivation, activation_id)
+    stored_phone = await db_session.get(PhoneNumber, phone_id)
+    assert stored_event is not None
+    assert stored_activation is not None
+    assert stored_phone is not None
+    assert second == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
+    assert stored_event.status == "delivered"
+    assert stored_event.routing_target_provider_number_id is None
+    assert stored_activation.activated_at is not None
+    assert stored_phone.provider_number_id == "fake-number-replacement"
+    assert stored_phone.provider_connection_name == "app-active"
+    assert provider.enabled == ["fake-number-go-live", "fake-number-replacement"]
+    assert provider.disabled == ["fake-number-go-live", "fake-number-go-live"]
     assert provider.externally_active == {"fake-number-replacement"}

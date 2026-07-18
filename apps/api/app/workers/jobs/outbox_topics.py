@@ -29,6 +29,7 @@ from app.repositories.customer_activation_repository import (
     CustomerActivationRepository,
 )
 from app.repositories.message_repository import MessageRepository
+from app.repositories.outbox_repository import OutboxRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
@@ -154,37 +155,104 @@ async def deliver_phone_routing(
 ) -> None:
     user_id = UUID(event.payload["user_id"])
     session_factory = ctx.get("session_factory") or get_session_factory()
-    async with session_factory() as session:
-        snapshot = await _routing_snapshot(session, user_id, event=event)
-        await session.commit()
+    provider = ctx.get("telephony_provider")
+    if provider is None:
+        provider = create_telephony_provider(get_settings())
+    routing_target = event.routing_target_provider_number_id
+
+    try:
+        async with session_factory() as session:
+            snapshot = await _routing_snapshot(session, user_id, event=event)
+            await session.commit()
+    except OutboxDeliveryError:
+        if routing_target is not None:
+            await _compensate_provider_enable(
+                provider,
+                provider_number_id=routing_target,
+            )
+            await _clear_routing_target(
+                session_factory,
+                event=event,
+                provider_number_id=routing_target,
+            )
+        raise
+
+    reconciled_connection_name: str | None = None
+    if routing_target is not None and (
+        snapshot is None
+        or not snapshot.should_enable
+        or snapshot.provider_number_id != routing_target
+    ):
+        reconciled_current_disable = bool(
+            snapshot is not None
+            and not snapshot.should_enable
+            and snapshot.provider_number_id == routing_target
+        )
+        await _compensate_provider_enable(
+            provider,
+            provider_number_id=routing_target,
+        )
+        if snapshot is not None:
+            await _persist_phone_projection(
+                session_factory,
+                user_id=user_id,
+                phone_number_id=snapshot.phone_number.id,
+                provider_number_id=routing_target,
+                provider_connection_name="app-disabled",
+            )
+        await _clear_routing_target(
+            session_factory,
+            event=event,
+            provider_number_id=routing_target,
+        )
+        routing_target = None
+        if reconciled_current_disable:
+            reconciled_connection_name = "app-disabled"
+        else:
+            async with session_factory() as session:
+                snapshot = await _routing_snapshot(session, user_id, event=event)
+                await session.commit()
 
     if snapshot is None:
         return
     desired_connection_name = "app-active" if snapshot.should_enable else "app-disabled"
 
-    provider = ctx.get("telephony_provider")
-    if provider is None:
-        provider = create_telephony_provider(get_settings())
-    try:
-        if snapshot.should_enable:
-            provider_connection_name = await provider.enable_number(
-                provider_number_id=snapshot.provider_number_id
-            )
-        else:
-            provider_connection_name = await provider.disable_number(
-                provider_number_id=snapshot.provider_number_id
-            )
-    except TelephonyProviderError as exc:
-        if snapshot.terminal_after_projection:
+    if (
+        reconciled_connection_name is None
+        and snapshot.should_enable
+        and routing_target is None
+    ):
+        await _set_routing_target(
+            session_factory,
+            event=event,
+            provider_number_id=snapshot.provider_number_id,
+        )
+        routing_target = snapshot.provider_number_id
+
+    if reconciled_connection_name is not None:
+        provider_connection_name = reconciled_connection_name
+    else:
+        try:
+            if snapshot.should_enable:
+                assert routing_target == snapshot.provider_number_id
+                provider_connection_name = await provider.enable_number(
+                    provider_number_id=routing_target
+                )
+            else:
+                provider_connection_name = await provider.disable_number(
+                    provider_number_id=snapshot.provider_number_id
+                )
+        except TelephonyProviderError as exc:
+            if snapshot.terminal_after_projection:
+                raise OutboxDeliveryError(
+                    "provider_retryable",
+                    retryable=True,
+                    exhaustible=False,
+                ) from None
             raise OutboxDeliveryError(
-                "provider_retryable",
-                retryable=True,
-                exhaustible=False,
+                exc.category,
+                retryable=exc.retryable,
             ) from None
-        raise OutboxDeliveryError(
-            exc.category,
-            retryable=exc.retryable,
-        ) from None
     if provider_connection_name != desired_connection_name:
         raise OutboxDeliveryError(
             "provider_retryable",
@@ -242,6 +310,12 @@ async def deliver_phone_routing(
                         "dispatch_ineligible",
                         retryable=False,
                     )
+                if routing_target is not None:
+                    await _clear_routing_target(
+                        session_factory,
+                        event=event,
+                        provider_number_id=routing_target,
+                    )
                 return
     except OutboxDeliveryError:
         if provider_connection_name != "app-active":
@@ -264,6 +338,12 @@ async def deliver_phone_routing(
             provider_number_id=snapshot.provider_number_id,
             provider_connection_name="app-disabled",
         )
+        if routing_target is not None:
+            await _clear_routing_target(
+                session_factory,
+                event=event,
+                provider_number_id=routing_target,
+            )
         raise
 
     await _persist_phone_projection(
@@ -287,6 +367,12 @@ async def deliver_phone_routing(
         provider_number_id=snapshot.provider_number_id,
         provider_connection_name="app-disabled",
     )
+    if routing_target is not None:
+        await _clear_routing_target(
+            session_factory,
+            event=event,
+            provider_number_id=routing_target,
+        )
 
     async with session_factory() as session:
         current = await _routing_snapshot(session, user_id, event=event)
@@ -300,6 +386,44 @@ async def deliver_phone_routing(
         raise OutboxDeliveryError("dispatch_ineligible", retryable=False)
     if should_enable:
         raise OutboxDeliveryError("provider_retryable", retryable=True)
+
+
+async def _set_routing_target(
+    session_factory,
+    *,
+    event: OutboxEvent,
+    provider_number_id: str,
+) -> None:
+    async with session_factory() as session:
+        stored = await OutboxRepository(session).set_routing_target(
+            event_id=event.id,
+            attempt_count=event.attempt_count,
+            provider_number_id=provider_number_id,
+        )
+        await session.commit()
+    if not stored:
+        raise OutboxDeliveryError("provider_retryable", retryable=True)
+
+
+async def _clear_routing_target(
+    session_factory,
+    *,
+    event: OutboxEvent,
+    provider_number_id: str,
+) -> None:
+    async with session_factory() as session:
+        cleared = await OutboxRepository(session).clear_routing_target(
+            event_id=event.id,
+            attempt_count=event.attempt_count,
+            provider_number_id=provider_number_id,
+        )
+        await session.commit()
+    if not cleared:
+        raise OutboxDeliveryError(
+            "provider_retryable",
+            retryable=True,
+            exhaustible=False,
+        )
 
 
 async def _compensate_provider_enable(provider, *, provider_number_id: str) -> None:
