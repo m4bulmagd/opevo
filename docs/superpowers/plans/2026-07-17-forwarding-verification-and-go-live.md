@@ -123,8 +123,8 @@ Use these current official sources in the catalog:
   `https://assistance.free.fr/articles/552`
 - Free mobile forwarding overview:
   `https://assistance.free.fr/articles/1755`
-- Bouygues current tariff guide confirming forwarding availability:
-  `https://www.bouyguestelecom.fr/static/cms/tarifs/guide_des_tarifs_GP_decembre_2024.pdf`
+- Bouygues current tariff guide confirming forwarding availability and billing:
+  `https://www.bouyguestelecom.fr/static/cms/tarifs/20260330_RCBT_Guide-des-tarifs_BD.pdf`
 
 Exact copyable fixed-line codes are limited to:
 
