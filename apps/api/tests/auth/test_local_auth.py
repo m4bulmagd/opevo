@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import (
 from app.core.auth import LocalAuthProvider
 from app.core.config import Settings
 from app.core.database import get_session
-from app.main import create_app
 from app.models import Base
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
@@ -88,6 +87,8 @@ async def local_client(
     tmp_path: Path,
     local_settings: Settings,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, str]]:
+    from app.main import create_app
+
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'local_auth.db'}"
     engine = create_async_engine(database_url, future=True)
     async with engine.begin() as connection:
