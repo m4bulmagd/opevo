@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 import os
 from collections.abc import AsyncIterator
 from uuid import uuid4
@@ -30,6 +31,10 @@ from app.repositories.customer_activation_repository import (
     CustomerActivationRepository,
 )
 from app.repositories.webhook_event_repository import WebhookEventRepository
+from app.services.forwarding_verification_service import (
+    ForwardingVerificationService,
+    build_expiry_user_claim_statement,
+)
 
 
 @pytest_asyncio.fixture
@@ -502,3 +507,63 @@ async def test_activation_event_append_race_returns_first_durable_event_to_both_
         )
     assert len(durable_events) == 1
     assert durable_events[0].id == returned_events[0][0]
+
+
+@pytest.mark.anyio
+async def test_verification_expiry_workers_skip_locked_users_before_activation_rows(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime(2026, 7, 18, 12, tzinfo=UTC)
+    seeded: list[tuple[User, CustomerActivation]] = []
+    for index, suffix in enumerate(
+        ("verification_expiry_a", "verification_expiry_b")
+    ):
+        user = await _create_user(postgres_session_factory, suffix=suffix)
+        async with postgres_session_factory() as session:
+            expires_at = now - timedelta(seconds=2 - index)
+            activation = CustomerActivation(
+                user_id=user.id,
+                verification_window_started_at=expires_at - timedelta(minutes=10),
+                verification_window_expires_at=expires_at,
+                verification_status="open",
+            )
+            session.add(activation)
+            await session.commit()
+            seeded.append((user, activation))
+
+    async def worker_b_expire_one() -> int:
+        async with postgres_session_factory() as session:
+            return await ForwardingVerificationService(
+                session,
+                now_provider=lambda: now,
+            ).expire_batch(limit=1)
+
+    async with postgres_session_factory() as worker_a_session:
+        worker_a_user_id = await worker_a_session.scalar(
+            build_expiry_user_claim_statement(now=now, limit=1)
+        )
+        assert worker_a_user_id == seeded[0][0].id
+
+        worker_b_result = await asyncio.wait_for(
+            worker_b_expire_one(),
+            timeout=2,
+        )
+        assert worker_b_result == 1
+        await worker_a_session.rollback()
+
+    async with postgres_session_factory() as session:
+        statuses = {
+            activation.user_id: activation.verification_status
+            for activation in await session.scalars(
+                select(CustomerActivation)
+            )
+        }
+        assert statuses == {
+            seeded[0][0].id: "open",
+            seeded[1][0].id: "expired",
+        }
+        assert await session.scalar(
+            select(func.count())
+            .select_from(ActivationEvent)
+            .where(ActivationEvent.event_type == "verification_window_expired")
+        ) == 1

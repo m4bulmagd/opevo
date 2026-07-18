@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import phonenumbers
@@ -168,15 +168,23 @@ def test_activation_response_normalizes_all_naive_milestones_to_utc() -> None:
         user_id=uuid4(),
         profile_confirmed_at=naive,
         provisioning_consented_at=naive,
+        verification_window_started_at=naive,
+        verification_window_expires_at=naive + timedelta(minutes=10),
+        verification_status="open",
         forwarding_verified_at=naive,
         go_live_approved_at=naive,
         activated_at=naive,
     )
 
-    response = ActivationSnapshotService._activation_response(activation)
+    response = ActivationSnapshotService._activation_response(activation, now=naive)
 
     assert response.profile_confirmed_at == naive.replace(tzinfo=UTC)
     assert response.provisioning_consented_at == naive.replace(tzinfo=UTC)
+    assert response.verification_window_started_at == naive.replace(tzinfo=UTC)
+    assert response.verification_window_expires_at == (
+        naive + timedelta(minutes=10)
+    ).replace(tzinfo=UTC)
+    assert response.verification_status == "open"
     assert response.forwarding_verified_at == naive.replace(tzinfo=UTC)
     assert response.go_live_approved_at == naive.replace(tzinfo=UTC)
     assert response.activated_at == naive.replace(tzinfo=UTC)
@@ -195,6 +203,9 @@ async def test_get_loads_each_authoritative_row_once_and_returns_active_snapshot
     assert snapshot.profile.business_name == "Sam Plumbing"
     assert snapshot.profile_constraints.phone_country == "FR"
     assert snapshot.activation.activated_at == NOW
+    assert snapshot.activation.verification_window_started_at is None
+    assert snapshot.activation.verification_window_expires_at is None
+    assert snapshot.activation.verification_status == "succeeded"
     assert snapshot.billing.eligible is True
     assert snapshot.billing.minutes_remaining == 30
     assert snapshot.number.assigned_e164 == "+33912345678"
@@ -354,3 +365,45 @@ async def test_expired_verification_window_is_not_reported_open() -> None:
     snapshot = await service.get(records[0].id, now=NOW)
 
     assert snapshot.stage is ActivationStage.FORWARDING_REQUIRED
+    assert snapshot.activation.verification_window_started_at == datetime(
+        2026, 7, 17, 9, tzinfo=UTC
+    )
+    assert snapshot.activation.verification_window_expires_at == NOW
+    assert snapshot.activation.verification_status == "expired"
+
+
+@pytest.mark.anyio
+async def test_claimed_window_remains_resumable_during_completion_grace() -> None:
+    records = list(build_records())
+    activation = records[2]
+    activation.forwarding_verified_at = None
+    activation.verified_routing_fingerprint = None
+    activation.go_live_approved_at = None
+    activation.activated_at = None
+    activation.verification_window_started_at = NOW - timedelta(minutes=10)
+    activation.verification_window_expires_at = NOW
+    activation.verification_status = "claimed"
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW + timedelta(minutes=1))
+
+    assert snapshot.stage is ActivationStage.FORWARDING_REQUIRED
+    assert snapshot.activation.verification_status == "claimed"
+
+
+@pytest.mark.anyio
+async def test_claimed_window_is_reported_expired_at_grace_boundary() -> None:
+    records = list(build_records())
+    activation = records[2]
+    activation.forwarding_verified_at = None
+    activation.verified_routing_fingerprint = None
+    activation.go_live_approved_at = None
+    activation.activated_at = None
+    activation.verification_window_started_at = NOW - timedelta(minutes=10)
+    activation.verification_window_expires_at = NOW
+    activation.verification_status = "claimed"
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW + timedelta(minutes=2))
+
+    assert snapshot.activation.verification_status == "expired"

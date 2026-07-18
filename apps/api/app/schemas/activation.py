@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -17,6 +18,17 @@ class ActivationProgressResponse(BaseModel):
 
     profile_confirmed_at: datetime | None
     provisioning_consented_at: datetime | None
+    verification_window_started_at: datetime | None
+    verification_window_expires_at: datetime | None
+    verification_status: Literal[
+        "not_started",
+        "open",
+        "claimed",
+        "succeeded",
+        "failed",
+        "expired",
+        "invalidated",
+    ]
     forwarding_verified_at: datetime | None
     go_live_approved_at: datetime | None
     activated_at: datetime | None

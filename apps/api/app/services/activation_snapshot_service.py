@@ -41,6 +41,7 @@ from app.services.customer_readiness_service import (
 )
 from app.services.customer_readiness_policy import CustomerReadinessPolicy
 from app.services.forwarding_instruction_catalog import ForwardingInstructionCatalog
+from app.services.forwarding_verification_service import COMPLETION_GRACE, as_utc
 
 
 class ActivationSnapshotUnavailableError(Exception):
@@ -175,7 +176,7 @@ class ActivationSnapshotService:
             warnings=list(readiness.warnings),
             profile=self._profile_response(profile),
             profile_constraints=BusinessProfileConstraints(),
-            activation=self._activation_response(activation),
+            activation=self._activation_response(activation, now=evaluated_at),
             billing=ActivationBillingResponse(
                 eligible=billing_eligible,
                 plan_tier=subscription.plan_tier if subscription is not None else None,
@@ -264,7 +265,24 @@ class ActivationSnapshotService:
     @staticmethod
     def _activation_response(
         activation: CustomerActivation | None,
+        *,
+        now: datetime | None = None,
     ) -> ActivationProgressResponse:
+        verification_status = (
+            activation.verification_status
+            if activation is not None
+            else "not_started"
+        )
+        if (
+            activation is not None
+            and verification_status in {"open", "claimed"}
+            and activation.verification_window_expires_at is not None
+        ):
+            deadline = as_utc(activation.verification_window_expires_at)
+            if verification_status == "claimed":
+                deadline += COMPLETION_GRACE
+            if as_utc(now or datetime.now(UTC)) >= deadline:
+                verification_status = "expired"
         return ActivationProgressResponse(
             profile_confirmed_at=ActivationSnapshotService._optional_utc(
                 activation.profile_confirmed_at if activation is not None else None
@@ -274,6 +292,17 @@ class ActivationSnapshotService:
                 if activation is not None
                 else None
             ),
+            verification_window_started_at=ActivationSnapshotService._optional_utc(
+                activation.verification_window_started_at
+                if activation is not None
+                else None
+            ),
+            verification_window_expires_at=ActivationSnapshotService._optional_utc(
+                activation.verification_window_expires_at
+                if activation is not None
+                else None
+            ),
+            verification_status=verification_status,
             forwarding_verified_at=ActivationSnapshotService._optional_utc(
                 activation.forwarding_verified_at if activation is not None else None
             ),
@@ -307,13 +336,9 @@ class ActivationSnapshotService:
         ):
             return False
         return (
-            CustomerReadinessPolicy._as_utc(
-                activation.verification_window_started_at
-            )
+            as_utc(activation.verification_window_started_at)
             <= now
-            < CustomerReadinessPolicy._as_utc(
-                activation.verification_window_expires_at
-            )
+            < as_utc(activation.verification_window_expires_at)
         )
 
     @staticmethod

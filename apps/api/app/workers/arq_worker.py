@@ -13,6 +13,7 @@ from app.workers.jobs.call_finalization import call_finalization_job
 from app.workers.jobs.call_reconciliation import call_reconciliation_job
 from app.workers.jobs.outbox_delivery import outbox_delivery_job, outbox_reconciliation_job
 from app.workers.jobs.transcript_flush import transcript_flush_job
+from app.workers.jobs.verification_expiry import verification_expiry_job
 
 
 async def on_startup(ctx: dict) -> None:
@@ -46,6 +47,9 @@ observed_outbox_reconciliation_job = instrument_job("outbox_reconciliation")(
 observed_call_reconciliation_job = instrument_job("call_reconciliation")(
     call_reconciliation_job
 )
+observed_verification_expiry_job = instrument_job("verification_expiry")(
+    verification_expiry_job
+)
 
 
 class WorkerSettings:
@@ -68,5 +72,10 @@ class WorkerSettings:
             observed_call_reconciliation_job,
             minute=set(range(60)),
             name="call_reconciliation_job",
+        ),
+        cron(
+            observed_verification_expiry_job,
+            minute=set(range(60)),
+            name="verification_expiry_job",
         ),
     ]

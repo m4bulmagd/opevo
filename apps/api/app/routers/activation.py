@@ -24,6 +24,10 @@ from app.services.carrier_lookup_service import (
     CarrierLookupService,
     CarrierLookupUnavailableError,
 )
+from app.services.forwarding_verification_service import (
+    ForwardingVerificationConflictError,
+    ForwardingVerificationService,
+)
 from app.services.receptionist_projection_service import (
     ReceptionistProjectionTooLargeError,
 )
@@ -54,6 +58,12 @@ def get_carrier_lookup_service(
     session: AsyncSession = Depends(get_session),
 ) -> CarrierLookupService:
     return CarrierLookupService(session)
+
+
+def get_forwarding_verification_service(
+    session: AsyncSession = Depends(get_session),
+) -> ForwardingVerificationService:
+    return ForwardingVerificationService(session)
 
 
 @router.get("/api/activation", response_model=ActivationSnapshotResponse)
@@ -168,6 +178,29 @@ async def retry_provisioning(
         raise _provisioning_blocked_error(error.code) from None
 
 
+@router.post(
+    "/api/activation/open-verification-window",
+    response_model=ActivationSnapshotResponse,
+)
+async def open_verification_window(
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    service: ForwardingVerificationService = Depends(
+        get_forwarding_verification_service
+    ),
+    snapshot_service: ActivationSnapshotService = Depends(
+        get_activation_snapshot_service
+    ),
+) -> ActivationSnapshotResponse:
+    try:
+        await service.open_window(identity.internal_user_id)
+    except ForwardingVerificationConflictError as error:
+        raise _verification_conflict_error(error.code) from None
+    return await _get_activation_snapshot(
+        identity.internal_user_id,
+        snapshot_service,
+    )
+
+
 async def _get_activation_snapshot(
     user_id: UUID,
     service: ActivationSnapshotService,
@@ -186,6 +219,13 @@ def _profile_unavailable_error() -> HTTPException:
 
 
 def _provisioning_blocked_error(code: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"code": code},
+    )
+
+
+def _verification_conflict_error(code: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={"code": code},
