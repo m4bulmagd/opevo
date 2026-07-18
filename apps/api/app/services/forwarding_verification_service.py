@@ -130,6 +130,7 @@ class ForwardingVerificationService:
                 profile=profile,
             )
             assert activation is not None
+            assert profile is not None
 
             phone = await self.phone_number_repository.get_by_user_id_for_update(user_id)
             if phone is None or not self._present(phone.provider_number_id):
@@ -153,7 +154,12 @@ class ForwardingVerificationService:
                         "verification_window_already_open"
                     )
                 await self._mark_expired(activation)
-            if activation.verification_status == "succeeded":
+            if (
+                activation.verification_status == "succeeded"
+                and activation.forwarding_verified_at is not None
+                and activation.verified_routing_fingerprint
+                == routing_fingerprint(profile, phone)
+            ):
                 raise ForwardingVerificationConflictError(
                     "verification_already_succeeded"
                 )
@@ -507,8 +513,6 @@ class ForwardingVerificationService:
             raise ForwardingVerificationConflictError("profile_not_confirmed")
         if profile is None:
             raise ForwardingVerificationConflictError("profile_incomplete")
-        if activation.profile_confirmed_revision != profile.content_revision:
-            raise ForwardingVerificationConflictError("profile_confirmation_stale")
         if any(
             not ForwardingVerificationService._present(getattr(profile, field))
             for field in REQUIRED_PROFILE_FIELDS
