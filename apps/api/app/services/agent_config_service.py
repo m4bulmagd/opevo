@@ -28,6 +28,10 @@ class AgentConfigContentManagedError(Exception):
     pass
 
 
+class AgentConfigEnableManagedByActivationError(Exception):
+    pass
+
+
 class AgentConfigReadinessError(Exception):
     def __init__(self, blockers: tuple[str, ...]) -> None:
         super().__init__("Agent configuration is not ready to enable")
@@ -64,6 +68,13 @@ class AgentConfigService:
         *,
         requested_fields: set[str] | None = None,
     ) -> AgentConfig:
+        if (
+            get_settings().activation_flow_enabled
+            and "is_enabled"
+            in (requested_fields if requested_fields is not None else updates.keys())
+            and updates.get("is_enabled") is True
+        ):
+            raise AgentConfigEnableManagedByActivationError
         if get_settings().activation_flow_enabled and PROFILE_MANAGED_CONTENT_FIELDS & (
             requested_fields if requested_fields is not None else updates.keys()
         ):

@@ -122,6 +122,7 @@ class SuccessfulProfileCommandService:
         ("POST", "/api/activation/confirm-provisioning", None),
         ("POST", "/api/activation/retry-provisioning", None),
         ("POST", "/api/activation/open-verification-window", None),
+        ("POST", "/api/activation/go-live", None),
     ],
 )
 async def test_activation_routes_require_authentication(
@@ -146,6 +147,7 @@ async def test_activation_routes_require_authentication(
         ("POST", "/api/activation/confirm-provisioning", None),
         ("POST", "/api/activation/retry-provisioning", None),
         ("POST", "/api/activation/open-verification-window", None),
+        ("POST", "/api/activation/go-live", None),
     ],
 )
 async def test_activation_routes_reject_unsynced_clerk_identity(
@@ -166,6 +168,98 @@ async def test_activation_routes_reject_unsynced_clerk_identity(
 
     assert response.status_code == 401
     assert response.json() == {"detail": "User not synced"}
+
+
+@pytest.mark.anyio
+async def test_go_live_endpoint_returns_202_and_uses_authenticated_owner(
+    async_client,
+    test_app,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    from app.routers.activation import get_activation_go_live_service
+
+    clerk_user_id = "user_go_live_endpoint"
+    await _seed_user(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="go-live-endpoint@example.com",
+    )
+    expected_user_id = await _load_internal_user_id(
+        client_database_url,
+        clerk_user_id,
+    )
+    headers = {
+        "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+    }
+    current = await async_client.get("/api/activation", headers=headers)
+    assert current.status_code == 200
+
+    class SuccessfulGoLiveService:
+        def __init__(self) -> None:
+            self.user_ids: list[object] = []
+
+        async def go_live(self, user_id, arq_pool):
+            self.user_ids.append(user_id)
+            return current.json()
+
+    service = SuccessfulGoLiveService()
+    test_app.dependency_overrides[get_activation_go_live_service] = lambda: service
+    try:
+        response = await async_client.post(
+            "/api/activation/go-live",
+            headers=headers,
+        )
+    finally:
+        test_app.dependency_overrides.pop(get_activation_go_live_service, None)
+
+    assert response.status_code == 202
+    assert service.user_ids == [expected_user_id]
+
+
+@pytest.mark.anyio
+async def test_go_live_endpoint_maps_blockers_to_stable_409(
+    async_client,
+    test_app,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    from app.routers.activation import get_activation_go_live_service
+    from app.services.activation_go_live_service import ActivationGoLiveBlockedError
+
+    clerk_user_id = "user_go_live_blocked"
+    await _seed_user(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="go-live-blocked@example.com",
+    )
+
+    class BlockedGoLiveService:
+        async def go_live(self, user_id, arq_pool):
+            raise ActivationGoLiveBlockedError(
+                ("forwarding_not_verified", "minutes_exhausted")
+            )
+
+    test_app.dependency_overrides[get_activation_go_live_service] = (
+        BlockedGoLiveService
+    )
+    try:
+        response = await async_client.post(
+            "/api/activation/go-live",
+            headers={
+                "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+            },
+        )
+    finally:
+        test_app.dependency_overrides.pop(get_activation_go_live_service, None)
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {
+            "code": "go_live_blocked",
+            "blockers": ["forwarding_not_verified", "minutes_exhausted"],
+        }
+    }
 
 
 @pytest.mark.anyio

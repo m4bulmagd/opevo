@@ -18,6 +18,7 @@ from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionRes
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.services.agent_config_service import (
     AgentConfigContentManagedError,
+    AgentConfigEnableManagedByActivationError,
     AgentConfigNotFoundError,
     AgentConfigPhoneNumberNotFoundError,
     AgentConfigReadinessError,
@@ -142,6 +143,11 @@ async def patch_agent_config(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "agent_content_managed_by_profile"},
+        ) from None
+    except AgentConfigEnableManagedByActivationError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "agent_enable_managed_by_go_live"},
         ) from None
     except AgentConfigNotFoundError as exc:
         raise HTTPException(

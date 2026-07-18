@@ -23,6 +23,25 @@ class ActivationEventRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_latest_attempt_token(
+        self,
+        *,
+        user_id: UUID,
+        event_type: str,
+    ) -> int | None:
+        rows = await self.session.scalars(
+            select(ActivationEvent.event_metadata).where(
+                ActivationEvent.user_id == user_id,
+                ActivationEvent.event_type == event_type,
+            )
+        )
+        attempts: list[int] = []
+        for metadata in rows:
+            raw_attempt = metadata.get("attempt") if isinstance(metadata, dict) else None
+            if isinstance(raw_attempt, str) and raw_attempt.isdigit():
+                attempts.append(int(raw_attempt))
+        return max(attempts, default=None)
+
     async def append(
         self,
         *,

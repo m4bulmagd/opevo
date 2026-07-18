@@ -8,7 +8,9 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.agent_config import AgentConfig
+from app.models.business_profile import BusinessProfile
 from app.models.call import Call
+from app.models.customer_activation import CustomerActivation
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
@@ -21,8 +23,22 @@ from app.schemas.agent_content import (
     SYSTEM_PROMPT_MAX_LENGTH,
 )
 from app.schemas.livekit import LiveKitDispatchMetadata
+from app.schemas.business_profile import WEEKDAYS
+from app.services.routing_fingerprint import routing_fingerprint
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 from app.workers.jobs.outbox_topics import deliver_recording_stop
+
+
+@pytest.fixture(autouse=True)
+def _activation_flow_defaults_off_for_legacy_dispatch_tests(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 class _ForbiddenDirectDispatch:
@@ -179,6 +195,50 @@ async def _seed_eligible_user(db_session):
     return user, phone, config
 
 
+async def _seed_verified_activation(
+    db_session,
+    *,
+    user,
+    phone: PhoneNumber,
+    config: AgentConfig,
+    active: bool,
+) -> tuple[BusinessProfile, CustomerActivation]:
+    now = datetime.now(UTC)
+    profile = BusinessProfile(
+        user_id=user.id,
+        owner_name="Camille Martin",
+        business_name="Atelier Martin",
+        business_type="Plomberie",
+        public_description="Dépannage et installation de plomberie.",
+        timezone="Europe/Paris",
+        business_hours={
+            day: {"closed": True, "intervals": []} for day in WEEKDAYS
+        },
+        existing_phone_e164="+33199000200",
+        confirmed_carrier="orange",
+        receptionist_name="Léa",
+        content_revision=3,
+        routing_revision=2,
+    )
+    activation = CustomerActivation(
+        user_id=user.id,
+        profile_confirmed_revision=profile.content_revision,
+        profile_confirmed_at=now - timedelta(hours=2),
+        provisioning_consented_at=now - timedelta(hours=1),
+        verification_status="succeeded",
+        forwarding_verified_at=now - timedelta(minutes=30),
+        go_live_requested_at=now - timedelta(minutes=2) if active else None,
+        go_live_approved_at=now - timedelta(minutes=2) if active else None,
+        activated_at=now - timedelta(minutes=1) if active else None,
+    )
+    config.profile_projection_revision = profile.content_revision
+    db_session.add_all([profile, activation])
+    await db_session.flush()
+    activation.verified_routing_fingerprint = routing_fingerprint(profile, phone)
+    await db_session.commit()
+    return profile, activation
+
+
 def _sip_join(*, room: str = "room-1", trunk: str | None = "+33999888777") -> dict:
     attributes = {"sip.phoneNumber": "+33123456789"}
     if trunk is not None:
@@ -192,6 +252,127 @@ def _sip_join(*, room: str = "room-1", trunk: str | None = "+33999888777") -> di
             "attributes": attributes,
         },
     }
+
+
+@pytest.mark.anyio
+async def test_activation_flow_denies_before_go_live_and_admits_after_provider_success(
+    db_session,
+    monkeypatch,
+) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        user, phone, config = await _seed_eligible_user(db_session)
+        _profile, activation = await _seed_verified_activation(
+            db_session,
+            user=user,
+            phone=phone,
+            config=config,
+            active=False,
+        )
+        service = LiveKitDispatchService(
+            db_session,
+            _ForbiddenDirectDispatch(),
+            realtime_service=None,
+            recording_service=_Recording(),
+        )
+
+        denied = await service.handle_participant_joined(
+            _sip_join(room="room-before-go-live")
+        )
+        assert denied.status == "denied"
+        assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
+        assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
+
+        now = datetime.now(UTC)
+        activation.go_live_requested_at = now - timedelta(minutes=2)
+        activation.go_live_approved_at = now - timedelta(minutes=2)
+        activation.activated_at = now - timedelta(minutes=1)
+        await db_session.commit()
+        accepted = await service.handle_participant_joined(
+            _sip_join(room="room-after-go-live")
+        )
+
+        assert accepted.status == "accepted"
+        assert await db_session.scalar(select(func.count()).select_from(Call)) == 1
+        assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_livekit_outbox_rechecks_current_activation_prerequisites(
+    db_session,
+    monkeypatch,
+) -> None:
+    from app.core.config import get_settings
+    from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+    from app.workers.jobs.outbox_topics import _dispatch_snapshot
+
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        user, phone, config = await _seed_eligible_user(db_session)
+        profile, _activation = await _seed_verified_activation(
+            db_session,
+            user=user,
+            phone=phone,
+            config=config,
+            active=True,
+        )
+        service = LiveKitDispatchService(
+            db_session,
+            _ForbiddenDirectDispatch(),
+            realtime_service=None,
+            recording_service=_Recording(),
+        )
+        accepted = await service.handle_participant_joined(
+            _sip_join(room="room-stale-livekit-dispatch")
+        )
+        assert accepted.status == "accepted"
+        call = (await db_session.scalars(select(Call))).one()
+        call_id = call.id
+
+        profile.existing_phone_e164 = "+33199000201"
+        profile.routing_revision += 1
+        await db_session.commit()
+        session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+        with pytest.raises(OutboxDeliveryError) as error:
+            await _dispatch_snapshot(session_factory, call_id)
+
+        assert error.value.error_code == "dispatch_ineligible"
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_disabled_activation_flow_preserves_legacy_dispatch(
+    db_session,
+    monkeypatch,
+) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
+    get_settings.cache_clear()
+    try:
+        await _seed_eligible_user(db_session)
+        service = LiveKitDispatchService(
+            db_session,
+            _ForbiddenDirectDispatch(),
+            realtime_service=None,
+            recording_service=_Recording(),
+        )
+
+        result = await service.handle_participant_joined(
+            _sip_join(room="room-legacy-activation-off")
+        )
+
+        assert result.status == "accepted"
+    finally:
+        get_settings.cache_clear()
 
 
 def _dispatch_metadata_payload(**overrides) -> dict:

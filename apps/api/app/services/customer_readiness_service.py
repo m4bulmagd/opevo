@@ -118,6 +118,7 @@ def build_customer_readiness_snapshot(
     profile_projection_current: bool = False,
     forwarding_verified: bool = False,
     go_live_approved: bool = False,
+    agent_enabled_override: bool | None = None,
 ) -> CustomerReadinessSnapshot:
     return CustomerReadinessSnapshot(
         user_status=user.status if user is not None else None,
@@ -148,7 +149,14 @@ def build_customer_readiness_snapshot(
             else None
         ),
         agent_present=agent_config is not None,
-        agent_enabled=bool(agent_config is not None and agent_config.is_enabled),
+        agent_enabled=bool(
+            agent_config is not None
+            and (
+                agent_enabled_override
+                if agent_enabled_override is not None
+                else agent_config.is_enabled
+            )
+        ),
         agent_name=(agent_config.agent_name if agent_config is not None else None),
         owner_context=(
             agent_config.owner_context if agent_config is not None else None
@@ -164,6 +172,49 @@ def build_customer_readiness_snapshot(
         profile_projection_current=profile_projection_current,
         forwarding_verified=forwarding_verified,
         go_live_approved=go_live_approved,
+    )
+
+
+def evaluate_customer_readiness(
+    *,
+    user: User | None,
+    subscription: Subscription | None,
+    balance: int,
+    phone_number: PhoneNumber | None,
+    provisioning: PhoneNumberProvisioning | None,
+    agent_config: AgentConfig | None,
+    business_profile: BusinessProfile | None = None,
+    activation: CustomerActivation | None = None,
+    activation_required: bool = False,
+    agent_enabled_override: bool | None = None,
+    go_live_approved_override: bool | None = None,
+    now: datetime | None = None,
+) -> CustomerReadinessResult:
+    prerequisites = activation_readiness_prerequisites(
+        profile=business_profile,
+        activation=activation,
+        phone_number=phone_number,
+        agent_config=agent_config,
+    )
+    go_live_approved = prerequisites.go_live_approved
+    if go_live_approved_override is not None:
+        go_live_approved = go_live_approved_override
+    return CustomerReadinessPolicy.evaluate(
+        build_customer_readiness_snapshot(
+            user=user,
+            subscription=subscription,
+            balance=balance,
+            phone_number=phone_number,
+            provisioning=provisioning,
+            agent_config=agent_config,
+            activation_required=activation_required,
+            business_profile_complete=prerequisites.business_profile_complete,
+            profile_projection_current=prerequisites.profile_projection_current,
+            forwarding_verified=prerequisites.forwarding_verified,
+            go_live_approved=go_live_approved,
+            agent_enabled_override=agent_enabled_override,
+        ),
+        now=now,
     )
 
 
@@ -241,12 +292,6 @@ class CustomerReadinessService:
 
         business_profile = None
         activation = None
-        activation_prerequisites = ActivationReadinessPrerequisites(
-            business_profile_complete=False,
-            profile_projection_current=False,
-            forwarding_verified=False,
-            go_live_approved=False,
-        )
         if self.activation_flow_enabled:
             if self.business_profile_repository is None or self.activation_repository is None:
                 raise RuntimeError("activation repositories are required")
@@ -254,31 +299,19 @@ class CustomerReadinessService:
                 user_id
             )
             activation = await self.activation_repository.get_by_user_id(user_id)
-            activation_prerequisites = activation_readiness_prerequisites(
-                profile=business_profile,
-                activation=activation,
-                phone_number=phone_number,
-                agent_config=agent_config,
-            )
 
-        snapshot = build_customer_readiness_snapshot(
+        result = evaluate_customer_readiness(
             user=user,
             subscription=subscription,
             balance=balance,
             phone_number=phone_number,
             provisioning=provisioning,
             agent_config=agent_config,
+            business_profile=business_profile,
+            activation=activation,
             activation_required=self.activation_flow_enabled,
-            business_profile_complete=(
-                activation_prerequisites.business_profile_complete
-            ),
-            profile_projection_current=(
-                activation_prerequisites.profile_projection_current
-            ),
-            forwarding_verified=activation_prerequisites.forwarding_verified,
-            go_live_approved=activation_prerequisites.go_live_approved,
+            now=now,
         )
-        result = CustomerReadinessPolicy.evaluate(snapshot, now=now)
         return CustomerReadinessContext(
             result=result,
             user=user,

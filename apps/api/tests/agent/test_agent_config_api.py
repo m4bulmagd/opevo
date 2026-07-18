@@ -20,6 +20,16 @@ from app.schemas.agent_content import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _activation_flow_defaults_off_for_legacy_config_tests(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 def test_activation_flow_defaults_off() -> None:
     settings = Settings(
         database_url="sqlite+aiosqlite://",
@@ -388,6 +398,91 @@ async def test_activation_flow_allows_non_projected_patch_fields(
 
     assert response.status_code == 200
     assert response.json()["pipeline_mode"] == "sts"
+
+
+@pytest.mark.anyio
+async def test_activation_flow_rejects_direct_enable_without_mutation_or_outbox(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    monkeypatch,
+) -> None:
+    clerk_user_id = "user_activation_managed_enable"
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="activation-managed-enable@example.com",
+        agent_name="Léa",
+        owner_context="Atelier Martin reception",
+        system_prompt="Answer missed calls professionally.",
+        knowledge_base="Open weekdays.",
+        is_enabled=False,
+    )
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        response = await async_client.patch(
+            "/api/agent/config",
+            headers={
+                "authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+            },
+            json={"is_enabled": True},
+        )
+    finally:
+        get_settings.cache_clear()
+
+    stored = await fetch_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+    )
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {"code": "agent_enable_managed_by_go_live"}
+    }
+    assert stored.is_enabled is False
+    assert await fetch_outbox_event_count(client_database_url) == 0
+
+
+@pytest.mark.anyio
+async def test_activation_flow_still_allows_customer_to_disable_routing(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    monkeypatch,
+) -> None:
+    clerk_user_id = "user_activation_disable"
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="activation-disable@example.com",
+        agent_name="Léa",
+        owner_context="Atelier Martin reception",
+        system_prompt="Answer missed calls professionally.",
+        knowledge_base="Open weekdays.",
+        is_enabled=True,
+    )
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        response = await async_client.patch(
+            "/api/agent/config",
+            headers={
+                "authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+            },
+            json={"is_enabled": False},
+        )
+    finally:
+        get_settings.cache_clear()
+
+    stored = await fetch_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+    )
+    assert response.status_code == 200
+    assert response.json()["is_enabled"] is False
+    assert stored.is_enabled is False
+    event = await fetch_outbox_event(client_database_url)
+    assert event.topic == "phone.disable"
 
 
 @pytest.mark.anyio
