@@ -39,6 +39,16 @@ from app.services.routing_fingerprint import routing_fingerprint
 PROVISIONING_NOW = datetime(2026, 7, 18, 9, 0, tzinfo=UTC)
 
 
+@pytest.fixture
+def activation_flow_disabled(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 def _valid_business_hours() -> dict[str, dict[str, object]]:
     return {
         day: {"closed": True, "intervals": []}
@@ -957,6 +967,7 @@ async def test_stale_enable_after_cancellation_converges_to_disabled_current_sta
 @pytest.mark.anyio
 async def test_stale_disable_after_reactivation_converges_to_enabled_current_state(
     outbox_session_factory: async_sessionmaker[AsyncSession],
+    activation_flow_disabled,
 ) -> None:
     from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
@@ -1025,6 +1036,7 @@ async def test_disable_replay_reapplies_provider_when_projection_already_disable
 @pytest.mark.anyio
 async def test_routing_retries_and_reapplies_new_desired_state_after_mid_call_change(
     outbox_session_factory: async_sessionmaker[AsyncSession],
+    activation_flow_disabled,
 ) -> None:
     from app.workers.jobs.outbox_delivery import outbox_delivery_job
 

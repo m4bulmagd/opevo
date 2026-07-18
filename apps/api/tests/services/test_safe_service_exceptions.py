@@ -24,6 +24,16 @@ from app.workers.jobs.outbox_topics import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _legacy_routing_flow(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 def _event(call_id, *, topic: str, aggregate_type: str) -> OutboxEvent:
     return OutboxEvent(
         id=uuid4(),
@@ -240,6 +250,8 @@ async def test_phone_routing_preserves_safe_provider_category(
 
     event = _event(active_user.id, topic="phone.enable", aggregate_type="user")
     event.payload = {"user_id": str(active_user.id)}
+    db_session.add(event)
+    await db_session.commit()
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await deliver_phone_routing(
