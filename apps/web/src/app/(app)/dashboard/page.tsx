@@ -1,3 +1,6 @@
+import { redirect } from "next/navigation";
+
+import { canEnterDashboard } from "@/app/(activation)/activate/_components/stage-router";
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { AgentSnapshotCard } from "@/components/dashboard/agent-snapshot-card";
 import { OnboardingStatusCard } from "@/components/dashboard/onboarding-status-card";
@@ -5,6 +8,7 @@ import { RecentCallsList } from "@/components/dashboard/recent-calls-list";
 import { SetupChecklist } from "@/components/dashboard/setup-checklist";
 import { StatusSummaryCards } from "@/components/dashboard/status-summary-cards";
 import { UsageSummaryCard } from "@/components/dashboard/usage-summary-card";
+import { getActivationSnapshot } from "@/lib/api/activation";
 import { getAgentConfig } from "@/lib/api/agent";
 import { getUsageSnapshot } from "@/lib/api/billing";
 import { listCalls } from "@/lib/api/calls";
@@ -19,6 +23,11 @@ export default async function DashboardPage() {
         description="Add your Clerk keys to load customer data, call history, and billing state."
       />
     );
+  }
+
+  const activation = await getActivationSnapshot();
+  if (!canEnterDashboard(activation)) {
+    redirect("/activate");
   }
 
   const [agentConfig, onboardingStatus, calls, usageSnapshot] = await Promise.all([
