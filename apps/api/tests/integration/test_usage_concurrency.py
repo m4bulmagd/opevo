@@ -1,7 +1,7 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -16,6 +16,7 @@ from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.repositories.usage_repository import UsageRepository
 from app.services.billing_service import BillingService
+from app.services.local_billing_service import LocalBillingService
 from app.services.usage_accounting_service import UsageAccountingService
 
 
@@ -114,6 +115,139 @@ async def test_invoice_grant_is_idempotent_by_invoice_object_id(
         )
     assert len(grants) == 1
     assert grants[0].balance_after == 60
+
+
+@pytest.mark.anyio
+async def test_concurrent_local_starter_activation_preserves_first_period_and_grant(
+    usage_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    user = await _seed_user(usage_session_factory, suffix="local_starter")
+    user_id = user.id
+    first_now = datetime(2026, 7, 18, 10, tzinfo=UTC)
+    later_now = first_now + timedelta(days=5)
+    grant_source = f"local-starter:{user_id}"
+
+    async def activate(
+        now: datetime,
+        pid_ready: asyncio.Future[int],
+    ) -> Subscription:
+        async with usage_session_factory() as session:
+            pid = await session.scalar(select(func.pg_backend_pid()))
+            assert pid is not None
+            pid_ready.set_result(pid)
+            return await LocalBillingService(session).activate_starter(
+                user_id,
+                now=now,
+            )
+
+    async def lock_is_held(pid: int) -> bool:
+        async with usage_session_factory() as session:
+            return bool(
+                await session.scalar(
+                    text(
+                        "SELECT EXISTS ("
+                        "SELECT 1 FROM pg_locks "
+                        "WHERE pid = :pid "
+                        "AND locktype = 'advisory' "
+                        "AND granted"
+                        ")"
+                    ),
+                    {"pid": pid},
+                )
+            )
+
+    async def waits_on_advisory_lock(pid: int) -> bool:
+        async with usage_session_factory() as session:
+            wait_state = (
+                await session.execute(
+                    text(
+                        "SELECT wait_event_type, wait_event "
+                        "FROM pg_stat_activity WHERE pid = :pid"
+                    ),
+                    {"pid": pid},
+                )
+            ).one()
+            return wait_state == ("Lock", "advisory")
+
+    async def wait_until(predicate, pid: int) -> None:
+        for _ in range(100):
+            if await predicate(pid):
+                return
+            await asyncio.sleep(0.01)
+        pytest.fail("Concurrent local starter lock state was not observed")
+
+    async def run_concurrent_activation() -> tuple[Subscription, Subscription]:
+        tasks: list[asyncio.Task[Subscription]] = []
+        async with usage_session_factory() as blocker_session:
+            locked_user = await UsageRepository(blocker_session).lock_user(
+                user_id=user_id
+            )
+            assert locked_user is not None
+
+            try:
+                loop = asyncio.get_running_loop()
+                first_pid_ready: asyncio.Future[int] = loop.create_future()
+                first_task = asyncio.create_task(
+                    activate(first_now, first_pid_ready)
+                )
+                tasks.append(first_task)
+                first_pid = await first_pid_ready
+                await wait_until(lock_is_held, first_pid)
+
+                second_pid_ready: asyncio.Future[int] = loop.create_future()
+                second_task = asyncio.create_task(
+                    activate(later_now, second_pid_ready)
+                )
+                tasks.append(second_task)
+                second_pid = await second_pid_ready
+                await wait_until(waits_on_advisory_lock, second_pid)
+
+                await blocker_session.commit()
+                first, second = await asyncio.gather(first_task, second_task)
+                return first, second
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    first, second = await asyncio.wait_for(
+        run_concurrent_activation(),
+        timeout=3,
+    )
+
+    assert first.current_period_start == second.current_period_start == first_now
+    assert first.current_period_end == second.current_period_end == (
+        first_now + timedelta(days=30)
+    )
+
+    async with usage_session_factory() as session:
+        subscriptions = list(
+            (
+                await session.execute(
+                    select(Subscription).where(Subscription.user_id == user_id)
+                )
+            ).scalars()
+        )
+        grants = list(
+            (
+                await session.execute(
+                    select(UsageLedger).where(
+                        UsageLedger.source_id == grant_source
+                    )
+                )
+            ).scalars()
+        )
+        balance = await UsageRepository(session).get_current_balance(user_id=user_id)
+
+    assert len(subscriptions) == 1
+    assert subscriptions[0].stripe_subscription_id == f"local_subscription_{user_id}"
+    assert subscriptions[0].current_period_start == first_now
+    assert subscriptions[0].current_period_end == first_now + timedelta(days=30)
+    assert len(grants) == 1
+    assert grants[0].user_id == user_id
+    assert grants[0].balance_after == 60
+    assert balance == 60
 
 
 @pytest.mark.anyio
