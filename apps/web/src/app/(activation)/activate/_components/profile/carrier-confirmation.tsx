@@ -43,6 +43,8 @@ type CarrierConfirmationProps = {
   initialDetectedCarrier?: string | null;
   initialDetectedCarrierCode?: CarrierCode | null;
   initialLookupError?: string | null;
+  phoneValidationError?: string;
+  carrierValidationError?: string;
   inputRef?: React.Ref<HTMLInputElement>;
 };
 
@@ -55,6 +57,8 @@ export function CarrierConfirmation({
   initialDetectedCarrier,
   initialDetectedCarrierCode,
   initialLookupError,
+  phoneValidationError,
+  carrierValidationError,
   inputRef,
 }: CarrierConfirmationProps) {
   const [detectedLabel, setDetectedLabel] = useState(initialDetectedCarrier ?? null);
@@ -64,6 +68,7 @@ export function CarrierConfirmation({
   const [lookingUp, setLookingUp] = useState(false);
   const checkedNumbersRef = useRef(new Set<string>());
   const normalized = normalizeFrenchNumber(phoneNumber);
+  const validationError = phoneValidationError ?? carrierValidationError ?? phoneError;
 
   const checkCarrier = async () => {
     if (!normalized) {
@@ -104,7 +109,7 @@ export function CarrierConfirmation({
 
   return (
     <div className="flex flex-col gap-4 rounded-xl border bg-muted/20 p-4">
-      <Field data-invalid={Boolean(phoneError)}>
+      <Field data-invalid={Boolean(validationError)}>
         <FieldLabel htmlFor="existing-phone">Existing French number</FieldLabel>
         <Input
           id="existing-phone"
@@ -112,8 +117,10 @@ export function CarrierConfirmation({
           type="tel"
           inputMode="tel"
           autoComplete="tel"
-          aria-invalid={Boolean(phoneError)}
-          aria-describedby="existing-phone-description"
+          aria-invalid={Boolean(validationError)}
+          aria-describedby={
+            validationError ? "existing-phone-description existing-phone-error" : "existing-phone-description"
+          }
           value={formatFrenchNumber(phoneNumber)}
           onChange={(event) => {
             setPhoneError(null);
@@ -126,7 +133,7 @@ export function CarrierConfirmation({
         <FieldDescription id="existing-phone-description">
           French numbers stay on your current line; Presvo only handles the missed-call route you configure later.
         </FieldDescription>
-        {phoneError ? <FieldError>{phoneError}</FieldError> : null}
+        {validationError ? <FieldError id="existing-phone-error">{validationError}</FieldError> : null}
       </Field>
 
       <div className="flex flex-wrap items-center gap-2">

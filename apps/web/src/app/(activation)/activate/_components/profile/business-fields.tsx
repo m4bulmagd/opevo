@@ -19,11 +19,12 @@ type BusinessFieldsProps = {
 };
 
 function detectedCode(value: string | null): CarrierCode | null {
-  const normalized = value?.toLocaleLowerCase() ?? "";
+  const normalized = value?.trim().toLocaleLowerCase() ?? "";
   if (normalized.includes("orange")) return "orange";
   if (normalized.includes("sfr")) return "sfr";
   if (normalized.includes("bouygues")) return "bouygues";
   if (normalized.includes("free")) return "free";
+  if (normalized === "other") return "other";
   return null;
 }
 
@@ -139,18 +140,21 @@ export function BusinessFields({
         rules={{
           validate: (value) => Boolean(value && normalizeFrenchNumber(value)) || "Enter a valid French number.",
         }}
-        render={({ field }) => (
+        render={({ field, fieldState }) => (
           <CarrierConfirmation
             phoneNumber={field.value ?? ""}
             inputRef={field.ref}
             confirmedCarrier={form.getValues("confirmed_carrier") ?? null}
+            phoneValidationError={fieldState.error?.message}
+            carrierValidationError={errors.confirmed_carrier?.message}
             onPhoneChange={(value) => {
               field.onChange(value);
               form.setValue("confirmed_carrier", null, { shouldDirty: true });
             }}
-            onConfirm={(carrier) =>
-              form.setValue("confirmed_carrier", carrier, { shouldDirty: true, shouldValidate: true })
-            }
+            onConfirm={(carrier) => {
+              form.setValue("confirmed_carrier", carrier, { shouldDirty: true, shouldValidate: true });
+              form.clearErrors("confirmed_carrier");
+            }}
             onSaveBeforeLookup={onSaveBeforeLookup}
             initialDetectedCarrier={detectedCarrier}
             initialDetectedCarrierCode={detectedCode(detectedCarrier)}
@@ -160,8 +164,6 @@ export function BusinessFields({
           />
         )}
       />
-      {errors.existing_phone_e164 ? <FieldError errors={[errors.existing_phone_e164]} /> : null}
-      {errors.confirmed_carrier ? <FieldError errors={[errors.confirmed_carrier]} /> : null}
     </FieldGroup>
   );
 }

@@ -73,7 +73,10 @@ type BusinessHoursEditorProps = {
 export function BusinessHoursEditor({ value, onChange, maxIntervalsPerDay, invalid }: BusinessHoursEditorProps) {
   const [hours, setHours] = useState(() => cloneHours(value));
   const [error, setError] = useState<ReturnType<typeof validateBusinessHours>>(null);
+  const hoursRef = useRef(hours);
   const inputRefs = useRef(new Map<string, HTMLInputElement>());
+
+  hoursRef.current = hours;
 
   useEffect(() => setHours(cloneHours(value)), [value]);
 
@@ -87,13 +90,27 @@ export function BusinessHoursEditor({ value, onChange, maxIntervalsPerDay, inval
     if (error?.day === day) setError(null);
   };
 
-  const validateAndFocus = () => {
+  const validateAndFocus = (event: React.FocusEvent<HTMLInputElement>) => {
     const nextError = validateBusinessHours(hours);
+    setError(nextError);
+    const nextControl = event.relatedTarget;
+    let movingWithinEditor = false;
+    for (const input of inputRefs.current.values()) {
+      if (input === nextControl) movingWithinEditor = true;
+    }
+    if (nextError && !movingWithinEditor) {
+      inputRefs.current.get(`${nextError.day}-${nextError.index}-start`)?.focus();
+    }
+  };
+
+  useEffect(() => {
+    if (!invalid) return;
+    const nextError = validateBusinessHours(hoursRef.current);
     setError(nextError);
     if (nextError) {
       inputRefs.current.get(`${nextError.day}-${nextError.index}-start`)?.focus();
     }
-  };
+  }, [invalid]);
 
   return (
     <FieldSet aria-invalid={invalid || Boolean(error)}>
@@ -127,7 +144,10 @@ export function BusinessHoursEditor({ value, onChange, maxIntervalsPerDay, inval
               {!day.closed ? (
                 <div className="flex flex-col gap-3">
                   {day.intervals.map((interval, intervalIndex) => (
-                    <div className="grid grid-cols-2 gap-3" key={`${key}-${intervalIndex.toString()}`}>
+                    <div
+                      className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                      key={`${key}-${intervalIndex.toString()}`}
+                    >
                       <Field>
                         <FieldLabel htmlFor={`${key}-${intervalIndex}-start`}>
                           {label} start {intervalIndex + 1}
@@ -167,6 +187,22 @@ export function BusinessHoursEditor({ value, onChange, maxIntervalsPerDay, inval
                           }}
                         />
                       </Field>
+                      {day.intervals.length > 1 ? (
+                        <Button
+                          className="self-end"
+                          type="button"
+                          variant="outline"
+                          aria-label={`Remove ${label} interval ${intervalIndex + 1}`}
+                          onClick={() =>
+                            updateDay(key, {
+                              ...day,
+                              intervals: day.intervals.filter((_, index) => index !== intervalIndex),
+                            })
+                          }
+                        >
+                          Remove interval
+                        </Button>
+                      ) : null}
                     </div>
                   ))}
                   {day.intervals.length < maxIntervalsPerDay ? (
@@ -177,10 +213,10 @@ export function BusinessHoursEditor({ value, onChange, maxIntervalsPerDay, inval
                       onClick={() =>
                         updateDay(key, {
                           ...day,
-                          intervals: [...day.intervals, { start: "13:00", end: "17:00" }],
+                          intervals: [...day.intervals, { start: "", end: "" }],
                         })
                       }
-                      aria-label={`Add afternoon hours for ${label}`}
+                      aria-label={`Add interval for ${label}`}
                     >
                       Add interval
                     </Button>
