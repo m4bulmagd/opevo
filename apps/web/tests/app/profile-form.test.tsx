@@ -112,6 +112,14 @@ function savedProfile(input: unknown): { status: "success"; data: BusinessProfil
   return { status: "success", data: profile(input as Partial<BusinessProfile>), message: "Profile saved." };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 function completeBusinessProfile(overrides: Partial<BusinessProfile> = {}): Partial<BusinessProfile> {
   return {
     owner_name: "Maya",
@@ -162,31 +170,83 @@ describe("profile form", () => {
     );
   });
 
-  it("ignores an older save response when a newer save finishes first", async () => {
+  it("never overlaps saves and coalesces queued edits to the latest complete draft", async () => {
     vi.useFakeTimers();
-    let resolveFirst: ((value: ReturnType<typeof savedProfile>) => void) | undefined;
-    saveProfileMock
-      .mockImplementationOnce(
-        (input) =>
-          new Promise((resolve) => {
-            resolveFirst = resolve;
-            void input;
-          }),
-      )
-      .mockImplementationOnce(async (input) => savedProfile(input));
+    const first = deferred<ReturnType<typeof savedProfile>>();
+    const second = deferred<ReturnType<typeof savedProfile>>();
+    saveProfileMock.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
     render(<ProfileForm milestone="business" snapshot={profileSnapshot()} />);
 
     fireEvent.change(screen.getByLabelText(/Owner name/i), { target: { value: "Maya" } });
     await act(() => vi.advanceTimersByTimeAsync(700));
     fireEvent.change(screen.getByLabelText(/Business name/i), { target: { value: "Presvo" } });
     await act(() => vi.advanceTimersByTimeAsync(700));
-    expect(screen.getByText(/^Saved$/i)).toBeInTheDocument();
-    await act(async () =>
-      resolveFirst?.({ status: "error", code: "request_failed", message: "late failure" } as never),
+    fireEvent.change(screen.getByLabelText(/Business name/i), { target: { value: "Newest" } });
+    await act(() => vi.advanceTimersByTimeAsync(700));
+
+    expect(saveProfileMock).toHaveBeenCalledTimes(1);
+    await act(async () => first.resolve(savedProfile(saveProfileMock.mock.calls[0]?.[0])));
+
+    expect(saveProfileMock).toHaveBeenCalledTimes(2);
+    expect(saveProfileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ owner_name: "Maya", business_name: "Newest" }),
     );
+    await act(async () => second.resolve(savedProfile(saveProfileMock.mock.calls[1]?.[0])));
+  });
+
+  it("shows Saved only after the exact latest queued draft is durable", async () => {
+    vi.useFakeTimers();
+    const first = deferred<ReturnType<typeof savedProfile>>();
+    const second = deferred<ReturnType<typeof savedProfile>>();
+    saveProfileMock.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    render(<ProfileForm milestone="business" snapshot={profileSnapshot()} />);
+
+    fireEvent.change(screen.getByLabelText(/Owner name/i), { target: { value: "Maya" } });
+    await act(() => vi.advanceTimersByTimeAsync(700));
+    fireEvent.change(screen.getByLabelText(/Business name/i), { target: { value: "Newest" } });
+    await act(() => vi.advanceTimersByTimeAsync(700));
+
+    await act(async () => first.resolve(savedProfile(saveProfileMock.mock.calls[0]?.[0])));
+
+    expect(screen.queryByText(/^Saved$/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/^Saving…$/i)).toBeInTheDocument();
+    await act(async () => second.resolve(savedProfile(saveProfileMock.mock.calls[1]?.[0])));
 
     expect(screen.getByText(/^Saved$/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Couldn't save/i)).not.toBeInTheDocument();
+  });
+
+  it("queues a revert to the last-saved draft behind a conflicting in-flight save", async () => {
+    vi.useFakeTimers();
+    const first = deferred<ReturnType<typeof savedProfile>>();
+    const reverted = deferred<ReturnType<typeof savedProfile>>();
+    saveProfileMock.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => reverted.promise);
+    render(<ProfileForm milestone="business" snapshot={profileSnapshot()} />);
+
+    fireEvent.change(screen.getByLabelText(/Owner name/i), { target: { value: "Maya" } });
+    await act(() => vi.advanceTimersByTimeAsync(700));
+    fireEvent.change(screen.getByLabelText(/Owner name/i), { target: { value: "" } });
+    await act(() => vi.advanceTimersByTimeAsync(700));
+
+    expect(saveProfileMock).toHaveBeenCalledTimes(1);
+    await act(async () => first.resolve(savedProfile(saveProfileMock.mock.calls[0]?.[0])));
+
+    expect(saveProfileMock).toHaveBeenCalledTimes(2);
+    expect(saveProfileMock).toHaveBeenLastCalledWith(expect.objectContaining({ owner_name: null }));
+    await act(async () => reverted.resolve(savedProfile(saveProfileMock.mock.calls[1]?.[0])));
+    expect(screen.getByText(/^Saved$/i)).toBeInTheDocument();
+  });
+
+  it("restores Saved when a local edit reverts without a conflicting save", async () => {
+    vi.useFakeTimers();
+    render(<ProfileForm milestone="business" snapshot={profileSnapshot()} />);
+
+    fireEvent.change(screen.getByLabelText(/Owner name/i), { target: { value: "Maya" } });
+    expect(screen.getByText(/^Unsaved$/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/Owner name/i), { target: { value: "" } });
+
+    expect(screen.getByText(/^Saved$/i)).toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(700));
+    expect(saveProfileMock).not.toHaveBeenCalled();
   });
 
   it("defaults to Europe/Paris and resumes the full server draft after refresh", () => {
@@ -249,6 +309,32 @@ describe("profile form", () => {
     expect(pushMock).toHaveBeenCalledWith("/activate?milestone=receptionist");
   });
 
+  it("flush waits through the in-flight save and latest queued draft before navigating", async () => {
+    vi.useFakeTimers();
+    const first = deferred<ReturnType<typeof savedProfile>>();
+    const latest = deferred<ReturnType<typeof savedProfile>>();
+    saveProfileMock.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => latest.promise);
+    render(<ProfileForm milestone="business" snapshot={profileSnapshot(completeBusinessProfile())} />);
+
+    fireEvent.change(screen.getByLabelText(/Owner name/i), { target: { value: "Maya 2" } });
+    await act(() => vi.advanceTimersByTimeAsync(700));
+    fireEvent.change(screen.getByLabelText(/Business name/i), { target: { value: "Atelier 2" } });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+
+    expect(saveProfileMock).toHaveBeenCalledTimes(1);
+    expect(pushMock).not.toHaveBeenCalled();
+    await act(async () => first.resolve(savedProfile(saveProfileMock.mock.calls[0]?.[0])));
+
+    expect(saveProfileMock).toHaveBeenCalledTimes(2);
+    expect(saveProfileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ owner_name: "Maya 2", business_name: "Atelier 2" }),
+    );
+    expect(pushMock).not.toHaveBeenCalled();
+    await act(async () => latest.resolve(savedProfile(saveProfileMock.mock.calls[1]?.[0])));
+
+    expect(pushMock).toHaveBeenCalledWith("/activate?milestone=receptionist");
+  });
+
   it("confirms the profile only after the receptionist's latest draft saves", async () => {
     const order: string[] = [];
     saveProfileMock.mockImplementation(async (input) => {
@@ -277,6 +363,17 @@ describe("profile form", () => {
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
 
     expect(await screen.findByText(/Couldn't save/i)).toBeInTheDocument();
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(confirmProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("settles a rejected save transport as an error and does not navigate", async () => {
+    saveProfileMock.mockRejectedValueOnce(new Error("transport unavailable"));
+    render(<ProfileForm milestone="business" snapshot={profileSnapshot(completeBusinessProfile())} />);
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+
+    await waitFor(() => expect(document.querySelector('[data-status="error"]')).toHaveTextContent("Couldn't save"));
+    expect(await screen.findAllByText(/couldn't save your profile/i)).not.toHaveLength(0);
     expect(pushMock).not.toHaveBeenCalled();
     expect(confirmProfileMock).not.toHaveBeenCalled();
   });
