@@ -219,6 +219,30 @@ async def test_get_loads_each_authoritative_row_once_and_returns_active_snapshot
 
 
 @pytest.mark.anyio
+async def test_provider_pending_number_order_remains_in_refreshable_provisioning_stage() -> None:
+    records = list(build_records())
+    activation = records[2]
+    activation.verification_status = "not_started"
+    activation.forwarding_verified_at = None
+    activation.verified_routing_fingerprint = None
+    activation.go_live_approved_at = None
+    activation.activated_at = None
+    provisioning = records[4]
+    provisioning.status = "running"
+    provisioning.phone_number_id = None
+    provisioning.can_retry = False
+    provisioning.last_error_reason = "existing_order_pending"
+    records[5] = None
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW)
+
+    assert snapshot.stage is ActivationStage.PROVISIONING
+    assert snapshot.number.provisioning_status == "running"
+    assert snapshot.number.can_retry is False
+
+
+@pytest.mark.anyio
 async def test_snapshot_forwarding_uses_stored_detected_number_type() -> None:
     records = list(build_records())
     profile = records[1]

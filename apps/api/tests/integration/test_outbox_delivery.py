@@ -1461,7 +1461,7 @@ async def test_pending_order_retries_outbox_without_customer_retry(
         assert stored_event.status == "pending"
         assert stored_event.last_error_code == "provider_retryable"
         assert provisioning is not None
-        assert provisioning.status == "failed"
+        assert provisioning.status == "running"
         assert provisioning.can_retry is False
         assert provisioning.last_error_reason == "existing_order_pending"
         assert provisioning.provider_operation_key == event.idempotency_key

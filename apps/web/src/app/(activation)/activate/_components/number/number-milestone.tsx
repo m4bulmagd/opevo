@@ -10,12 +10,12 @@ type NumberMilestoneProps = {
 };
 
 export function NumberMilestone({ snapshot, localBilling }: NumberMilestoneProps) {
-  if (snapshot.number.assigned_e164 || snapshot.stage === "provisioning" || snapshot.stage === "provisioning_failed") {
-    return <ProvisioningStatus snapshot={snapshot} />;
+  if (snapshot.stage === "payment_required" || !snapshot.billing.eligible) {
+    return <PaymentAction localBilling={localBilling} />;
   }
 
-  if (!snapshot.billing.eligible) {
-    return <PaymentAction localBilling={localBilling} />;
+  if (snapshot.number.assigned_e164 || snapshot.stage === "provisioning" || snapshot.stage === "provisioning_failed") {
+    return <ProvisioningStatus snapshot={snapshot} />;
   }
 
   return <ProvisioningConsent />;

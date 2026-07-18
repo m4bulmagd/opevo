@@ -104,7 +104,12 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
             The first attempt did not complete. Retry resumes the same request; no second number will be ordered.
           </AlertDescription>
         </Alert>
-        {error ? <p className="text-destructive text-sm">{error}</p> : null}
+        {error ? (
+          <Alert variant="destructive">
+            <AlertTitle>Retry did not start</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
         <Button className="self-start" disabled={pending} onClick={() => void retry()}>
           {pending ? <Spinner /> : null}
           Retry provisioning

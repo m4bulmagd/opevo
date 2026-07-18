@@ -130,6 +130,31 @@ class PhoneNumberProvisioningRepository:
         await self.session.flush()
         return provisioning
 
+    async def mark_pending(
+        self,
+        *,
+        user_id,
+        target_country_code: str,
+        reason: str,
+        payload: dict | None,
+    ) -> PhoneNumberProvisioning:
+        provisioning = await self.get_by_user_id(user_id)
+        if provisioning is None:
+            provisioning = PhoneNumberProvisioning(
+                user_id=user_id,
+                target_country_code=target_country_code,
+                attempt_count=1,
+            )
+            self.session.add(provisioning)
+        provisioning.target_country_code = target_country_code
+        provisioning.status = "running"
+        provisioning.can_retry = False
+        provisioning.phone_number_id = None
+        provisioning.last_error_reason = reason
+        provisioning.last_error_payload = payload
+        await self.session.flush()
+        return provisioning
+
     async def mark_failed(
         self,
         *,
