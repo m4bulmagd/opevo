@@ -20,6 +20,8 @@ _HTTP_CLIENT_LOGGING_LOCK = threading.Lock()
 
 
 def _is_http_client_record(record: logging.LogRecord) -> bool:
+    if not isinstance(record.name, str):
+        return False
     return any(
         record.name == prefix or record.name.startswith(f"{prefix}.")
         for prefix in _HTTP_CLIENT_LOGGER_PREFIXES
