@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -103,6 +104,35 @@ async def test_lookup_number_rejects_non_french_or_mismatched_results(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field", "malformed_value"),
+    [
+        ("normalized_number", object()),
+        ("country_code", object()),
+        ("carrier_name", object()),
+        ("number_type", object()),
+        ("looked_up_at", "not-a-timestamp"),
+    ],
+)
+async def test_lookup_number_converts_malformed_provider_contract_to_safe_error(
+    field: str,
+    malformed_value: object,
+) -> None:
+    malformed_result = replace(
+        lookup_result(),
+        **{field: malformed_value},
+    )
+
+    with pytest.raises(CarrierLookupError) as exc_info:
+        await CarrierLookupService(
+            provider=ResultProvider(malformed_result)
+        ).lookup_number("+33612345678")
+
+    assert exc_info.value.code == "terminal"
+    assert str(exc_info.value) == "terminal"
+
+
+@pytest.mark.anyio
 async def test_lookup_for_user_releases_transaction_during_provider_io_and_persists_detection(
     db_session: AsyncSession,
     active_user,
@@ -165,6 +195,30 @@ async def test_provider_failure_records_only_safe_failed_state_and_preserves_con
     assert stored.carrier_looked_up_at is not None
     assert stored.confirmed_carrier == "free"
     assert "secret" not in stored.carrier_lookup_status
+
+
+@pytest.mark.anyio
+async def test_malformed_provider_contract_records_safe_failed_state(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    user_id = active_user.id
+    await seed_profile(db_session, user_id)
+    malformed_result = replace(lookup_result(), number_type=object())
+
+    with pytest.raises(CarrierLookupUnavailableError):
+        await CarrierLookupService(
+            db_session,
+            provider=ResultProvider(malformed_result),
+        ).lookup_for_user(user_id)
+
+    stored = await BusinessProfileRepository(db_session).get_by_user_id(user_id)
+    assert stored is not None
+    assert stored.detected_carrier is None
+    assert stored.detected_number_type is None
+    assert stored.carrier_lookup_status == "failed"
+    assert stored.carrier_looked_up_at is not None
+    assert stored.confirmed_carrier == "free"
 
 
 @pytest.mark.anyio

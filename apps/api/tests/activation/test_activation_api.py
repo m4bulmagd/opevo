@@ -298,6 +298,91 @@ async def test_lookup_failure_returns_safe_manual_fallback_and_profile_put_still
 
 
 @pytest.mark.anyio
+async def test_telnyx_api_error_persists_failure_and_returns_secret_free_fallback(
+    async_client,
+    test_app,
+    client_database_url: str,
+    rs256_clerk_token_for,
+    complete_profile_payload: dict[str, object],
+) -> None:
+    import telnyx
+
+    from app.routers.activation import get_carrier_lookup_service
+    from app.providers.carrier_lookup.telnyx import TelnyxCarrierLookupProvider
+    from app.services.carrier_lookup_service import CarrierLookupService
+
+    class APIErrorNumberLookupResource:
+        @classmethod
+        def retrieve(cls, phone_number, /, *, api_key):
+            raise telnyx.error.APIError(
+                [{"title": "provider credential secret"}],
+                http_status=500,
+            )
+
+    class PersistingAPIErrorLookupService:
+        async def lookup_for_user(self, user_id):
+            engine = create_async_engine(client_database_url, future=True)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            try:
+                async with session_factory() as session:
+                    service = CarrierLookupService(
+                        session,
+                        provider=TelnyxCarrierLookupProvider(
+                            api_key="test-key",
+                            number_lookup_resource=APIErrorNumberLookupResource,
+                        ),
+                    )
+                    return await service.lookup_for_user(user_id)
+            finally:
+                await engine.dispose()
+
+    await _seed_user(
+        client_database_url,
+        clerk_user_id="user_carrier_api_error",
+        email="carrier-api-error@example.com",
+    )
+    headers = {
+        "Authorization": (
+            f"Bearer {rs256_clerk_token_for('user_carrier_api_error')}"
+        )
+    }
+    saved = await async_client.put(
+        "/api/business-profile",
+        json=complete_profile_payload | {"confirmed_carrier": "free"},
+        headers=headers,
+    )
+    test_app.dependency_overrides[get_carrier_lookup_service] = (
+        PersistingAPIErrorLookupService
+    )
+    try:
+        failed = await async_client.post(
+            "/api/activation/lookup-carrier",
+            headers=headers,
+        )
+    finally:
+        test_app.dependency_overrides.pop(get_carrier_lookup_service, None)
+    snapshot = await async_client.get("/api/activation", headers=headers)
+
+    assert failed.status_code == 503
+    assert failed.json() == {
+        "detail": {
+            "code": "carrier_lookup_unavailable",
+            "manual_selection_allowed": True,
+        }
+    }
+    assert "provider" not in failed.text.lower()
+    assert "secret" not in failed.text.lower()
+    profile = snapshot.json()["profile"]
+    assert profile["detected_carrier"] is None
+    assert profile["detected_number_type"] is None
+    assert profile["carrier_lookup_status"] == "failed"
+    assert profile["carrier_looked_up_at"] is not None
+    assert profile["confirmed_carrier"] == "free"
+    assert profile["content_revision"] == saved.json()["content_revision"]
+    assert profile["routing_revision"] == saved.json()["routing_revision"]
+
+
+@pytest.mark.anyio
 async def test_carrier_lookup_uses_only_authenticated_internal_user_ownership(
     async_client,
     test_app,

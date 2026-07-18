@@ -33,29 +33,38 @@ class CarrierLookupService:
     async def lookup_number(self, e164: str) -> CarrierLookupResult:
         try:
             requested_number = normalize_french_number(e164)
-            provider_result = await self.provider.lookup(requested_number)
+        except (TypeError, ValueError):
+            raise CarrierLookupError("terminal") from None
+
+        provider_result = await self.provider.lookup(requested_number)
+        if not isinstance(provider_result, CarrierLookupResult):
+            raise CarrierLookupError("terminal")
+        try:
             result_number = normalize_french_number(
                 provider_result.normalized_number
             )
-        except CarrierLookupError:
-            raise
+            country_code = self._required_contract_string(
+                provider_result.country_code
+            )
+            carrier_name = self._safe_carrier_name(provider_result.carrier_name)
+            number_type = normalize_number_type(provider_result.number_type)
+            looked_up_at = self._safe_timestamp(provider_result.looked_up_at)
         except (TypeError, ValueError):
             raise CarrierLookupError("terminal") from None
 
         if (
-            provider_result.country_code != "FR"
+            country_code != "FR"
             or result_number != requested_number
         ):
             raise CarrierLookupError("terminal")
 
-        carrier_name = self._safe_carrier_name(provider_result.carrier_name)
         return CarrierLookupResult(
             normalized_number=result_number,
             country_code="FR",
             carrier_name=carrier_name,
             normalized_carrier=normalize_carrier_name(carrier_name),
-            number_type=normalize_number_type(provider_result.number_type),
-            looked_up_at=self._safe_timestamp(provider_result.looked_up_at),
+            number_type=number_type,
+            looked_up_at=looked_up_at,
         )
 
     async def lookup_for_user(self, user_id: UUID) -> CarrierLookupResult:
@@ -131,14 +140,24 @@ class CarrierLookupService:
         return self.session
 
     @staticmethod
-    def _safe_carrier_name(value: str | None) -> str | None:
+    def _safe_carrier_name(value: object | None) -> str | None:
         if value is None:
             return None
+        if not isinstance(value, str):
+            raise ValueError("Malformed carrier name")
         normalized = value.strip()
         return normalized[:100] or None
 
     @staticmethod
-    def _safe_timestamp(value: datetime) -> datetime:
+    def _safe_timestamp(value: object) -> datetime:
+        if not isinstance(value, datetime):
+            raise ValueError("Malformed lookup timestamp")
         if value.tzinfo is None:
             return datetime.now(UTC)
         return value.astimezone(UTC)
+
+    @staticmethod
+    def _required_contract_string(value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Malformed provider contract")
+        return value

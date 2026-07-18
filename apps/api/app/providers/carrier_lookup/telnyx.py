@@ -47,14 +47,27 @@ class TelnyxCarrierLookupProvider:
             telnyx.error.ResourceNotFoundError,
         ):
             raise CarrierLookupError("terminal") from None
+        except telnyx.error.APIError as exc:
+            if isinstance(exc.http_status, int) and exc.http_status < 500:
+                raise CarrierLookupError("terminal") from None
+            raise CarrierLookupError("retryable") from None
+        except telnyx.error.TelnyxError:
+            raise CarrierLookupError("terminal") from None
 
-        payload = self._read(response, "data") or response
-        result_number = self._read(payload, "phone_number")
-        country_code = self._read(payload, "country_code")
-        carrier = self._read(payload, "carrier")
-        carrier_name = self._safe_carrier_name(self._read(carrier, "name"))
-        number_type = normalize_number_type(self._read(carrier, "type"))
         try:
+            payload_data = self._read(response, "data")
+            payload = response if payload_data is None else payload_data
+            result_number = self._read(payload, "phone_number")
+            country_code = self._required_string(
+                self._read(payload, "country_code"),
+                field="country_code",
+            )
+            carrier = self._carrier_details(self._read(payload, "carrier"))
+            carrier_name = self._optional_string(
+                self._read(carrier, "name"),
+                field="carrier.name",
+            )
+            number_type = normalize_number_type(self._read(carrier, "type"))
             result_number = normalize_french_number(result_number)
         except (TypeError, ValueError):
             raise CarrierLookupError("terminal") from None
@@ -76,8 +89,25 @@ class TelnyxCarrierLookupProvider:
         return getattr(value, field, None)
 
     @staticmethod
-    def _safe_carrier_name(value: Any) -> str | None:
-        if not isinstance(value, str):
+    def _optional_string(value: Any, *, field: str) -> str | None:
+        if value is None:
             return None
+        if not isinstance(value, str):
+            raise ValueError(f"Malformed {field}")
         normalized = value.strip()
         return normalized[:100] or None
+
+    @classmethod
+    def _required_string(cls, value: Any, *, field: str) -> str:
+        normalized = cls._optional_string(value, field=field)
+        if normalized is None:
+            raise ValueError(f"Missing {field}")
+        return normalized
+
+    @staticmethod
+    def _carrier_details(value: Any) -> Any:
+        if value is None or isinstance(value, dict):
+            return value
+        if hasattr(value, "name") or hasattr(value, "type"):
+            return value
+        raise ValueError("Malformed carrier")

@@ -31,9 +31,11 @@ class CarrierLookupProvider(Protocol):
         raise NotImplementedError
 
 
-def normalize_carrier_name(carrier_name: str | None) -> CarrierCode:
+def normalize_carrier_name(carrier_name: object | None) -> CarrierCode:
     if carrier_name is None:
         return "other"
+    if not isinstance(carrier_name, str):
+        raise ValueError("Malformed carrier name")
     folded = "".join(
         character
         for character in unicodedata.normalize("NFKD", carrier_name)
@@ -55,7 +57,11 @@ def normalize_carrier_name(carrier_name: str | None) -> CarrierCode:
     return "other"
 
 
-def normalize_number_type(number_type: str | None) -> str | None:
+def normalize_number_type(number_type: object | None) -> str | None:
+    if number_type is None:
+        return None
+    if not isinstance(number_type, str):
+        raise ValueError("Malformed number type")
     if not number_type:
         return None
     folded = number_type.casefold().replace("-", "_").replace(" ", "_")

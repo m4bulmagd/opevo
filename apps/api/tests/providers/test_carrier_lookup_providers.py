@@ -7,6 +7,7 @@ import telnyx
 from app.providers.carrier_lookup.base import (
     CarrierLookupError,
     normalize_carrier_name,
+    normalize_number_type,
 )
 from app.providers.carrier_lookup.factory import build_carrier_lookup_provider
 from app.providers.carrier_lookup.fake import FakeCarrierLookupProvider
@@ -60,6 +61,11 @@ def test_factory_defaults_to_deterministic_fake(settings) -> None:
     provider = build_carrier_lookup_provider(settings=settings)
 
     assert isinstance(provider, FakeCarrierLookupProvider)
+
+
+def test_number_type_normalization_rejects_malformed_non_string() -> None:
+    with pytest.raises(ValueError, match="Malformed number type"):
+        normalize_number_type(object())  # type: ignore[arg-type]
 
 
 @pytest.mark.anyio
@@ -152,6 +158,20 @@ async def test_telnyx_lookup_runs_blocking_sdk_resource_off_event_loop() -> None
             telnyx.error.ResourceNotFoundError([{"title": "resource secret"}]),
             "terminal",
         ),
+        (
+            telnyx.error.APIError(
+                [{"title": "internal provider secret"}],
+                http_status=500,
+            ),
+            "retryable",
+        ),
+        (
+            telnyx.error.TelnyxError(
+                [{"title": "unexpected sdk secret"}],
+                http_status=418,
+            ),
+            "terminal",
+        ),
     ],
 )
 async def test_telnyx_errors_map_to_safe_contract_codes(
@@ -175,3 +195,38 @@ async def test_telnyx_errors_map_to_safe_contract_codes(
     assert exc_info.value.retryable is (expected_code == "retryable")
     assert str(exc_info.value) == expected_code
     assert "secret" not in str(exc_info.value)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "malformed_carrier",
+    [
+        {"name": "Orange France", "type": object()},
+        {"name": object(), "type": "mobile"},
+        object(),
+    ],
+)
+async def test_telnyx_malformed_dynamic_carrier_fields_fail_safely(
+    malformed_carrier: object,
+) -> None:
+    class MalformedNumberLookupResource:
+        @classmethod
+        def retrieve(cls, phone_number, /, *, api_key):
+            return {
+                "data": {
+                    "phone_number": phone_number,
+                    "country_code": "FR",
+                    "carrier": malformed_carrier,
+                }
+            }
+
+    provider = TelnyxCarrierLookupProvider(
+        api_key="lookup-key",
+        number_lookup_resource=MalformedNumberLookupResource,
+    )
+
+    with pytest.raises(CarrierLookupError) as exc_info:
+        await provider.lookup("+33612345678")
+
+    assert exc_info.value.code == "terminal"
+    assert str(exc_info.value) == "terminal"
