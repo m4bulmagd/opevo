@@ -62,4 +62,3 @@ async def activate_starter(
             detail={"code": error.code},
         ) from None
     return await snapshot_service.get(identity.internal_user_id)
-

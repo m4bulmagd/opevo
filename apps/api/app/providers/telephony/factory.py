@@ -16,4 +16,3 @@ def create_telephony_provider(
             ordering_enabled=selected_settings.telnyx_ordering_enabled,
         )
     return FakeTelephonyProvider()
-
