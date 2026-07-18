@@ -76,6 +76,9 @@ describe("dashboard page", () => {
 
     expect(screen.getByText(/Setup checklist/i)).toBeInTheDocument();
     expect(screen.getByText(/Activate billing/i)).toBeInTheDocument();
+    expect(screen.getByText(/eligible for a Presvo number/i)).toBeInTheDocument();
+    expect(screen.getByText(/review and confirm the provisioning details/i)).toBeInTheDocument();
+    expect(screen.queryByText(/automatic\s+number\s+provisioning/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Choose your plan/i)).toBeInTheDocument();
     expect(screen.getByText(/No calls yet/i)).toBeInTheDocument();
     expect(screen.getAllByText(/No active plan/i).length).toBeGreaterThan(0);

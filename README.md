@@ -174,7 +174,9 @@ bash scripts/run-local-e2e.sh
 
 The runner uses project `presvo-e2e`, alternate loopback ports, fresh volumes,
 and a cleanup trap. It starts only PostgreSQL, Redis, MinIO, migrations, API,
-worker, and web, then runs the same serial browser journey used by CI.
+worker, and web, then runs the same serial browser journey used by CI. After
+activation it restarts every long-running local service while preserving the
+volumes, proves the active dashboard resumes, and removes the disposable stack.
 
 Local ignored environment files can be created from:
 
@@ -214,7 +216,6 @@ docs/
 ├── runbooks/      Deployment, rollback, incident, and credential procedures
 ├── security/      Reviewed dependency exceptions
 └── superpowers/   Historical design specifications and implementation plans
-infra/             Storage lifecycle configuration
 libs/shared/       Small cross-application Python contracts
 ```
 
