@@ -25,6 +25,9 @@ from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
 
 LOCAL_TOKEN = "presvo-local-development-token"
+# ARCEP reserves the 01 99 00 range for audiovisual fiction and does not
+# assign it to subscribers (national numbering plan, version 2026-01-01).
+ARCEP_FICTIONAL_FIXED_NUMBER = "+33 1 99 00 00 00"
 
 
 def _complete_profile_payload() -> dict[str, object]:
@@ -54,7 +57,7 @@ def _complete_profile_payload() -> dict[str, object]:
         "public_description": "Dépannage et installation de plomberie.",
         "timezone": "Europe/Paris",
         "business_hours": business_hours,
-        "existing_phone_e164": "+33 6 12 34 56 78",
+        "existing_phone_e164": ARCEP_FICTIONAL_FIXED_NUMBER,
         "confirmed_carrier": "orange",
         "receptionist_name": "Léa",
         "faqs": [
