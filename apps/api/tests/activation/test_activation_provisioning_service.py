@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -18,6 +18,16 @@ from app.services.activation_provisioning_service import (
     ActivationProvisioningBlockedError,
     ActivationProvisioningService,
 )
+
+
+PROVISIONING_NOW = datetime(2026, 7, 18, 9, 0, tzinfo=UTC)
+
+
+def _provisioning_service(db_session) -> ActivationProvisioningService:
+    return ActivationProvisioningService(
+        db_session,
+        now=lambda: PROVISIONING_NOW,
+    )
 
 
 def _complete_business_hours() -> dict[str, dict[str, object]]:
@@ -53,7 +63,7 @@ async def _seed_eligible_customer(db_session, user) -> CustomerActivation:
     activation = CustomerActivation(
         user_id=user.id,
         profile_confirmed_revision=3,
-        profile_confirmed_at=datetime(2026, 7, 18, 8, 0, tzinfo=UTC),
+        profile_confirmed_at=PROVISIONING_NOW - timedelta(hours=1),
     )
     db_session.add_all(
         [
@@ -66,8 +76,8 @@ async def _seed_eligible_customer(db_session, user) -> CustomerActivation:
                 plan_tier="starter",
                 status="active",
                 allocated_minutes=60,
-                current_period_start=datetime(2026, 7, 1, tzinfo=UTC),
-                current_period_end=datetime(2026, 8, 1, tzinfo=UTC),
+                current_period_start=PROVISIONING_NOW - timedelta(days=30),
+                current_period_end=PROVISIONING_NOW + timedelta(days=30),
             ),
             UsageLedger(
                 user_id=user.id,
@@ -89,7 +99,7 @@ async def test_confirm_records_one_consent_and_one_outbox_across_duplicate_calls
 ) -> None:
     activation = await _seed_eligible_customer(db_session, active_user)
     activation_id = activation.id
-    service = ActivationProvisioningService(db_session)
+    service = _provisioning_service(db_session)
 
     first = await service.confirm(active_user.id, arq_pool=None)
     first_consent_at = first.activation.provisioning_consented_at
@@ -132,6 +142,57 @@ async def test_confirm_records_one_consent_and_one_outbox_across_duplicate_calls
     assert event.event_metadata == {"country_code": "FR"}
 
 
+@pytest.mark.anyio
+async def test_repeat_confirm_accepts_completed_matching_provisioning_without_new_intent(
+    db_session,
+    active_user,
+) -> None:
+    await _seed_eligible_customer(db_session, active_user)
+    service = _provisioning_service(db_session)
+    first = await service.confirm(active_user.id, arq_pool=None)
+    provisioning = await db_session.scalar(
+        select(PhoneNumberProvisioning).where(
+            PhoneNumberProvisioning.user_id == active_user.id
+        )
+    )
+    assert provisioning is not None
+    phone = PhoneNumber(
+        user_id=active_user.id,
+        e164="+33123456789",
+        country_code="FR",
+        provider="telnyx",
+        provider_number_id="pn_completed_confirm",
+        provider_connection_name="app-disabled",
+        is_active=False,
+    )
+    db_session.add(phone)
+    await db_session.flush()
+    provisioning.status = "succeeded"
+    provisioning.phone_number_id = phone.id
+    await db_session.commit()
+
+    repeated = await service.confirm(active_user.id, arq_pool=None)
+
+    assert repeated.activation.provisioning_consented_at == (
+        first.activation.provisioning_consented_at
+    )
+    assert repeated.number.provisioning_status == "succeeded"
+    assert repeated.number.assigned_e164 == "+33123456789"
+    assert await db_session.scalar(
+        select(func.count()).select_from(PhoneNumberProvisioning)
+    ) == 1
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(OutboxEvent)
+        .where(OutboxEvent.topic == "phone.provision")
+    ) == 1
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(ActivationEvent)
+        .where(ActivationEvent.event_type == "provisioning_consented")
+    ) == 1
+
+
 class _FailingArqPool:
     async def enqueue_job(self, _name: str, _payload: dict) -> None:
         raise ConnectionError("redis unavailable")
@@ -144,7 +205,7 @@ async def test_confirm_redis_wakeup_failure_keeps_committed_canonical_snapshot(
 ) -> None:
     await _seed_eligible_customer(db_session, active_user)
 
-    result = await ActivationProvisioningService(db_session).confirm(
+    result = await _provisioning_service(db_session).confirm(
         active_user.id,
         arq_pool=_FailingArqPool(),
     )
@@ -208,7 +269,7 @@ async def test_confirm_rejects_ineligible_state_with_stable_blocker_code(
     elif case == "subscription_inactive":
         subscription.status = "past_due"
     elif case == "subscription_expired":
-        subscription.current_period_end = datetime(2026, 7, 17, tzinfo=UTC)
+        subscription.current_period_end = PROVISIONING_NOW - timedelta(seconds=1)
     elif case == "minutes_exhausted":
         ledger = await db_session.scalar(
             select(UsageLedger).where(UsageLedger.user_id == active_user.id)
@@ -231,7 +292,7 @@ async def test_confirm_rejects_ineligible_state_with_stable_blocker_code(
     await db_session.commit()
 
     with pytest.raises(ActivationProvisioningBlockedError) as exc_info:
-        await ActivationProvisioningService(db_session).confirm(
+        await _provisioning_service(db_session).confirm(
             active_user.id,
             arq_pool=None,
         )
@@ -260,7 +321,7 @@ async def test_confirm_rejects_unsupported_plan_with_stable_blocker_code(
     await db_session.commit()
 
     with pytest.raises(ActivationProvisioningBlockedError) as exc_info:
-        await ActivationProvisioningService(db_session).confirm(
+        await _provisioning_service(db_session).confirm(
             active_user.id,
             arq_pool=None,
         )
@@ -274,7 +335,7 @@ async def test_retry_queues_new_delivery_identity_but_keeps_provider_identity(
     active_user,
 ) -> None:
     activation = await _seed_eligible_customer(db_session, active_user)
-    service = ActivationProvisioningService(db_session)
+    service = _provisioning_service(db_session)
     await service.confirm(active_user.id, arq_pool=None)
     provisioning = await db_session.scalar(
         select(PhoneNumberProvisioning).where(
@@ -286,7 +347,7 @@ async def test_retry_queues_new_delivery_identity_but_keeps_provider_identity(
     assert initial_outbox is not None
     provider_operation_key = provisioning.provider_operation_key
     initial_outbox.status = "delivered"
-    initial_outbox.delivered_at = datetime.now(UTC)
+    initial_outbox.delivered_at = PROVISIONING_NOW
     provisioning.status = "failed"
     provisioning.attempt_count = 1
     provisioning.can_retry = True
@@ -323,7 +384,7 @@ async def test_retry_requires_failed_retryable_state(
     active_user,
 ) -> None:
     await _seed_eligible_customer(db_session, active_user)
-    await ActivationProvisioningService(db_session).confirm(
+    await _provisioning_service(db_session).confirm(
         active_user.id,
         arq_pool=None,
     )
@@ -338,7 +399,7 @@ async def test_retry_requires_failed_retryable_state(
     await db_session.commit()
 
     with pytest.raises(ActivationProvisioningBlockedError) as exc_info:
-        await ActivationProvisioningService(db_session).retry(
+        await _provisioning_service(db_session).retry(
             active_user.id,
             arq_pool=None,
         )
@@ -354,7 +415,7 @@ async def test_confirm_rolls_back_consent_when_outbox_insert_fails(
 ) -> None:
     await _seed_eligible_customer(db_session, active_user)
     user_id = active_user.id
-    service = ActivationProvisioningService(db_session)
+    service = _provisioning_service(db_session)
 
     async def fail_add(**_kwargs):
         raise RuntimeError("outbox unavailable")
@@ -399,15 +460,15 @@ async def test_confirm_acquires_command_locks_in_required_order() -> None:
         id=activation_id,
         user_id=user_id,
         profile_confirmed_revision=3,
-        profile_confirmed_at=datetime(2026, 7, 18, 8, 0, tzinfo=UTC),
+        profile_confirmed_at=PROVISIONING_NOW - timedelta(hours=1),
         provisioning_consented_at=None,
         provisioning_idempotency_key=None,
     )
     subscription = SimpleNamespace(
         plan_tier="starter",
         status="active",
-        current_period_start=datetime(2026, 7, 1, tzinfo=UTC),
-        current_period_end=datetime(2026, 8, 1, tzinfo=UTC),
+        current_period_start=PROVISIONING_NOW - timedelta(days=30),
+        current_period_end=PROVISIONING_NOW + timedelta(days=30),
     )
 
     class Session:
@@ -483,7 +544,7 @@ async def test_confirm_acquires_command_locks_in_required_order() -> None:
         outbox_service=Outbox(),
         activation_event_repository=ActivationEvents(),
         snapshot_service=Snapshots(),
-        now=lambda: datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+        now=lambda: PROVISIONING_NOW,
     )
 
     result = await service.confirm(user_id, arq_pool=None)

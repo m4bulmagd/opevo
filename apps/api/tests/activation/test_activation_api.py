@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -796,6 +796,7 @@ async def test_confirm_provisioning_returns_202_canonical_activation_snapshot(
         headers=headers,
     )
     user_id = await _load_internal_user_id(client_database_url, clerk_user_id)
+    subscription_now = datetime.now(UTC)
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
@@ -808,8 +809,8 @@ async def test_confirm_provisioning_returns_202_canonical_activation_snapshot(
                     plan_tier="starter",
                     status="active",
                     allocated_minutes=60,
-                    current_period_start=datetime(2026, 7, 1, tzinfo=UTC),
-                    current_period_end=datetime(2026, 8, 1, tzinfo=UTC),
+                    current_period_start=subscription_now - timedelta(days=1),
+                    current_period_end=subscription_now + timedelta(days=30),
                 ),
                 UsageLedger(
                     user_id=user_id,
