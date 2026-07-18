@@ -30,11 +30,16 @@ from agent.prompt_builder import build_initial_greeting
 from agent.providers import PipelineMode
 from agent.runtime_validation import validate_agent_runtime
 from agent.safe_logging import report_safe_exception
-from agent.schemas import DispatchMetadata
+from agent.schemas import (
+    DispatchMetadata,
+    ForwardingVerificationDispatchMetadata,
+    parse_job_metadata,
+)
 from agent.session_runtime import (
     CALL_LIMIT_EXPIRY_MESSAGE,
     SessionRuntime,
 )
+from agent.verification_runtime import run_forwarding_verification
 
 
 logger = logging.getLogger(__name__)
@@ -221,8 +226,16 @@ async def _disconnect_at_call_limit(
 async def handle_job_request(request: JobRequest) -> None:
     try:
         metadata_dict = json.loads(request.job.metadata or "{}")
-        metadata = DispatchMetadata.model_validate(metadata_dict)
-        if metadata.agent_identity != f"agent-call-{metadata.call_id}":
+        metadata = parse_job_metadata(metadata_dict)
+        if isinstance(metadata, ForwardingVerificationDispatchMetadata):
+            expected_identity = (
+                f"agent-verification-{metadata.verification_session_id}"
+            )
+            display_name = "Presvo forwarding verification"
+        else:
+            expected_identity = f"agent-call-{metadata.call_id}"
+            display_name = metadata.agent_name
+        if metadata.agent_identity != expected_identity:
             raise ValueError("invalid agent identity")
     except (json.JSONDecodeError, ValidationError, TypeError, ValueError):
         logger.warning("job_request_rejected reason=invalid_dispatch_metadata")
@@ -230,7 +243,7 @@ async def handle_job_request(request: JobRequest) -> None:
         return
 
     await request.accept(
-        name=metadata.agent_name,
+        name=display_name,
         identity=metadata.agent_identity,
     )
 
@@ -239,7 +252,10 @@ async def entrypoint(context: JobContext) -> None:
     _initialize_observability_safely()
     context.add_shutdown_callback(shutdown_observability)
     metadata_dict = json.loads(context.job.metadata or "{}")
-    metadata = DispatchMetadata.model_validate(metadata_dict)
+    metadata = parse_job_metadata(metadata_dict)
+    if isinstance(metadata, ForwardingVerificationDispatchMetadata):
+        await run_forwarding_verification(context, metadata)
+        return
     metadata_dict = metadata.model_dump()
     started_at = time.monotonic()
     with agent_lifecycle_span(

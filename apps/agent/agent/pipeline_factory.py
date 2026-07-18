@@ -1,3 +1,4 @@
+import importlib
 from typing import Any
 
 from livekit.agents import Agent
@@ -8,6 +9,10 @@ from agent.debug_streams import InstrumentedAgent
 from agent.debug_streams import StreamDebugLogger
 from agent.prompt_builder import build_system_prompt
 from agent.providers import LLMProvider, PipelineMode, STSProvider, STTProvider, TTSProvider
+
+
+class VerificationSessionConfigurationError(RuntimeError):
+    """A verification TTS-only session could not be configured safely."""
 
 
 def _resolve_speechmatics_turn_detection_mode(plugin_module: Any):
@@ -131,6 +136,44 @@ def _build_tts(config: dict, plugins: dict[str, Any]):
             api_key=settings.speechmatics_api_key,
         )
     raise ValueError(f"Unsupported TTS provider: {config['tts_provider']}")
+
+
+def build_verification_session(
+    tts_provider: str,
+    *,
+    plugin_modules: dict[str, Any] | None = None,
+    session_cls=AgentSession,
+):
+    settings = get_settings()
+    try:
+        if plugin_modules is None:
+            plugin = importlib.import_module(f"livekit.plugins.{tts_provider}")
+        else:
+            plugin = plugin_modules[tts_provider]
+
+        if tts_provider == TTSProvider.SPEECHMATICS.value:
+            api_key = (settings.speechmatics_api_key or "").strip()
+            if not api_key:
+                raise ValueError
+            tts = plugin.TTS(api_key=api_key)
+        elif tts_provider == TTSProvider.ELEVENLABS.value:
+            api_key = (settings.elevenlabs_api_key or "").strip()
+            voice_id = (settings.elevenlabs_voice_id or "").strip()
+            if not api_key or not voice_id:
+                raise ValueError
+            tts = plugin.TTS(
+                voice_id=voice_id,
+                model="eleven_flash_v2_5",
+                api_key=api_key,
+            )
+        else:
+            raise ValueError
+    except Exception:
+        raise VerificationSessionConfigurationError(
+            "verification TTS configuration is unavailable"
+        ) from None
+
+    return session_cls(tts=tts)
 
 
 def _build_vad(plugins: dict[str, Any]):

@@ -6,12 +6,238 @@ import pytest
 import httpx
 from pydantic import ValidationError
 
+import agent.api_client as api_client_module
 from agent.api_client import (
     AgentApiClient,
     TranscriptAppendPermanentError,
     TranscriptAppendRetryableError,
 )
 from agent.schemas import CallTranscriptItem
+
+
+async def _completed_sleep() -> None:
+    return None
+
+
+@pytest.mark.anyio
+async def test_complete_verification_posts_only_scoped_token_and_empty_body() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"status": "verified", "session_id": "session-1"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AgentApiClient(
+            base_url="http://api.test",
+            http_client=http_client,
+        )
+
+        result = await client.complete_verification(
+            "session-1",
+            "verification-token",
+        )
+
+    assert result == {"status": "verified", "session_id": "session-1"}
+    assert len(requests) == 1
+    request = requests[0]
+    assert str(request.url) == (
+        "http://api.test/api/activation/verification/session-1/complete"
+    )
+    assert request.headers["x-verification-token"] == "verification-token"
+    assert "x-agent-token" not in request.headers
+    assert json.loads(request.content) == {}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("session_id", "token"),
+    [
+        ("", "token"),
+        ("   ", "token"),
+        ("session", ""),
+        ("session", "   "),
+        (None, "token"),
+        (123, "token"),
+        ("session", None),
+        ("session", object()),
+    ],
+)
+async def test_complete_verification_rejects_empty_inputs(
+    session_id: object,
+    token: object,
+) -> None:
+    client = AgentApiClient(base_url="http://api.test")
+
+    with pytest.raises(api_client_module.VerificationCompletionPermanentError):
+        await client.complete_verification(session_id, token)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status_code", [408, 425, 429, 500, 502, 599])
+async def test_complete_verification_retries_only_transient_statuses(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    async def no_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(api_client_module.asyncio, "sleep", no_sleep)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(status_code, text="RESPONSE_BODY_SENTINEL")
+        return httpx.Response(
+            200,
+            json={"status": "verified", "session_id": "session-1"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AgentApiClient(
+            base_url="http://api.test",
+            http_client=http_client,
+            max_retries=2,
+        )
+
+        await client.complete_verification("session-1", "token-sentinel")
+
+    assert attempts == 2
+    assert sleeps == [1]
+
+
+@pytest.mark.anyio
+async def test_complete_verification_retries_transport_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    monkeypatch.setattr(
+        api_client_module.asyncio,
+        "sleep",
+        lambda _delay: _completed_sleep(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout("TRANSPORT_MESSAGE_SENTINEL")
+        return httpx.Response(
+            200,
+            json={"status": "verified", "session_id": "session-1"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AgentApiClient(
+            base_url="http://api.test",
+            http_client=http_client,
+            max_retries=2,
+        )
+
+        await client.complete_verification("session-1", "token-sentinel")
+
+    assert attempts == 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 409, 422])
+async def test_complete_verification_rejects_permanent_status_without_retry(
+    status_code: int,
+) -> None:
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(status_code, text="RESPONSE_BODY_SENTINEL")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AgentApiClient(
+            base_url="http://api.test",
+            http_client=http_client,
+            max_retries=3,
+        )
+
+        with pytest.raises(api_client_module.VerificationCompletionPermanentError):
+            await client.complete_verification("session-1", "token-sentinel")
+
+    assert attempts == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, text="not-json"),
+        httpx.Response(200, json={"status": "verified"}),
+        httpx.Response(200, json={"status": "wrong", "session_id": "session-1"}),
+        httpx.Response(200, json={"status": "verified", "session_id": "wrong"}),
+        httpx.Response(
+            200,
+            json={"status": "verified", "session_id": "session-1", "extra": True},
+        ),
+    ],
+)
+async def test_complete_verification_rejects_malformed_or_mismatched_success(
+    response: httpx.Response,
+) -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: response)
+    ) as http_client:
+        client = AgentApiClient(base_url="http://api.test", http_client=http_client)
+
+        with pytest.raises(
+            api_client_module.VerificationCompletionAcknowledgementError
+        ):
+            await client.complete_verification("session-1", "token-sentinel")
+
+
+@pytest.mark.anyio
+async def test_complete_verification_exhaustion_redacts_all_sensitive_values(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session_id = "SESSION_ID_SENTINEL"
+    token = "VERIFICATION_TOKEN_SENTINEL"
+    base_url = "http://api.test/PATH_SENTINEL"
+    monkeypatch.setattr(
+        api_client_module.asyncio,
+        "sleep",
+        lambda _delay: _completed_sleep(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("TRANSPORT_MESSAGE_SENTINEL")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AgentApiClient(
+            base_url=base_url,
+            http_client=http_client,
+            max_retries=2,
+        )
+
+        with caplog.at_level(logging.WARNING), pytest.raises(
+            api_client_module.VerificationCompletionRetryableError
+        ) as caught:
+            await client.complete_verification(session_id, token)
+
+    combined = caplog.text + str(caught.value)
+    assert "attempt 1/2" in combined
+    assert "classification=transport" in combined
+    for sentinel in [
+        session_id,
+        token,
+        "PATH_SENTINEL",
+        "TRANSPORT_MESSAGE_SENTINEL",
+    ]:
+        assert sentinel not in combined
 
 
 @pytest.mark.anyio

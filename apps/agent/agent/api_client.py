@@ -32,6 +32,20 @@ class CallCompletionRetryableError(RuntimeError):
     """Call completion did not receive a durable acknowledgement."""
 
 
+class VerificationCompletionRetryableError(RuntimeError):
+    """Verification completion may be retried unchanged."""
+
+
+class VerificationCompletionPermanentError(RuntimeError):
+    """Verification completion was permanently rejected."""
+
+
+class VerificationCompletionAcknowledgementError(
+    VerificationCompletionPermanentError
+):
+    """A successful response did not acknowledge this verification session."""
+
+
 def is_completion_acknowledgement(value: object, call_id: str) -> bool:
     return (
         isinstance(value, dict)
@@ -130,6 +144,89 @@ class AgentApiClient:
         client = self.http_client
         self.http_client = None
         await client.aclose()
+
+    async def complete_verification(
+        self,
+        session_id: str,
+        token: str,
+    ) -> dict:
+        if (
+            not isinstance(session_id, str)
+            or not session_id.strip()
+            or not isinstance(token, str)
+            or not token.strip()
+        ):
+            raise VerificationCompletionPermanentError(
+                "verification completion credentials are required"
+            )
+
+        url = (
+            f"{self.base_url}/api/activation/verification/"
+            f"{session_id}/complete"
+        )
+        last_error: VerificationCompletionRetryableError | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                response = await self._get_http_client().post(
+                    url,
+                    json={},
+                    headers={"x-verification-token": token},
+                )
+            except httpx.TransportError:
+                last_error = VerificationCompletionRetryableError(
+                    "verification completion transport failure"
+                )
+                logger.warning(
+                    "complete_verification attempt %d/%d "
+                    "classification=transport",
+                    attempt,
+                    self.max_retries,
+                )
+            else:
+                status_code = response.status_code
+                if (
+                    status_code in RETRYABLE_STATUS_CODES
+                    or status_code >= 500
+                ):
+                    last_error = VerificationCompletionRetryableError(
+                        f"verification completion retryable status={status_code}"
+                    )
+                    logger.warning(
+                        "complete_verification attempt %d/%d "
+                        "classification=http status=%d",
+                        attempt,
+                        self.max_retries,
+                        status_code,
+                    )
+                elif status_code < 200 or status_code >= 300:
+                    raise VerificationCompletionPermanentError(
+                        f"verification completion permanent status={status_code}"
+                    )
+                else:
+                    try:
+                        acknowledgement = response.json()
+                    except (ValueError, TypeError):
+                        raise VerificationCompletionAcknowledgementError(
+                            "verification completion acknowledgement is malformed"
+                        ) from None
+                    if acknowledgement != {
+                        "status": "verified",
+                        "session_id": session_id,
+                    }:
+                        raise VerificationCompletionAcknowledgementError(
+                            "verification completion acknowledgement is malformed "
+                            "or mismatched"
+                        )
+                    return acknowledgement
+
+            if attempt < self.max_retries:
+                await asyncio.sleep(min(2 ** (attempt - 1), 8))
+
+        if last_error is None:
+            raise VerificationCompletionRetryableError(
+                "verification completion exhausted without acknowledgement"
+            )
+        raise last_error
 
     async def complete_call(self, payload: dict) -> dict:
         token = payload.get("dispatch_token")
