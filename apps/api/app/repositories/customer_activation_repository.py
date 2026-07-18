@@ -29,6 +29,17 @@ class CustomerActivationRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_verification_session_id(
+        self,
+        session_id: str,
+    ) -> CustomerActivation | None:
+        result = await self.session.execute(
+            select(CustomerActivation).where(
+                CustomerActivation.verification_session_id == session_id
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_or_create_for_update(self, user_id: UUID) -> CustomerActivation:
         await self.session.scalar(
             select(User.id).where(User.id == user_id).with_for_update()

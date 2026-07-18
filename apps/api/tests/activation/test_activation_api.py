@@ -121,6 +121,7 @@ class SuccessfulProfileCommandService:
         ("POST", "/api/activation/confirm-profile", None),
         ("POST", "/api/activation/confirm-provisioning", None),
         ("POST", "/api/activation/retry-provisioning", None),
+        ("POST", "/api/activation/open-verification-window", None),
     ],
 )
 async def test_activation_routes_require_authentication(
@@ -144,6 +145,7 @@ async def test_activation_routes_require_authentication(
         ("POST", "/api/activation/confirm-profile", None),
         ("POST", "/api/activation/confirm-provisioning", None),
         ("POST", "/api/activation/retry-provisioning", None),
+        ("POST", "/api/activation/open-verification-window", None),
     ],
 )
 async def test_activation_routes_reject_unsynced_clerk_identity(
@@ -907,3 +909,86 @@ async def test_confirm_provisioning_route_uses_authenticated_owner_and_arq_wake(
 
     assert result is canonical_snapshot
     assert commands.calls == [(user_id, pool)]
+
+
+@pytest.mark.anyio
+async def test_open_verification_window_uses_authenticated_owner_and_snapshot() -> None:
+    from app.routers.activation import open_verification_window
+
+    user_id = uuid4()
+    canonical_snapshot = object()
+
+    class Commands:
+        def __init__(self) -> None:
+            self.calls: list[object] = []
+
+        async def open_window(self, requested_user_id):
+            self.calls.append(requested_user_id)
+
+    class Snapshots:
+        def __init__(self) -> None:
+            self.calls: list[object] = []
+
+        async def get(self, requested_user_id):
+            self.calls.append(requested_user_id)
+            return canonical_snapshot
+
+    commands = Commands()
+    snapshots = Snapshots()
+
+    result = await open_verification_window(
+        identity=UserIdentity(
+            clerk_user_id="authenticated_owner",
+            internal_user_id=user_id,
+        ),
+        service=commands,
+        snapshot_service=snapshots,
+    )
+
+    assert result is canonical_snapshot
+    assert commands.calls == [user_id]
+    assert snapshots.calls == [user_id]
+
+
+@pytest.mark.anyio
+async def test_open_verification_window_translates_conflict_to_safe_409(
+    async_client,
+    test_app,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    from app.routers.activation import get_forwarding_verification_service
+    from app.services.forwarding_verification_service import (
+        ForwardingVerificationConflictError,
+    )
+
+    class BlockedService:
+        async def open_window(self, _user_id):
+            raise ForwardingVerificationConflictError(
+                "verification_window_already_open"
+            )
+
+    clerk_user_id = "verification_window_blocked"
+    await _seed_user(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="verification-window-blocked@example.com",
+    )
+    test_app.dependency_overrides[get_forwarding_verification_service] = BlockedService
+    try:
+        response = await async_client.post(
+            "/api/activation/open-verification-window",
+            headers={
+                "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+            },
+        )
+    finally:
+        test_app.dependency_overrides.pop(
+            get_forwarding_verification_service,
+            None,
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {"code": "verification_window_already_open"}
+    }
