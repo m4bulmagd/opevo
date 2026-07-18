@@ -556,14 +556,18 @@ still take precedence.
 - [ ] **Step 4: Implement idempotent local starter activation**
 
 Use a synthetic Stripe identity prefixed `local_`, a 30-day period starting at
-the first activation time, and the existing subscription/usage services. Lock
-the user as the serialization boundary. If the user's existing subscription is
-already the local starter subscription, preserve its original period instead of
-sliding it forward. Never overwrite a real Stripe-backed subscription through
-the development endpoint. Use the stable usage source
-`local-starter:{user_id}` so repeated activation on a later day still cannot
-grant twice. Tests must call the command with two different `now` values and
-assert one grant plus an unchanged period.
+the first activation time, and the existing subscription/usage services. Follow
+the established billing lock order: acquire the stable invoice-grant advisory
+lock for `local-starter:{user_id}` first, then lock the user serialization row,
+then subscription/usage state. This matches Stripe's invoice-before-user order
+and avoids mixed-path deadlocks. If the user's existing subscription is already
+the local starter subscription, preserve its original period instead of sliding
+it forward. Never overwrite a real Stripe-backed subscription through the
+development endpoint. Use the same stable usage source `local-starter:{user_id}`
+so repeated activation on a later day still cannot grant twice. Tests must call
+the command with two different `now` values and assert one grant plus an
+unchanged period; a lock-order test must pin grant lock → user → subscription →
+usage grant.
 
 ```python
 subscription = await self.subscription_repository.upsert_by_stripe_subscription_id(
