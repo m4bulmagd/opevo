@@ -213,6 +213,7 @@ class ForwardingVerificationService:
         *,
         called_number: str,
         room_name: str,
+        diversion_number: str | None = None,
     ) -> ForwardingVerificationClaim:
         """Claim a window while leaving commit and rollback to the caller."""
         normalized_number = self._normalize_french_number(called_number)
@@ -250,8 +251,56 @@ class ForwardingVerificationService:
             raise ForwardingVerificationConflictError(
                 "verification_window_not_found"
             )
+        if diversion_number is not None:
+            existing_number = profile.existing_phone_e164
+            if not isinstance(existing_number, str):
+                raise ForwardingVerificationConflictError(
+                    "verification_diversion_mismatch"
+                )
+            try:
+                normalized_diversion = self._normalize_french_number(
+                    diversion_number
+                )
+                normalized_existing_number = self._normalize_french_number(
+                    existing_number
+                )
+            except ForwardingVerificationConflictError:
+                raise ForwardingVerificationConflictError(
+                    "verification_diversion_mismatch"
+                ) from None
+            if normalized_diversion != normalized_existing_number:
+                raise ForwardingVerificationConflictError(
+                    "verification_diversion_mismatch"
+                )
 
+        now = as_utc(self.now_provider())
         if activation.verification_status == "claimed":
+            existing_session_id = activation.verification_session_id
+            expires_at = activation.verification_window_expires_at
+            if (
+                isinstance(existing_session_id, str)
+                and expires_at is not None
+                and now < as_utc(expires_at) + COMPLETION_GRACE
+            ):
+                claim_event = (
+                    await self.activation_event_repository.get_by_idempotency_key(
+                        "activation-event:verification-claim:"
+                        f"{existing_session_id}"
+                    )
+                )
+                if (
+                    claim_event is not None
+                    and claim_event.event_type == "verification_window_claimed"
+                    and claim_event.activation_id == activation.id
+                    and claim_event.user_id == user_id
+                    and claim_event.event_metadata.get("room_name") == room_name
+                ):
+                    return ForwardingVerificationClaim(
+                        activation_id=activation.id,
+                        user_id=user_id,
+                        session_id=existing_session_id,
+                        room_name=room_name,
+                    )
             raise ForwardingVerificationConflictError(
                 "verification_window_already_claimed"
             )
@@ -265,7 +314,6 @@ class ForwardingVerificationService:
             raise ForwardingVerificationConflictError(
                 "verification_window_not_open"
             )
-        now = as_utc(self.now_provider())
         if now < as_utc(started_at):
             raise ForwardingVerificationConflictError(
                 "verification_window_not_open"

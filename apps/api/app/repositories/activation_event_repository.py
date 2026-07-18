@@ -12,6 +12,17 @@ class ActivationEventRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def get_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> ActivationEvent | None:
+        result = await self.session.execute(
+            select(ActivationEvent).where(
+                ActivationEvent.idempotency_key == idempotency_key
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def append(
         self,
         *,

@@ -84,6 +84,7 @@ _OUTBOX_TOPICS = frozenset(
         "phone.enable",
         "phone.disable",
         "livekit.dispatch",
+        "livekit.verification_dispatch",
         "recording.stop",
         "summary.generate",
     }

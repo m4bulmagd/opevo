@@ -13,6 +13,7 @@ SUPPORTED_OUTBOX_TOPICS = frozenset(
         "phone.enable",
         "phone.disable",
         "livekit.dispatch",
+        "livekit.verification_dispatch",
         "summary.generate",
         "recording.stop",
     }
@@ -23,6 +24,9 @@ REFERENCE_PAYLOAD_FIELDS = {
     "phone.enable": frozenset({"user_id"}),
     "phone.disable": frozenset({"user_id"}),
     "livekit.dispatch": frozenset({"call_id"}),
+    "livekit.verification_dispatch": frozenset(
+        {"activation_id", "session_id", "room_name"}
+    ),
     "summary.generate": frozenset({"call_id"}),
     "recording.stop": frozenset({"call_id"}),
 }
@@ -44,8 +48,10 @@ def validate_outbox_payload(topic: str, payload: dict) -> None:
         raise OutboxPayloadError("Outbox payload must contain references only")
     for field in required_fields:
         value = payload.get(field)
-        if not isinstance(value, str):
+        if not isinstance(value, str) or not value:
             raise OutboxPayloadError("Outbox reference is invalid")
+        if field == "room_name":
+            continue
         try:
             UUID(value)
         except (TypeError, ValueError):

@@ -21,6 +21,7 @@ from app.services.customer_readiness_policy import CustomerReadinessPolicy
 from app.services.customer_readiness_service import (
     build_customer_readiness_snapshot,
 )
+from app.services.inbound_verification_service import InboundVerificationService
 from app.services.livekit_recording_service import LiveKitRecordingService
 from app.services.outbox_service import OutboxService
 from app.services.realtime_service import RealtimeService
@@ -92,6 +93,7 @@ class LiveKitDispatchService:
         user_repository: UserRepository | None = None,
         usage_repository: UsageRepository | None = None,
         subscription_repository: SubscriptionRepository | None = None,
+        inbound_verification_service: InboundVerificationService | None = None,
         outbox_service: OutboxService | None = None,
         realtime_service: RealtimeService | None,
         recording_service: LiveKitRecordingService,
@@ -100,6 +102,7 @@ class LiveKitDispatchService:
         now_provider=None,
     ) -> None:
         self.session = session
+        self.now_provider = now_provider or (lambda: datetime.now(UTC))
         # Kept as a compatibility argument for callers while intentionally unused:
         # webhook handling records provider intent and never dispatches directly.
         self.dispatch_client = dispatch_client
@@ -109,6 +112,13 @@ class LiveKitDispatchService:
         self.user_repository = user_repository or UserRepository(session)
         self.usage_repository = usage_repository or UsageRepository(session)
         self.subscription_repository = subscription_repository or SubscriptionRepository(session)
+        self.inbound_verification_service = (
+            inbound_verification_service
+            or InboundVerificationService(
+                session,
+                now_provider=self.now_provider,
+            )
+        )
         self.outbox_service = outbox_service or OutboxService(session)
         self.realtime_service = realtime_service
         self.recording_service = recording_service
@@ -117,7 +127,6 @@ class LiveKitDispatchService:
             call_repository=self.call_repository,
         )
         self.arq_pool = arq_pool
-        self.now_provider = now_provider or (lambda: datetime.now(UTC))
 
     async def handle_participant_joined(self, event: dict) -> DispatchJoinResult:
         participant = event.get("participant", {})
@@ -208,6 +217,15 @@ class LiveKitDispatchService:
         if existing is not None:
             await self.session.commit()
             return DispatchJoinResult("idempotent", str(existing.id))
+
+        verification_claim = await self.inbound_verification_service.claim_if_open(
+            called_number=normalized_called_number,
+            room_name=room_name,
+            diversion_number=attributes.get("sip.diversion"),
+        )
+        if verification_claim is not None:
+            await self._best_effort_outbox_wakeup()
+            return DispatchJoinResult("verification_claimed")
 
         phone_number = await self.phone_number_repository.get_by_e164_for_update(
             normalized_called_number

@@ -36,7 +36,7 @@ def is_dispatch_secret_safe(secret: object) -> TypeGuard[str]:
     return not any(marker in lowered for marker in UNSAFE_SECRET_MARKERS)
 
 
-def _configured_secret() -> str:
+def require_dispatch_secret() -> str:
     settings = get_settings()
     secret = settings.agent_dispatch_jwt_secret
     if not is_dispatch_secret_safe(secret):
@@ -61,7 +61,7 @@ def create_dispatch_token(
     agent_config_id: str,
 ) -> str:
     settings = get_settings()
-    secret = _configured_secret()
+    secret = require_dispatch_secret()
     normalized_call_id = _identifier(call_id)
     normalized_user_id = _identifier(user_id)
     normalized_agent_config_id = _identifier(agent_config_id)
@@ -86,7 +86,7 @@ def verify_dispatch_token(
     expected_call_id: str,
     expected_user_id: str | None = None,
 ) -> dict:
-    secret = _configured_secret()
+    secret = require_dispatch_secret()
     try:
         normalized_expected_call_id = _identifier(expected_call_id)
         normalized_expected_user_id = (
