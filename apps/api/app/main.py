@@ -23,6 +23,7 @@ from app.routers.activation import router as activation_router
 from app.routers.agent import router as agent_router
 from app.routers.billing import router as billing_router
 from app.routers.calls import router as calls_router
+from app.routers.development import router as development_router
 from app.routers.health import router as health_router
 from app.routers.onboarding import router as onboarding_router
 from app.routers.readiness import (
@@ -170,6 +171,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     validate_api_runtime(configured_settings)
 
     application = FastAPI(lifespan=_lifespan(configured_settings))
+    application.state.settings = configured_settings
     install_http_observability(application)
     application.state.limiter = limiter
     application.add_exception_handler(
@@ -195,6 +197,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(agent_router)
     application.include_router(billing_router)
     application.include_router(calls_router)
+    if configured_settings.app_env == "development":
+        application.include_router(development_router)
     application.include_router(health_router)
     application.include_router(onboarding_router)
     application.include_router(readiness_router)
