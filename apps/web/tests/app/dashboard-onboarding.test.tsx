@@ -1,10 +1,22 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const getActivationSnapshotMock = vi.fn();
 const getAgentConfigMock = vi.fn();
 const getOnboardingStatusMock = vi.fn();
 const listCallsMock = vi.fn();
 const getUsageSnapshotMock = vi.fn();
+const redirectMock = vi.fn(() => {
+  throw new Error("NEXT_REDIRECT");
+});
+
+vi.mock("next/navigation", () => ({
+  redirect: redirectMock,
+}));
+
+vi.mock("@/lib/api/activation", () => ({
+  getActivationSnapshot: getActivationSnapshotMock,
+}));
 
 vi.mock("@/lib/api/agent", () => ({
   getAgentConfig: getAgentConfigMock,
@@ -67,7 +79,58 @@ function buildUsageSnapshot(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildActivationSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    stage: "active",
+    activation: {
+      activated_at: "2026-07-16T11:00:00Z",
+    },
+    ...overrides,
+  };
+}
+
 describe("dashboard onboarding", () => {
+  beforeEach(() => {
+    getActivationSnapshotMock.mockReset().mockResolvedValue(buildActivationSnapshot());
+    getAgentConfigMock.mockReset();
+    getOnboardingStatusMock.mockReset();
+    listCallsMock.mockReset();
+    getUsageSnapshotMock.mockReset();
+    redirectMock.mockClear();
+  });
+
+  it("redirects never-activated customers before protected dashboard reads", async () => {
+    getActivationSnapshotMock.mockResolvedValueOnce(buildActivationSnapshot({ stage: "profile_required" }));
+
+    const { default: Page } = await import("@/app/(app)/dashboard/page");
+
+    await expect(Page()).rejects.toThrow("NEXT_REDIRECT");
+    expect(redirectMock).toHaveBeenCalledWith("/activate");
+    expect(getAgentConfigMock).not.toHaveBeenCalled();
+    expect(getOnboardingStatusMock).not.toHaveBeenCalled();
+    expect(listCallsMock).not.toHaveBeenCalled();
+    expect(getUsageSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("allows a previously activated runtime-paused customer into the dashboard", async () => {
+    getActivationSnapshotMock.mockResolvedValueOnce(
+      buildActivationSnapshot({
+        stage: "runtime_paused",
+        activation: { activated_at: "2026-07-16T11:00:00Z" },
+      }),
+    );
+    getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
+    getOnboardingStatusMock.mockResolvedValueOnce(buildOnboardingStatus());
+    listCallsMock.mockResolvedValueOnce([]);
+    getUsageSnapshotMock.mockResolvedValueOnce(buildUsageSnapshot());
+
+    const { default: Page } = await import("@/app/(app)/dashboard/page");
+    render(await Page());
+
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(getAgentConfigMock).toHaveBeenCalledTimes(1);
+  });
+
   it("renders provisioning progress clearly", async () => {
     getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
     getOnboardingStatusMock.mockResolvedValueOnce(buildOnboardingStatus());

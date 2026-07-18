@@ -1,10 +1,15 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const getActivationSnapshotMock = vi.fn();
 const getAgentConfigMock = vi.fn();
 const getOnboardingStatusMock = vi.fn();
 const listCallsMock = vi.fn();
 const getUsageSnapshotMock = vi.fn();
+
+vi.mock("@/lib/api/activation", () => ({
+  getActivationSnapshot: getActivationSnapshotMock,
+}));
 
 vi.mock("@/lib/api/agent", () => ({
   getAgentConfig: getAgentConfigMock,
@@ -24,6 +29,13 @@ vi.mock("@/lib/api/billing", () => ({
 }));
 
 describe("dashboard page", () => {
+  beforeEach(() => {
+    getActivationSnapshotMock.mockReset().mockResolvedValue({
+      stage: "active",
+      activation: { activated_at: "2026-07-16T11:00:00Z" },
+    });
+  });
+
   it("shows setup UI for first-run users", async () => {
     getAgentConfigMock.mockResolvedValueOnce({
       agent_name: "Assistant",
