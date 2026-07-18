@@ -21,6 +21,16 @@ from app.repositories.call_repository import CallRepository
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 
 
+@pytest.fixture(autouse=True)
+def _legacy_normal_call_flow(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest_asyncio.fixture
 async def livekit_session_factory():
     database_url = os.getenv("TEST_DATABASE_URL")

@@ -117,6 +117,7 @@ def test_outbox_model_exposes_the_task7_launch_shape() -> None:
         "attempt_count",
         "next_attempt_at",
         "last_error_code",
+        "routing_target_provider_number_id",
         "delivered_at",
         "created_at",
         "updated_at",
@@ -126,6 +127,7 @@ def test_outbox_model_exposes_the_task7_launch_shape() -> None:
     assert columns.payload.nullable is False
     assert columns.next_attempt_at.nullable is False
     assert columns.last_error_code.nullable is True
+    assert columns.routing_target_provider_number_id.nullable is True
     assert columns.delivered_at.nullable is True
     assert columns.status.server_default is not None
     assert columns.attempt_count.server_default is not None

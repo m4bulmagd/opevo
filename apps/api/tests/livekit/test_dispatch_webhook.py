@@ -16,6 +16,16 @@ from app.models.usage_ledger import UsageLedger
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 
 
+@pytest.fixture(autouse=True)
+def _legacy_normal_call_flow(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 ROOM_NAME_SENTINEL = "room_TRANSCRIPT_SENTINEL_+33612345678"
 
 

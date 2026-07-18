@@ -10,6 +10,16 @@ from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 
 
+@pytest.fixture(autouse=True)
+def _legacy_onboarding_flow(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 def _add_subscription(
     db_session,
     user_id,
