@@ -46,10 +46,8 @@ class FakeOnboardingService:
         )
 
     async def retry_provisioning(self, user_id, *, arq_pool):
-        await arq_pool.enqueue_job("phone_provisioning_job", {"user_id": str(user_id)})
-        from app.schemas.onboarding import RetryProvisioningResponse
-
-        return RetryProvisioningResponse(status="accepted", queued=True)
+        await arq_pool.enqueue_job("outbox_delivery_job", {})
+        return SimpleNamespace(stage="provisioning")
 
 
 class FakeRejectingOnboardingService(FakeOnboardingService):
@@ -99,9 +97,8 @@ async def test_retry_provisioning_enqueues_job() -> None:
         service=FakeOnboardingService(),
     )
 
-    assert response.status == "accepted"
-    assert response.queued is True
-    assert pool.jobs == [("phone_provisioning_job", {"user_id": "00000000-0000-0000-0000-000000000000"})]
+    assert response.stage == "provisioning"
+    assert pool.jobs == [("outbox_delivery_job", {})]
 
 
 @pytest.mark.anyio

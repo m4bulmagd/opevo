@@ -197,7 +197,7 @@ async def phone_provisioning_job(
     ctx: dict[str, Any],
     payload: dict[str, Any],
     *,
-    operation_key: str | None = None,
+    provider_operation_key: str | None = None,
 ) -> None:
     user_id_str = payload.get("user_id")
     if not user_id_str:
@@ -240,7 +240,7 @@ async def phone_provisioning_job(
         provisioning = await provisioning_repo.mark_running(
             user_id=user_id,
             target_country_code=country_code,
-            operation_key=operation_key,
+            provider_operation_key=provider_operation_key,
         )
         provider_operation_key = provisioning.provider_operation_key
         start_persist_error_type: str | None = None

@@ -63,19 +63,31 @@ async def deliver_phone_provision(
     ctx: dict[str, Any],
     event: OutboxEvent,
 ) -> None:
+    user_id = UUID(event.payload["user_id"])
+    session_factory = ctx.get("session_factory") or get_session_factory()
+    async with session_factory() as session:
+        provisioning = await PhoneNumberProvisioningRepository(
+            session
+        ).get_by_user_id(user_id)
+        provider_operation_key = (
+            provisioning.provider_operation_key
+            if provisioning is not None
+            else None
+        )
+        await session.commit()
+    if not provider_operation_key:
+        raise OutboxDeliveryError("provider_terminal", retryable=False)
     try:
         await phone_provisioning_job(
             ctx,
             dict(event.payload),
-            operation_key=event.idempotency_key,
+            provider_operation_key=provider_operation_key,
         )
     except TelephonyProviderError as exc:
         raise OutboxDeliveryError(
             exc.category,
             retryable=exc.retryable,
         ) from None
-    user_id = UUID(event.payload["user_id"])
-    session_factory = ctx.get("session_factory") or get_session_factory()
     async with session_factory() as session:
         phone_number = await PhoneNumberRepository(session).get_by_user_id(user_id)
         provisioning = await PhoneNumberProvisioningRepository(session).get_by_user_id(

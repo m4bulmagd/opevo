@@ -4,6 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
 
 
+class ProvisioningStateConflictError(RuntimeError):
+    pass
+
+
 class PhoneNumberProvisioningRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -25,12 +29,57 @@ class PhoneNumberProvisioningRepository:
         )
         return result.scalar_one_or_none()
 
+    async def queue_initial(
+        self,
+        *,
+        user_id,
+        operation_key: str,
+    ) -> PhoneNumberProvisioning:
+        provisioning = await self.get_by_user_id_for_update(user_id)
+        if provisioning is None:
+            provisioning = PhoneNumberProvisioning(
+                user_id=user_id,
+                target_country_code="FR",
+                status="queued",
+                attempt_count=0,
+                can_retry=False,
+                provider_operation_key=operation_key,
+            )
+            self.session.add(provisioning)
+        elif provisioning.provider_operation_key is None:
+            provisioning.provider_operation_key = operation_key
+        elif provisioning.provider_operation_key != operation_key:
+            raise ProvisioningStateConflictError
+        await self.session.flush()
+        return provisioning
+
+    async def queue_retry(
+        self,
+        *,
+        user_id,
+        operation_key: str,
+    ) -> PhoneNumberProvisioning:
+        provisioning = await self.get_by_user_id_for_update(user_id)
+        if (
+            provisioning is None
+            or provisioning.status != "failed"
+            or not provisioning.can_retry
+            or provisioning.provider_operation_key != operation_key
+        ):
+            raise ProvisioningStateConflictError
+        provisioning.status = "queued"
+        provisioning.can_retry = False
+        provisioning.last_error_reason = None
+        provisioning.last_error_payload = None
+        await self.session.flush()
+        return provisioning
+
     async def mark_running(
         self,
         *,
         user_id,
         target_country_code: str,
-        operation_key: str | None = None,
+        provider_operation_key: str | None = None,
     ) -> PhoneNumberProvisioning:
         provisioning = await self.get_by_user_id_for_update(user_id)
         if provisioning is None:
@@ -42,7 +91,7 @@ class PhoneNumberProvisioningRepository:
                 can_retry=False,
                 last_error_reason=None,
                 last_error_payload=None,
-                provider_operation_key=operation_key,
+                provider_operation_key=provider_operation_key,
             )
             self.session.add(provisioning)
         else:
@@ -54,7 +103,12 @@ class PhoneNumberProvisioningRepository:
             provisioning.last_error_payload = None
             provisioning.phone_number_id = None
             if provisioning.provider_operation_key is None:
-                provisioning.provider_operation_key = operation_key
+                provisioning.provider_operation_key = provider_operation_key
+            elif (
+                provider_operation_key is not None
+                and provisioning.provider_operation_key != provider_operation_key
+            ):
+                raise ProvisioningStateConflictError
 
         await self.session.flush()
         return provisioning

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import Literal
 from uuid import UUID
 
@@ -14,20 +13,20 @@ from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
-from app.schemas.onboarding import OnboardingStatusResponse, RetryProvisioningResponse
+from app.schemas.activation import ActivationSnapshotResponse
+from app.schemas.onboarding import OnboardingStatusResponse
+from app.services.activation_provisioning_service import (
+    ActivationProvisioningBlockedError,
+    ActivationProvisioningService,
+)
 from app.services.customer_readiness_policy import (
     CustomerReadinessStage,
     ReadinessBlocker,
 )
 from app.services.customer_readiness_service import CustomerReadinessService
-from app.services.outbox_service import OutboxService
 
 
-class OnboardingRetryNotAllowedError(Exception):
-    pass
-
-
-logger = logging.getLogger(__name__)
+OnboardingRetryNotAllowedError = ActivationProvisioningBlockedError
 
 
 class OnboardingService:
@@ -50,6 +49,7 @@ class OnboardingService:
         phone_number_repository: PhoneNumberRepository | None = None,
         provisioning_repository: PhoneNumberProvisioningRepository | None = None,
         agent_config_repository: AgentConfigRepository | None = None,
+        activation_provisioning_service: ActivationProvisioningService | None = None,
     ) -> None:
         if readiness_service is None:
             readiness_service = CustomerReadinessService(
@@ -67,7 +67,9 @@ class OnboardingService:
             provisioning_repository or readiness_service.provisioning_repository
         )
         self.session = session
-        self.outbox_service = OutboxService(session) if session is not None else None
+        self.activation_provisioning_service = activation_provisioning_service
+        if self.activation_provisioning_service is None and session is not None:
+            self.activation_provisioning_service = ActivationProvisioningService(session)
 
     async def get_status(self, user_id: UUID | str) -> OnboardingStatusResponse:
         context = await self.readiness_service.evaluate(user_id)
@@ -129,48 +131,13 @@ class OnboardingService:
         user_id: UUID | str,
         *,
         arq_pool,
-    ) -> RetryProvisioningResponse:
-        if self.session is None or self.outbox_service is None:
+    ) -> ActivationSnapshotResponse:
+        if self.activation_provisioning_service is None:
             raise RuntimeError("A database session is required for provisioning retry")
-        user_uuid = UUID(str(user_id))
-        provisioning = await self.provisioning_repository.get_by_user_id_for_update(
-            user_uuid
+        return await self.activation_provisioning_service.retry(
+            UUID(str(user_id)),
+            arq_pool=arq_pool,
         )
-        if (
-            provisioning is None
-            or provisioning.status != "failed"
-            or not provisioning.can_retry
-        ):
-            raise OnboardingRetryNotAllowedError
-
-        context = await self.readiness_service.evaluate(user_uuid)
-        if context.phone_number is not None or not context.result.can_provision_number:
-            raise OnboardingRetryNotAllowedError
-
-        next_attempt = provisioning.attempt_count + 1
-        provisioning.status = "queued"
-        provisioning.can_retry = False
-        await self.outbox_service.add(
-            topic="phone.provision",
-            aggregate_type="user",
-            aggregate_id=user_uuid,
-            idempotency_key=(
-                f"onboarding:phone.provision:{provisioning.id}:attempt:{next_attempt}"
-            ),
-            payload={"user_id": str(user_uuid)},
-        )
-        await self.session.commit()
-
-        if arq_pool is not None:
-            try:
-                await arq_pool.enqueue_job("outbox_delivery_job", {})
-            except Exception as error:
-                logger.warning(
-                    "outbox wakeup enqueue failed operation=retry_phone_provisioning "
-                    "error_type=%s",
-                    type(error).__name__,
-                )
-        return RetryProvisioningResponse(status="accepted", queued=True)
 
     @staticmethod
     def _phone_number_status(

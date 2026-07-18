@@ -263,6 +263,8 @@ async def test_phone_routing_preserves_safe_provider_category(
     ],
 )
 async def test_phone_provisioning_outbox_preserves_safe_provider_category(
+    db_session,
+    active_user,
     monkeypatch: pytest.MonkeyPatch,
     category: str,
     retryable: bool,
@@ -277,12 +279,26 @@ async def test_phone_provisioning_outbox_preserves_safe_provider_category(
         "phone_provisioning_job",
         fail_provisioning,
     )
-    user_id = uuid4()
+    from app.models.phone_number_provisioning import PhoneNumberProvisioning
+
+    user_id = active_user.id
     event = _event(user_id, topic="phone.provision", aggregate_type="user")
     event.payload = {"user_id": str(user_id)}
+    db_session.add(
+        PhoneNumberProvisioning(
+            user_id=user_id,
+            target_country_code="FR",
+            status="queued",
+            attempt_count=0,
+            can_retry=False,
+            provider_operation_key=event.idempotency_key,
+        )
+    )
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_phone_provision({}, event)
+        await deliver_phone_provision({"session_factory": factory}, event)
 
     assert exc_info.value.error_code == category
     assert exc_info.value.retryable is retryable
@@ -325,6 +341,17 @@ async def test_malformed_provisioning_result_is_safe_terminal_outbox_failure(
         aggregate_type="user",
     )
     event.payload = {"user_id": str(active_user.id)}
+    db_session.add(
+        PhoneNumberProvisioning(
+            user_id=active_user.id,
+            target_country_code="FR",
+            status="queued",
+            attempt_count=0,
+            can_retry=False,
+            provider_operation_key=event.idempotency_key,
+        )
+    )
+    await db_session.commit()
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await deliver_phone_provision(

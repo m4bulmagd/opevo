@@ -2,10 +2,8 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
 
 from app.models.agent_config import AgentConfig
-from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
@@ -329,71 +327,34 @@ async def test_get_status_is_live_only_when_full_projection_is_active(
 
 
 @pytest.mark.anyio
-async def test_retry_provisioning_commits_durable_intent_without_redis(
-    db_session,
-    active_user,
-) -> None:
+async def test_retry_provisioning_delegates_to_activation_command() -> None:
     from app.services.onboarding_service import OnboardingService
 
-    _add_subscription(db_session, active_user.id)
-    _add_minutes(db_session, active_user.id)
-    provisioning = PhoneNumberProvisioning(
-        user_id=active_user.id,
-        target_country_code="IE",
-        status="failed",
-        attempt_count=1,
-        can_retry=True,
-        last_error_reason="provider_retryable",
+    user_id = uuid4()
+    pool = object()
+    canonical_snapshot = object()
+
+    class ProvisioningCommands:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object, object]] = []
+
+        async def retry(self, requested_user_id, *, arq_pool):
+            self.calls.append((requested_user_id, arq_pool))
+            return canonical_snapshot
+
+    commands = ProvisioningCommands()
+    readiness_service = type(
+        "ReadinessService",
+        (),
+        {"provisioning_repository": object()},
     )
-    db_session.add(provisioning)
-    await db_session.commit()
-
-    result = await OnboardingService(db_session).retry_provisioning(
-        active_user.id,
-        arq_pool=None,
-    )
-
-    await db_session.refresh(provisioning)
-    event = await db_session.scalar(select(OutboxEvent))
-    assert result.status == "accepted"
-    assert result.queued is True
-    assert provisioning.status == "queued"
-    assert provisioning.can_retry is False
-    assert event is not None
-    assert event.topic == "phone.provision"
-    assert event.aggregate_type == "user"
-    assert event.aggregate_id == active_user.id
-    assert event.payload == {"user_id": str(active_user.id)}
-
-
-@pytest.mark.anyio
-async def test_retry_provisioning_enqueue_failure_keeps_committed_intent(
-    db_session,
-    active_user,
-) -> None:
-    from app.services.onboarding_service import OnboardingService
-
-    class FailingPool:
-        async def enqueue_job(self, _name, _payload):
-            raise ConnectionError("redis unavailable")
-
-    _add_subscription(db_session, active_user.id)
-    _add_minutes(db_session, active_user.id)
-    db_session.add(
-        PhoneNumberProvisioning(
-            user_id=active_user.id,
-            target_country_code="IE",
-            status="failed",
-            attempt_count=2,
-            can_retry=True,
-        )
-    )
-    await db_session.commit()
-
-    result = await OnboardingService(db_session).retry_provisioning(
-        active_user.id,
-        arq_pool=FailingPool(),
+    result = await OnboardingService(
+        readiness_service=readiness_service,
+        activation_provisioning_service=commands,
+    ).retry_provisioning(
+        user_id,
+        arq_pool=pool,
     )
 
-    assert result.queued is True
-    assert await db_session.scalar(select(OutboxEvent)) is not None
+    assert result is canonical_snapshot
+    assert commands.calls == [(user_id, pool)]

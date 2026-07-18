@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
@@ -10,6 +10,10 @@ from app.schemas.business_profile import BusinessProfileDraft, BusinessProfileRe
 from app.services.activation_snapshot_service import (
     ActivationSnapshotService,
     ActivationSnapshotUnavailableError,
+)
+from app.services.activation_provisioning_service import (
+    ActivationProvisioningBlockedError,
+    ActivationProvisioningService,
 )
 from app.services.business_profile_service import (
     BusinessProfileIncompleteError,
@@ -32,6 +36,12 @@ def get_activation_snapshot_service(
     session: AsyncSession = Depends(get_session),
 ) -> ActivationSnapshotService:
     return ActivationSnapshotService(session)
+
+
+def get_activation_provisioning_service(
+    session: AsyncSession = Depends(get_session),
+) -> ActivationProvisioningService:
+    return ActivationProvisioningService(session)
 
 
 def get_business_profile_service(
@@ -116,6 +126,48 @@ async def confirm_profile(
     return await _get_activation_snapshot(identity.internal_user_id, snapshot_service)
 
 
+@router.post(
+    "/api/activation/confirm-provisioning",
+    response_model=ActivationSnapshotResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def confirm_provisioning(
+    request: Request,
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    service: ActivationProvisioningService = Depends(
+        get_activation_provisioning_service
+    ),
+) -> ActivationSnapshotResponse:
+    try:
+        return await service.confirm(
+            identity.internal_user_id,
+            arq_pool=getattr(request.app.state, "arq_pool", None),
+        )
+    except ActivationProvisioningBlockedError as error:
+        raise _provisioning_blocked_error(error.code) from None
+
+
+@router.post(
+    "/api/activation/retry-provisioning",
+    response_model=ActivationSnapshotResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_provisioning(
+    request: Request,
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    service: ActivationProvisioningService = Depends(
+        get_activation_provisioning_service
+    ),
+) -> ActivationSnapshotResponse:
+    try:
+        return await service.retry(
+            identity.internal_user_id,
+            arq_pool=getattr(request.app.state, "arq_pool", None),
+        )
+    except ActivationProvisioningBlockedError as error:
+        raise _provisioning_blocked_error(error.code) from None
+
+
 async def _get_activation_snapshot(
     user_id: UUID,
     service: ActivationSnapshotService,
@@ -130,4 +182,11 @@ def _profile_unavailable_error() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={"code": "profile_unavailable"},
+    )
+
+
+def _provisioning_blocked_error(code: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"code": code},
     )
