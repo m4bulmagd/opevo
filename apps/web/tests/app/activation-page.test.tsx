@@ -42,6 +42,12 @@ vi.mock("@/lib/api/activation", () => ({
   getActivationSnapshot: getActivationSnapshotMock,
 }));
 
+vi.mock("@/app/(activation)/activate/actions", () => ({
+  confirmProfileAction: vi.fn(),
+  lookupCarrierAction: vi.fn(),
+  saveBusinessProfileAction: vi.fn(),
+}));
+
 vi.mock("@/lib/development/capabilities", () => ({
   getDevelopmentCapabilities: getDevelopmentCapabilitiesMock,
 }));
@@ -153,6 +159,43 @@ describe("activation page", () => {
     expect(getDevelopmentCapabilitiesMock).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("heading", { name: /Choose your Presvo number/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Prepare to go live/i })).not.toBeInTheDocument();
+  });
+
+  it("integrates the shared profile form only for the business and receptionist branches", async () => {
+    getActivationSnapshotMock.mockResolvedValueOnce(buildSnapshot());
+    const businessView = render(await Page({ searchParams: Promise.resolve({ milestone: "business" }) }));
+
+    expect(screen.getByLabelText(/Owner name/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Receptionist name/i)).not.toBeInTheDocument();
+    businessView.unmount();
+
+    const base = buildSnapshot();
+    getActivationSnapshotMock.mockResolvedValueOnce(
+      buildSnapshot({
+        profile: {
+          ...base.profile,
+          owner_name: "Maya",
+          business_name: "Atelier Maya",
+          business_type: "Florist",
+          timezone: "Europe/Paris",
+          business_hours: {
+            monday: { closed: false, intervals: [{ start: "09:00", end: "17:00" }] },
+            tuesday: { closed: false, intervals: [{ start: "09:00", end: "17:00" }] },
+            wednesday: { closed: false, intervals: [{ start: "09:00", end: "17:00" }] },
+            thursday: { closed: false, intervals: [{ start: "09:00", end: "17:00" }] },
+            friday: { closed: false, intervals: [{ start: "09:00", end: "17:00" }] },
+            saturday: { closed: true, intervals: [] },
+            sunday: { closed: true, intervals: [] },
+          },
+          existing_phone_e164: "+33612345678",
+          confirmed_carrier: "orange",
+        },
+      }),
+    );
+    render(await Page({ searchParams: Promise.resolve({ milestone: "receptionist" }) }));
+
+    expect(screen.getByLabelText(/Receptionist name/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Owner name/i)).not.toBeInTheDocument();
   });
 
   it("redirects an active customer to the dashboard", async () => {

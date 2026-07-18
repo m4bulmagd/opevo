@@ -5,6 +5,7 @@ import { getActivationSnapshot } from "@/lib/api/activation";
 import { getDevelopmentCapabilities } from "@/lib/development/capabilities";
 
 import { ActivationShell } from "./_components/activation-shell";
+import { ProfileForm } from "./_components/profile/profile-form";
 import { type ActivationMilestoneId, canEnterDashboard, selectMilestone } from "./_components/stage-router";
 
 type ActivationPageProps = {
@@ -65,6 +66,9 @@ export default async function ActivationPage({ searchParams }: ActivationPagePro
           </h1>
           <p className="max-w-2xl text-base text-muted-foreground leading-7">{copy.description}</p>
         </div>
+        {selectedMilestone === "business" || selectedMilestone === "receptionist" ? (
+          <ProfileForm snapshot={snapshot} milestone={selectedMilestone} />
+        ) : null}
       </div>
     </ActivationShell>
   );
