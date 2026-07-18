@@ -1,10 +1,18 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.core.database import get_session
+from app.core.dispatch_token import DispatchTokenConfigurationError
+from app.core.verification_token import (
+    VerificationTokenError,
+    verify_verification_token,
+)
+from app.repositories.customer_activation_repository import (
+    CustomerActivationRepository,
+)
 from app.schemas.activation import ActivationSnapshotResponse, CarrierLookupResponse
 from app.schemas.business_profile import BusinessProfileDraft, BusinessProfileResponse
 from app.services.activation_snapshot_service import (
@@ -201,6 +209,44 @@ async def open_verification_window(
     )
 
 
+@router.post("/api/activation/verification/{session_id}/complete")
+async def complete_forwarding_verification(
+    session_id: str,
+    x_verification_token: str | None = Header(
+        default=None,
+        alias="x-verification-token",
+    ),
+    session: AsyncSession = Depends(get_session),
+    service: ForwardingVerificationService = Depends(
+        get_forwarding_verification_service
+    ),
+) -> dict[str, str]:
+    activation = (
+        await CustomerActivationRepository(session).get_by_verification_session_id(
+            session_id
+        )
+    )
+    if activation is None:
+        raise _verification_auth_error()
+    try:
+        verify_verification_token(
+            x_verification_token or "",
+            expected_session_id=session_id,
+            expected_user_id=str(activation.user_id),
+        )
+    except (VerificationTokenError, DispatchTokenConfigurationError):
+        raise _verification_auth_error() from None
+
+    try:
+        await service.complete(session_id=session_id)
+    except ForwardingVerificationConflictError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "verification_not_claimable"},
+        ) from None
+    return {"status": "verified", "session_id": session_id}
+
+
 async def _get_activation_snapshot(
     user_id: UUID,
     service: ActivationSnapshotService,
@@ -229,4 +275,11 @@ def _verification_conflict_error(code: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={"code": code},
+    )
+
+
+def _verification_auth_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid verification token",
     )

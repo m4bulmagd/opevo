@@ -1,11 +1,14 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import json
 from typing import Any
 from uuid import UUID
 
 from app.core.config import get_settings
 from app.core.dispatch_token import create_dispatch_token
+from app.core.verification_token import create_verification_token
 from app.core.database import get_session_factory
+from app.models.customer_activation import CustomerActivation
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.providers.livekit_dispatch.base import LiveKitDispatch
@@ -16,6 +19,9 @@ from app.providers.telephony.base import TelephonyProviderError
 from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
+from app.repositories.customer_activation_repository import (
+    CustomerActivationRepository,
+)
 from app.repositories.message_repository import MessageRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.phone_number_provisioning_repository import (
@@ -24,7 +30,7 @@ from app.repositories.phone_number_provisioning_repository import (
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.usage_repository import UsageRepository
-from app.schemas.livekit import LiveKitDispatchMetadata
+from app.schemas.livekit import LiveKitDispatchMetadata, VerificationDispatchMetadata
 from app.services.customer_readiness_policy import CustomerReadinessPolicy
 from app.services.customer_readiness_service import (
     build_customer_readiness_snapshot,
@@ -34,7 +40,9 @@ from app.services.livekit_dispatch_service import (
     expected_agent_identity,
 )
 from app.services.livekit_dispatch_lock import livekit_dispatch_lock
+from app.services.livekit_dispatch_lock import verification_dispatch_lock
 from app.services.livekit_recording_service import LiveKitRecordingService
+from app.services.forwarding_verification_service import COMPLETION_GRACE, as_utc
 from app.services.summary_service import SummaryService
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
@@ -54,6 +62,17 @@ class _DispatchSnapshot:
     call_id: UUID
     user_id: UUID
     agent_config_id: UUID
+    room_name: str
+    worker_name: str
+    metadata: str
+    persisted_dispatch_id: str | None
+
+
+@dataclass(frozen=True)
+class _VerificationDispatchSnapshot:
+    activation_id: UUID
+    user_id: UUID
+    session_id: str
     room_name: str
     worker_name: str
     metadata: str
@@ -488,6 +507,294 @@ async def _persist_dispatch_identity(
         await session.commit()
 
 
+async def deliver_livekit_verification_dispatch(
+    ctx: dict[str, Any],
+    event: OutboxEvent,
+) -> None:
+    activation_id, session_id, room_name = (
+        _validated_verification_dispatch_reference(event)
+    )
+    session_factory = ctx.get("session_factory") or get_session_factory()
+    now_provider = ctx.get("verification_now") or (lambda: datetime.now(UTC))
+
+    async with verification_dispatch_lock(session_factory, activation_id):
+        snapshot = await _verification_dispatch_snapshot(
+            session_factory,
+            activation_id=activation_id,
+            session_id=session_id,
+            room_name=room_name,
+            now=now_provider(),
+        )
+        provider = ctx.get("livekit_dispatch_provider")
+        if provider is None:
+            provider = LiveKitDispatchAPIProvider()
+
+        try:
+            dispatches = await provider.list_dispatches(
+                room_name=snapshot.room_name
+            )
+        except ValueError:
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            ) from None
+        except Exception:
+            raise OutboxDeliveryError(
+                "provider_retryable",
+                retryable=True,
+            ) from None
+
+        dispatch = _reconcile_verification_dispatches(snapshot, dispatches)
+        if dispatch is None:
+            if snapshot.persisted_dispatch_id is not None:
+                raise OutboxDeliveryError(
+                    "dispatch_conflict",
+                    retryable=False,
+                )
+            try:
+                created_dispatch = await provider.create_dispatch(
+                    agent_name=snapshot.worker_name,
+                    room_name=snapshot.room_name,
+                    metadata=snapshot.metadata,
+                )
+            except ValueError:
+                raise OutboxDeliveryError(
+                    "dispatch_configuration",
+                    retryable=False,
+                ) from None
+            except Exception:
+                try:
+                    dispatches = await provider.list_dispatches(
+                        room_name=snapshot.room_name
+                    )
+                except Exception:
+                    raise OutboxDeliveryError(
+                        "provider_retryable",
+                        retryable=True,
+                    ) from None
+                dispatch = _reconcile_verification_dispatches(
+                    snapshot,
+                    dispatches,
+                )
+                if dispatch is None:
+                    raise OutboxDeliveryError(
+                        "provider_retryable",
+                        retryable=True,
+                    ) from None
+            else:
+                dispatch = _reconcile_verification_dispatches(
+                    snapshot,
+                    [created_dispatch],
+                )
+
+        if dispatch is None:
+            raise OutboxDeliveryError(
+                "provider_retryable",
+                retryable=True,
+            )
+        await _persist_verification_dispatch_identity(
+            session_factory,
+            activation_id=activation_id,
+            session_id=session_id,
+            dispatch_id=dispatch.id,
+        )
+
+
+def _validated_verification_dispatch_reference(
+    event: OutboxEvent,
+) -> tuple[UUID, str, str]:
+    try:
+        if set(event.payload) != {"activation_id", "session_id", "room_name"}:
+            raise ValueError
+        activation_id = UUID(event.payload["activation_id"])
+        session_id = str(UUID(event.payload["session_id"]))
+        room_name = event.payload["room_name"]
+        if not isinstance(room_name, str) or not room_name:
+            raise ValueError
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise OutboxDeliveryError(
+            "dispatch_configuration",
+            retryable=False,
+        ) from None
+    if (
+        event.topic != "livekit.verification_dispatch"
+        or event.aggregate_type != "forwarding-verification"
+        or event.aggregate_id != activation_id
+        or event.idempotency_key != f"livekit.verification_dispatch:{session_id}"
+    ):
+        raise OutboxDeliveryError(
+            "dispatch_configuration",
+            retryable=False,
+        )
+    return activation_id, session_id, room_name
+
+
+async def _verification_dispatch_snapshot(
+    session_factory,
+    *,
+    activation_id: UUID,
+    session_id: str,
+    room_name: str,
+    now: datetime,
+) -> _VerificationDispatchSnapshot:
+    async with session_factory() as session:
+        resolved_activation = await session.get(CustomerActivation, activation_id)
+        if resolved_activation is None:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            )
+        user_id = resolved_activation.user_id
+        user = await UserRepository(session).get_by_id_for_update(user_id)
+        activation = (
+            await CustomerActivationRepository(session).get_by_user_id_for_update(
+                user_id
+            )
+        )
+        if (
+            user is None
+            or user.status != "active"
+            or activation is None
+            or activation.id != activation_id
+            or activation.verification_status != "claimed"
+            or activation.verification_session_id != session_id
+            or activation.verification_claimed_at is None
+            or activation.verification_window_started_at is None
+            or activation.verification_window_expires_at is None
+            or as_utc(now) < as_utc(activation.verification_window_started_at)
+            or as_utc(now)
+            >= as_utc(activation.verification_window_expires_at) + COMPLETION_GRACE
+        ):
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_ineligible",
+                retryable=False,
+            )
+
+        try:
+            worker_name = get_settings().livekit_agent_name.strip()
+            if not worker_name:
+                raise ValueError
+            metadata = VerificationDispatchMetadata(
+                verification_session_id=session_id,
+                user_id=str(user_id),
+                agent_identity=f"agent-verification-{session_id}",
+                completion_token=create_verification_token(
+                    session_id=session_id,
+                    user_id=str(user_id),
+                ),
+            ).model_dump_json()
+        except Exception:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            ) from None
+
+        snapshot = _VerificationDispatchSnapshot(
+            activation_id=activation_id,
+            user_id=user_id,
+            session_id=session_id,
+            room_name=room_name,
+            worker_name=worker_name,
+            metadata=metadata,
+            persisted_dispatch_id=activation.verification_dispatch_id,
+        )
+        await session.commit()
+        return snapshot
+
+
+def _reconcile_verification_dispatches(
+    snapshot: _VerificationDispatchSnapshot,
+    dispatches: list[LiveKitDispatch],
+) -> LiveKitDispatch | None:
+    named_dispatches = [
+        dispatch for dispatch in dispatches if dispatch.agent_name.strip()
+    ]
+    matches: list[LiveKitDispatch] = []
+    for dispatch in named_dispatches:
+        try:
+            metadata = json.loads(dispatch.metadata)
+        except (TypeError, ValueError):
+            metadata = None
+        if (
+            dispatch.agent_name == snapshot.worker_name
+            and dispatch.room == snapshot.room_name
+            and isinstance(metadata, dict)
+            and metadata.get("job_type") == "forwarding_verification"
+            and metadata.get("verification_session_id") == snapshot.session_id
+        ):
+            matches.append(dispatch)
+
+    if not named_dispatches:
+        return None
+    if len(named_dispatches) == 1 and len(matches) == 1 and matches[0].id:
+        if (
+            snapshot.persisted_dispatch_id is not None
+            and matches[0].id != snapshot.persisted_dispatch_id
+        ):
+            raise OutboxDeliveryError(
+                "dispatch_conflict",
+                retryable=False,
+            )
+        return matches[0]
+    raise OutboxDeliveryError(
+        "dispatch_conflict",
+        retryable=False,
+    )
+
+
+async def _persist_verification_dispatch_identity(
+    session_factory,
+    *,
+    activation_id: UUID,
+    session_id: str,
+    dispatch_id: str,
+) -> None:
+    if not dispatch_id:
+        raise OutboxDeliveryError(
+            "dispatch_conflict",
+            retryable=False,
+        )
+    async with session_factory() as session:
+        resolved_activation = await session.get(CustomerActivation, activation_id)
+        if resolved_activation is None:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            )
+        user_id = resolved_activation.user_id
+        user = await UserRepository(session).get_by_id_for_update(user_id)
+        activation_repository = CustomerActivationRepository(session)
+        activation = await activation_repository.get_by_user_id_for_update(user_id)
+        if (
+            user is None
+            or user.status != "active"
+            or activation is None
+            or activation.id != activation_id
+            or activation.verification_session_id != session_id
+            or activation.verification_status not in {"claimed", "succeeded"}
+        ):
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_conflict",
+                retryable=False,
+            )
+        if activation.verification_dispatch_id not in (None, dispatch_id):
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_conflict",
+                retryable=False,
+            )
+        await activation_repository.set_verification_dispatch_id(
+            activation,
+            dispatch_id=dispatch_id,
+        )
+        await session.commit()
+
+
 async def deliver_summary_generate(
     ctx: dict[str, Any],
     event: OutboxEvent,
@@ -611,6 +918,7 @@ DEFAULT_OUTBOX_HANDLERS = {
     "phone.enable": deliver_phone_routing,
     "phone.disable": deliver_phone_routing,
     "livekit.dispatch": deliver_livekit_dispatch,
+    "livekit.verification_dispatch": deliver_livekit_verification_dispatch,
     "summary.generate": deliver_summary_generate,
     "recording.stop": deliver_recording_stop,
 }

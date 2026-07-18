@@ -40,6 +40,15 @@ class CustomerActivationRepository:
         )
         return result.scalar_one_or_none()
 
+    async def set_verification_dispatch_id(
+        self,
+        activation: CustomerActivation,
+        *,
+        dispatch_id: str,
+    ) -> None:
+        activation.verification_dispatch_id = dispatch_id
+        await self.session.flush()
+
     async def get_or_create_for_update(self, user_id: UUID) -> CustomerActivation:
         await self.session.scalar(
             select(User.id).where(User.id == user_id).with_for_update()

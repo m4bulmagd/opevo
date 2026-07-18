@@ -27,3 +27,17 @@ class LiveKitDispatchMetadata(BaseModel):
     knowledge_base: KnowledgeBase
     pipeline_mode: Literal["stt_llm_tts", "sts"]
     dispatch_token: str
+
+
+class VerificationDispatchMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_type: Literal["forwarding_verification"] = "forwarding_verification"
+    verification_session_id: str
+    user_id: str
+    agent_identity: str
+    completion_token: str
+    message: Literal[
+        "Forwarding test successful. Return to Presvo to go live."
+    ] = "Forwarding test successful. Return to Presvo to go live."
+    tts_provider: Literal["speechmatics", "elevenlabs"] = "speechmatics"
