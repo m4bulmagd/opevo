@@ -92,7 +92,7 @@ async def _seed_open_window(db_session, active_user) -> CustomerActivation:
     return activation
 
 
-def _sip_join(*, attributes: dict[str, str] | None = None) -> dict:
+def _sip_join(*, attributes: dict[str, object] | None = None) -> dict:
     return {
         "id": "verification-webhook-1",
         "event": "participant_joined",
@@ -236,6 +236,41 @@ async def test_present_mismatched_diversion_does_not_claim(
         select(func.count()).select_from(OutboxEvent)
     ) == 0
     assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("malformed_diversion", [{}, [], 123, True])
+async def test_malformed_diversion_value_does_not_escape_verification_admission(
+    db_session,
+    active_user,
+    malformed_diversion: object,
+) -> None:
+    activation = await _seed_open_window(db_session, active_user)
+    service = LiveKitDispatchService(
+        db_session,
+        realtime_service=_Realtime(),
+        recording_service=_Recording(),
+        now_provider=lambda: FIXED_NOW,
+    )
+
+    result = await service.handle_participant_joined(
+        _sip_join(
+            attributes={
+                "sip.phoneNumber": SOURCE_NUMBER,
+                "sip.trunkPhoneNumber": PRESVO_NUMBER,
+                "sip.diversion": malformed_diversion,
+            }
+        )
+    )
+
+    await db_session.refresh(activation)
+    assert result.status == "denied"
+    assert activation.verification_status == "open"
+    assert activation.verification_session_id is None
+    assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
+    assert await db_session.scalar(
+        select(func.count()).select_from(OutboxEvent)
+    ) == 0
 
 
 @pytest.mark.anyio
@@ -527,6 +562,79 @@ async def test_same_room_redelivery_with_new_event_id_is_verification_idempotent
         select(func.count()).select_from(OutboxEvent)
     ) == 1
     assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
+
+
+@pytest.mark.anyio
+async def test_same_room_replay_after_success_never_becomes_a_customer_call(
+    db_session,
+    active_user,
+) -> None:
+    activation = await _seed_open_window(db_session, active_user)
+    service = LiveKitDispatchService(
+        db_session,
+        realtime_service=_Realtime(),
+        recording_service=_Recording(),
+        now_provider=lambda: FIXED_NOW,
+    )
+    first = await service.handle_participant_joined(_sip_join())
+    session_id = activation.verification_session_id
+    assert first.status == "verification_claimed"
+    assert session_id is not None
+
+    await ForwardingVerificationService(
+        db_session,
+        now_provider=lambda: FIXED_NOW,
+    ).complete(session_id=session_id)
+    phone = await db_session.scalar(
+        select(PhoneNumber).where(PhoneNumber.user_id == active_user.id)
+    )
+    assert phone is not None
+    phone.is_active = True
+    phone.provider_connection_name = "app-active"
+    db_session.add_all(
+        [
+            AgentConfig(
+                user_id=active_user.id,
+                agent_name="Ava",
+                owner_context="Atelier Martin",
+                system_prompt="Be helpful",
+                knowledge_base="Hours 9-5",
+                pipeline_mode="stt_llm_tts",
+                is_enabled=True,
+            ),
+            Subscription(
+                user_id=active_user.id,
+                stripe_customer_id="cus-fictional-replay",
+                stripe_subscription_id="sub-fictional-replay",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                current_period_start=FIXED_NOW - timedelta(days=1),
+                current_period_end=FIXED_NOW + timedelta(days=1),
+            ),
+            UsageLedger(
+                user_id=active_user.id,
+                event_type="invoice_paid_reset",
+                source_id="invoice-fictional-replay",
+                minutes_delta=60,
+                balance_after=60,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    replay = _sip_join()
+    replay["id"] = "verification-webhook-after-success"
+    result = await service.handle_participant_joined(replay)
+
+    await db_session.refresh(activation)
+    assert result.status == "verification_claimed"
+    assert activation.verification_status == "succeeded"
+    assert activation.verification_session_id == session_id
+    assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
+    outbox = list((await db_session.scalars(select(OutboxEvent))).all())
+    assert len(outbox) == 1
+    assert outbox[0].topic == "livekit.verification_dispatch"
 
 
 @pytest.mark.anyio
