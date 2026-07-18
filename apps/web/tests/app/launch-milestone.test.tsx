@@ -5,13 +5,14 @@ import { LaunchMilestone } from "@/app/(activation)/activate/_components/launch/
 
 import { activationSnapshot } from "./activation-snapshot-fixture";
 
-const { simulateMock, goLiveMock, refreshMock } = vi.hoisted(() => ({
+const { simulateMock, goLiveMock, pushMock, refreshMock } = vi.hoisted(() => ({
   simulateMock: vi.fn(),
   goLiveMock: vi.fn(),
+  pushMock: vi.fn(),
   refreshMock: vi.fn(),
 }));
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: refreshMock }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: pushMock, refresh: refreshMock }) }));
 vi.mock("@/app/(activation)/activate/actions", () => ({
   simulateDevelopmentForwardedCallAction: simulateMock,
   goLiveAction: goLiveMock,
@@ -37,6 +38,7 @@ describe("launch milestone", () => {
       data: activationSnapshot({ stage: "activating" }),
       message: "Go-live started.",
     });
+    pushMock.mockReset();
     refreshMock.mockReset();
   });
 
@@ -81,6 +83,25 @@ describe("launch milestone", () => {
 
     await waitFor(() => expect(simulateMock).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't complete this step/i);
+    expect(refreshMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a successful local simulation to the canonical launch milestone", async () => {
+    const windowSnapshot = activationSnapshot({
+      stage: "verification_window_open",
+      activation: {
+        ...activationSnapshot().activation,
+        verification_window_expires_at: "2026-07-17T10:10:00Z",
+        verification_status: "open",
+      },
+    });
+    render(<LaunchMilestone localVerification snapshot={windowSnapshot} />);
+
+    const simulate = screen.getByRole("button", { name: /Simulate forwarded call/i });
+    fireEvent.click(simulate);
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/activate?milestone=launch"));
+    expect(simulate).toBeEnabled();
     expect(refreshMock).not.toHaveBeenCalled();
   });
 

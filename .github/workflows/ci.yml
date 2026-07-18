@@ -146,6 +146,32 @@ jobs:
       - name: Next.js build
         run: npm run build
 
+  e2e:
+    name: CI / E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    needs: [api, agent, web]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+          package-manager-cache: false
+      - name: Install locked web dependencies
+        working-directory: apps/web
+        run: npm ci
+      - name: Install Chromium and system dependencies
+        working-directory: apps/web
+        run: npm exec -- playwright install --with-deps chromium
+      - name: Run disposable local browser journey
+        run: bash scripts/run-local-e2e.sh
+
   migrations:
     name: CI / Migrations
     runs-on: ubuntu-24.04
@@ -335,6 +361,7 @@ jobs:
       - api
       - agent
       - web
+      - e2e
       - migrations
       - dependency-audit
       - gitleaks
@@ -345,12 +372,13 @@ jobs:
           API_RESULT: ${{ needs.api.result }}
           AGENT_RESULT: ${{ needs.agent.result }}
           WEB_RESULT: ${{ needs.web.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
           MIGRATIONS_RESULT: ${{ needs.migrations.result }}
           DEPENDENCY_AUDIT_RESULT: ${{ needs['dependency-audit'].result }}
           GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
           CONTAINER_SCAN_RESULT: ${{ needs['container-scan'].result }}
         run: |
-          for result in "$API_RESULT" "$AGENT_RESULT" "$WEB_RESULT" "$MIGRATIONS_RESULT" "$DEPENDENCY_AUDIT_RESULT" "$GITLEAKS_RESULT" "$CONTAINER_SCAN_RESULT"; do
+          for result in "$API_RESULT" "$AGENT_RESULT" "$WEB_RESULT" "$E2E_RESULT" "$MIGRATIONS_RESULT" "$DEPENDENCY_AUDIT_RESULT" "$GITLEAKS_RESULT" "$CONTAINER_SCAN_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "A required CI job did not succeed."
               exit 1

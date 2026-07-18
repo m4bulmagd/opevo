@@ -556,6 +556,12 @@ def test_production_compose_scopes_modes_and_passes_runtime_validation(
     assert telephony_match.group(1) == "telnyx"
     resolved_modes["telephony_mode"] = telephony_match.group(1)
 
+    assert (
+        "ACTIVATION_FLOW_ENABLED: "
+        "${ACTIVATION_FLOW_ENABLED:?ACTIVATION_FLOW_ENABLED is required}"
+    ) in worker_environment
+    assert "LOCAL_AUTH_TOKEN" not in compose
+
     validate_api_runtime(base_settings.model_copy(update=resolved_modes))
 
 
@@ -588,7 +594,7 @@ def test_production_worker_runtime_accepts_least_privilege_settings() -> None:
     validate_worker_runtime(settings)
 
 
-def test_development_services_load_local_env_files_without_empty_secret_overrides() -> None:
+def test_development_services_load_local_env_files_without_leaking_api_identity_to_worker() -> None:
     compose_dev = (REPO_ROOT / "compose.dev.yaml").read_text()
     api_service = compose_dev.split("\n  api:", 1)[1].split("\n  worker:", 1)[0]
     worker_service = compose_dev.split("\n  worker:", 1)[1].split("\n  agent:", 1)[0]
@@ -597,13 +603,15 @@ def test_development_services_load_local_env_files_without_empty_secret_override
 
     for service, env_path in (
         (api_service, "./apps/api/.env"),
-        (worker_service, "./apps/api/.env"),
         (agent_service, "./apps/agent/.env"),
         (web_service, "./apps/web/.env"),
     ):
         assert "env_file:" in service
         assert f"path: {env_path}" in service
         assert "required: false" in service
+
+    assert "env_file:" not in worker_service
+    assert "./apps/api/.env" not in worker_service
 
     for provider_key in (
         "LIVEKIT_URL",
@@ -637,10 +645,12 @@ def test_development_compose_scopes_local_identity_and_provider_modes() -> None:
         "CARRIER_LOOKUP_MODE: fake",
         "TELEPHONY_MODE: fake",
         "LOCAL_AUTH_TOKEN: presvo-local-development-token",
+        'ACTIVATION_FLOW_ENABLED: "true"',
     ):
         assert setting in api_service
 
     assert "TELEPHONY_MODE: fake" in worker_service
+    assert 'ACTIVATION_FLOW_ENABLED: "true"' in worker_service
     for forbidden_setting in (
         "AUTH_MODE:",
         "BILLING_MODE:",
@@ -648,7 +658,14 @@ def test_development_compose_scopes_local_identity_and_provider_modes() -> None:
         "LOCAL_AUTH_TOKEN:",
     ):
         assert forbidden_setting not in worker_service
-        assert forbidden_setting not in web_service
+    for setting in (
+        "AUTH_MODE: local",
+        "BILLING_MODE: fake",
+        "TELEPHONY_MODE: fake",
+        "LOCAL_AUTH_TOKEN: presvo-local-development-token",
+    ):
+        assert setting in web_service
+    assert "CARRIER_LOOKUP_MODE:" not in web_service
     assert "NEXT_PUBLIC_LOCAL_AUTH_TOKEN" not in compose_dev
 
     local_examples = (
@@ -666,6 +683,105 @@ def test_development_compose_scopes_local_identity_and_provider_modes() -> None:
     for example in local_examples:
         assert f"# {example}" in api_env_example
         assert example not in active_example_lines
+
+
+def test_development_compose_parameterizes_disposable_host_ports() -> None:
+    compose_dev = (REPO_ROOT / "compose.dev.yaml").read_text()
+
+    for binding in (
+        '"127.0.0.1:${POSTGRES_PORT:-5432}:5432"',
+        '"127.0.0.1:${REDIS_PORT:-6379}:6379"',
+        '"127.0.0.1:${MINIO_PORT:-9000}:9000"',
+        '"127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"',
+        '"127.0.0.1:${API_PORT:-8000}:8000"',
+        '"127.0.0.1:${WEB_PORT:-3000}:3000"',
+    ):
+        assert binding in compose_dev
+
+
+def test_local_e2e_runner_is_disposable_and_never_starts_voice_agent() -> None:
+    runner = (REPO_ROOT / "scripts" / "run-local-e2e.sh").read_text()
+
+    assert runner.startswith("#!/bin/sh\nset -eu\n")
+    assert "presvo-e2e" in runner
+    for port in ("3300", "5800", "55432", "56379", "59000", "59001"):
+        assert port in runner
+    assert "trap cleanup" in runner
+    assert "down --volumes" in runner
+    assert "wait_for_health" in runner
+    up_commands = re.findall(r"^compose up --detach (.+)$", runner, re.MULTILINE)
+    started_services = set(" ".join(up_commands).split())
+    assert started_services == {
+        "postgres",
+        "redis",
+        "minio",
+        "minio-init",
+        "migrate",
+        "api",
+        "worker",
+        "web",
+    }
+    assert "agent" not in started_services
+
+
+@pytest.mark.parametrize(
+    ("signal_name", "expected_exit_code"),
+    [("HUP", 129), ("INT", 130), ("TERM", 143)],
+)
+def test_local_e2e_runner_preserves_signal_exit_and_failure_logs(
+    tmp_path: Path,
+    signal_name: str,
+    expected_exit_code: int,
+) -> None:
+    runner = REPO_ROOT / "scripts" / "run-local-e2e.sh"
+    probe_log = tmp_path / "docker.log"
+    signal_marker = tmp_path / "signal-sent"
+    fake_docker = tmp_path / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$PROBE_LOG"
+if [ ! -e "$PROBE_SIGNAL_MARKER" ]; then
+  : > "$PROBE_SIGNAL_MARKER"
+  kill -"$PROBE_SIGNAL" "$PPID"
+fi
+exit 0
+"""
+    )
+    fake_docker.chmod(0o755)
+    env = os.environ | {
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "PROBE_LOG": str(probe_log),
+        "PROBE_SIGNAL": signal_name,
+        "PROBE_SIGNAL_MARKER": str(signal_marker),
+    }
+
+    result = subprocess.run(
+        ["/bin/sh", str(runner)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert result.returncode == expected_exit_code
+    docker_calls = probe_log.read_text()
+    assert " ps" in docker_calls
+    assert " logs api worker web" in docker_calls
+    assert " down --volumes --remove-orphans" in docker_calls
+
+
+def test_ci_runs_the_disposable_browser_journey_without_deployment() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    e2e_job = workflow.split("\n  e2e:", 1)[1].split("\n  migrations:", 1)[0]
+
+    assert "needs: [api, agent, web]" in e2e_job
+    assert "npm ci" in e2e_job
+    assert "playwright install --with-deps chromium" in e2e_job
+    assert "bash scripts/run-local-e2e.sh" in e2e_job
+    for forbidden in ("deploy", "push", "publish"):
+        assert forbidden not in e2e_job.lower()
 
 
 def test_worker_secrets_are_least_privilege_and_agent_shutdown_can_drain() -> None:

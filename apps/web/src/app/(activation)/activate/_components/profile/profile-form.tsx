@@ -200,7 +200,7 @@ export function ProfileForm({ snapshot, milestone }: ProfileFormProps) {
       }
       return;
     }
-    router.refresh();
+    router.push("/activate?milestone=number");
   };
 
   return (

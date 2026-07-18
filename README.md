@@ -6,9 +6,9 @@
 **Status:** Active development.
 
 Presvo is a working pre-production MVP with a production-oriented architecture.
-Work is progressing toward a controlled
-beta, with onboarding, compliance, recovery testing, and real-provider
-certification still in progress.
+The complete guided activation journey is implemented and browser-tested with
+local providers. Cloud deployment, compliance approval, recovery testing, and
+real-provider certification are still required before a controlled beta.
 
 ![Presvo landing page](docs/landing_page.webp)
 
@@ -25,13 +25,15 @@ Next.js dashboard with transcripts, summaries, recordings, and minute usage.
 - Stripe-hosted checkout, billing portal, subscription lifecycle, and
   authoritative minute accounting
 - Queue-backed France number provisioning with visible progress and retry
+- Resumable five-milestone activation for business profile, receptionist,
+  number, conditional forwarding, verification, and explicit go-live
 - Configurable agent identity, instructions, business context, and knowledge
 - LiveKit inbound dispatch with STT → Gemini → TTS voice processing
 - Incremental transcript persistence and crash-recovery tail
 - Durable call state machine, reconciliation, call limits, and idempotent
   finalization
-- Structured summaries, private recordings, signed playback access, and call
-  archive
+- Structured summaries, private recordings, signed playback access, and
+  owner-controlled removal of terminal calls
 - Transactional outbox for provider operations and post-call work
 - Readiness checks, safe logging, OpenTelemetry, security scans, and hardened
   container definitions
@@ -41,10 +43,20 @@ Next.js dashboard with transcripts, summaries, recordings, and minute usage.
 The public MVP is intentionally constrained to France, one `starter` plan, one
 agent per customer, inbound calls, and the `stt_llm_tts` launch pipeline.
 
-The current dashboard exposes onboarding state and a setup checklist, but not
-yet a complete guided onboarding wizard. Real-provider staging certification,
-French legal and localization work, recovery drills, account data lifecycle,
-and controlled-beta evidence are also still in progress.
+The guided journey is complete for the local provider-free mode. The launch
+market remains professionals and small businesses in France, using an English
+UI and a Presvo-provided French number reached through conditional forwarding
+for unanswered, busy, and unreachable calls. Real-provider staging
+certification, French legal/localization work, recovery drills, and
+controlled-beta evidence remain in progress.
+
+An authenticated owner can use **Remove call** on a terminal call. Presvo first
+stops any persisted recording egress, deletes the original-audio object from
+active storage, then purges and hides the transcript, summary, caller data, and
+remaining call content. Active calls reject removal, and Presvo makes no claim
+that per-call removal erases historical backup copies. Account-wide export and
+deletion orchestration, appointment booking, configurable conversation flows,
+and automatic 30-day retention are planned rather than implemented.
 
 See [Project Status and Roadmap](docs/PROJECT_STATUS.md) for the evidence-based
 feature matrix, production gates, and planned conversation-flow work.
@@ -73,18 +85,20 @@ flowchart LR
 
 ### Inbound call lifecycle
 
-1. Stripe-backed onboarding provisions a French Telnyx number.
-2. An inbound SIP caller joins a LiveKit room.
-3. A verified LiveKit webhook creates the durable call and dispatches the
+1. The owner completes the business and receptionist milestones.
+2. Stripe establishes payment eligibility; a separate explicit provisioning
+   consent then authorizes ordering one French Telnyx number.
+3. An inbound SIP caller joins a LiveKit room.
+4. A verified LiveKit webhook creates the durable call and dispatches the
    customer-scoped agent.
-4. The agent loads the customer's configuration, speaks the required AI and
+5. The agent loads the customer's configuration, speaks the required AI and
    recording disclosure, and handles the call.
-5. Transcript segments are persisted incrementally with call-scoped JWT
+6. Transcript segments are persisted incrementally with call-scoped JWT
    authorization.
-6. Call completion atomically records the usage debit and pending notification
+7. Call completion atomically records the usage debit and pending notification
    row, then enqueues `summary.generate`, `recording.stop`, and any required
    `phone.disable` transactional-outbox work.
-7. The dashboard reads the durable call, transcript, summary, recording, and
+8. The dashboard reads the durable call, transcript, summary, recording, and
    billing state from the API.
 
 ## Engineering highlights
@@ -121,21 +135,46 @@ flowchart LR
 ### Prerequisites
 
 - Docker with Docker Compose
-- Hosted provider credentials only if you want to exercise authentication,
-  billing, provisioning, or live voice calls
+- Node.js 22 when running browser tests from the host
+- Hosted provider credentials only for the separate real-provider path
 
 ### Start the core stack
 
 From the repository root:
 
 ```bash
-docker compose -f compose.dev.yaml up --build
+docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker web
 ```
 
 This starts PostgreSQL 17, Redis 7, MinIO, the one-shot migration service,
-FastAPI, the ARQ worker, and Next.js. The web application is available at
-`http://localhost:3000`; without Clerk configuration it shows setup notices
-instead of authenticated customer data.
+FastAPI, the ARQ worker, and Next.js. Open `http://127.0.0.1:3000/activate`.
+Compose selects local identity plus fake billing, carrier lookup, telephony,
+and verification, so Clerk, Stripe, Telnyx, LiveKit, and cloud credentials are
+not required. The local token stays server-only and the LiveKit agent is not
+part of this deterministic journey.
+
+Complete the five milestones in order:
+
+1. Save the business profile and confirm the existing French number's carrier.
+2. Save receptionist content and confirm the exact profile revision.
+3. Activate the local starter plan, separately consent to number provisioning,
+   and wait for the fake French number.
+4. Review conditional-forwarding guidance and start the ten-minute test window.
+5. Simulate the forwarded call, approve go-live, and verify the active dashboard.
+
+Reloading between milestones resumes from durable state; no database reset
+endpoint exists.
+
+### Run the disposable browser proof
+
+```bash
+npm exec --prefix apps/web -- playwright install chromium
+bash scripts/run-local-e2e.sh
+```
+
+The runner uses project `presvo-e2e`, alternate loopback ports, fresh volumes,
+and a cleanup trap. It starts only PostgreSQL, Redis, MinIO, migrations, API,
+worker, and web, then runs the same serial browser journey used by CI.
 
 Local ignored environment files can be created from:
 
@@ -152,8 +191,11 @@ After configuring LiveKit and the selected speech/model providers in
 docker compose -f compose.dev.yaml --profile voice up --build
 ```
 
-A real end-to-end phone call also requires valid Clerk, Stripe, Telnyx,
-LiveKit, storage, and model-provider configuration. Follow the
+A real end-to-end phone call requires an explicit non-local deployment with
+Clerk, Stripe, Telnyx, LiveKit, storage, and model-provider credentials.
+Production Compose requires the activation flag and selects real provider
+modes; it has no local token and fails closed when required values are absent.
+Follow the
 [staging smoke runbook](docs/architecture/staging-smoke-runbook.md) for that
 path.
 
@@ -179,6 +221,7 @@ libs/shared/       Small cross-application Python contracts
 ## Documentation
 
 - [Project status and roadmap](docs/PROJECT_STATUS.md)
+- [Local self-service activation](docs/architecture/local-self-service-activation.md)
 - [Backend context](docs/architecture/backend-context.md)
 - [Integration endpoints](docs/architecture/integration-endpoints.md)
 - [Production deployment decision](docs/architecture/production-deployment.md)

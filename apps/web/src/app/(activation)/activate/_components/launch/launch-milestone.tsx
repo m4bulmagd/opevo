@@ -34,7 +34,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
     : Array.from(new Set([...snapshot.runtime_readiness.blockers, "forwarding_not_verified"]));
   const actionableBlockers = getActionableReadinessBlockers(readinessBlockers);
 
-  const runCommand = async (command: LaunchCommand, fallbackMessage: string) => {
+  const runCommand = async (command: LaunchCommand, fallbackMessage: string, onSuccess = () => router.refresh()) => {
     if (pendingRef.current) return;
     pendingRef.current = true;
     setPending(true);
@@ -47,7 +47,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
         return;
       }
       accepted = true;
-      router.refresh();
+      onSuccess();
     } catch {
       accepted = false;
       setError(fallbackMessage);
@@ -97,6 +97,11 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
               void runCommand(
                 () => simulateDevelopmentForwardedCallAction({}),
                 "We couldn't simulate the forwarded call. Refresh and try again.",
+                () => {
+                  pendingRef.current = false;
+                  setPending(false);
+                  router.push("/activate?milestone=launch");
+                },
               )
             }
           >
