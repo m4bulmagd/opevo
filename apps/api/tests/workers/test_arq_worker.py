@@ -72,7 +72,7 @@ async def test_worker_startup_rejects_unsafe_runtime_before_jobs(
         assert actual_settings is settings
         raise RuntimeError("TELNYX_ORDERING_ENABLED")
 
-    monkeypatch.setattr(arq_worker, "validate_api_runtime", reject_runtime)
+    monkeypatch.setattr(arq_worker, "validate_worker_runtime", reject_runtime)
 
     with pytest.raises(RuntimeError, match="TELNYX_ORDERING_ENABLED"):
         await arq_worker.WorkerSettings.on_startup({})

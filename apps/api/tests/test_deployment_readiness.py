@@ -8,7 +8,7 @@ import tomllib
 import pytest
 
 from app.core.config import Settings
-from app.core.runtime_validation import validate_api_runtime
+from app.core.runtime_validation import validate_api_runtime, validate_worker_runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -272,9 +272,34 @@ def test_production_requires_exact_provider_modes_without_echoing_values(
     assert unsafe_value not in str(error.value)
 
 
+@pytest.mark.parametrize(
+    "field_name",
+    ("auth_mode", "billing_mode", "carrier_lookup_mode", "telephony_mode"),
+)
+def test_settings_validation_hides_arbitrary_invalid_mode_values(
+    field_name: str,
+) -> None:
+    sentinel = f"{field_name.upper()}_SENTINEL_SECRET"
+
+    with pytest.raises(ValueError) as error:
+        Settings(
+            database_url="sqlite+aiosqlite://",
+            redis_url="redis://localhost:6379/0",
+            **{field_name: sentinel},
+        )
+
+    assert sentinel not in str(error.value)
+
+
 @pytest.mark.parametrize("app_env", ["test", "staging"])
+@pytest.mark.parametrize(
+    "validator",
+    (validate_api_runtime, validate_worker_runtime),
+    ids=("api", "worker"),
+)
 def test_every_non_development_environment_rejects_local_auth(
     app_env: str,
+    validator,
 ) -> None:
     settings = Settings(
         app_env=app_env,
@@ -286,7 +311,7 @@ def test_every_non_development_environment_rejects_local_auth(
     )
 
     with pytest.raises(RuntimeError, match="AUTH_MODE") as error:
-        validate_api_runtime(settings)
+        validator(settings)
 
     assert "local-token-sentinel-that-must-not-be-reported" not in str(error.value)
 
@@ -491,6 +516,76 @@ def test_compose_requires_explicit_telnyx_ordering_for_worker_and_api() -> None:
     assert compose.count(required_setting) == 1
     worker_environment = compose.split("x-api-environment:", maxsplit=1)[0]
     assert required_setting in worker_environment
+
+
+def test_production_compose_scopes_modes_and_passes_runtime_validation(
+    base_settings: Settings,
+) -> None:
+    compose = (REPO_ROOT / "compose.yaml").read_text()
+    worker_environment = compose.split(
+        "x-worker-environment: &worker-environment",
+        1,
+    )[1].split("x-api-environment: &api-environment", 1)[0]
+    api_environment = compose.split(
+        "x-api-environment: &api-environment",
+        1,
+    )[1].split("x-service-hardening: &service-hardening", 1)[0]
+    api_only_modes = {
+        "AUTH_MODE": ("auth_mode", "clerk"),
+        "BILLING_MODE": ("billing_mode", "stripe"),
+        "CARRIER_LOOKUP_MODE": ("carrier_lookup_mode", "telnyx"),
+    }
+    resolved_modes: dict[str, str] = {}
+    for environment_name, (field_name, expected_value) in api_only_modes.items():
+        match = re.search(
+            rf"^  {environment_name}: ([a-z]+)$",
+            api_environment,
+            flags=re.MULTILINE,
+        )
+        assert match is not None
+        assert match.group(1) == expected_value
+        resolved_modes[field_name] = match.group(1)
+        assert environment_name not in worker_environment
+
+    telephony_match = re.search(
+        r"^  TELEPHONY_MODE: ([a-z]+)$",
+        worker_environment,
+        flags=re.MULTILINE,
+    )
+    assert telephony_match is not None
+    assert telephony_match.group(1) == "telnyx"
+    resolved_modes["telephony_mode"] = telephony_match.group(1)
+
+    validate_api_runtime(base_settings.model_copy(update=resolved_modes))
+
+
+def test_production_worker_runtime_accepts_least_privilege_settings() -> None:
+    settings = Settings(
+        app_env="production",
+        database_url="postgresql+asyncpg://db/ai_call",
+        redis_url="rediss://redis/0",
+        livekit_url="wss://livekit.example.com",
+        livekit_api_key="livekit-api-key",
+        livekit_api_secret="livekit-api-secret",
+        telnyx_api_key="telnyx-api-key",
+        telnyx_active_connection_id="telnyx-active-connection",
+        telnyx_disabled_connection_id="telnyx-disabled-connection",
+        telnyx_ordering_enabled=True,
+        telephony_mode="telnyx",
+        storage_bucket_name="recordings",
+        s3_endpoint_url="https://storage.example.com",
+        s3_access_key="storage-access-key",
+        s3_secret_key="storage-secret-key",
+        s3_region="eu-west-3",
+        agent_dispatch_jwt_secret=(
+            "production-dispatch-jwt-secret-at-least-32-bytes"
+        ),
+        summary_provider="gemini",
+        summary_model="gemini-2.5-flash",
+        gemini_api_key="gemini-api-key",
+    )
+
+    validate_worker_runtime(settings)
 
 
 def test_development_services_load_local_env_files_without_empty_secret_overrides() -> None:

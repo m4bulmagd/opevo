@@ -17,6 +17,8 @@ from app.repositories.user_repository import UserRepository
 from app.services.user_bootstrap_service import UserBootstrapService
 
 logger = logging.getLogger(__name__)
+LOCAL_USER_EXTERNAL_ID = "local_presvo_user"
+LOCAL_USER_EMAIL = "local@presvo.invalid"
 
 
 @dataclass(slots=True)
@@ -109,7 +111,7 @@ class LocalAuthProvider(AuthProvider):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token",
             )
-        return UserIdentity(clerk_user_id="local_presvo_user")
+        return UserIdentity(clerk_user_id=LOCAL_USER_EXTERNAL_ID)
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -147,8 +149,8 @@ async def require_user_identity(
 
     if isinstance(auth_provider, LocalAuthProvider):
         local_user = await UserBootstrapService(session).ensure_user(
-            external_user_id="local_presvo_user",
-            email="local@presvo.invalid",
+            external_user_id=LOCAL_USER_EXTERNAL_ID,
+            email=LOCAL_USER_EMAIL,
         )
         await session.commit()
         internal_user_id = local_user.id
