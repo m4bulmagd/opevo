@@ -83,6 +83,160 @@ class FakeSession:
 
 
 @pytest.mark.parametrize(
+    ("tts_provider", "plugin", "credential_name"),
+    [
+        ("speechmatics", FakeSpeechmaticsPlugin, "speechmatics_api_key"),
+        ("elevenlabs", FakeElevenLabsPlugin, "elevenlabs_api_key"),
+    ],
+)
+def test_verification_session_builds_only_the_selected_tts(
+    monkeypatch: pytest.MonkeyPatch,
+    tts_provider: str,
+    plugin: object,
+    credential_name: str,
+) -> None:
+    settings = SimpleNamespace(
+        speechmatics_api_key="speechmatics-test-key",
+        elevenlabs_api_key="elevenlabs-test-key",
+        elevenlabs_voice_id="voice-id",
+    )
+    monkeypatch.setattr(pipeline_factory, "get_settings", lambda: settings)
+    forbidden = [
+        "_default_plugin_modules",
+        "_build_stt",
+        "_build_llm",
+        "_build_sts_model",
+        "_build_vad",
+        "_build_turn_detection",
+        "build_system_prompt",
+        "InstrumentedAgent",
+        "StreamDebugLogger",
+    ]
+    for name in forbidden:
+        monkeypatch.setattr(
+            pipeline_factory,
+            name,
+            lambda *_args, _name=name, **_kwargs: pytest.fail(
+                f"forbidden verification builder called: {_name}"
+            ),
+        )
+
+    session = pipeline_factory.build_verification_session(
+        tts_provider,
+        plugin_modules={tts_provider: plugin},
+        session_cls=FakeSession,
+    )
+
+    assert set(session.kwargs) == {"tts"}
+    assert session.kwargs["tts"].kwargs["api_key"] == getattr(
+        settings,
+        credential_name,
+    )
+
+
+@pytest.mark.parametrize("tts_provider", ["speechmatics", "elevenlabs"])
+def test_verification_session_imports_only_the_selected_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+    tts_provider: str,
+) -> None:
+    imported: list[str] = []
+    plugin = (
+        FakeSpeechmaticsPlugin
+        if tts_provider == "speechmatics"
+        else FakeElevenLabsPlugin
+    )
+    monkeypatch.setattr(
+        pipeline_factory.importlib,
+        "import_module",
+        lambda module_name: imported.append(module_name) or plugin,
+    )
+    monkeypatch.setattr(
+        pipeline_factory,
+        "get_settings",
+        lambda: SimpleNamespace(
+            speechmatics_api_key="speechmatics-test-key",
+            elevenlabs_api_key="elevenlabs-test-key",
+            elevenlabs_voice_id="voice-id",
+        ),
+    )
+
+    pipeline_factory.build_verification_session(
+        tts_provider,
+        session_cls=FakeSession,
+    )
+
+    assert imported == [f"livekit.plugins.{tts_provider}"]
+
+
+@pytest.mark.parametrize(
+    ("tts_provider", "settings"),
+    [
+        (
+            "speechmatics",
+            SimpleNamespace(
+                speechmatics_api_key="",
+                elevenlabs_api_key="elevenlabs-test-key",
+                elevenlabs_voice_id="voice-id",
+            ),
+        ),
+        (
+            "elevenlabs",
+            SimpleNamespace(
+                speechmatics_api_key="speechmatics-test-key",
+                elevenlabs_api_key="",
+                elevenlabs_voice_id="voice-id",
+            ),
+        ),
+    ],
+)
+def test_verification_session_rejects_missing_credentials_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    tts_provider: str,
+    settings: SimpleNamespace,
+) -> None:
+    monkeypatch.setattr(pipeline_factory, "get_settings", lambda: settings)
+
+    with pytest.raises(
+        pipeline_factory.VerificationSessionConfigurationError,
+        match="verification TTS configuration is unavailable",
+    ) as caught:
+        pipeline_factory.build_verification_session(
+            tts_provider,
+            plugin_modules={
+                "speechmatics": FakeSpeechmaticsPlugin,
+                "elevenlabs": FakeElevenLabsPlugin,
+            },
+            session_cls=FakeSession,
+        )
+
+    assert "test-key" not in str(caught.value)
+
+
+def test_verification_session_rejects_missing_selected_plugin_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pipeline_factory,
+        "get_settings",
+        lambda: SimpleNamespace(
+            speechmatics_api_key="speechmatics-test-key",
+            elevenlabs_api_key="elevenlabs-test-key",
+            elevenlabs_voice_id="voice-id",
+        ),
+    )
+
+    with pytest.raises(
+        pipeline_factory.VerificationSessionConfigurationError,
+        match="verification TTS configuration is unavailable",
+    ):
+        pipeline_factory.build_verification_session(
+            "speechmatics",
+            plugin_modules={},
+            session_cls=FakeSession,
+        )
+
+
+@pytest.mark.parametrize(
     ("stt_provider", "tts_provider"),
     [
         ("elevenlabs", "speechmatics"),

@@ -1,6 +1,14 @@
 from typing import Annotated, Literal
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    field_validator,
+)
 
 
 TranscriptSpeaker = Literal["CALLER", "AGENT"]
@@ -50,9 +58,10 @@ KnowledgeBase = Annotated[
 ]
 
 
-class DispatchMetadata(BaseModel):
+class CustomerCallDispatchMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    job_type: Literal["customer_call"] = "customer_call"
     call_id: str = Field(min_length=1)
     user_id: str = Field(min_length=1)
     agent_config_id: str = Field(min_length=1)
@@ -66,6 +75,55 @@ class DispatchMetadata(BaseModel):
     minutes_remaining: int = Field(ge=0)
     allowed_duration_seconds: int = Field(gt=0)
     dispatch_token: str = Field(min_length=1)
+
+
+VERIFICATION_MESSAGE = (
+    "Forwarding test successful. Return to Presvo to go live."
+)
+
+
+class ForwardingVerificationDispatchMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_type: Literal["forwarding_verification"]
+    verification_session_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    agent_identity: str = Field(min_length=1)
+    completion_token: str = Field(min_length=1)
+    message: Literal[
+        "Forwarding test successful. Return to Presvo to go live."
+    ]
+    tts_provider: Literal["speechmatics", "elevenlabs"]
+
+    @field_validator("verification_session_id", "user_id")
+    @classmethod
+    def validate_uuid(cls, value: str) -> str:
+        UUID(value)
+        return value
+
+    @field_validator("completion_token")
+    @classmethod
+    def validate_completion_token(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("completion token is required")
+        return value
+
+
+JobMetadata = Annotated[
+    CustomerCallDispatchMetadata | ForwardingVerificationDispatchMetadata,
+    Field(discriminator="job_type"),
+]
+JOB_METADATA_ADAPTER: TypeAdapter[JobMetadata] = TypeAdapter(JobMetadata)
+
+
+def parse_job_metadata(value: object) -> JobMetadata:
+    if isinstance(value, dict) and "job_type" not in value:
+        value = {**value, "job_type": "customer_call"}
+    return JOB_METADATA_ADAPTER.validate_python(value)
+
+
+# Compatibility name retained for existing customer-call consumers.
+DispatchMetadata = CustomerCallDispatchMetadata
 
 
 class CallTranscriptItem(BaseModel):

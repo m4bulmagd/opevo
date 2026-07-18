@@ -459,6 +459,30 @@ async def test_entrypoint_connects_then_waits_only_for_sip_participant(
 
 
 @pytest.mark.anyio
+async def test_customer_entrypoint_accepts_legacy_metadata_without_job_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    context = FakeJobContext(metadata)
+    payload = metadata.model_dump()
+    payload.pop("job_type")
+    context.job.metadata = json.dumps(payload)
+    session = FakeEntrypointSession()
+    captured: list[dict] = []
+
+    def capture_runtime(dispatch_metadata, **_kwargs):
+        captured.append(dispatch_metadata)
+        return object(), session
+
+    monkeypatch.setattr("agent.main.build_agent_runtime", capture_runtime)
+
+    await entrypoint(context)
+
+    assert session.started is True
+    assert captured[0]["job_type"] == "customer_call"
+
+
+@pytest.mark.anyio
 async def test_entrypoint_records_only_fixed_lifecycle_and_provider_boundaries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
