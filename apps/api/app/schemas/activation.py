@@ -7,6 +7,7 @@ from app.schemas.business_profile import (
     BusinessProfileConstraints,
     BusinessProfileResponse,
 )
+from app.schemas.forwarding import ForwardingGuide
 from app.services.activation_policy import ActivationStage
 from app.services.customer_readiness_policy import CustomerReadinessStage
 
@@ -82,5 +83,6 @@ class ActivationSnapshotResponse(BaseModel):
     activation: ActivationProgressResponse
     billing: ActivationBillingResponse
     number: ActivationNumberResponse
+    forwarding: ForwardingGuide | None = None
     runtime_readiness: RuntimeReadinessResponse
     evaluated_at: datetime
