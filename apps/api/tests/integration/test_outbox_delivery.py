@@ -34,6 +34,9 @@ from app.services.activation_provisioning_service import ActivationProvisioningS
 from app.services.onboarding_service import OnboardingRetryNotAllowedError, OnboardingService
 
 
+PROVISIONING_NOW = datetime(2026, 7, 18, 9, 0, tzinfo=UTC)
+
+
 def _valid_business_hours() -> dict[str, dict[str, object]]:
     return {
         day: {"closed": True, "intervals": []}
@@ -310,7 +313,7 @@ async def test_concurrent_provisioning_confirmation_creates_one_durable_intent(
                     id=activation_id,
                     user_id=user.id,
                     profile_confirmed_revision=1,
-                    profile_confirmed_at=datetime.now(UTC),
+                    profile_confirmed_at=PROVISIONING_NOW - timedelta(hours=1),
                 ),
                 Subscription(
                     user_id=user.id,
@@ -319,8 +322,8 @@ async def test_concurrent_provisioning_confirmation_creates_one_durable_intent(
                     plan_tier="starter",
                     status="active",
                     allocated_minutes=60,
-                    current_period_start=datetime(2026, 1, 1, tzinfo=UTC),
-                    current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
+                    current_period_start=PROVISIONING_NOW - timedelta(days=30),
+                    current_period_end=PROVISIONING_NOW + timedelta(days=30),
                 ),
                 UsageLedger(
                     user_id=user.id,
@@ -336,7 +339,10 @@ async def test_concurrent_provisioning_confirmation_creates_one_durable_intent(
 
     async def confirm() -> datetime | None:
         async with outbox_session_factory() as session:
-            snapshot = await ActivationProvisioningService(session).confirm(
+            snapshot = await ActivationProvisioningService(
+                session,
+                now=lambda: PROVISIONING_NOW,
+            ).confirm(
                 user_id,
                 arq_pool=None,
             )

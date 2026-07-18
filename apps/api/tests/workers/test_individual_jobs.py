@@ -559,6 +559,61 @@ class CapturingPhoneProvisioningRepository:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("case", ["missing_row", "missing_key"])
+async def test_phone_provision_outbox_missing_provider_identity_is_terminal_before_job(
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    from app.workers.jobs import outbox_topics
+    from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+
+    user_id = uuid4()
+    job_called = False
+
+    class Session:
+        async def commit(self) -> None:
+            return None
+
+    class SessionContext:
+        async def __aenter__(self):
+            return Session()
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+    class Provisionings:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def get_by_user_id(self, requested_user_id):
+            assert requested_user_id == user_id
+            if case == "missing_row":
+                return None
+            return SimpleNamespace(provider_operation_key=None)
+
+    async def capture(*_args, **_kwargs) -> None:
+        nonlocal job_called
+        job_called = True
+
+    monkeypatch.setattr(outbox_topics, "PhoneNumberProvisioningRepository", Provisionings)
+    monkeypatch.setattr(outbox_topics, "phone_provisioning_job", capture)
+    event = SimpleNamespace(
+        payload={"user_id": str(user_id)},
+        idempotency_key=f"activation:phone.provision:{uuid4()}",
+    )
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await outbox_topics.deliver_phone_provision(
+            {"session_factory": SessionContext},
+            event,
+        )
+
+    assert exc_info.value.error_code == "provider_terminal"
+    assert exc_info.value.retryable is False
+    assert job_called is False
+
+
+@pytest.mark.anyio
 async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
