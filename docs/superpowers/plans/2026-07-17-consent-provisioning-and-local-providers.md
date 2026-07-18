@@ -556,9 +556,14 @@ still take precedence.
 - [ ] **Step 4: Implement idempotent local starter activation**
 
 Use a synthetic Stripe identity prefixed `local_`, a 30-day period starting at
-`now`, and the existing subscription/usage services. The usage source is
-`local-starter:{user_id}:{period_start.isoformat()}` so repeated activation
-cannot grant twice.
+the first activation time, and the existing subscription/usage services. Lock
+the user as the serialization boundary. If the user's existing subscription is
+already the local starter subscription, preserve its original period instead of
+sliding it forward. Never overwrite a real Stripe-backed subscription through
+the development endpoint. Use the stable usage source
+`local-starter:{user_id}` so repeated activation on a later day still cannot
+grant twice. Tests must call the command with two different `now` values and
+assert one grant plus an unchanged period.
 
 ```python
 subscription = await self.subscription_repository.upsert_by_stripe_subscription_id(
@@ -575,7 +580,7 @@ subscription = await self.subscription_repository.upsert_by_stripe_subscription_
 )
 await self.usage_accounting_service.grant_invoice(
     user_id=user_id,
-    invoice_id=f"local-starter:{user_id}:{now.date().isoformat()}",
+    invoice_id=f"local-starter:{user_id}",
     minutes=60,
 )
 ```
