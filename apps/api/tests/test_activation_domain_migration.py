@@ -115,7 +115,7 @@ def test_activation_revision_follows_call_state_machine() -> None:
     assert migration.down_revision == "0011_call_state_machine"
 
 
-def test_offline_upgrade_generates_full_chain_through_activation_head() -> None:
+def test_offline_upgrade_generates_full_chain_through_routing_target_head() -> None:
     environment = {
         **os.environ,
         "DATABASE_URL": (
@@ -143,7 +143,8 @@ def test_offline_upgrade_generates_full_chain_through_activation_head() -> None:
     output = completed.stdout + completed.stderr
     assert completed.returncode == 0, output
     assert "0011_call_state_machine -> 0012_customer_activation" in output
-    assert "version_num='0012_customer_activation'" in output
+    assert "0012_customer_activation -> 0013_outbox_routing_target" in output
+    assert "version_num='0013_outbox_routing_target'" in output
 
 
 def test_upgrade_preflights_duplicate_phone_owners_before_ddl(monkeypatch) -> None:

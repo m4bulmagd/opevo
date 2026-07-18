@@ -63,4 +63,8 @@ class OutboxEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default=func.now(),
     )
     last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    routing_target_provider_number_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

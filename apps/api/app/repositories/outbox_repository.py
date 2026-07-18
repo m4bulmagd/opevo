@@ -45,6 +45,7 @@ class OutboxRepository:
             "attempt_count": 0,
             "next_attempt_at": next_attempt_at,
             "last_error_code": None,
+            "routing_target_provider_number_id": None,
             "delivered_at": None,
         }
         dialect_name = self.session.bind.dialect.name
@@ -203,6 +204,48 @@ class OutboxRepository:
             event.next_attempt_at = failed_at + retry_delays[delay_index]
         await self.session.flush()
         return event
+
+    async def set_routing_target(
+        self,
+        *,
+        event_id: UUID,
+        attempt_count: int,
+        provider_number_id: str,
+    ) -> bool:
+        event = await self._get_current_claim(
+            event_id=event_id,
+            attempt_count=attempt_count,
+        )
+        if event is None or event.topic not in {"phone.enable", "phone.disable"}:
+            return False
+        if event.routing_target_provider_number_id not in {
+            None,
+            provider_number_id,
+        }:
+            return False
+        event.routing_target_provider_number_id = provider_number_id
+        await self.session.flush()
+        return True
+
+    async def clear_routing_target(
+        self,
+        *,
+        event_id: UUID,
+        attempt_count: int,
+        provider_number_id: str,
+    ) -> bool:
+        event = await self._get_current_claim(
+            event_id=event_id,
+            attempt_count=attempt_count,
+        )
+        if (
+            event is None
+            or event.routing_target_provider_number_id != provider_number_id
+        ):
+            return False
+        event.routing_target_provider_number_id = None
+        await self.session.flush()
+        return True
 
     async def _get_current_claim(
         self,
