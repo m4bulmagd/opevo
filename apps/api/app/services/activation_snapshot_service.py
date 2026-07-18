@@ -1,10 +1,15 @@
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
+
+import phonenumbers
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
+from app.models.phone_number import PhoneNumber
+from app.providers.carrier_lookup.base import CarrierCode
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.customer_activation_repository import (
@@ -28,12 +33,14 @@ from app.schemas.business_profile import (
     BusinessProfileConstraints,
     BusinessProfileResponse,
 )
+from app.schemas.forwarding import ForwardingGuide
 from app.services.activation_policy import ActivationFacts, ActivationPolicy
 from app.services.customer_readiness_service import (
     activation_readiness_prerequisites,
     build_customer_readiness_snapshot,
 )
 from app.services.customer_readiness_policy import CustomerReadinessPolicy
+from app.services.forwarding_instruction_catalog import ForwardingInstructionCatalog
 
 
 class ActivationSnapshotUnavailableError(Exception):
@@ -199,6 +206,7 @@ class ActivationSnapshotService:
                 ),
                 can_retry=bool(provisioning is not None and provisioning.can_retry),
             ),
+            forwarding=self._forwarding_guide(profile, phone),
             runtime_readiness=RuntimeReadinessResponse(
                 stage=readiness.stage,
                 can_provision_number=readiness.can_provision_number,
@@ -217,6 +225,41 @@ class ActivationSnapshotService:
         if profile is None:
             return BusinessProfileResponse(content_revision=1, routing_revision=1)
         return BusinessProfileResponse.model_validate(profile)
+
+    @staticmethod
+    def _forwarding_guide(
+        profile: BusinessProfile | None,
+        phone: PhoneNumber | None,
+    ) -> ForwardingGuide | None:
+        if profile is None or profile.confirmed_carrier is None or phone is None:
+            return None
+        number_type = profile.detected_number_type
+        if number_type is None:
+            number_type = ActivationSnapshotService._classify_existing_number(
+                profile.existing_phone_e164
+            )
+        return ForwardingInstructionCatalog().for_profile(
+            carrier=cast(CarrierCode, profile.confirmed_carrier),
+            number_type=number_type,
+            presvo_number=phone.e164,
+        )
+
+    @staticmethod
+    def _classify_existing_number(existing_phone_e164: str | None) -> str:
+        if existing_phone_e164 is None:
+            return "unknown"
+        try:
+            parsed = phonenumbers.parse(existing_phone_e164, None)
+        except phonenumbers.NumberParseException:
+            return "unknown"
+        if not phonenumbers.is_valid_number_for_region(parsed, "FR"):
+            return "unknown"
+        number_type = phonenumbers.number_type(parsed)
+        if number_type == phonenumbers.PhoneNumberType.MOBILE:
+            return "mobile"
+        if number_type == phonenumbers.PhoneNumberType.FIXED_LINE:
+            return "fixed"
+        return "unknown"
 
     @staticmethod
     def _activation_response(

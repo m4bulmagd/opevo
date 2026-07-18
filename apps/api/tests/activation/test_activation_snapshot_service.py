@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import phonenumbers
 import pytest
 
 from app.models.agent_config import AgentConfig
@@ -19,6 +20,9 @@ from app.services.routing_fingerprint import routing_fingerprint
 
 
 NOW = datetime(2026, 7, 17, 10, tzinfo=UTC)
+# ARCEP reserves 01 99 00 for fiction and 09 99 for technical/internal use.
+ARCEP_FICTIONAL_FIXED_NUMBER = "+33199000000"
+ARCEP_TECHNICAL_NUMBER = "+33999000000"
 
 
 class FakeByIdRepository:
@@ -201,6 +205,75 @@ async def test_get_loads_each_authoritative_row_once_and_returns_active_snapshot
     assert "secret_provider_detail" not in snapshot.model_dump_json()
     for repository in repositories.values():
         assert repository.calls == [user.id]
+
+
+@pytest.mark.anyio
+async def test_snapshot_forwarding_uses_stored_detected_number_type() -> None:
+    records = list(build_records())
+    profile = records[1]
+    phone = records[5]
+    profile.existing_phone_e164 = ARCEP_FICTIONAL_FIXED_NUMBER
+    profile.detected_number_type = "mobile"
+    phone.e164 = ARCEP_TECHNICAL_NUMBER
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW)
+
+    assert snapshot.forwarding is not None
+    assert snapshot.forwarding.carrier == "orange"
+    assert snapshot.forwarding.number_type == "mobile"
+    assert snapshot.forwarding.presvo_number == ARCEP_TECHNICAL_NUMBER
+    assert all(step.dial_code is None for step in snapshot.forwarding.steps)
+
+
+@pytest.mark.anyio
+async def test_snapshot_classifies_existing_line_when_lookup_type_is_missing() -> None:
+    records = list(build_records())
+    profile = records[1]
+    phone = records[5]
+    profile.confirmed_carrier = "sfr"
+    profile.existing_phone_e164 = ARCEP_FICTIONAL_FIXED_NUMBER
+    profile.detected_number_type = None
+    phone.e164 = ARCEP_TECHNICAL_NUMBER
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW)
+
+    assert snapshot.forwarding is not None
+    assert snapshot.forwarding.number_type == "fixed"
+    assert snapshot.forwarding.step("unanswered").dial_code == "*61*0999000000#"
+
+
+def test_local_classification_keeps_ambiguous_line_types_safe(monkeypatch) -> None:
+    monkeypatch.setattr(
+        phonenumbers,
+        "number_type",
+        lambda _number: phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE,
+    )
+
+    assert (
+        ActivationSnapshotService._classify_existing_number(
+            ARCEP_FICTIONAL_FIXED_NUMBER
+        )
+        == "unknown"
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("missing_record", ["carrier", "phone"])
+async def test_snapshot_omits_forwarding_until_carrier_and_number_exist(
+    missing_record: str,
+) -> None:
+    records = list(build_records())
+    if missing_record == "carrier":
+        records[1].confirmed_carrier = None
+    else:
+        records[5] = None
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW)
+
+    assert snapshot.forwarding is None
 
 
 @pytest.mark.anyio
