@@ -158,6 +158,7 @@ describe("activation page", () => {
     expect(getActivationSnapshotMock).toHaveBeenCalledTimes(1);
     expect(getDevelopmentCapabilitiesMock).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("heading", { name: /Choose your Presvo number/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Start starter plan/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Prepare to go live/i })).not.toBeInTheDocument();
   });
 

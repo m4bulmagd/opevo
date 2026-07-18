@@ -16,6 +16,7 @@ import {
   simulateDevelopmentForwardedCall,
 } from "@/lib/api/activation";
 import { BackendApiError } from "@/lib/api/backend-client";
+import { createCheckoutSession } from "@/lib/api/billing";
 import { requireServerSession, ServerSessionRequiredError } from "@/lib/auth/server-session";
 import { type DevelopmentCapabilities, getDevelopmentCapabilities } from "@/lib/development/capabilities";
 import type { ActivationActionResult, BusinessProfile, CarrierLookupResponse } from "@/lib/types/activation";
@@ -276,6 +277,32 @@ export function activateDevelopmentStarterAction(input: unknown = {}): Promise<A
     successMessage: "Local starter plan activated.",
     capability: "localBilling",
   });
+}
+
+export async function createActivationCheckoutAction(
+  input: unknown = {},
+): Promise<ActivationActionResult<{ url: string }>> {
+  try {
+    await requireServerSession();
+  } catch (error) {
+    return mapActionError(error);
+  }
+
+  const parsed = emptyCommandSchema.safeParse(input);
+  if (!parsed.success) return invalidInputResult(parsed.error);
+
+  try {
+    const session = await createCheckoutSession("starter");
+    const checkoutUrl = new URL(session.url);
+    if (checkoutUrl.protocol !== "https:") throw new Error("Checkout URL must use HTTPS.");
+    return {
+      status: "success",
+      data: { url: checkoutUrl.toString() },
+      message: "Checkout session created.",
+    };
+  } catch (error) {
+    return mapActionError(error);
+  }
 }
 
 export function simulateDevelopmentForwardedCallAction(input: unknown = {}): Promise<ActivationActionResult> {

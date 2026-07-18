@@ -15,6 +15,7 @@ const {
   goLiveMock,
   activateDevelopmentStarterMock,
   simulateDevelopmentForwardedCallMock,
+  createCheckoutSessionMock,
 } = vi.hoisted(() => ({
   requireServerSessionMock: vi.fn(),
   revalidatePathMock: vi.fn(),
@@ -28,6 +29,7 @@ const {
   goLiveMock: vi.fn(),
   activateDevelopmentStarterMock: vi.fn(),
   simulateDevelopmentForwardedCallMock: vi.fn(),
+  createCheckoutSessionMock: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: revalidatePathMock }));
@@ -37,6 +39,9 @@ vi.mock("@/lib/auth/server-session", () => ({
 }));
 vi.mock("@/lib/development/capabilities", () => ({
   getDevelopmentCapabilities: getDevelopmentCapabilitiesMock,
+}));
+vi.mock("@/lib/api/billing", () => ({
+  createCheckoutSession: createCheckoutSessionMock,
 }));
 vi.mock("@/lib/api/activation", () => ({
   saveBusinessProfile: saveBusinessProfileMock,
@@ -54,6 +59,7 @@ import {
   activateDevelopmentStarterAction,
   confirmProfileAction,
   confirmProvisioningAction,
+  createActivationCheckoutAction,
   goLiveAction,
   lookupCarrierAction,
   openVerificationWindowAction,
@@ -69,6 +75,7 @@ describe("activation Server Actions", () => {
     vi.clearAllMocks();
     requireServerSessionMock.mockResolvedValue({ userId: "user_123", token: "session-token" });
     getDevelopmentCapabilitiesMock.mockReturnValue({ localBilling: true, localVerification: true });
+    createCheckoutSessionMock.mockResolvedValue({ url: "https://checkout.stripe.test/session" });
     for (const mock of [
       saveBusinessProfileMock,
       lookupCarrierMock,
@@ -117,6 +124,30 @@ describe("activation Server Actions", () => {
     expect(result).toMatchObject({ status: "error", code: "invalid_input" });
     expect(requireServerSessionMock).toHaveBeenCalledOnce();
     expect(confirmProvisioningMock).not.toHaveBeenCalled();
+  });
+
+  it("authenticates checkout, fixes the starter plan, and returns an HTTPS URL without revalidation", async () => {
+    const result = await createActivationCheckoutAction({});
+
+    expect(result).toMatchObject({
+      status: "success",
+      data: { url: "https://checkout.stripe.test/session" },
+    });
+    expect(requireServerSessionMock).toHaveBeenCalledOnce();
+    expect(createCheckoutSessionMock).toHaveBeenCalledWith("starter");
+    expect(revalidatePathMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects checkout input keys and unsafe redirect URLs", async () => {
+    const invalidInput = await createActivationCheckoutAction({ plan_tier: "enterprise" });
+    expect(invalidInput).toMatchObject({ status: "error", code: "invalid_input" });
+    expect(createCheckoutSessionMock).not.toHaveBeenCalled();
+
+    createCheckoutSessionMock.mockResolvedValueOnce({ url: "http://provider.internal/session-secret" });
+    const unsafeUrl = await createActivationCheckoutAction({});
+    expect(unsafeUrl).toMatchObject({ status: "error", code: "unexpected_error" });
+    expect(unsafeUrl.message).not.toContain("provider.internal");
+    expect(revalidatePathMock).not.toHaveBeenCalled();
   });
 
   it.each([
