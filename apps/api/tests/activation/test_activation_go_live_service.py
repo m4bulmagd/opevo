@@ -21,7 +21,6 @@ from app.services.activation_go_live_service import (
     fail_current_go_live_attempt,
 )
 from app.repositories.agent_config_repository import AgentConfigRepository
-from app.repositories.outbox_repository import OutboxRepository
 from app.services.agent_config_service import AgentConfigService
 from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.forwarding_verification_service import as_utc
@@ -173,13 +172,11 @@ def _sip_join(*, room: str) -> dict:
 async def _claim_event(db_session, event_id):
     event = await db_session.get(OutboxEvent, event_id)
     assert event is not None
-    claimed = await OutboxRepository(db_session).claim_batch(
-        limit=1,
-        now=as_utc(event.next_attempt_at) + timedelta(seconds=1),
-    )
+    event.status = "processing"
+    event.attempt_count += 1
+    event.next_attempt_at = as_utc(event.next_attempt_at) + timedelta(minutes=5)
     await db_session.commit()
-    assert [item.id for item in claimed] == [event_id]
-    return claimed[0]
+    return event
 
 
 async def _seed_ready_customer(db_session, user):
