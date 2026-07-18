@@ -4,6 +4,7 @@ import logging
 import httpx
 
 from agent.config import get_settings
+from agent.safe_logging import install_safe_http_client_logging
 from agent.schemas import CallTranscriptItem
 
 
@@ -64,6 +65,7 @@ class AgentApiClient:
         timeout: float | None = None,
         max_retries: int | None = None,
     ) -> None:
+        install_safe_http_client_logging()
         settings = get_settings()
         self.base_url = (base_url or settings.api_base_url).rstrip("/")
         self.http_client = http_client
@@ -186,7 +188,7 @@ class AgentApiClient:
                 status_code = response.status_code
                 if (
                     status_code in RETRYABLE_STATUS_CODES
-                    or status_code >= 500
+                    or 500 <= status_code < 600
                 ):
                     last_error = VerificationCompletionRetryableError(
                         f"verification completion retryable status={status_code}"

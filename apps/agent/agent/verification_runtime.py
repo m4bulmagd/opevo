@@ -34,6 +34,19 @@ async def _await_if_needed(result: object) -> None:
         await result
 
 
+async def _close_session(session: Any) -> None:
+    public_close = getattr(session, "aclose", None)
+    if callable(public_close):
+        await _await_if_needed(public_close())
+        return
+    fallback_shutdown = getattr(session, "shutdown", None)
+    if not callable(fallback_shutdown):
+        raise VerificationRuntimeCleanupError(
+            "verification runtime cleanup failed"
+        )
+    await _await_if_needed(fallback_shutdown(drain=True))
+
+
 async def _cleanup_runtime(
     session: Any | None,
     api_client: AgentApiClient | None,
@@ -44,7 +57,7 @@ async def _cleanup_runtime(
     cancellation: asyncio.CancelledError | None = None
     try:
         if session is not None:
-            await _await_if_needed(session.shutdown(drain=True))
+            await _close_session(session)
     except asyncio.CancelledError as exc:
         cancellation = exc
     except BaseException:
