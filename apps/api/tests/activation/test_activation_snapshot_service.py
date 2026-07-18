@@ -158,6 +158,26 @@ def build_service(*, records, balance: int = 30):
     return ActivationSnapshotService(**repositories), repositories
 
 
+def test_activation_response_normalizes_all_naive_milestones_to_utc() -> None:
+    naive = datetime(2026, 7, 18, 12, 30)
+    activation = CustomerActivation(
+        user_id=uuid4(),
+        profile_confirmed_at=naive,
+        provisioning_consented_at=naive,
+        forwarding_verified_at=naive,
+        go_live_approved_at=naive,
+        activated_at=naive,
+    )
+
+    response = ActivationSnapshotService._activation_response(activation)
+
+    assert response.profile_confirmed_at == naive.replace(tzinfo=UTC)
+    assert response.provisioning_consented_at == naive.replace(tzinfo=UTC)
+    assert response.forwarding_verified_at == naive.replace(tzinfo=UTC)
+    assert response.go_live_approved_at == naive.replace(tzinfo=UTC)
+    assert response.activated_at == naive.replace(tzinfo=UTC)
+
+
 @pytest.mark.anyio
 async def test_get_loads_each_authoritative_row_once_and_returns_active_snapshot() -> None:
     records = build_records()

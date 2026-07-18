@@ -551,11 +551,77 @@ class CapturingPhoneProvisioningRepository:
 
     async def mark_running(self, **kwargs):
         return SimpleNamespace(
-            provider_operation_key=kwargs.get("operation_key")
+            provider_operation_key=kwargs.get("provider_operation_key")
         )
 
     async def mark_failed(self, **kwargs) -> None:
         self.failed_calls.append(kwargs)
+
+
+@pytest.mark.anyio
+async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers.jobs import outbox_topics
+    from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+
+    user_id = uuid4()
+    provider_operation_key = f"activation:phone.provision:{uuid4()}"
+    delivery_key = f"{provider_operation_key}:attempt:2"
+    captured: list[tuple[dict, str]] = []
+
+    class Session:
+        async def commit(self) -> None:
+            return None
+
+    class SessionContext:
+        async def __aenter__(self):
+            return Session()
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+    class Provisionings:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def get_by_user_id(self, requested_user_id):
+            assert requested_user_id == user_id
+            return SimpleNamespace(
+                provider_operation_key=provider_operation_key,
+                can_retry=False,
+                last_error_reason=None,
+            )
+
+    class Phones:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def get_by_user_id(self, requested_user_id):
+            assert requested_user_id == user_id
+            return None
+
+    async def capture(_ctx, payload, *, provider_operation_key):
+        captured.append((payload, provider_operation_key))
+
+    monkeypatch.setattr(outbox_topics, "PhoneNumberProvisioningRepository", Provisionings)
+    monkeypatch.setattr(outbox_topics, "PhoneNumberRepository", Phones)
+    monkeypatch.setattr(outbox_topics, "phone_provisioning_job", capture)
+    event = SimpleNamespace(
+        payload={"user_id": str(user_id)},
+        idempotency_key=delivery_key,
+    )
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await outbox_topics.deliver_phone_provision(
+            {"session_factory": SessionContext},
+            event,
+        )
+
+    assert exc_info.value.error_code == "provider_terminal"
+    assert captured == [
+        ({"user_id": str(user_id)}, provider_operation_key)
+    ]
 
 
 class CapturingPhoneProvisioningNotificationRepository:
@@ -630,7 +696,7 @@ async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_de
             "session_factory": session_factory,
         },
         {"user_id": str(active_user.id)},
-        operation_key="outbox:phone-provision:evt_123",
+        provider_operation_key="activation:phone.provision:evt_123",
     )
 
     provisionings = (
@@ -643,7 +709,7 @@ async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_de
     ).scalars().all()
 
     assert provider.country_codes == ["FR"]
-    assert provider.operation_keys == ["outbox:phone-provision:evt_123"]
+    assert provider.operation_keys == ["activation:phone.provision:evt_123"]
     assert len(phone_numbers) == 1
     assert len(provisionings) == 1
     assert provisionings[0].status == "succeeded"
@@ -652,7 +718,7 @@ async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_de
     assert provisionings[0].phone_number_id == phone_numbers[0].id
     assert (
         provisionings[0].provider_operation_key
-        == "outbox:phone-provision:evt_123"
+        == "activation:phone.provision:evt_123"
     )
 
 
@@ -697,7 +763,7 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
             "session_factory": session_factory,
         },
         {"user_id": str(active_user.id)},
-        operation_key="outbox:phone-provision:first-event",
+        provider_operation_key="activation:phone.provision:stable",
     )
     await phone_provisioning_job(
         {
@@ -705,7 +771,7 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
             "session_factory": session_factory,
         },
         {"user_id": str(active_user.id)},
-        operation_key="outbox:phone-provision:customer-retry-event",
+        provider_operation_key="activation:phone.provision:stable",
     )
 
     provisioning = await db_session.scalar(
@@ -715,12 +781,12 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
     )
     assert provisioning is not None
     assert provider.operation_keys == [
-        "outbox:phone-provision:first-event",
-        "outbox:phone-provision:first-event",
+        "activation:phone.provision:stable",
+        "activation:phone.provision:stable",
     ]
     assert (
         provisioning.provider_operation_key
-        == "outbox:phone-provision:first-event"
+        == "activation:phone.provision:stable"
     )
     assert provisioning.status == "succeeded"
 
@@ -753,7 +819,7 @@ async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
                 "session_factory": session_factory,
             },
             {"user_id": str(active_user.id)},
-            operation_key="outbox:phone-provision:pending",
+            provider_operation_key="activation:phone.provision:pending",
         )
 
     provisioning = await db_session.scalar(
@@ -767,7 +833,7 @@ async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
     assert provisioning.last_error_reason == "existing_order_pending"
     assert (
         provisioning.provider_operation_key
-        == "outbox:phone-provision:pending"
+        == "activation:phone.provision:pending"
     )
 
 

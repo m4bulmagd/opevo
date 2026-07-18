@@ -14,6 +14,9 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.models import Base
+from app.models.activation_event import ActivationEvent
+from app.models.business_profile import BusinessProfile
+from app.models.customer_activation import CustomerActivation
 from app.models.outbox_event import OutboxEvent
 from app.models.agent_config import AgentConfig
 from app.models.phone_number import PhoneNumber
@@ -27,7 +30,84 @@ from app.repositories.phone_number_provisioning_repository import (
 )
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.services.outbox_service import OutboxService
+from app.services.activation_provisioning_service import ActivationProvisioningService
 from app.services.onboarding_service import OnboardingRetryNotAllowedError, OnboardingService
+
+
+def _valid_business_hours() -> dict[str, dict[str, object]]:
+    return {
+        day: {"closed": True, "intervals": []}
+        for day in (
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        )
+    }
+
+
+def _add_retryable_activation(
+    session: AsyncSession,
+    user: User,
+    *,
+    attempt_count: int,
+) -> str:
+    activation_id = uuid4()
+    operation_key = f"activation:phone.provision:{activation_id}"
+    user.country_code = "FR"
+    session.add_all(
+        [
+            BusinessProfile(
+                user_id=user.id,
+                owner_name="Camille Martin",
+                business_name="Atelier Martin",
+                business_type="Plomberie",
+                public_description="Dépannage.",
+                timezone="Europe/Paris",
+                business_hours=_valid_business_hours(),
+                existing_phone_e164="+33612345678",
+                confirmed_carrier="orange",
+                receptionist_name="Léa",
+            ),
+            CustomerActivation(
+                id=activation_id,
+                user_id=user.id,
+                profile_confirmed_revision=1,
+                profile_confirmed_at=datetime.now(UTC),
+                provisioning_consented_at=datetime.now(UTC),
+                provisioning_idempotency_key=operation_key,
+            ),
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id=f"cus_{uuid4().hex}",
+                stripe_subscription_id=f"sub_{uuid4().hex}",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                current_period_start=datetime(2026, 1, 1, tzinfo=UTC),
+                current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
+            ),
+            UsageLedger(
+                user_id=user.id,
+                event_type="subscription_activated",
+                source_id=f"in_{uuid4().hex}",
+                minutes_delta=60,
+                balance_after=60,
+            ),
+            PhoneNumberProvisioning(
+                user_id=user.id,
+                target_country_code="FR",
+                status="failed",
+                attempt_count=attempt_count,
+                can_retry=True,
+                provider_operation_key=operation_key,
+            ),
+        ]
+    )
+    return operation_key
 
 
 @pytest_asyncio.fixture
@@ -168,25 +248,7 @@ async def test_concurrent_onboarding_retry_creates_one_new_attempt(
         )
         session.add(user)
         await session.flush()
-        session.add(
-            Subscription(
-                user_id=user.id,
-                stripe_customer_id=f"cus_{uuid4().hex}",
-                stripe_subscription_id=f"sub_{uuid4().hex}",
-                plan_tier="starter",
-                status="active",
-                allocated_minutes=60,
-            )
-        )
-        session.add(
-            PhoneNumberProvisioning(
-                user_id=user.id,
-                target_country_code="FR",
-                status="failed",
-                attempt_count=3,
-                can_retry=True,
-            )
-        )
+        _add_retryable_activation(session, user, attempt_count=3)
         await session.commit()
         user_id = user.id
 
@@ -215,6 +277,99 @@ async def test_concurrent_onboarding_retry_creates_one_new_attempt(
         assert provisioning.status == "queued"
         assert provisioning.attempt_count == 3
         assert len(events) == 1
+
+
+@pytest.mark.anyio
+async def test_concurrent_provisioning_confirmation_creates_one_durable_intent(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    activation_id = uuid4()
+    async with outbox_session_factory() as session:
+        user = User(
+            clerk_user_id=f"confirm_{uuid4().hex}",
+            email=f"confirm_{uuid4().hex}@example.com",
+            country_code="FR",
+        )
+        session.add(user)
+        await session.flush()
+        session.add_all(
+            [
+                BusinessProfile(
+                    user_id=user.id,
+                    owner_name="Camille Martin",
+                    business_name="Atelier Martin",
+                    business_type="Plomberie",
+                    public_description="Dépannage.",
+                    timezone="Europe/Paris",
+                    business_hours=_valid_business_hours(),
+                    existing_phone_e164="+33612345678",
+                    confirmed_carrier="orange",
+                    receptionist_name="Léa",
+                ),
+                CustomerActivation(
+                    id=activation_id,
+                    user_id=user.id,
+                    profile_confirmed_revision=1,
+                    profile_confirmed_at=datetime.now(UTC),
+                ),
+                Subscription(
+                    user_id=user.id,
+                    stripe_customer_id=f"cus_{uuid4().hex}",
+                    stripe_subscription_id=f"sub_{uuid4().hex}",
+                    plan_tier="starter",
+                    status="active",
+                    allocated_minutes=60,
+                    current_period_start=datetime(2026, 1, 1, tzinfo=UTC),
+                    current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
+                ),
+                UsageLedger(
+                    user_id=user.id,
+                    event_type="subscription_activated",
+                    source_id=f"in_{uuid4().hex}",
+                    minutes_delta=60,
+                    balance_after=60,
+                ),
+            ]
+        )
+        await session.commit()
+        user_id = user.id
+
+    async def confirm() -> datetime | None:
+        async with outbox_session_factory() as session:
+            snapshot = await ActivationProvisioningService(session).confirm(
+                user_id,
+                arq_pool=None,
+            )
+            return snapshot.activation.provisioning_consented_at
+
+    consent_times = await asyncio.gather(confirm(), confirm())
+
+    assert consent_times[0] is not None
+    assert consent_times[0] == consent_times[1]
+    async with outbox_session_factory() as session:
+        activation = await session.scalar(
+            select(CustomerActivation).where(CustomerActivation.user_id == user_id)
+        )
+        provisioning = await session.scalar(
+            select(PhoneNumberProvisioning).where(
+                PhoneNumberProvisioning.user_id == user_id
+            )
+        )
+        assert activation is not None
+        assert provisioning is not None
+        operation_key = f"activation:phone.provision:{activation_id}"
+        assert activation.provisioning_idempotency_key == operation_key
+        assert provisioning.provider_operation_key == operation_key
+        assert await session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.topic == "phone.provision")
+        ) == 1
+        assert await session.scalar(
+            select(func.count())
+            .select_from(ActivationEvent)
+            .where(ActivationEvent.event_type == "provisioning_consented")
+        ) == 1
 
 
 @pytest.mark.anyio
@@ -862,7 +1017,7 @@ async def test_provisioning_provider_runs_without_provisioning_row_lock(
             "telephony_provider": LockProbingProvider(),
         },
         {"user_id": str(user_id)},
-        operation_key="provision:lock-boundary",
+        provider_operation_key="provision:lock-boundary",
     )
 
     assert provider_observations == [("running", 1)]
@@ -928,7 +1083,7 @@ async def test_same_provisioning_key_serializes_provider_execution_past_lease_ov
         phone_provisioning_job(
             ctx,
             payload,
-            operation_key=operation_key,
+            provider_operation_key=operation_key,
         )
     )
     await asyncio.wait_for(first_provider_started.wait(), timeout=2)
@@ -936,7 +1091,7 @@ async def test_same_provisioning_key_serializes_provider_execution_past_lease_ov
         phone_provisioning_job(
             ctx,
             payload,
-            operation_key=operation_key,
+            provider_operation_key=operation_key,
         )
     )
     await asyncio.sleep(0.1)
@@ -963,8 +1118,21 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
             email=f"provision_{uuid4().hex}@example.com",
         )
         session.add(user)
-        await session.commit()
+        await session.flush()
         user_id = user.id
+        session.add(
+            PhoneNumberProvisioning(
+                user_id=user_id,
+                target_country_code="FR",
+                status="queued",
+                attempt_count=0,
+                can_retry=False,
+                provider_operation_key=(
+                    "activation:phone.provision:stable-provider-operation"
+                ),
+            )
+        )
+        await session.commit()
     event = await _add_event(
         outbox_session_factory,
         topic="phone.provision",
@@ -974,8 +1142,8 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
     )
     calls: list[tuple[dict, str | None]] = []
 
-    async def capture(_ctx, payload, *, operation_key=None):
-        calls.append((payload, operation_key))
+    async def capture(_ctx, payload, *, provider_operation_key):
+        calls.append((payload, provider_operation_key))
 
     monkeypatch.setattr(outbox_topics, "phone_provisioning_job", capture)
 
@@ -985,7 +1153,10 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
     assert calls == [
-        ({"user_id": str(user_id)}, event.idempotency_key)
+        (
+            {"user_id": str(user_id)},
+            "activation:phone.provision:stable-provider-operation",
+        )
     ]
     async with outbox_session_factory() as session:
         stored = await session.get(OutboxEvent, event.id)
@@ -1000,6 +1171,7 @@ async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_rout
 ) -> None:
     from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
+    operation_key = "outbox:phone-provision:crash-safe-disabled"
     async with outbox_session_factory() as session:
         user = User(
             clerk_user_id=f"provision_crash_{uuid4().hex}",
@@ -1007,13 +1179,24 @@ async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_rout
             country_code="FR",
         )
         session.add(user)
+        await session.flush()
+        session.add(
+            PhoneNumberProvisioning(
+                user_id=user.id,
+                target_country_code="FR",
+                status="queued",
+                attempt_count=0,
+                can_retry=False,
+                provider_operation_key=operation_key,
+            )
+        )
         await session.commit()
         user_id = user.id
     event = await _add_event(
         outbox_session_factory,
         topic="phone.provision",
         aggregate_id=user_id,
-        idempotency_key="outbox:phone-provision:crash-safe-disabled",
+        idempotency_key=operation_key,
         payload={"user_id": str(user_id)},
     )
     current_time = event.next_attempt_at + timedelta(seconds=1)
@@ -1086,6 +1269,7 @@ async def test_pending_order_retries_outbox_without_customer_retry(
     from app.providers.telephony.base import TelephonyProvisioningPending
     from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
+    operation_key = "outbox:phone-provision:pending-order"
     async with outbox_session_factory() as session:
         user = User(
             clerk_user_id=f"provision_pending_{uuid4().hex}",
@@ -1093,13 +1277,24 @@ async def test_pending_order_retries_outbox_without_customer_retry(
             country_code="FR",
         )
         session.add(user)
+        await session.flush()
+        session.add(
+            PhoneNumberProvisioning(
+                user_id=user.id,
+                target_country_code="FR",
+                status="queued",
+                attempt_count=0,
+                can_retry=False,
+                provider_operation_key=operation_key,
+            )
+        )
         await session.commit()
         user_id = user.id
     event = await _add_event(
         outbox_session_factory,
         topic="phone.provision",
         aggregate_id=user_id,
-        idempotency_key="outbox:phone-provision:pending-order",
+        idempotency_key=operation_key,
         payload={"user_id": str(user_id)},
     )
 
@@ -1143,6 +1338,7 @@ async def test_existing_order_conflict_is_terminal_and_disables_customer_retry(
     from app.providers.telephony.base import TelephonyProvisioningReviewRequired
     from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
+    operation_key = "outbox:phone-provision:order-conflict"
     async with outbox_session_factory() as session:
         user = User(
             clerk_user_id=f"provision_conflict_{uuid4().hex}",
@@ -1150,13 +1346,24 @@ async def test_existing_order_conflict_is_terminal_and_disables_customer_retry(
             country_code="FR",
         )
         session.add(user)
+        await session.flush()
+        session.add(
+            PhoneNumberProvisioning(
+                user_id=user.id,
+                target_country_code="FR",
+                status="queued",
+                attempt_count=0,
+                can_retry=False,
+                provider_operation_key=operation_key,
+            )
+        )
         await session.commit()
         user_id = user.id
     event = await _add_event(
         outbox_session_factory,
         topic="phone.provision",
         aggregate_id=user_id,
-        idempotency_key="outbox:phone-provision:order-conflict",
+        idempotency_key=operation_key,
         payload={"user_id": str(user_id)},
     )
 
@@ -1205,7 +1412,6 @@ async def test_customer_retry_new_event_reuses_original_provider_operation_key(
 ) -> None:
     from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
-    original_provider_key = "outbox:phone-provision:original-attempt"
     async with outbox_session_factory() as session:
         user = User(
             clerk_user_id=f"provision_customer_retry_{uuid4().hex}",
@@ -1214,25 +1420,10 @@ async def test_customer_retry_new_event_reuses_original_provider_operation_key(
         )
         session.add(user)
         await session.flush()
-        session.add(
-            Subscription(
-                user_id=user.id,
-                stripe_customer_id=f"cus_{uuid4().hex}",
-                stripe_subscription_id=f"sub_{uuid4().hex}",
-                plan_tier="starter",
-                status="active",
-                allocated_minutes=60,
-            )
-        )
-        session.add(
-            PhoneNumberProvisioning(
-                user_id=user.id,
-                target_country_code="FR",
-                status="failed",
-                attempt_count=1,
-                can_retry=True,
-                provider_operation_key=original_provider_key,
-            )
+        original_provider_key = _add_retryable_activation(
+            session,
+            user,
+            attempt_count=1,
         )
         await session.commit()
         user_id = user.id

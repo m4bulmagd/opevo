@@ -223,25 +223,33 @@ class ActivationSnapshotService:
         activation: CustomerActivation | None,
     ) -> ActivationProgressResponse:
         return ActivationProgressResponse(
-            profile_confirmed_at=(
+            profile_confirmed_at=ActivationSnapshotService._optional_utc(
                 activation.profile_confirmed_at if activation is not None else None
             ),
-            provisioning_consented_at=(
+            provisioning_consented_at=ActivationSnapshotService._optional_utc(
                 activation.provisioning_consented_at
                 if activation is not None
                 else None
             ),
-            forwarding_verified_at=(
+            forwarding_verified_at=ActivationSnapshotService._optional_utc(
                 activation.forwarding_verified_at if activation is not None else None
             ),
-            go_live_approved_at=(
+            go_live_approved_at=ActivationSnapshotService._optional_utc(
                 activation.go_live_approved_at if activation is not None else None
             ),
-            activated_at=activation.activated_at if activation is not None else None,
+            activated_at=ActivationSnapshotService._optional_utc(
+                activation.activated_at if activation is not None else None
+            ),
             last_failure_code=(
                 activation.last_failure_code if activation is not None else None
             ),
         )
+
+    @staticmethod
+    def _optional_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return CustomerReadinessPolicy._as_utc(value)
 
     @staticmethod
     def _window_is_open(

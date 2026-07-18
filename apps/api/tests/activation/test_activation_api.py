@@ -1,11 +1,16 @@
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.user import User
+from app.models.subscription import Subscription
+from app.models.usage_ledger import UsageLedger
+from app.core.auth import UserIdentity
 from app.providers.carrier_lookup.base import CarrierLookupResult
 from app.schemas.business_profile import WEEKDAYS
 from app.services.activation_snapshot_service import ActivationSnapshotUnavailableError
@@ -114,6 +119,8 @@ class SuccessfulProfileCommandService:
         ("PUT", "/api/business-profile", {}),
         ("POST", "/api/activation/lookup-carrier", None),
         ("POST", "/api/activation/confirm-profile", None),
+        ("POST", "/api/activation/confirm-provisioning", None),
+        ("POST", "/api/activation/retry-provisioning", None),
     ],
 )
 async def test_activation_routes_require_authentication(
@@ -135,6 +142,8 @@ async def test_activation_routes_require_authentication(
         ("PUT", "/api/business-profile", {}),
         ("POST", "/api/activation/lookup-carrier", None),
         ("POST", "/api/activation/confirm-profile", None),
+        ("POST", "/api/activation/confirm-provisioning", None),
+        ("POST", "/api/activation/retry-provisioning", None),
     ],
 )
 async def test_activation_routes_reject_unsynced_clerk_identity(
@@ -761,3 +770,139 @@ async def test_activation_api_is_scoped_to_authenticated_user(
     assert snapshot_b.status_code == 200
     assert snapshot_b.json()["profile"]["business_name"] is None
     assert snapshot_b.json()["stage"] == "profile_required"
+
+
+@pytest.mark.anyio
+async def test_confirm_provisioning_returns_202_canonical_activation_snapshot(
+    async_client,
+    client_database_url: str,
+    rs256_clerk_token_for,
+    complete_profile_payload: dict[str, object],
+) -> None:
+    clerk_user_id = "activation_confirm_provisioning"
+    await _seed_user(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="confirm-provisioning@example.com",
+    )
+    headers = {"Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"}
+    saved = await async_client.put(
+        "/api/business-profile",
+        json=complete_profile_payload,
+        headers=headers,
+    )
+    confirmed = await async_client.post(
+        "/api/activation/confirm-profile",
+        headers=headers,
+    )
+    user_id = await _load_internal_user_id(client_database_url, clerk_user_id)
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add_all(
+            [
+                Subscription(
+                    user_id=user_id,
+                    stripe_customer_id="cus_activation_confirm",
+                    stripe_subscription_id="sub_activation_confirm",
+                    plan_tier="starter",
+                    status="active",
+                    allocated_minutes=60,
+                    current_period_start=datetime(2026, 7, 1, tzinfo=UTC),
+                    current_period_end=datetime(2026, 8, 1, tzinfo=UTC),
+                ),
+                UsageLedger(
+                    user_id=user_id,
+                    event_type="subscription_activated",
+                    source_id="in_activation_confirm",
+                    minutes_delta=60,
+                    balance_after=60,
+                ),
+            ]
+        )
+        await session.commit()
+    await engine.dispose()
+
+    response = await async_client.post(
+        "/api/activation/confirm-provisioning",
+        headers=headers,
+    )
+
+    assert saved.status_code == 200
+    assert confirmed.status_code == 200
+    assert response.status_code == 202
+    assert response.json()["stage"] == "provisioning"
+    assert response.json()["activation"]["provisioning_consented_at"] is not None
+    assert response.json()["number"]["provisioning_status"] == "queued"
+
+
+@pytest.mark.anyio
+async def test_confirm_provisioning_translates_blocker_to_stable_409_code(
+    async_client,
+    test_app,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    from app.routers.activation import get_activation_provisioning_service
+    from app.services.activation_provisioning_service import (
+        ActivationProvisioningBlockedError,
+    )
+
+    class BlockedService:
+        async def confirm(self, user_id, *, arq_pool):
+            raise ActivationProvisioningBlockedError("minutes_exhausted")
+
+    clerk_user_id = "activation_provisioning_blocked"
+    await _seed_user(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="provisioning-blocked@example.com",
+    )
+    test_app.dependency_overrides[get_activation_provisioning_service] = BlockedService
+    try:
+        response = await async_client.post(
+            "/api/activation/confirm-provisioning",
+            headers={
+                "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+            },
+        )
+    finally:
+        test_app.dependency_overrides.pop(
+            get_activation_provisioning_service,
+            None,
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "minutes_exhausted"}}
+
+
+@pytest.mark.anyio
+async def test_confirm_provisioning_route_uses_authenticated_owner_and_arq_wake() -> None:
+    from app.routers.activation import confirm_provisioning
+
+    user_id = uuid4()
+    pool = object()
+    canonical_snapshot = object()
+
+    class Commands:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object, object]] = []
+
+        async def confirm(self, requested_user_id, *, arq_pool):
+            self.calls.append((requested_user_id, arq_pool))
+            return canonical_snapshot
+
+    commands = Commands()
+    result = await confirm_provisioning(
+        request=SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(arq_pool=pool))
+        ),
+        identity=UserIdentity(
+            clerk_user_id="authenticated_owner",
+            internal_user_id=user_id,
+        ),
+        service=commands,
+    )
+
+    assert result is canonical_snapshot
+    assert commands.calls == [(user_id, pool)]
