@@ -5,6 +5,8 @@ import { getActivationSnapshot } from "@/lib/api/activation";
 import { getDevelopmentCapabilities } from "@/lib/development/capabilities";
 
 import { ActivationShell } from "./_components/activation-shell";
+import { ForwardingMilestone } from "./_components/forwarding/forwarding-milestone";
+import { LaunchMilestone } from "./_components/launch/launch-milestone";
 import { NumberMilestone } from "./_components/number/number-milestone";
 import { ProfileForm } from "./_components/profile/profile-form";
 import { type ActivationMilestoneId, canEnterDashboard, selectMilestone } from "./_components/stage-router";
@@ -72,6 +74,10 @@ export default async function ActivationPage({ searchParams }: ActivationPagePro
         ) : null}
         {selectedMilestone === "number" ? (
           <NumberMilestone snapshot={snapshot} localBilling={capabilities.localBilling} />
+        ) : null}
+        {selectedMilestone === "forwarding" ? <ForwardingMilestone snapshot={snapshot} /> : null}
+        {selectedMilestone === "launch" ? (
+          <LaunchMilestone snapshot={snapshot} localVerification={capabilities.localVerification} />
         ) : null}
       </div>
     </ActivationShell>

@@ -7,6 +7,8 @@ import ActivationLoading from "@/app/(activation)/activate/loading";
 import Page from "@/app/(activation)/activate/page";
 import type { ActivationSnapshot } from "@/lib/types/activation";
 
+import { forwardingGuide } from "./activation-snapshot-fixture";
+
 const clerkConfigState = vi.hoisted(() => ({
   authMode: "local" as "local" | "clerk",
   shouldWrapClerk: false,
@@ -44,8 +46,11 @@ vi.mock("@/lib/api/activation", () => ({
 
 vi.mock("@/app/(activation)/activate/actions", () => ({
   confirmProfileAction: vi.fn(),
+  goLiveAction: vi.fn(),
   lookupCarrierAction: vi.fn(),
+  openVerificationWindowAction: vi.fn(),
   saveBusinessProfileAction: vi.fn(),
+  simulateDevelopmentForwardedCallAction: vi.fn(),
 }));
 
 vi.mock("@/lib/development/capabilities", () => ({
@@ -229,6 +234,52 @@ describe("activation page", () => {
 
     expect(screen.getByRole("heading", { name: /Prepare to go live/i })).toBeInTheDocument();
     expect(redirectMock).not.toHaveBeenCalled();
+  });
+
+  it("renders the authoritative carrier guide in the forwarding milestone", async () => {
+    getActivationSnapshotMock.mockResolvedValue(
+      buildSnapshot({
+        stage: "forwarding_required",
+        completed_milestones: ["profile_confirmed", "number_provisioned"],
+        forwarding: forwardingGuide(),
+        number: {
+          assigned_e164: "+33187654321",
+          country_code: "FR",
+          provider_ready: true,
+          provisioning_status: "succeeded",
+          can_retry: false,
+        },
+      }),
+    );
+
+    render(await Page({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByRole("heading", { name: /Forward missed calls to Presvo/i })).toBeInTheDocument();
+    expect(screen.getByText("+33 1 87 65 43 21")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Start 10-minute test/i })).toBeInTheDocument();
+  });
+
+  it("renders the server-owned verification window and guarded local simulator in launch", async () => {
+    getDevelopmentCapabilitiesMock.mockReturnValue({ localBilling: false, localVerification: true });
+    const base = buildSnapshot();
+    getActivationSnapshotMock.mockResolvedValue(
+      buildSnapshot({
+        stage: "verification_window_open",
+        completed_milestones: ["profile_confirmed", "number_provisioned"],
+        activation: {
+          ...base.activation,
+          verification_window_started_at: "2026-07-17T10:00:00Z",
+          verification_window_expires_at: "2026-07-17T10:10:00Z",
+          verification_status: "open",
+        },
+      }),
+    );
+
+    render(await Page({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByRole("heading", { name: /Prepare to go live/i })).toBeInTheDocument();
+    expect(screen.getByRole("timer")).toHaveTextContent("10:00");
+    expect(screen.getByRole("button", { name: /Simulate forwarded call/i })).toBeInTheDocument();
   });
 });
 
