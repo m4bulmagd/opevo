@@ -886,6 +886,52 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
 
 
 @pytest.mark.anyio
+async def test_phone_provider_pending_attempt_uses_refreshable_running_state() -> None:
+    from app.providers.telephony.base import TelephonyProvisioningPending
+    from app.workers.jobs.phone_provisioning import _run_provider_attempt
+
+    class Session:
+        commits = 0
+
+        async def commit(self) -> None:
+            self.commits += 1
+
+    class Provisionings:
+        pending_calls: list[dict] = []
+
+        async def mark_pending(self, **kwargs) -> None:
+            self.pending_calls.append(kwargs)
+
+    class Telephony:
+        async def provision_number(self, _user_id, **_kwargs):
+            raise TelephonyProvisioningPending(reason="existing_order_pending")
+
+    session = Session()
+    provisionings = Provisionings()
+    user_id = uuid4()
+
+    with pytest.raises(TelephonyProvisioningPending):
+        await _run_provider_attempt(
+            session=session,
+            user_id=user_id,
+            country_code="FR",
+            provider_operation_key="activation:phone.provision:pending-unit",
+            telephony_service=Telephony(),
+            provisioning_repo=provisionings,
+        )
+
+    assert provisionings.pending_calls == [
+        {
+            "user_id": user_id,
+            "target_country_code": "FR",
+            "reason": "existing_order_pending",
+            "payload": {"event": "phone_number_provisioning_pending"},
+        }
+    ]
+    assert session.commits == 1
+
+
+@pytest.mark.anyio
 async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
     db_session, active_user
 ) -> None:
@@ -922,7 +968,7 @@ async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
         )
     )
     assert provisioning is not None
-    assert provisioning.status == "failed"
+    assert provisioning.status == "running"
     assert provisioning.can_retry is False
     assert provisioning.last_error_reason == "existing_order_pending"
     assert (

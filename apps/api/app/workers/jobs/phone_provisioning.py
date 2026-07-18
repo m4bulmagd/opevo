@@ -77,12 +77,11 @@ async def _run_provider_attempt(
     except TelephonyProvisioningPending as exc:
         pending_reason = exc.reason
         try:
-            await provisioning_repo.mark_failed(
+            await provisioning_repo.mark_pending(
                 user_id=user_id,
                 target_country_code=country_code,
                 reason=pending_reason,
                 payload={"event": "phone_number_provisioning_pending"},
-                can_retry=False,
             )
             await session.commit()
         except Exception as persist_error:

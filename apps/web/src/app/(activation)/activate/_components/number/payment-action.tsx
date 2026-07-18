@@ -74,7 +74,7 @@ export function PaymentAction({ localBilling, navigate = defaultNavigate }: Paym
         </p>
         {!localBilling ? (
           <p className="text-muted-foreground text-sm">
-            You can cancel before confirmation and will not be charged by Presvo.
+            Cancel checkout before completing payment and Presvo will not charge you.
           </p>
         ) : (
           <p className="text-muted-foreground text-sm">

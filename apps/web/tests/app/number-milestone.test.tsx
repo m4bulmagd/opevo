@@ -166,7 +166,7 @@ describe("number milestone", () => {
     const navigate = vi.fn();
     render(<PaymentAction localBilling={false} navigate={navigate} />);
 
-    expect(screen.getByText(/cancel before confirmation/i)).toHaveTextContent(/not be charged/i);
+    expect(screen.getByText(/Cancel checkout before completing payment/i)).toHaveTextContent(/Presvo will not charge/i);
     fireEvent.click(screen.getByRole("button", { name: /Start starter plan/i }));
 
     await waitFor(() => expect(checkoutMock).toHaveBeenCalledTimes(1));
@@ -187,6 +187,28 @@ describe("number milestone", () => {
     expect(screen.getByText(/One Presvo number/i)).toBeInTheDocument();
     expect(screen.getByText(/Configure conditional forwarding/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Confirm and provision my number/i })).toBeEnabled();
+  });
+
+  it("honors canonical payment_required even when an assigned number already exists", () => {
+    render(
+      <NumberMilestone
+        localBilling={false}
+        snapshot={snapshot({
+          stage: "payment_required",
+          billing: { ...snapshot().billing, eligible: false, subscription_status: "past_due" },
+          number: {
+            assigned_e164: "+33187654321",
+            country_code: "FR",
+            provider_ready: true,
+            provisioning_status: "succeeded",
+            can_retry: false,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Start starter plan/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Continue to forwarding/i })).not.toBeInTheDocument();
   });
 
   it("queues exactly one provisioning consent while the action is pending", async () => {
@@ -217,7 +239,15 @@ describe("number milestone", () => {
   });
 
   it("resumes pending provisioning without offering another consent", () => {
-    render(<NumberMilestone localBilling={false} snapshot={snapshot({ stage: "provisioning" })} />);
+    render(
+      <NumberMilestone
+        localBilling={false}
+        snapshot={snapshot({
+          stage: "provisioning",
+          number: { ...snapshot().number, provisioning_status: "running", can_retry: false },
+        })}
+      />,
+    );
 
     expect(screen.getByRole("status")).toHaveTextContent(/Provisioning your French number/i);
     expect(screen.getByText(/You can safely leave and return/i)).toBeInTheDocument();
@@ -286,6 +316,30 @@ describe("number milestone", () => {
     expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 
+  it("announces an asynchronous retry failure without leaking provider details", async () => {
+    retryProvisioningMock.mockResolvedValueOnce({
+      status: "error",
+      code: "request_failed",
+      message: "We couldn't complete this step. Refresh and try again.",
+    });
+    render(
+      <NumberMilestone
+        localBilling={false}
+        snapshot={snapshot({
+          stage: "provisioning_failed",
+          number: { ...snapshot().number, provisioning_status: "failed", can_retry: true },
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Retry provisioning/i }));
+
+    const error = await screen.findByText(/couldn't complete this step/i);
+    expect(error.closest('[role="alert"]')).not.toBeNull();
+    expect(screen.queryByText(/provider/i)).not.toBeInTheDocument();
+    expect(refreshMock).not.toHaveBeenCalled();
+  });
+
   it("sends terminal failures to profile correction with only a safe reference", () => {
     render(
       <NumberMilestone
@@ -294,7 +348,7 @@ describe("number milestone", () => {
           stage: "provisioning_failed",
           blockers: ["raw-provider-validation-secret"],
           activation: { ...snapshot().activation, last_failure_code: "profile_correction_required" },
-          number: { ...snapshot().number, provisioning_status: "terminal", can_retry: false },
+          number: { ...snapshot().number, provisioning_status: "failed", can_retry: false },
         })}
       />,
     );
