@@ -9,10 +9,10 @@ import { getAgentConfig } from "@/lib/api/agent";
 import { getUsageSnapshot } from "@/lib/api/billing";
 import { listCalls } from "@/lib/api/calls";
 import { getOnboardingStatus } from "@/lib/api/onboarding";
-import { isClerkConfigured } from "@/lib/auth/clerk-config";
+import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 
 export default async function DashboardPage() {
-  if (!isClerkConfigured) {
+  if (!isAppAuthConfigured) {
     return (
       <ClerkSetupNotice
         title="Dashboard is unavailable"

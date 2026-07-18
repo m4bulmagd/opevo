@@ -1,6 +1,6 @@
-export const CLERK_REQUIRED_ENV_VARS = ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"] as const;
+import { requireProductionWebAuth, resolveWebAuthMode } from "@/lib/auth/auth-mode";
 
-const BACKEND_REQUIRED_ENV_VAR = "API_BASE_URL or NEXT_PUBLIC_API_BASE_URL";
+export const CLERK_REQUIRED_ENV_VARS = ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"] as const;
 
 type ProductionClerkConfig = {
   nodeEnv?: string;
@@ -23,30 +23,26 @@ export function selectFirstNonblank(...candidates: Array<string | undefined>): s
 }
 
 export function requireProductionClerkConfig(config: ProductionClerkConfig): void {
-  if (config.nodeEnv !== "production") {
-    return;
-  }
-
-  const missing = [
-    isAbsent(config.publishableKey) ? CLERK_REQUIRED_ENV_VARS[0] : undefined,
-    isAbsent(config.secretKey) ? CLERK_REQUIRED_ENV_VARS[1] : undefined,
-    isAbsent(config.backendBaseUrl) ? BACKEND_REQUIRED_ENV_VAR : undefined,
-  ].filter((name): name is string => Boolean(name));
-
-  if (missing.length > 0) {
-    throw new Error(`Missing required production settings: ${missing.join(", ")}`);
-  }
+  requireProductionWebAuth({ ...config, authMode: "clerk" });
 }
 
 export function shouldUseClerkMiddleware(config: ClerkMiddlewareConfig): boolean {
   return config.nodeEnv === "production" || config.clerkConfigured;
 }
 
-requireProductionClerkConfig({
+const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const secretKey = process.env.CLERK_SECRET_KEY;
+const backendBaseUrl = selectFirstNonblank(process.env.API_BASE_URL, process.env.NEXT_PUBLIC_API_BASE_URL);
+
+requireProductionWebAuth({
   nodeEnv: process.env.NODE_ENV,
-  publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
-  secretKey: process.env.CLERK_SECRET_KEY,
-  backendBaseUrl: selectFirstNonblank(process.env.API_BASE_URL, process.env.NEXT_PUBLIC_API_BASE_URL),
+  authMode: process.env.AUTH_MODE,
+  publishableKey,
+  secretKey,
+  backendBaseUrl,
 });
 
-export const isClerkConfigured = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY);
+export const authMode = resolveWebAuthMode({ nodeEnv: process.env.NODE_ENV, authMode: process.env.AUTH_MODE });
+export const isClerkConfigured = !isAbsent(publishableKey) && !isAbsent(secretKey);
+export const isAppAuthConfigured = authMode === "local" || isClerkConfigured;
+export const shouldWrapClerk = authMode === "clerk" && isClerkConfigured;

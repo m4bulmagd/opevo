@@ -3,10 +3,10 @@ import { BillingActionsCard } from "@/components/billing/billing-actions-card";
 import { BillingSummaryCards } from "@/components/billing/billing-summary-cards";
 import { UsageLedgerList } from "@/components/billing/usage-ledger-list";
 import { getSubscription, getUsageLedger, getUsageSnapshot } from "@/lib/api/billing";
-import { isClerkConfigured } from "@/lib/auth/clerk-config";
+import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 
 export default async function BillingPage() {
-  if (!isClerkConfigured) {
+  if (!isAppAuthConfigured) {
     return (
       <ClerkSetupNotice
         title="Billing is unavailable"

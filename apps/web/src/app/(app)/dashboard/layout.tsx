@@ -8,13 +8,13 @@ import { ThemeSwitcher } from "@/app/(app)/dashboard/_components/sidebar/theme-s
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import { isClerkConfigured } from "@/lib/auth/clerk-config";
+import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 import { SIDEBAR_COLLAPSIBLE_VALUES, SIDEBAR_VARIANT_VALUES } from "@/lib/preferences/layout";
 import { cn } from "@/lib/utils";
 import { getPreference } from "@/server/server-actions";
 
 export default async function AppLayout({ children }: Readonly<{ children: ReactNode }>) {
-  if (!isClerkConfigured) {
+  if (!isAppAuthConfigured) {
     return (
       <ClerkSetupNotice
         title="Authentication is not configured"

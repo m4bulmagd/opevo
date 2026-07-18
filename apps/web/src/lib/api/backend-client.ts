@@ -1,18 +1,26 @@
 import "server-only";
 
 import { selectFirstNonblank } from "@/lib/auth/clerk-config";
-import { getServerSessionState } from "@/lib/auth/server-session";
+import { requireServerSession } from "@/lib/auth/server-session";
 
 const API_BASE_URL =
   selectFirstNonblank(process.env.API_BASE_URL, process.env.NEXT_PUBLIC_API_BASE_URL) ?? "http://localhost:8000";
 
 export class BackendApiError extends Error {
   status: number;
+  detail: string | { code?: string; [key: string]: unknown };
 
-  constructor(message: string, status: number) {
+  constructor(detail: string | { code?: string; [key: string]: unknown }, status: number) {
+    const message =
+      typeof detail === "string"
+        ? detail
+        : typeof detail.code === "string" && detail.code.trim()
+          ? detail.code
+          : `Backend request failed (${status})`;
     super(message);
     this.name = "BackendApiError";
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -22,16 +30,7 @@ type BackendFetchOptions = RequestInit & {
 
 export async function backendFetch<T>(path: string, options: BackendFetchOptions = {}) {
   const { allow404 = false, headers, ...init } = options;
-  const session = await getServerSessionState();
-
-  if (!session.isAuthenticated) {
-    throw new BackendApiError("Missing authenticated session", 401);
-  }
-
-  const token = await session.getToken();
-  if (!token) {
-    throw new BackendApiError("Missing session token", 401);
-  }
+  const { token } = await requireServerSession();
 
   const requestHeaders = new Headers(headers);
   requestHeaders.set("Authorization", `Bearer ${token}`);
@@ -51,11 +50,23 @@ export async function backendFetch<T>(path: string, options: BackendFetchOptions
   }
 
   if (!response.ok) {
-    let detail = response.statusText;
+    let detail: string | { code?: string; [key: string]: unknown } =
+      response.statusText || `Backend request failed (${response.status})`;
 
     try {
-      const payload = (await response.json()) as { detail?: string };
-      detail = payload.detail ?? detail;
+      const payload = (await response.json()) as { detail?: unknown };
+      const candidate = payload.detail;
+
+      if (typeof candidate === "string") {
+        detail = candidate;
+      } else if (
+        candidate !== null &&
+        typeof candidate === "object" &&
+        !Array.isArray(candidate) &&
+        (!("code" in candidate) || candidate.code === undefined || typeof candidate.code === "string")
+      ) {
+        detail = candidate as { code?: string; [key: string]: unknown };
+      }
     } catch {
       // Preserve the default detail message when the backend error body is absent or invalid JSON.
     }

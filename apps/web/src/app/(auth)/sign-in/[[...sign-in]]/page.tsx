@@ -1,8 +1,14 @@
+import { redirect } from "next/navigation";
+
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
-import { isClerkConfigured } from "@/lib/auth/clerk-config";
+import { authMode, isAppAuthConfigured } from "@/lib/auth/clerk-config";
 
 export default async function SignInPage() {
-  if (!isClerkConfigured) {
+  if (authMode === "local") {
+    redirect("/activate");
+  }
+
+  if (!isAppAuthConfigured) {
     return (
       <ClerkSetupNotice
         title="Sign-in is unavailable"

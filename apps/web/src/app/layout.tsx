@@ -5,7 +5,7 @@ import type { Metadata } from "next";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { APP_CONFIG } from "@/config/app-config";
-import { isClerkConfigured } from "@/lib/auth/clerk-config";
+import { shouldWrapClerk } from "@/lib/auth/clerk-config";
 import { fontVars } from "@/lib/fonts/registry";
 import { PREFERENCE_DEFAULTS } from "@/lib/preferences/preferences-config";
 import { ThemeBootScript } from "@/scripts/theme-boot";
@@ -38,7 +38,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
 
   let bodyContent = appShell;
 
-  if (isClerkConfigured) {
+  if (shouldWrapClerk) {
     const { ClerkProvider } = await import("@clerk/nextjs");
     bodyContent = <ClerkProvider>{appShell}</ClerkProvider>;
   }
