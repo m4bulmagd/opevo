@@ -152,5 +152,8 @@ egresses are not running before deleting active storage or database content.
 
 The `e2e` CI job runs only after API, agent, and web verification. It installs
 the locked web dependencies and Chromium, then calls the same disposable
-runner. It publishes no image, deploys no service, contacts no product provider,
-and is included in the aggregate required-status job.
+runner. The runner completes activation, restarts PostgreSQL, Redis, MinIO, API,
+worker, and web without removing their volumes, and proves the persisted active
+dashboard resumes before cleanup. It publishes no image, deploys no service,
+contacts no product provider, and is included in the aggregate required-status
+job.

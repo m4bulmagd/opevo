@@ -18,12 +18,12 @@ function getChecklistSteps(agentConfig: AgentConfig | null, onboardingStatus: On
   return [
     {
       title: "Activate billing",
-      description: "Subscribe to the starter plan to unlock automatic number provisioning.",
+      description: "Activate your plan to become eligible for a Presvo number. No number is ordered yet.",
       complete: ["active", "trialing"].includes(onboardingStatus.subscription_status ?? ""),
     },
     {
       title: "Set up your Presvo number",
-      description: "Wait for Presvo to assign your number before you enable routing.",
+      description: "Review and confirm the provisioning details before Presvo assigns your number.",
       complete: onboardingStatus.phone_number_status === "ready",
     },
     {

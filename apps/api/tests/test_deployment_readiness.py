@@ -724,6 +724,45 @@ def test_local_e2e_runner_is_disposable_and_never_starts_voice_agent() -> None:
     assert "agent" not in started_services
 
 
+def test_local_e2e_runner_proves_activation_survives_full_service_restart() -> None:
+    runner = (REPO_ROOT / "scripts" / "run-local-e2e.sh").read_text()
+
+    activation_phase = "tests/e2e/activation.spec.ts"
+    restart_command = "compose restart postgres redis minio api worker web"
+    restart_marker = "E2E_AFTER_SERVICE_RESTART=true"
+    resume_phase = "tests/e2e/restart-resume.spec.ts"
+    resume_command = (
+        'E2E_AFTER_SERVICE_RESTART=true E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \\\n'
+        "  npm --prefix apps/web run test:e2e -- tests/e2e/restart-resume.spec.ts"
+    )
+
+    assert activation_phase in runner
+    assert restart_command in runner
+    assert resume_phase in runner
+    assert runner.count(restart_marker) == 1
+    assert runner.count(resume_command) == 1
+    activation_index = runner.index(activation_phase)
+    restart_index = runner.index(restart_command)
+    restart_wait_index = runner.index("wait_for_health web", restart_index)
+    marker_index = runner.index(restart_marker)
+    resume_index = runner.index(resume_phase)
+    assert activation_index < restart_index < restart_wait_index < marker_index < resume_index
+    before_restart = runner[:restart_index]
+    restart_to_resume = runner[restart_index:resume_index]
+    assert restart_to_resume.count(restart_marker) == 1
+    for wait_command in (
+        "wait_for_health postgres",
+        "wait_for_health redis",
+        "wait_for_health minio",
+        "wait_for_health api",
+        "wait_for_running worker",
+        "wait_for_health web",
+    ):
+        assert before_restart.count(wait_command) == 1
+        assert restart_to_resume.count(wait_command) == 1
+        assert restart_to_resume.index(wait_command) < restart_to_resume.index(restart_marker)
+
+
 @pytest.mark.parametrize(
     ("signal_name", "expected_exit_code"),
     [("HUP", 129), ("INT", 130), ("TERM", 143)],

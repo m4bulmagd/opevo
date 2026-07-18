@@ -128,4 +128,16 @@ wait_for_health api
 wait_for_running worker
 wait_for_health web
 
-E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" npm --prefix apps/web run test:e2e
+E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+  npm --prefix apps/web run test:e2e -- tests/e2e/activation.spec.ts
+
+compose restart postgres redis minio api worker web
+wait_for_health postgres
+wait_for_health redis
+wait_for_health minio
+wait_for_health api
+wait_for_running worker
+wait_for_health web
+
+E2E_AFTER_SERVICE_RESTART=true E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+  npm --prefix apps/web run test:e2e -- tests/e2e/restart-resume.spec.ts

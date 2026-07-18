@@ -50,8 +50,8 @@ real-provider certification remain controlled-beta gates.
 | Durable call lifecycle | **Implemented** | Incremental transcript persistence, call-scoped agent JWTs, a state machine, reconciliation, duration limits, and idempotent finalization are present. |
 | Call review | **Implemented** | Call list/detail, transcript, summary, recording availability, signed recording URLs, and usage charge are present. |
 | Terminal-call removal | **Implemented** | An authenticated owner can use **Remove call** on a terminal call. Presvo synchronously stops persisted recording egress, deletes the original-audio object from active storage, then purges and hides transcript, summary, caller data, and call content. Active calls reject removal, and no backup-erasure claim is made. |
-| Rich call-review workflow | **Partial** | Pagination contracts exist, but the web UI lacks pagination controls, inline audio playback, search, tags, notes, and structured action-item presentation. |
-| Recording lifecycle | **Implemented** | LiveKit room-composite egress, private object storage, signed access, and bucket lifecycle configuration are present. |
+| Rich call-review workflow | **Partial** | Pagination contracts, inline original-audio playback, and structured next-action presentation are implemented, but the web UI lacks pagination controls, search, tags, and notes. |
+| Recording lifecycle | **Implemented** | LiveKit room-composite egress, private object storage, signed access, and manual terminal-call removal are implemented; no automatic bucket lifecycle is configured. |
 | Transactional outbox | **Implemented** | Handlers cover `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, and `recording.stop`. |
 | Call finalization effects | **Implemented** | Usage debit and the pending notification row are direct writes in the same call-finalization transaction. |
 | Live dashboard and intervention | **Partial** | An optional backend WebSocket observer exists but is disabled by default, has a documented identity-key mismatch, and has no live-call web interface. |
@@ -82,9 +82,10 @@ real-provider certification remain controlled-beta gates.
   storage or database content is deleted.
 - The application lacks French localization, approved legal pages,
   account-wide export/deletion orchestration, and a complete account menu.
-- The repository does not yet contain behavioral voice evaluations,
-  accessibility end-to-end tests, load definitions, or completed recovery-drill
-  evidence.
+- The repository contains four credential-gated LiveKit behavioral voice
+  evaluations, but no completed credentialed run or evidence against an
+  approved production-equivalent model. Accessibility end-to-end tests, load
+  definitions, and completed recovery-drill evidence are also absent.
 
 ## Production-readiness gates
 
@@ -115,7 +116,6 @@ production-ready until all of these gates have evidence:
 
 - French localization and locale-aware formatting
 - Account and session controls
-- Inline recording playback
 - Call pagination, search, and richer review workflows
 - Account data export and deletion
 - Approved automatic 30-day retention behavior
