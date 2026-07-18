@@ -51,6 +51,7 @@ class ActivationReadinessPrerequisites:
     profile_projection_current: bool
     forwarding_verified: bool
     go_live_approved: bool
+    go_live_activated: bool
 
 
 def business_profile_is_complete(profile: BusinessProfile | None) -> bool:
@@ -97,11 +98,15 @@ def activation_readiness_prerequisites(
     go_live_approved = bool(
         activation is not None and activation.go_live_approved_at is not None
     )
+    go_live_activated = bool(
+        activation is not None and activation.activated_at is not None
+    )
     return ActivationReadinessPrerequisites(
         business_profile_complete=profile_complete,
         profile_projection_current=projection_current,
         forwarding_verified=forwarding_verified,
         go_live_approved=go_live_approved,
+        go_live_activated=go_live_activated,
     )
 
 
@@ -118,6 +123,7 @@ def build_customer_readiness_snapshot(
     profile_projection_current: bool = False,
     forwarding_verified: bool = False,
     go_live_approved: bool = False,
+    go_live_activated: bool = False,
     agent_enabled_override: bool | None = None,
 ) -> CustomerReadinessSnapshot:
     return CustomerReadinessSnapshot(
@@ -172,6 +178,7 @@ def build_customer_readiness_snapshot(
         profile_projection_current=profile_projection_current,
         forwarding_verified=forwarding_verified,
         go_live_approved=go_live_approved,
+        go_live_activated=go_live_activated,
     )
 
 
@@ -188,6 +195,7 @@ def evaluate_customer_readiness(
     activation_required: bool = False,
     agent_enabled_override: bool | None = None,
     go_live_approved_override: bool | None = None,
+    go_live_activated_override: bool | None = None,
     now: datetime | None = None,
 ) -> CustomerReadinessResult:
     prerequisites = activation_readiness_prerequisites(
@@ -199,6 +207,9 @@ def evaluate_customer_readiness(
     go_live_approved = prerequisites.go_live_approved
     if go_live_approved_override is not None:
         go_live_approved = go_live_approved_override
+    go_live_activated = prerequisites.go_live_activated
+    if go_live_activated_override is not None:
+        go_live_activated = go_live_activated_override
     return CustomerReadinessPolicy.evaluate(
         build_customer_readiness_snapshot(
             user=user,
@@ -212,6 +223,7 @@ def evaluate_customer_readiness(
             profile_projection_current=prerequisites.profile_projection_current,
             forwarding_verified=prerequisites.forwarding_verified,
             go_live_approved=go_live_approved,
+            go_live_activated=go_live_activated,
             agent_enabled_override=agent_enabled_override,
         ),
         now=now,

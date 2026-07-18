@@ -43,6 +43,7 @@ def ready_snapshot(**overrides: object) -> CustomerReadinessSnapshot:
         "profile_projection_current": False,
         "forwarding_verified": False,
         "go_live_approved": False,
+        "go_live_activated": False,
     }
     values.update(overrides)
     return CustomerReadinessSnapshot(**values)  # type: ignore[arg-type]
@@ -69,7 +70,7 @@ def test_live_snapshot_can_activate_route_and_dispatch() -> None:
     assert result.blockers == ()
     assert result.warnings == ()
     assert result.evaluated_at == NOW
-    assert result.policy_version == "runtime-v2"
+    assert result.policy_version == "runtime-v3"
 
 
 @pytest.mark.parametrize(
@@ -98,6 +99,7 @@ def test_flag_off_ignores_activation_prerequisites() -> None:
         profile_projection_current=False,
         forwarding_verified=False,
         go_live_approved=False,
+        go_live_activated=False,
     )
 
     assert result.can_activate is True
@@ -108,6 +110,7 @@ def test_flag_off_ignores_activation_prerequisites() -> None:
         ReadinessBlocker.PROFILE_PROJECTION_STALE,
         ReadinessBlocker.FORWARDING_NOT_VERIFIED,
         ReadinessBlocker.GO_LIVE_NOT_APPROVED,
+        ReadinessBlocker.GO_LIVE_NOT_ACTIVATED,
     } & set(result.blockers)
 
 
@@ -136,6 +139,7 @@ def test_flag_on_activation_prerequisite_blocks_enable_and_routing(
         "profile_projection_current": True,
         "forwarding_verified": True,
         "go_live_approved": True,
+        "go_live_activated": True,
     }
     prerequisites[field] = False
 
@@ -145,6 +149,23 @@ def test_flag_on_activation_prerequisite_blocks_enable_and_routing(
     assert result.can_activate is False
     assert result.should_enable_phone is False
     assert result.can_route is False
+
+
+def test_approved_activation_enables_projection_but_not_routing_until_completed() -> None:
+    result = evaluate(
+        activation_required=True,
+        business_profile_complete=True,
+        profile_projection_current=True,
+        forwarding_verified=True,
+        go_live_approved=True,
+        go_live_activated=False,
+    )
+
+    assert ReadinessBlocker.GO_LIVE_NOT_ACTIVATED in result.blockers
+    assert result.can_activate is True
+    assert result.should_enable_phone is True
+    assert result.can_route is False
+    assert result.stage is CustomerReadinessStage.ROUTING_PENDING
 
 
 def test_period_end_is_exclusive() -> None:

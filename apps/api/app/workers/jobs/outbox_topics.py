@@ -71,6 +71,7 @@ class _RoutingSnapshot:
     balance: int
     readiness: CustomerReadinessResult
     current_go_live_attempt: bool
+    terminal_after_projection: bool
     provider_number_id: str
     should_enable: bool
 
@@ -181,44 +182,145 @@ async def deliver_phone_routing(
     if provider_connection_name != desired_connection_name:
         raise OutboxDeliveryError("provider_retryable", retryable=True)
 
+    try:
+        async with session_factory() as session:
+            current = await _routing_snapshot(session, user_id, event=event)
+            stable_projection = bool(
+                current is not None
+                and current.phone_number.id == snapshot.phone_number.id
+                and current.should_enable == snapshot.should_enable
+            )
+            if not stable_projection:
+                await session.rollback()
+            else:
+                assert current is not None
+                phone_number = current.phone_number
+                phone_number.provider_connection_name = provider_connection_name
+                phone_number.is_active = provider_connection_name == "app-active"
+                readiness = evaluate_customer_readiness(
+                    user=current.user,
+                    subscription=current.subscription,
+                    balance=current.balance,
+                    phone_number=phone_number,
+                    provisioning=current.provisioning,
+                    agent_config=current.agent_config,
+                    business_profile=current.business_profile,
+                    activation=current.activation,
+                    activation_required=get_settings().activation_flow_enabled,
+                    go_live_activated_override=(
+                        True if current.current_go_live_attempt else None
+                    ),
+                )
+                if (
+                    provider_connection_name == "app-active"
+                    and current.current_go_live_attempt
+                    and current.activation is not None
+                    and readiness.can_route
+                ):
+                    now_provider = ctx.get("routing_now") or (lambda: datetime.now(UTC))
+                    await mark_current_go_live_succeeded(
+                        session,
+                        event=event,
+                        activation=current.activation,
+                        succeeded_at=now_provider(),
+                    )
+                terminal_after_projection = current.terminal_after_projection
+                await session.commit()
+                if terminal_after_projection:
+                    raise OutboxDeliveryError(
+                        "dispatch_ineligible",
+                        retryable=False,
+                    )
+                return
+    except OutboxDeliveryError:
+        if provider_connection_name != "app-active":
+            raise
+        await _persist_phone_projection(
+            session_factory,
+            phone_number_id=snapshot.phone_number.id,
+            provider_number_id=snapshot.provider_number_id,
+            provider_connection_name="app-active",
+        )
+        await _compensate_provider_enable(
+            provider,
+            provider_number_id=snapshot.provider_number_id,
+        )
+        await _persist_phone_projection(
+            session_factory,
+            phone_number_id=snapshot.phone_number.id,
+            provider_number_id=snapshot.provider_number_id,
+            provider_connection_name="app-disabled",
+        )
+        raise
+
+    await _persist_phone_projection(
+        session_factory,
+        phone_number_id=snapshot.phone_number.id,
+        provider_number_id=snapshot.provider_number_id,
+        provider_connection_name=provider_connection_name,
+    )
+    if provider_connection_name != "app-active":
+        raise OutboxDeliveryError("provider_retryable", retryable=True)
+
+    await _compensate_provider_enable(
+        provider,
+        provider_number_id=snapshot.provider_number_id,
+    )
+    await _persist_phone_projection(
+        session_factory,
+        phone_number_id=snapshot.phone_number.id,
+        provider_number_id=snapshot.provider_number_id,
+        provider_connection_name="app-disabled",
+    )
+
     async with session_factory() as session:
         current = await _routing_snapshot(session, user_id, event=event)
-        if current is None:
-            await session.rollback()
+        if current is None or current.phone_number.id != snapshot.phone_number.id:
+            await session.commit()
             return
-        if (
-            current.phone_number.id != snapshot.phone_number.id
-            or current.should_enable != snapshot.should_enable
-        ):
-            await session.rollback()
-            raise OutboxDeliveryError("provider_retryable", retryable=True)
-        phone_number = current.phone_number
-        phone_number.provider_connection_name = provider_connection_name
-        phone_number.is_active = provider_connection_name == "app-active"
-        readiness = evaluate_customer_readiness(
-            user=current.user,
-            subscription=current.subscription,
-            balance=current.balance,
-            phone_number=phone_number,
-            provisioning=current.provisioning,
-            agent_config=current.agent_config,
-            business_profile=current.business_profile,
-            activation=current.activation,
-            activation_required=get_settings().activation_flow_enabled,
+        terminal_after_projection = current.terminal_after_projection
+        should_enable = current.should_enable
+        await session.commit()
+    if terminal_after_projection:
+        raise OutboxDeliveryError("dispatch_ineligible", retryable=False)
+    if should_enable:
+        raise OutboxDeliveryError("provider_retryable", retryable=True)
+
+
+async def _compensate_provider_enable(provider, *, provider_number_id: str) -> None:
+    try:
+        connection_name = await provider.disable_number(
+            provider_number_id=provider_number_id
+        )
+    except TelephonyProviderError:
+        # The provider is known to have accepted the enable operation. Keep the
+        # durable event retryable until disable is confirmed, even if the
+        # provider classifies an individual compensation attempt as terminal.
+        raise OutboxDeliveryError(
+            "provider_retryable",
+            retryable=True,
+        ) from None
+    if connection_name != "app-disabled":
+        raise OutboxDeliveryError("provider_retryable", retryable=True)
+
+
+async def _persist_phone_projection(
+    session_factory,
+    *,
+    phone_number_id: UUID,
+    provider_number_id: str,
+    provider_connection_name: str,
+) -> None:
+    async with session_factory() as session:
+        phone_number = await PhoneNumberRepository(session).get_by_id_for_update(
+            phone_number_id
         )
         if (
-            provider_connection_name == "app-active"
-            and current.current_go_live_attempt
-            and current.activation is not None
-            and readiness.can_route
+            phone_number is not None
+            and phone_number.provider_number_id == provider_number_id
         ):
-            now_provider = ctx.get("routing_now") or (lambda: datetime.now(UTC))
-            await mark_current_go_live_succeeded(
-                session,
-                event=event,
-                activation=current.activation,
-                succeeded_at=now_provider(),
-            )
+            phone_number.provider_connection_name = provider_connection_name
+            phone_number.is_active = provider_connection_name == "app-active"
         await session.commit()
 
 
@@ -291,8 +393,9 @@ async def _routing_snapshot(
             return None
         if pending_go_live and not current_go_live_attempt:
             return None
-        if current_go_live_attempt and not readiness.should_enable_phone:
-            raise OutboxDeliveryError("dispatch_ineligible", retryable=False)
+    terminal_after_projection = bool(
+        current_go_live_attempt and not readiness.should_enable_phone
+    )
     return _RoutingSnapshot(
         user=user,
         activation=activation,
@@ -304,8 +407,11 @@ async def _routing_snapshot(
         balance=balance,
         readiness=readiness,
         current_go_live_attempt=current_go_live_attempt,
+        terminal_after_projection=terminal_after_projection,
         provider_number_id=phone_number.provider_number_id,
-        should_enable=readiness.should_enable_phone,
+        should_enable=(
+            False if terminal_after_projection else readiness.should_enable_phone
+        ),
     )
 
 

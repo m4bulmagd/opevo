@@ -280,5 +280,6 @@ def test_activation_prerequisites_are_named_immutable_and_reject_null_fingerprin
     assert prerequisites.profile_projection_current is False
     assert prerequisites.forwarding_verified is False
     assert prerequisites.go_live_approved is False
+    assert prerequisites.go_live_activated is False
     with pytest.raises(FrozenInstanceError):
         prerequisites.forwarding_verified = True

@@ -30,6 +30,7 @@ class ReadinessBlocker(StrEnum):
     PROFILE_PROJECTION_STALE = "profile_projection_stale"
     FORWARDING_NOT_VERIFIED = "forwarding_not_verified"
     GO_LIVE_NOT_APPROVED = "go_live_not_approved"
+    GO_LIVE_NOT_ACTIVATED = "go_live_not_activated"
 
 
 class CustomerReadinessStage(StrEnum):
@@ -67,6 +68,7 @@ class CustomerReadinessSnapshot:
     profile_projection_current: bool
     forwarding_verified: bool
     go_live_approved: bool
+    go_live_activated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +89,7 @@ class CustomerReadinessResult:
 
 
 class CustomerReadinessPolicy:
-    POLICY_VERSION = "runtime-v2"
+    POLICY_VERSION = "runtime-v3"
     ELIGIBLE_SUBSCRIPTION_STATUSES = frozenset({"active", "trialing"})
     SUPPORTED_PLAN = "starter"
 
@@ -166,6 +168,7 @@ class CustomerReadinessPolicy:
             should_enable_phone
             and snapshot.phone_active
             and snapshot.phone_connection_name == "app-active"
+            and (not snapshot.activation_required or snapshot.go_live_activated)
         )
         stage = cls._derive_stage(
             snapshot=snapshot,
@@ -258,6 +261,8 @@ class CustomerReadinessPolicy:
             found.add(ReadinessBlocker.FORWARDING_NOT_VERIFIED)
         if not snapshot.go_live_approved:
             found.add(ReadinessBlocker.GO_LIVE_NOT_APPROVED)
+        elif not snapshot.go_live_activated:
+            found.add(ReadinessBlocker.GO_LIVE_NOT_ACTIVATED)
 
     @classmethod
     def _derive_stage(
