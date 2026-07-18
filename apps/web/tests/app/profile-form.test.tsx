@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProfileForm } from "@/app/(activation)/activate/_components/profile/profile-form";
-import type { ActivationSnapshot, BusinessProfile } from "@/lib/types/activation";
+import type { ActivationSnapshot, BusinessHours, BusinessProfile } from "@/lib/types/activation";
 
 const { confirmProfileMock, pushMock, refreshMock, saveProfileMock } = vi.hoisted(() => ({
   confirmProfileMock: vi.fn(),
@@ -129,6 +129,24 @@ function completeBusinessProfile(overrides: Partial<BusinessProfile> = {}): Part
     existing_phone_e164: "+33612345678",
     confirmed_carrier: "orange",
     ...overrides,
+  };
+}
+
+function businessHoursWithMondayOverlap(): BusinessHours {
+  return {
+    monday: {
+      closed: false,
+      intervals: [
+        { start: "09:00", end: "17:00" },
+        { start: "13:00", end: "18:00" },
+      ],
+    },
+    tuesday: { closed: true, intervals: [] },
+    wednesday: { closed: true, intervals: [] },
+    thursday: { closed: true, intervals: [] },
+    friday: { closed: true, intervals: [] },
+    saturday: { closed: true, intervals: [] },
+    sunday: { closed: true, intervals: [] },
   };
 }
 
@@ -278,6 +296,22 @@ describe("profile form", () => {
     expect(screen.getByLabelText(/Timezone/i)).toHaveValue("Europe/Paris");
   });
 
+  it("resumes a persisted Other carrier as an explicit suggestion after refresh", () => {
+    render(
+      <ProfileForm
+        milestone="business"
+        snapshot={profileSnapshot({
+          ...completeBusinessProfile({ confirmed_carrier: null }),
+          detected_carrier: "other",
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Suggested carrier")).toBeInTheDocument();
+    expect(screen.getByText(/^Other$/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Confirm carrier/i })).toBeInTheDocument();
+  });
+
   it("uses server constraints for lengths, counters, and the FAQ limit", () => {
     render(<ProfileForm milestone="receptionist" snapshot={profileSnapshot()} />);
 
@@ -385,5 +419,47 @@ describe("profile form", () => {
 
     await waitFor(() => expect(screen.getByLabelText(/Owner name/i)).toHaveFocus());
     expect(saveProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("highlights and focuses the first invalid business interval on submit without a prior blur", async () => {
+    render(
+      <ProfileForm
+        milestone="business"
+        snapshot={profileSnapshot(completeBusinessProfile({ business_hours: businessHoursWithMondayOverlap() }))}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+
+    expect(await screen.findByText(/Monday intervals cannot overlap/i)).toBeInTheDocument();
+    const invalidStart = screen.getByLabelText(/Monday start 2/i);
+    expect(invalidStart).toHaveFocus();
+    expect(invalidStart).toHaveAttribute("aria-invalid", "true");
+    expect(saveProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("associates a missing carrier error with the focused phone and clears it after confirmation", async () => {
+    render(
+      <ProfileForm
+        milestone="business"
+        snapshot={profileSnapshot({
+          ...completeBusinessProfile({ confirmed_carrier: null }),
+          detected_carrier: "Orange France",
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+
+    const phone = screen.getByLabelText(/Existing French number/i);
+    await waitFor(() => expect(phone).toHaveFocus());
+    expect(phone).toHaveAttribute("aria-invalid", "true");
+    expect(phone).toHaveAccessibleDescription(/Confirm or choose the carrier/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /Confirm carrier/i }));
+
+    await waitFor(() => expect(phone).toHaveAttribute("aria-invalid", "false"));
+    expect(phone).not.toHaveAccessibleDescription(/Confirm or choose the carrier/i);
+    expect(screen.queryByText(/Confirm or choose the carrier/i)).not.toBeInTheDocument();
   });
 });

@@ -1,7 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { BusinessHoursEditor } from "@/app/(activation)/activate/_components/profile/business-hours-editor";
+import {
+  BusinessHoursEditor,
+  createDefaultBusinessHours,
+} from "@/app/(activation)/activate/_components/profile/business-hours-editor";
 import type { BusinessHours } from "@/lib/types/activation";
 
 function hoursWithOneMondayInterval(): BusinessHours {
@@ -20,10 +23,33 @@ describe("business hours editor", () => {
   it("supports two non-overlapping intervals and no third interval", () => {
     render(<BusinessHoursEditor maxIntervalsPerDay={2} onChange={vi.fn()} value={hoursWithOneMondayInterval()} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Add afternoon hours for Monday/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Add interval for Monday/i }));
 
     expect(screen.getAllByLabelText(/Monday start/i)).toHaveLength(2);
-    expect(screen.queryByRole("button", { name: /Add afternoon hours for Monday/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Add interval for Monday/i })).not.toBeInTheDocument();
+  });
+
+  it("adds a blank second interval instead of overlapping the default full-day interval", () => {
+    render(<BusinessHoursEditor maxIntervalsPerDay={2} onChange={vi.fn()} value={createDefaultBusinessHours()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add interval for Monday/i }));
+
+    expect(screen.getAllByLabelText(/Monday start/i)[1]).toHaveValue("");
+    expect(screen.getAllByLabelText(/Monday end/i)[1]).toHaveValue("");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("provides an accessible action to remove an added interval", () => {
+    const onChange = vi.fn();
+    render(<BusinessHoursEditor maxIntervalsPerDay={2} onChange={onChange} value={hoursWithOneMondayInterval()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Add interval for Monday/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /Remove Monday interval 2/i }));
+
+    expect(screen.getAllByLabelText(/Monday start/i)).toHaveLength(1);
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ monday: { closed: false, intervals: [{ start: "09:00", end: "12:00" }] } }),
+    );
   });
 
   it("keeps a closed day free of intervals", () => {
@@ -38,7 +64,7 @@ describe("business hours editor", () => {
 
   it("reports overlapping intervals and focuses the conflicting start", () => {
     render(<BusinessHoursEditor maxIntervalsPerDay={2} onChange={vi.fn()} value={hoursWithOneMondayInterval()} />);
-    fireEvent.click(screen.getByRole("button", { name: /Add afternoon hours for Monday/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Add interval for Monday/i }));
 
     const starts = screen.getAllByLabelText(/Monday start/i);
     const ends = screen.getAllByLabelText(/Monday end/i);
@@ -61,5 +87,18 @@ describe("business hours editor", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(/end after they start/i);
     expect(start).toHaveFocus();
+  });
+
+  it("does not steal focus while the user corrects an externally invalid interval", () => {
+    const hours = hoursWithOneMondayInterval();
+    hours.monday.intervals.push({ start: "11:00", end: "13:00" });
+    render(<BusinessHoursEditor invalid maxIntervalsPerDay={2} onChange={vi.fn()} value={hours} />);
+
+    expect(screen.getByLabelText(/Monday start 2/i)).toHaveFocus();
+    const conflictingEnd = screen.getByLabelText(/Monday end 2/i);
+    act(() => conflictingEnd.focus());
+    fireEvent.change(conflictingEnd, { target: { value: "14:00" } });
+
+    expect(conflictingEnd).toHaveFocus();
   });
 });
