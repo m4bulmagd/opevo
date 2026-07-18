@@ -175,12 +175,22 @@ async def deliver_phone_routing(
                 provider_number_id=snapshot.provider_number_id
             )
     except TelephonyProviderError as exc:
+        if snapshot.terminal_after_projection:
+            raise OutboxDeliveryError(
+                "provider_retryable",
+                retryable=True,
+                exhaustible=False,
+            ) from None
         raise OutboxDeliveryError(
             exc.category,
             retryable=exc.retryable,
         ) from None
     if provider_connection_name != desired_connection_name:
-        raise OutboxDeliveryError("provider_retryable", retryable=True)
+        raise OutboxDeliveryError(
+            "provider_retryable",
+            retryable=True,
+            exhaustible=not snapshot.terminal_after_projection,
+        )
 
     try:
         async with session_factory() as session:
@@ -188,6 +198,7 @@ async def deliver_phone_routing(
             stable_projection = bool(
                 current is not None
                 and current.phone_number.id == snapshot.phone_number.id
+                and current.provider_number_id == snapshot.provider_number_id
                 and current.should_enable == snapshot.should_enable
             )
             if not stable_projection:
@@ -237,6 +248,7 @@ async def deliver_phone_routing(
             raise
         await _persist_phone_projection(
             session_factory,
+            user_id=user_id,
             phone_number_id=snapshot.phone_number.id,
             provider_number_id=snapshot.provider_number_id,
             provider_connection_name="app-active",
@@ -247,6 +259,7 @@ async def deliver_phone_routing(
         )
         await _persist_phone_projection(
             session_factory,
+            user_id=user_id,
             phone_number_id=snapshot.phone_number.id,
             provider_number_id=snapshot.provider_number_id,
             provider_connection_name="app-disabled",
@@ -255,6 +268,7 @@ async def deliver_phone_routing(
 
     await _persist_phone_projection(
         session_factory,
+        user_id=user_id,
         phone_number_id=snapshot.phone_number.id,
         provider_number_id=snapshot.provider_number_id,
         provider_connection_name=provider_connection_name,
@@ -268,6 +282,7 @@ async def deliver_phone_routing(
     )
     await _persist_phone_projection(
         session_factory,
+        user_id=user_id,
         phone_number_id=snapshot.phone_number.id,
         provider_number_id=snapshot.provider_number_id,
         provider_connection_name="app-disabled",
@@ -299,19 +314,29 @@ async def _compensate_provider_enable(provider, *, provider_number_id: str) -> N
         raise OutboxDeliveryError(
             "provider_retryable",
             retryable=True,
+            exhaustible=False,
         ) from None
     if connection_name != "app-disabled":
-        raise OutboxDeliveryError("provider_retryable", retryable=True)
+        raise OutboxDeliveryError(
+            "provider_retryable",
+            retryable=True,
+            exhaustible=False,
+        )
 
 
 async def _persist_phone_projection(
     session_factory,
     *,
+    user_id: UUID,
     phone_number_id: UUID,
     provider_number_id: str,
     provider_connection_name: str,
 ) -> None:
     async with session_factory() as session:
+        user = await UserRepository(session).get_by_id_for_update(user_id)
+        if user is None:
+            await session.commit()
+            return
         phone_number = await PhoneNumberRepository(session).get_by_id_for_update(
             phone_number_id
         )
