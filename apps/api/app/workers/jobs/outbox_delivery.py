@@ -50,20 +50,29 @@ _CALL_TOPIC_AGGREGATE_TYPES = {
 
 
 class OutboxDeliveryError(RuntimeError):
-    def __init__(self, error_code: str, *, retryable: bool) -> None:
+    def __init__(
+        self,
+        error_code: str,
+        *,
+        retryable: bool,
+        exhaustible: bool = True,
+    ) -> None:
         if error_code not in SAFE_OUTBOX_ERROR_CODES:
             raise ValueError("Unsafe outbox error code")
+        if not retryable and not exhaustible:
+            raise ValueError("Non-retryable outbox errors must be exhaustible")
         super().__init__(error_code)
         self.error_code = error_code
         self.retryable = retryable
+        self.exhaustible = exhaustible
 
 
-def _classify_error(error: BaseException) -> tuple[str, bool]:
+def _classify_error(error: BaseException) -> tuple[str, bool, bool]:
     if isinstance(error, OutboxDeliveryError):
-        return error.error_code, error.retryable
+        return error.error_code, error.retryable, error.exhaustible
     if isinstance(error, OutboxPayloadError):
-        return "invalid_payload", False
-    return "provider_retryable", True
+        return "invalid_payload", False, True
+    return "provider_retryable", True, True
 
 
 async def emit_outbox_terminal_failure_metric(
@@ -135,7 +144,7 @@ async def outbox_delivery_job(
             with bind_call_id(_validated_event_call_id(event)):
                 await handler(ctx, event)
         except Exception as error:
-            error_code, retryable = _classify_error(error)
+            error_code, retryable, exhaustible = _classify_error(error)
             failure_time = now_provider()
             async with session_factory() as session:
                 stored = await OutboxRepository(session).mark_failed_attempt(
@@ -145,6 +154,7 @@ async def outbox_delivery_job(
                     error_code=error_code,
                     retry_delays=OUTBOX_RETRY_DELAYS,
                     terminal=not retryable,
+                    exhaustible=exhaustible,
                 )
                 if stored is not None and stored.status == "failed":
                     await _fail_livekit_dispatch_call(

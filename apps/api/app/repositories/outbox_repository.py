@@ -183,6 +183,7 @@ class OutboxRepository:
         error_code: str,
         retry_delays: tuple[timedelta, ...],
         terminal: bool = False,
+        exhaustible: bool = True,
     ) -> OutboxEvent | None:
         event = await self._get_current_claim(
             event_id=event_id,
@@ -192,12 +193,14 @@ class OutboxRepository:
             return None
 
         event.last_error_code = error_code[:100]
-        if terminal or event.attempt_count > len(retry_delays):
+        retries_exhausted = event.attempt_count > len(retry_delays)
+        if terminal or (exhaustible and retries_exhausted):
             event.status = "failed"
             event.next_attempt_at = failed_at
         else:
             event.status = "pending"
-            event.next_attempt_at = failed_at + retry_delays[event.attempt_count - 1]
+            delay_index = min(event.attempt_count - 1, len(retry_delays) - 1)
+            event.next_attempt_at = failed_at + retry_delays[delay_index]
         await self.session.flush()
         return event
 
