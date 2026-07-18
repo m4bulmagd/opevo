@@ -62,7 +62,11 @@ class FakeStartEgressClient(FakeEgressClient):
         return SimpleNamespace(egress_id="egress-started")
 
 
-def build_provider(client: FakeEgressClient) -> LiveKitRecordingProvider:
+def build_provider(
+    client: FakeEgressClient,
+    *,
+    observability=None,
+) -> LiveKitRecordingProvider:
     return LiveKitRecordingProvider(
         egress_client=client,
         bucket_name="recordings",
@@ -70,12 +74,22 @@ def build_provider(client: FakeEgressClient) -> LiveKitRecordingProvider:
         access_key="key",
         secret_key="secret",
         region="us-east-1",
+        observability=observability,
     )
 
 
 async def ensure_stopped(provider: LiveKitRecordingProvider, egress_id: str) -> None:
     method = getattr(provider, "ensure_stopped", None)
     assert method is not None, "recording provider must expose ensure_stopped"
+    await method(egress_id)
+
+
+async def ensure_not_running(
+    provider: LiveKitRecordingProvider,
+    egress_id: str,
+) -> None:
+    method = getattr(provider, "ensure_not_running", None)
+    assert method is not None, "recording provider must expose ensure_not_running"
     await method(egress_id)
 
 
@@ -176,6 +190,38 @@ async def test_ensure_stopped_reports_failed_terminal_egress_as_provider_error(
         ("livekit", "ensure_recording_stopped", "error")
     ]
     assert telemetry.error_classes == [expected_error_class]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "failed_status",
+    [
+        api.EgressStatus.EGRESS_FAILED,
+        api.EgressStatus.EGRESS_ABORTED,
+        api.EgressStatus.EGRESS_LIMIT_REACHED,
+    ],
+)
+async def test_ensure_not_running_accepts_failed_terminal_egress_while_ensure_stopped_rejects_it(
+    failed_status: int,
+) -> None:
+    stop_job_client = FakeEgressClient([[failed_status]])
+    deletion_client = FakeEgressClient([[failed_status]])
+    telemetry = _Telemetry()
+
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await ensure_stopped(build_provider(stop_job_client), "egress-1")
+
+    await ensure_not_running(
+        build_provider(deletion_client, observability=telemetry),
+        "egress-1",
+    )
+
+    assert exc_info.value.category == "provider_terminal"
+    assert stop_job_client.stop_requests == []
+    assert deletion_client.stop_requests == []
+    assert telemetry.calls == [
+        ("livekit", "ensure_recording_not_running", "success")
+    ]
 
 
 @pytest.mark.anyio

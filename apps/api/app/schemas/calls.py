@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,7 +36,15 @@ class CallResponse(BaseModel):
     recording_url: str | None
 
 
-class CallHistoryListItem(BaseModel):
+class CallSummaryResponseFields(BaseModel):
+    summary_status: Literal["processing", "ready", "unavailable"]
+    caller_intent: str | None
+    action_items: list[str] | None
+    sentiment: str | None
+    follow_up_required: bool | None
+
+
+class CallHistoryListItem(CallSummaryResponseFields):
     id: UUID
     status: str
     caller_number: str | None
@@ -58,7 +67,7 @@ class CallTranscriptLineResponse(BaseModel):
     created_at: datetime
 
 
-class CallDetailResponse(BaseModel):
+class CallDetailResponse(CallSummaryResponseFields):
     id: UUID
     status: str
     caller_number: str | None

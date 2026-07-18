@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from app.core.config import get_settings
 from app.providers.livekit_recording.livekit import LiveKitRecordingProvider
 
@@ -72,8 +74,17 @@ class LiveKitRecordingService:
             await lkapi.aclose()
 
     async def ensure_stopped(self, egress_id: str) -> None:
+        async with self._provider_session() as provider:
+            await provider.ensure_stopped(egress_id)
+
+    async def ensure_not_running(self, egress_id: str) -> None:
+        async with self._provider_session() as provider:
+            await provider.ensure_not_running(egress_id)
+
+    @asynccontextmanager
+    async def _provider_session(self):
         if self.provider is not None:
-            await self.provider.ensure_stopped(egress_id)
+            yield self.provider
             return
 
         from livekit import api
@@ -96,6 +107,6 @@ class LiveKitRecordingService:
                 secret_key=settings.s3_secret_key,
                 region=settings.s3_region,
             )
-            await provider.ensure_stopped(egress_id)
+            yield provider
         finally:
             await lkapi.aclose()

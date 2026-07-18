@@ -141,7 +141,7 @@ describe("dashboard onboarding", () => {
     render(await Page());
 
     expect(screen.getByText(/Number provisioning in progress/i)).toBeInTheDocument();
-    expect(screen.getByText(/assigning your Irish number now/i)).toBeInTheDocument();
+    expect(screen.getByText(/assigning your Presvo number now/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Retry provisioning/i })).not.toBeInTheDocument();
   });
 
@@ -170,7 +170,7 @@ describe("dashboard onboarding", () => {
     getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
     getOnboardingStatusMock.mockResolvedValueOnce(
       buildOnboardingStatus({
-        phone_number: "+35315551234",
+        phone_number: "+3315551234",
         phone_number_status: "ready",
         agent_setup_complete: true,
         stage: "ready",
@@ -184,14 +184,17 @@ describe("dashboard onboarding", () => {
     render(await Page());
 
     expect(screen.getByText(/Ready to go live/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/\+35315551234/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+3315551234/i).length).toBeGreaterThan(0);
+    for (const link of screen.getAllByRole("link", { name: /Review activation/i })) {
+      expect(link).toHaveAttribute("href", "/activate");
+    }
   });
 
   it("keeps live status distinct from ready-to-enable", async () => {
     getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig({ is_enabled: true }));
     getOnboardingStatusMock.mockResolvedValueOnce(
       buildOnboardingStatus({
-        phone_number: "+35315551234",
+        phone_number: "+3315551234",
         phone_number_status: "ready",
         agent_setup_complete: true,
         stage: "live",

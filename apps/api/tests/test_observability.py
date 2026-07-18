@@ -552,6 +552,23 @@ async def test_provider_metrics_count_once_and_normalize_unknown_without_content
 
 
 @pytest.mark.anyio
+async def test_recording_not_running_provider_operation_is_allowlisted() -> None:
+    tracer = _Tracer()
+    telemetry = _observability(tracer=tracer)
+
+    async with telemetry.provider_operation(
+        "livekit",
+        "ensure_recording_not_running",
+    ):
+        await asyncio.sleep(0)
+
+    assert tracer.spans[0].attributes["presvo.provider.name"] == "livekit"
+    assert tracer.spans[0].attributes["presvo.provider.operation"] == (
+        "ensure_recording_not_running"
+    )
+
+
+@pytest.mark.anyio
 async def test_provider_telemetry_prefers_allowlisted_structured_error_class() -> None:
     class StructuredProviderError(RuntimeError):
         def __init__(self) -> None:

@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { AudioLines, ChevronRight, Phone } from "lucide-react";
 
+import { CallOutcome } from "@/components/calls/call-outcome";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,12 +42,15 @@ export function CallsTable({ calls }: { calls: CallHistoryListItem[] }) {
                     <Badge variant={call.status === "completed" ? "secondary" : "outline"}>{call.status}</Badge>
                     <span className="text-muted-foreground text-xs">{formatCallTime(call.started_at)}</span>
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="font-medium">{formatPhoneNumber(call.caller_number)}</span>
-                    <p className="line-clamp-2 text-muted-foreground text-sm">
-                      {call.summary_text ?? "No summary yet for this conversation."}
-                    </p>
-                  </div>
+                  <span className="font-medium">{formatPhoneNumber(call.caller_number)}</span>
+                  <CallOutcome
+                    summaryText={call.summary_text}
+                    summary_status={call.summary_status}
+                    caller_intent={call.caller_intent}
+                    action_items={call.action_items}
+                    sentiment={call.sentiment}
+                    follow_up_required={call.follow_up_required}
+                  />
                   <div className="flex items-center gap-2 text-muted-foreground text-xs">
                     <AudioLines className="size-3.5" />
                     <span>{formatDuration(call.duration_seconds)}</span>

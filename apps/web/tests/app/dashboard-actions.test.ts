@@ -1,23 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
-  archiveCallMock,
+  deleteCallMock,
   createCheckoutSessionMock,
   createPortalSessionMock,
   patchAgentConfigMock,
   retryProvisioningMock,
   revalidatePathMock,
+  redirectMock,
 } = vi.hoisted(() => ({
-  archiveCallMock: vi.fn(),
+  deleteCallMock: vi.fn(),
   createCheckoutSessionMock: vi.fn(),
   createPortalSessionMock: vi.fn(),
   patchAgentConfigMock: vi.fn(),
   retryProvisioningMock: vi.fn(),
   revalidatePathMock: vi.fn(),
+  redirectMock: vi.fn(() => {
+    throw new Error("NEXT_REDIRECT");
+  }),
 }));
 
 vi.mock("next/cache", () => ({
   revalidatePath: revalidatePathMock,
+}));
+
+vi.mock("next/navigation", () => ({
+  redirect: redirectMock,
 }));
 
 vi.mock("@/lib/api/agent", () => ({
@@ -25,7 +33,7 @@ vi.mock("@/lib/api/agent", () => ({
 }));
 
 vi.mock("@/lib/api/calls", () => ({
-  archiveCall: archiveCallMock,
+  deleteCall: deleteCallMock,
 }));
 
 vi.mock("@/lib/api/billing", () => ({
@@ -56,18 +64,24 @@ describe("dashboard action revalidation", () => {
     expect(revalidatePathMock).not.toHaveBeenCalled();
   });
 
-  it("retains exact successful archive invalidation and skips failed archives", async () => {
-    archiveCallMock.mockResolvedValueOnce(undefined);
-    const { archiveCallAction } = await import("@/app/(app)/dashboard/calls/actions");
+  it("redirects after successful deletion and returns retry guidance without invalidation on failure", async () => {
+    deleteCallMock.mockResolvedValueOnce(undefined);
+    const { deleteCallAction } = await import("@/app/(app)/dashboard/calls/actions");
 
-    await archiveCallAction("call-1");
+    await expect(deleteCallAction("call-1")).rejects.toThrow("NEXT_REDIRECT");
 
     expect(revalidatePathMock.mock.calls).toEqual([["/dashboard/calls"], ["/dashboard"]]);
+    expect(redirectMock).toHaveBeenCalledWith("/dashboard/calls");
 
     revalidatePathMock.mockClear();
-    archiveCallMock.mockRejectedValueOnce(new Error("archive failed"));
-    await expect(archiveCallAction("call-2")).rejects.toThrow("archive failed");
+    redirectMock.mockClear();
+    deleteCallMock.mockRejectedValueOnce(new Error("delete failed"));
+    await expect(deleteCallAction("call-2")).resolves.toEqual({
+      status: "error",
+      message: "Presvo could not remove this call right now. Try again.",
+    });
     expect(revalidatePathMock).not.toHaveBeenCalled();
+    expect(redirectMock).not.toHaveBeenCalled();
   });
 
   it("revalidates the dashboard only after provisioning retry succeeds", async () => {

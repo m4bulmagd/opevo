@@ -29,7 +29,7 @@ type OnboardingStatusCardProps = {
   retryHandler?: () => Promise<RetryProvisioningActionResult>;
 };
 
-type StatusAction = "billing" | "receptionist" | null;
+type StatusAction = "activation" | "billing" | null;
 
 const SUBSCRIPTION_BLOCKERS = new Set<ReadinessBlocker>([
   "subscription_missing",
@@ -77,11 +77,11 @@ function getStatusPresentation(onboardingStatus: OnboardingStatus) {
     case "number_provisioning":
       return {
         title: "Number provisioning in progress",
-        description: "We’re assigning your Irish number now. This usually finishes automatically.",
+        description: "We’re assigning your Presvo number now. This usually finishes automatically.",
         badgeLabel: "Provisioning",
         badgeVariant: "secondary" as const,
         icon: LoaderCircle,
-        action: "receptionist" as const,
+        action: "activation" as const,
       };
     case "number_provisioning_failed":
       return {
@@ -99,7 +99,7 @@ function getStatusPresentation(onboardingStatus: OnboardingStatus) {
         badgeLabel: "Setup required",
         badgeVariant: "secondary" as const,
         icon: Settings2,
-        action: "receptionist" as const,
+        action: "activation" as const,
       };
     case "ready":
       return {
@@ -108,7 +108,7 @@ function getStatusPresentation(onboardingStatus: OnboardingStatus) {
         badgeLabel: "Ready",
         badgeVariant: "default" as const,
         icon: CheckCircle2,
-        action: "receptionist" as const,
+        action: "activation" as const,
       };
     case "routing_pending":
       return {
@@ -126,12 +126,12 @@ function getStatusPresentation(onboardingStatus: OnboardingStatus) {
         badgeLabel: "Live",
         badgeVariant: "default" as const,
         icon: ShieldCheck,
-        action: "receptionist" as const,
+        action: "activation" as const,
       };
     case "subscription_required":
       return {
         title: "Choose your plan",
-        description: "Activate the starter plan to begin automatic Irish number provisioning.",
+        description: "Activate the starter plan to begin Presvo number provisioning.",
         badgeLabel: "Plan required",
         badgeVariant: "secondary" as const,
         icon: CreditCard,
@@ -160,10 +160,10 @@ function StatusActionLink({ action }: { action: StatusAction }) {
     );
   }
 
-  if (action === "receptionist") {
+  if (action === "activation") {
     return (
       <Button asChild variant="secondary">
-        <Link href="/dashboard/agent">Open receptionist settings</Link>
+        <Link href="/activate">Review activation</Link>
       </Button>
     );
   }

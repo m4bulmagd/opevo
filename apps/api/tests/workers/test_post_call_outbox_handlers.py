@@ -373,6 +373,47 @@ async def test_summary_handler_empty_transcript_is_successful_noop(
 
 
 @pytest.mark.anyio
+async def test_summary_handler_rejects_deleted_call_without_recreating_metadata(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(
+        user_id=active_user.id,
+        status="completed",
+        duration_seconds=1,
+        deleted_at=datetime.now(UTC),
+    )
+    db_session.add(call)
+    await db_session.commit()
+    call_id = call.id
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_summary_generate(
+            {"session_factory": factory},
+            event(
+                call_id=call_id,
+                topic="summary.generate",
+                aggregate_type="call-summary",
+            ),
+        )
+
+    assert exc_info.value.error_code == "provider_terminal"
+    assert exc_info.value.retryable is False
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert stored is not None
+    assert stored.summary_text is None
+    assert stored.summary_data is None
+    assert stored.summary_transcript_max_sequence is None
+    assert stored.recording_object_key is None
+    assert stored.recording_url is None
+    assert stored.recording_egress_id is None
+
+
+@pytest.mark.anyio
 async def test_summary_handler_provider_failure_is_retryable(
     db_session,
     active_user,

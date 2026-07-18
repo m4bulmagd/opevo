@@ -205,6 +205,27 @@ class S3Storage(StorageProvider):
             object_key,
         )
 
+    @instrument_provider("s3", "delete_object")
+    async def delete_object(self, *, object_key: str) -> None:
+        client = self._get_client()
+        await self._run_application_call(self._ensure_bucket_exists, client)
+        try:
+            await asyncio.to_thread(
+                client.remove_object,
+                self.bucket_name,
+                object_key,
+            )
+        except S3Error as exc:
+            if exc.code == "NoSuchBucket":
+                raise StorageConfigurationError(
+                    "Configured storage bucket is unavailable"
+                ) from None
+            if exc.code in {"NoSuchKey", "NoSuchObject", "NoSuchVersion"}:
+                return
+            self._raise_provider_error(exc)
+        except Exception as exc:
+            self._raise_provider_error(exc)
+
     @instrument_provider("s3", "get_bucket_lifecycle")
     async def get_bucket_lifecycle(self):
         client = self._get_client()
