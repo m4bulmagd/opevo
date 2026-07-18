@@ -31,7 +31,9 @@ from app.repositories.phone_number_provisioning_repository import (
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.services.outbox_service import OutboxService
 from app.services.activation_provisioning_service import ActivationProvisioningService
+from app.services.activation_go_live_service import ActivationGoLiveService
 from app.services.onboarding_service import OnboardingRetryNotAllowedError, OnboardingService
+from app.services.routing_fingerprint import routing_fingerprint
 
 
 PROVISIONING_NOW = datetime(2026, 7, 18, 9, 0, tzinfo=UTC)
@@ -280,6 +282,122 @@ async def test_concurrent_onboarding_retry_creates_one_new_attempt(
         assert provisioning.status == "queued"
         assert provisioning.attempt_count == 3
         assert len(events) == 1
+
+
+@pytest.mark.anyio
+async def test_concurrent_go_live_commands_create_one_durable_attempt(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+    async with outbox_session_factory() as session:
+        user = User(
+            clerk_user_id=f"go_live_{uuid4().hex}",
+            email=f"go_live_{uuid4().hex}@example.com",
+            country_code="FR",
+        )
+        session.add(user)
+        await session.flush()
+        profile = BusinessProfile(
+            user_id=user.id,
+            owner_name="Camille Martin",
+            business_name="Atelier Martin",
+            business_type="Plomberie",
+            public_description="Dépannage.",
+            timezone="Europe/Paris",
+            business_hours=_valid_business_hours(),
+            existing_phone_e164="+33199000400",
+            confirmed_carrier="orange",
+            receptionist_name="Léa",
+            content_revision=2,
+            routing_revision=2,
+        )
+        activation = CustomerActivation(
+            user_id=user.id,
+            profile_confirmed_revision=profile.content_revision,
+            profile_confirmed_at=now - timedelta(hours=2),
+            provisioning_consented_at=now - timedelta(hours=1),
+            verification_status="succeeded",
+            forwarding_verified_at=now - timedelta(minutes=30),
+        )
+        phone = PhoneNumber(
+            user_id=user.id,
+            e164="+33999000400",
+            country_code="FR",
+            provider="fake",
+            provider_number_id="fake-number-concurrent-go-live",
+            provider_connection_name="app-disabled",
+            is_active=False,
+        )
+        config = AgentConfig(
+            user_id=user.id,
+            agent_name="Léa",
+            business_display_name="Atelier Martin",
+            owner_context="Camille Martin at Atelier Martin",
+            system_prompt="Answer missed calls professionally.",
+            knowledge_base="Open weekdays.",
+            is_enabled=False,
+            profile_projection_revision=profile.content_revision,
+        )
+        session.add_all(
+            [
+                profile,
+                activation,
+                phone,
+                config,
+                Subscription(
+                    user_id=user.id,
+                    stripe_customer_id=f"cus_{uuid4().hex}",
+                    stripe_subscription_id=f"sub_{uuid4().hex}",
+                    plan_tier="starter",
+                    status="active",
+                    allocated_minutes=60,
+                    current_period_start=now - timedelta(days=1),
+                    current_period_end=now + timedelta(days=29),
+                ),
+                UsageLedger(
+                    user_id=user.id,
+                    event_type="subscription_activated",
+                    source_id=f"in_{uuid4().hex}",
+                    minutes_delta=60,
+                    balance_after=60,
+                ),
+            ]
+        )
+        await session.flush()
+        activation.verified_routing_fingerprint = routing_fingerprint(profile, phone)
+        session.add(
+            PhoneNumberProvisioning(
+                user_id=user.id,
+                phone_number_id=phone.id,
+                target_country_code="FR",
+                status="succeeded",
+                attempt_count=1,
+                can_retry=False,
+                provider_operation_key=f"activation:phone.provision:{activation.id}",
+            )
+        )
+        await session.commit()
+        user_id = user.id
+
+    async def go_live():
+        async with outbox_session_factory() as session:
+            return await ActivationGoLiveService(
+                session,
+                now_provider=lambda: now,
+            ).go_live(user_id, arq_pool=None)
+
+    first, second = await asyncio.gather(go_live(), go_live())
+
+    assert first.stage == second.stage == "activating"
+    async with outbox_session_factory() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(OutboxEvent)
+        ) == 1
+        assert await session.scalar(
+            select(func.count())
+            .select_from(ActivationEvent)
+            .where(ActivationEvent.event_type == "go_live_requested")
+        ) == 1
 
 
 @pytest.mark.anyio

@@ -6,8 +6,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import report_safe_exception
+from app.core.config import get_settings
 from app.repositories.agent_config_repository import AgentConfigRepository
+from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.call_repository import CallRepository
+from app.repositories.customer_activation_repository import (
+    CustomerActivationRepository,
+)
+from app.repositories.phone_number_provisioning_repository import (
+    PhoneNumberProvisioningRepository,
+)
 from app.repositories.phone_number_repository import (
     PhoneNumberRepository,
     normalize_phone_number,
@@ -17,9 +25,8 @@ from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.providers.telephony.telnyx import normalize_french_number
 from app.services.call_lifecycle_service import CallLifecycleService
-from app.services.customer_readiness_policy import CustomerReadinessPolicy
 from app.services.customer_readiness_service import (
-    build_customer_readiness_snapshot,
+    evaluate_customer_readiness,
 )
 from app.services.inbound_verification_service import InboundVerificationService
 from app.services.livekit_recording_service import LiveKitRecordingService
@@ -93,6 +100,9 @@ class LiveKitDispatchService:
         user_repository: UserRepository | None = None,
         usage_repository: UsageRepository | None = None,
         subscription_repository: SubscriptionRepository | None = None,
+        business_profile_repository: BusinessProfileRepository | None = None,
+        activation_repository: CustomerActivationRepository | None = None,
+        provisioning_repository: PhoneNumberProvisioningRepository | None = None,
         inbound_verification_service: InboundVerificationService | None = None,
         outbox_service: OutboxService | None = None,
         realtime_service: RealtimeService | None,
@@ -112,6 +122,15 @@ class LiveKitDispatchService:
         self.user_repository = user_repository or UserRepository(session)
         self.usage_repository = usage_repository or UsageRepository(session)
         self.subscription_repository = subscription_repository or SubscriptionRepository(session)
+        self.business_profile_repository = (
+            business_profile_repository or BusinessProfileRepository(session)
+        )
+        self.activation_repository = (
+            activation_repository or CustomerActivationRepository(session)
+        )
+        self.provisioning_repository = (
+            provisioning_repository or PhoneNumberProvisioningRepository(session)
+        )
         self.inbound_verification_service = (
             inbound_verification_service
             or InboundVerificationService(
@@ -227,8 +246,23 @@ class LiveKitDispatchService:
             await self._best_effort_outbox_wakeup()
             return DispatchJoinResult("verification_claimed")
 
+        settings = get_settings()
+        activation = None
+        business_profile = None
+        if settings.activation_flow_enabled:
+            activation = await self.activation_repository.get_by_user_id_for_update(
+                user.id
+            )
+            business_profile = (
+                await self.business_profile_repository.get_by_user_id_for_update(
+                    user.id
+                )
+            )
         phone_number = await self.phone_number_repository.get_by_e164_for_update(
             normalized_called_number
+        )
+        provisioning = await self.provisioning_repository.get_by_user_id_for_update(
+            user.id
         )
         subscription = await self.subscription_repository.get_by_user_id_for_update(
             user.id
@@ -245,15 +279,16 @@ class LiveKitDispatchService:
             and phone_number.user_id == user.id
             and phone_number.e164 == normalized_called_number
         )
-        readiness = CustomerReadinessPolicy.evaluate(
-            build_customer_readiness_snapshot(
-                user=user,
-                subscription=subscription,
-                balance=balance,
-                phone_number=phone_number,
-                provisioning=None,
-                agent_config=agent_config,
-            ),
+        readiness = evaluate_customer_readiness(
+            user=user,
+            subscription=subscription,
+            balance=balance,
+            phone_number=phone_number,
+            provisioning=provisioning,
+            agent_config=agent_config,
+            business_profile=business_profile,
+            activation=activation,
+            activation_required=settings.activation_flow_enabled,
             now=self.now_provider(),
         )
         eligible = readiness.can_dispatch(

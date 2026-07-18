@@ -19,6 +19,10 @@ from app.services.activation_snapshot_service import (
     ActivationSnapshotService,
     ActivationSnapshotUnavailableError,
 )
+from app.services.activation_go_live_service import (
+    ActivationGoLiveBlockedError,
+    ActivationGoLiveService,
+)
 from app.services.activation_provisioning_service import (
     ActivationProvisioningBlockedError,
     ActivationProvisioningService,
@@ -54,6 +58,12 @@ def get_activation_provisioning_service(
     session: AsyncSession = Depends(get_session),
 ) -> ActivationProvisioningService:
     return ActivationProvisioningService(session)
+
+
+def get_activation_go_live_service(
+    session: AsyncSession = Depends(get_session),
+) -> ActivationGoLiveService:
+    return ActivationGoLiveService(session)
 
 
 def get_business_profile_service(
@@ -207,6 +217,31 @@ async def open_verification_window(
         identity.internal_user_id,
         snapshot_service,
     )
+
+
+@router.post(
+    "/api/activation/go-live",
+    response_model=ActivationSnapshotResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def go_live(
+    request: Request,
+    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    service: ActivationGoLiveService = Depends(get_activation_go_live_service),
+) -> ActivationSnapshotResponse:
+    try:
+        return await service.go_live(
+            identity.internal_user_id,
+            arq_pool=getattr(request.app.state, "arq_pool", None),
+        )
+    except ActivationGoLiveBlockedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "go_live_blocked",
+                "blockers": list(error.blockers),
+            },
+        ) from None
 
 
 @router.post("/api/activation/verification/{session_id}/complete")

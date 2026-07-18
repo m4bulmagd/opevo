@@ -8,9 +8,14 @@ from app.core.config import get_settings
 from app.core.dispatch_token import create_dispatch_token
 from app.core.verification_token import create_verification_token
 from app.core.database import get_session_factory
+from app.models.agent_config import AgentConfig
+from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.models.phone_number_provisioning import PhoneNumberProvisioning
+from app.models.subscription import Subscription
+from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
 from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
@@ -18,6 +23,7 @@ from app.providers.summaries.gemini import GeminiSummaryProvider
 from app.providers.telephony.base import TelephonyProviderError
 from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.agent_config_repository import AgentConfigRepository
+from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.call_repository import CallRepository
 from app.repositories.customer_activation_repository import (
     CustomerActivationRepository,
@@ -31,9 +37,14 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.usage_repository import UsageRepository
 from app.schemas.livekit import LiveKitDispatchMetadata, VerificationDispatchMetadata
-from app.services.customer_readiness_policy import CustomerReadinessPolicy
+from app.services.activation_go_live_service import (
+    is_current_go_live_event,
+    is_go_live_event,
+    mark_current_go_live_succeeded,
+)
+from app.services.customer_readiness_policy import CustomerReadinessResult
 from app.services.customer_readiness_service import (
-    build_customer_readiness_snapshot,
+    evaluate_customer_readiness,
 )
 from app.services.livekit_dispatch_service import (
     calculate_allowed_duration,
@@ -50,11 +61,18 @@ from app.workers.jobs.phone_provisioning import phone_provisioning_job
 
 @dataclass(frozen=True)
 class _RoutingSnapshot:
-    phone_number_id: UUID
+    user: User
+    activation: CustomerActivation | None
+    business_profile: BusinessProfile | None
+    phone_number: PhoneNumber
+    provisioning: PhoneNumberProvisioning | None
+    subscription: Subscription | None
+    agent_config: AgentConfig | None
+    balance: int
+    readiness: CustomerReadinessResult
+    current_go_live_attempt: bool
     provider_number_id: str
     should_enable: bool
-    is_active: bool
-    provider_connection_name: str | None
 
 
 @dataclass(frozen=True)
@@ -136,7 +154,7 @@ async def deliver_phone_routing(
     user_id = UUID(event.payload["user_id"])
     session_factory = ctx.get("session_factory") or get_session_factory()
     async with session_factory() as session:
-        snapshot = await _routing_snapshot(session, user_id)
+        snapshot = await _routing_snapshot(session, user_id, event=event)
         await session.commit()
 
     if snapshot is None:
@@ -164,52 +182,130 @@ async def deliver_phone_routing(
         raise OutboxDeliveryError("provider_retryable", retryable=True)
 
     async with session_factory() as session:
-        current = await _routing_snapshot(session, user_id)
+        current = await _routing_snapshot(session, user_id, event=event)
         if current is None:
             await session.rollback()
             return
-        if current.should_enable != snapshot.should_enable:
+        if (
+            current.phone_number.id != snapshot.phone_number.id
+            or current.should_enable != snapshot.should_enable
+        ):
             await session.rollback()
             raise OutboxDeliveryError("provider_retryable", retryable=True)
-        phone_number = await session.get(
-            PhoneNumber,
-            snapshot.phone_number_id,
-            with_for_update=True,
-        )
-        if phone_number is None:
-            await session.rollback()
-            return
+        phone_number = current.phone_number
         phone_number.provider_connection_name = provider_connection_name
         phone_number.is_active = provider_connection_name == "app-active"
+        readiness = evaluate_customer_readiness(
+            user=current.user,
+            subscription=current.subscription,
+            balance=current.balance,
+            phone_number=phone_number,
+            provisioning=current.provisioning,
+            agent_config=current.agent_config,
+            business_profile=current.business_profile,
+            activation=current.activation,
+            activation_required=get_settings().activation_flow_enabled,
+        )
+        if (
+            provider_connection_name == "app-active"
+            and current.current_go_live_attempt
+            and current.activation is not None
+            and readiness.can_route
+        ):
+            now_provider = ctx.get("routing_now") or (lambda: datetime.now(UTC))
+            await mark_current_go_live_succeeded(
+                session,
+                event=event,
+                activation=current.activation,
+                succeeded_at=now_provider(),
+            )
         await session.commit()
 
 
-async def _routing_snapshot(session, user_id: UUID) -> _RoutingSnapshot | None:
-    phone_number = await PhoneNumberRepository(session).get_by_user_id(user_id)
+async def _routing_snapshot(
+    session,
+    user_id: UUID,
+    *,
+    event: OutboxEvent | None = None,
+) -> _RoutingSnapshot | None:
+    user = await UserRepository(session).get_by_id_for_update(user_id)
+    if user is None:
+        return None
+    activation_flow_enabled = get_settings().activation_flow_enabled
+    activation = None
+    business_profile = None
+    if activation_flow_enabled:
+        activation = await CustomerActivationRepository(
+            session
+        ).get_by_user_id_for_update(user_id)
+        business_profile = await BusinessProfileRepository(
+            session
+        ).get_by_user_id_for_update(user_id)
+    phone_number = await PhoneNumberRepository(session).get_by_user_id_for_update(
+        user_id
+    )
     if phone_number is None:
+        if (
+            event is not None
+            and activation_flow_enabled
+            and is_current_go_live_event(event, activation)
+        ):
+            raise OutboxDeliveryError("dispatch_ineligible", retryable=False)
         return None
     if not phone_number.provider_number_id:
         raise OutboxDeliveryError("provider_terminal", retryable=False)
-    user = await UserRepository(session).get_by_id(user_id)
-    subscription = await SubscriptionRepository(session).get_by_user_id(user_id)
-    agent_config = await AgentConfigRepository(session).get_by_user_id(user_id)
-    balance = await UsageRepository(session).get_current_balance(user_id=user_id)
-    readiness = CustomerReadinessPolicy.evaluate(
-        build_customer_readiness_snapshot(
-            user=user,
-            subscription=subscription,
-            balance=balance,
-            phone_number=phone_number,
-            provisioning=None,
-            agent_config=agent_config,
-        )
+    provisioning = await PhoneNumberProvisioningRepository(
+        session
+    ).get_by_user_id_for_update(user_id)
+    subscription = await SubscriptionRepository(session).get_by_user_id_for_update(
+        user_id
     )
+    agent_config = await AgentConfigRepository(session).get_by_user_id_for_update(
+        user_id
+    )
+    balance = await UsageRepository(session).get_current_balance(user_id=user_id)
+    readiness = evaluate_customer_readiness(
+        user=user,
+        subscription=subscription,
+        balance=balance,
+        phone_number=phone_number,
+        provisioning=provisioning,
+        agent_config=agent_config,
+        business_profile=business_profile,
+        activation=activation,
+        activation_required=activation_flow_enabled,
+    )
+    current_go_live_attempt = bool(
+        event is not None
+        and activation_flow_enabled
+        and is_current_go_live_event(event, activation)
+    )
+    if event is not None and activation_flow_enabled and event.topic == "phone.enable":
+        pending_go_live = bool(
+            activation is not None
+            and activation.go_live_requested_at is not None
+            and activation.go_live_approved_at is not None
+            and activation.activated_at is None
+        )
+        if is_go_live_event(event) and not current_go_live_attempt:
+            return None
+        if pending_go_live and not current_go_live_attempt:
+            return None
+        if current_go_live_attempt and not readiness.should_enable_phone:
+            raise OutboxDeliveryError("dispatch_ineligible", retryable=False)
     return _RoutingSnapshot(
-        phone_number_id=phone_number.id,
+        user=user,
+        activation=activation,
+        business_profile=business_profile,
+        phone_number=phone_number,
+        provisioning=provisioning,
+        subscription=subscription,
+        agent_config=agent_config,
+        balance=balance,
+        readiness=readiness,
+        current_go_live_attempt=current_go_live_attempt,
         provider_number_id=phone_number.provider_number_id,
         should_enable=readiness.should_enable_phone,
-        is_active=phone_number.is_active,
-        provider_connection_name=phone_number.provider_connection_name,
     )
 
 
@@ -327,8 +423,16 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
             )
         await session.refresh(call)
 
-        # Keep this order aligned with webhook admission: phone, subscription,
-        # then agent config after the User row serialization boundary.
+        settings = get_settings()
+        activation = None
+        business_profile = None
+        if settings.activation_flow_enabled:
+            activation = await CustomerActivationRepository(
+                session
+            ).get_by_user_id_for_update(call.user_id)
+            business_profile = await BusinessProfileRepository(
+                session
+            ).get_by_user_id_for_update(call.user_id)
         phone = (
             await PhoneNumberRepository(session).get_by_id_for_update(
                 call.phone_number_id
@@ -336,6 +440,9 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
             if call.phone_number_id is not None
             else None
         )
+        provisioning = await PhoneNumberProvisioningRepository(
+            session
+        ).get_by_user_id_for_update(call.user_id)
         subscription = await SubscriptionRepository(session).get_by_user_id_for_update(
             call.user_id
         )
@@ -358,15 +465,16 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
             and phone.user_id == call.user_id
             and bool(phone.e164)
         )
-        readiness = CustomerReadinessPolicy.evaluate(
-            build_customer_readiness_snapshot(
-                user=user,
-                subscription=subscription,
-                balance=balance,
-                phone_number=phone,
-                provisioning=None,
-                agent_config=agent_config,
-            )
+        readiness = evaluate_customer_readiness(
+            user=user,
+            subscription=subscription,
+            balance=balance,
+            phone_number=phone,
+            provisioning=provisioning,
+            agent_config=agent_config,
+            business_profile=business_profile,
+            activation=activation,
+            activation_required=settings.activation_flow_enabled,
         )
         eligible = bool(
             user.status == "active"
@@ -382,7 +490,6 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
             )
 
         try:
-            settings = get_settings()
             worker_name = settings.livekit_agent_name.strip()
             if not worker_name:
                 raise ValueError("LiveKit agent worker name is not configured")

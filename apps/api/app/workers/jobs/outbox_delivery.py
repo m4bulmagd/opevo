@@ -10,6 +10,7 @@ from app.core.observability import bind_call_id, get_observability
 from app.models.outbox_event import OutboxEvent
 from app.repositories.call_repository import CallRepository
 from app.repositories.outbox_repository import OutboxRepository
+from app.services.activation_go_live_service import fail_current_go_live_attempt
 from app.services.outbox_service import OutboxPayloadError, validate_outbox_payload
 
 
@@ -150,6 +151,10 @@ async def outbox_delivery_job(
                         session,
                         event=stored,
                         error_code=error_code,
+                    )
+                    await fail_current_go_live_attempt(
+                        session,
+                        event=stored,
                     )
                 await session.commit()
             if stored is None:

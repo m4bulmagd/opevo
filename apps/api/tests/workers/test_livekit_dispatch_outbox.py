@@ -17,6 +17,18 @@ from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_deliver
 from app.workers.jobs.outbox_topics import deliver_livekit_dispatch
 
 
+@pytest.fixture(autouse=True)
+def _activation_flow_defaults_off_for_legacy_outbox_tests(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 class _Provider:
     def __init__(
         self, *, timeout_after_create: bool = False, always_fail: bool = False
@@ -255,11 +267,50 @@ async def test_activation_flow_missing_business_name_fails_dispatch_closed(
     db_session,
     monkeypatch,
 ) -> None:
-    _call, event, _subscription = await _seed_dispatch(
+    call, event, _subscription = await _seed_dispatch(
         db_session,
         owner_name="Legacy Owner",
         business_display_name=None,
     )
+    from app.models.business_profile import BusinessProfile
+    from app.models.customer_activation import CustomerActivation
+    from app.services.routing_fingerprint import routing_fingerprint
+
+    phone = await db_session.get(PhoneNumber, call.phone_number_id)
+    config = await db_session.get(AgentConfig, call.agent_config_id)
+    assert phone is not None
+    assert config is not None
+    now = datetime.now(UTC)
+    profile = BusinessProfile(
+        user_id=call.user_id,
+        owner_name="Legacy Owner",
+        business_name="Atelier Nord",
+        business_type="Plomberie",
+        public_description="Dépannage et installation.",
+        timezone="Europe/Paris",
+        business_hours={"monday": {"closed": True, "intervals": []}},
+        existing_phone_e164="+33199000300",
+        confirmed_carrier="orange",
+        receptionist_name="Ava",
+        content_revision=2,
+        routing_revision=2,
+    )
+    activation = CustomerActivation(
+        user_id=call.user_id,
+        profile_confirmed_revision=profile.content_revision,
+        profile_confirmed_at=now - timedelta(hours=2),
+        provisioning_consented_at=now - timedelta(hours=1),
+        verification_status="succeeded",
+        forwarding_verified_at=now - timedelta(minutes=10),
+        go_live_requested_at=now - timedelta(minutes=5),
+        go_live_approved_at=now - timedelta(minutes=5),
+        activated_at=now - timedelta(minutes=4),
+    )
+    config.profile_projection_revision = profile.content_revision
+    db_session.add_all([profile, activation])
+    await db_session.flush()
+    activation.verified_routing_fingerprint = routing_fingerprint(profile, phone)
+    await db_session.commit()
     provider = _Provider()
     monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
     from app.core.config import get_settings
