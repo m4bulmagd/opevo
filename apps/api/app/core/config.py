@@ -56,7 +56,11 @@ class Settings(BaseSettings):
     call_reconciliation_finalizing_lease_seconds: int = Field(default=300, ge=1)
     call_reconciliation_max_attempts: int = Field(default=5, ge=1, le=5)
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        hide_input_in_errors=True,
+    )
 
     @model_validator(mode="after")
     def validate_connected_reconciliation_timeout(self) -> Self:

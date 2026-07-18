@@ -32,6 +32,25 @@ PRODUCTION_REQUIRED_SETTINGS = (
     "summary_model",
 )
 
+WORKER_PRODUCTION_REQUIRED_SETTINGS = (
+    "database_url",
+    "redis_url",
+    "livekit_url",
+    "livekit_api_key",
+    "livekit_api_secret",
+    "telnyx_api_key",
+    "telnyx_active_connection_id",
+    "telnyx_disabled_connection_id",
+    "storage_bucket_name",
+    "s3_endpoint_url",
+    "s3_access_key",
+    "s3_secret_key",
+    "s3_region",
+    "agent_dispatch_jwt_secret",
+    "summary_provider",
+    "summary_model",
+)
+
 
 def _is_missing(value: object) -> bool:
     if value is None:
@@ -67,11 +86,7 @@ def validate_api_runtime(settings: Settings) -> None:
             f"Missing or invalid required runtime settings: {', '.join(invalid_modes)}"
         )
 
-    if not is_dispatch_secret_safe(settings.agent_dispatch_jwt_secret):
-        raise RuntimeError(
-            "Missing or invalid required runtime settings: "
-            "AGENT_DISPATCH_JWT_SECRET"
-        )
+    _validate_dispatch_secret(settings)
 
     if environment != "production":
         return
@@ -100,4 +115,48 @@ def validate_api_runtime(settings: Settings) -> None:
     if missing:
         raise RuntimeError(
             f"Missing or invalid required production settings: {', '.join(missing)}"
+        )
+
+
+def validate_worker_runtime(settings: Settings) -> None:
+    environment = settings.app_env.strip().lower()
+    if environment == "development":
+        return
+
+    if settings.auth_mode != "clerk":
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: AUTH_MODE"
+        )
+
+    if environment == "production" and settings.telephony_mode != "telnyx":
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: TELEPHONY_MODE"
+        )
+
+    _validate_dispatch_secret(settings)
+
+    if environment != "production":
+        return
+
+    missing = _require(settings, WORKER_PRODUCTION_REQUIRED_SETTINGS)
+    if not settings.telnyx_ordering_enabled:
+        missing.append("TELNYX_ORDERING_ENABLED")
+
+    if not _is_missing(settings.summary_provider):
+        if settings.summary_provider == "gemini":
+            missing.extend(_require(settings, ("gemini_api_key",)))
+        else:
+            missing.append("SUMMARY_PROVIDER")
+
+    if missing:
+        raise RuntimeError(
+            f"Missing or invalid required production settings: {', '.join(missing)}"
+        )
+
+
+def _validate_dispatch_secret(settings: Settings) -> None:
+    if not is_dispatch_secret_safe(settings.agent_dispatch_jwt_secret):
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: "
+            "AGENT_DISPATCH_JWT_SECRET"
         )
