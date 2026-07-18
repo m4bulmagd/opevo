@@ -1,5 +1,4 @@
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -108,7 +107,8 @@ async def test_routing_uses_local_factory_without_injected_provider(
     db_session,
     active_user,
 ) -> None:
-    from app.workers.jobs.outbox_topics import deliver_phone_routing
+    from app.services.outbox_service import OutboxService
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
     user_id = active_user.id
     now = datetime.now(UTC)
@@ -152,13 +152,17 @@ async def test_routing_uses_local_factory_without_injected_provider(
             ),
         ]
     )
+    await OutboxService(db_session).add(
+        topic="phone.enable",
+        aggregate_type="user",
+        aggregate_id=user_id,
+        idempotency_key=f"test:phone.enable:{user_id}",
+        payload={"user_id": str(user_id)},
+    )
     await db_session.commit()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await deliver_phone_routing(
-        {"session_factory": session_factory},
-        SimpleNamespace(payload={"user_id": str(user_id)}),
-    )
+    result = await outbox_delivery_job({"session_factory": session_factory})
 
     db_session.expire_all()
     phone_number = await db_session.scalar(
@@ -168,3 +172,4 @@ async def test_routing_uses_local_factory_without_injected_provider(
     assert phone_number.provider_number_id == provider_number_id
     assert phone_number.provider_connection_name == "app-active"
     assert phone_number.is_active is True
+    assert result == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
