@@ -147,7 +147,10 @@ async def test_complete_verification_retries_transport_then_succeeds(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 409, 422])
+@pytest.mark.parametrize(
+    "status_code",
+    [400, 401, 403, 404, 409, 422, 600, 601],
+)
 async def test_complete_verification_rejects_permanent_status_without_retry(
     status_code: int,
 ) -> None:
@@ -169,6 +172,59 @@ async def test_complete_verification_rejects_permanent_status_without_retry(
             await client.complete_verification("session-1", "token-sentinel")
 
     assert attempts == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("log_level", [logging.INFO, logging.DEBUG])
+async def test_complete_verification_filters_http_client_urls_at_verbose_levels(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    log_level: int,
+) -> None:
+    session_id = "SESSION_URL_SENTINEL"
+    token = "VERIFICATION_TOKEN_SENTINEL"
+    base_url = "http://api.test/PATH_SENTINEL"
+    attempts = 0
+    monkeypatch.setattr(
+        api_client_module.asyncio,
+        "sleep",
+        lambda _delay: _completed_sleep(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(500, text="RESPONSE_BODY_SENTINEL")
+        return httpx.Response(
+            200,
+            json={"status": "verified", "session_id": session_id},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AgentApiClient(
+            base_url=base_url,
+            http_client=http_client,
+            max_retries=2,
+        )
+
+        with caplog.at_level(log_level):
+            logging.getLogger("httpcore.connection").log(
+                log_level,
+                "httpcore path=%s",
+                f"/PATH_SENTINEL/{session_id}",
+            )
+            await client.complete_verification(session_id, token)
+
+    assert "complete_verification attempt 1/2" in caplog.text
+    assert "classification=http status=500" in caplog.text
+    for sentinel in [
+        session_id,
+        token,
+        "PATH_SENTINEL",
+        "RESPONSE_BODY_SENTINEL",
+    ]:
+        assert sentinel not in caplog.text
 
 
 @pytest.mark.anyio

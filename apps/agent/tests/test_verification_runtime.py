@@ -313,8 +313,48 @@ class FakeVerificationApiClient:
             raise self.close_error
 
 
+class FakePublicClosingSession(FakeVerificationSession):
+    def __init__(self, events: list[object]) -> None:
+        super().__init__(events)
+        self.public_close_complete = False
+
+    def shutdown(self, **_kwargs: object) -> None:
+        pytest.fail("sync shutdown scheduled cleanup without awaiting it")
+
+    async def aclose(self) -> None:
+        self.events.append("session_aclose_started")
+        await asyncio.sleep(0)
+        self.public_close_complete = True
+        self.events.append("session_aclose_finished")
+
+
 def _runtime_module():
     return importlib.import_module("agent.verification_runtime")
+
+
+@pytest.mark.anyio
+async def test_verification_runtime_awaits_public_session_close_before_api_close() -> None:
+    runtime = _runtime_module()
+    metadata = schemas.parse_job_metadata(verification_metadata())
+    context = FakeVerificationContext()
+    events = context.events
+    session = FakePublicClosingSession(events)
+    api_client = FakeVerificationApiClient(events)
+
+    await runtime.run_forwarding_verification(
+        context,
+        metadata,
+        session_factory=lambda _provider: session,
+        agent_factory=object,
+        api_client_factory=lambda: api_client,
+    )
+
+    assert session.public_close_complete is True
+    assert events[-3:] == [
+        "session_aclose_started",
+        "session_aclose_finished",
+        "close_api",
+    ]
 
 
 @pytest.mark.anyio
