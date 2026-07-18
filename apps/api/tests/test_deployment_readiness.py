@@ -50,6 +50,10 @@ def base_settings() -> Settings:
         telnyx_active_connection_id="telnyx-active-connection",
         telnyx_disabled_connection_id="telnyx-disabled-connection",
         telnyx_ordering_enabled=True,
+        auth_mode="clerk",
+        billing_mode="stripe",
+        carrier_lookup_mode="telnyx",
+        telephony_mode="telnyx",
         storage_bucket_name="recordings",
         s3_endpoint_url="https://storage.example.com",
         s3_access_key="storage-access-key",
@@ -245,6 +249,48 @@ def test_development_accepts_fake_api_providers() -> None:
     validate_api_runtime(settings)
 
 
+@pytest.mark.parametrize(
+    ("field_name", "unsafe_value", "setting_name"),
+    [
+        ("auth_mode", "local", "AUTH_MODE"),
+        ("billing_mode", "fake", "BILLING_MODE"),
+        ("carrier_lookup_mode", "fake", "CARRIER_LOOKUP_MODE"),
+        ("telephony_mode", "fake", "TELEPHONY_MODE"),
+    ],
+)
+def test_production_requires_exact_provider_modes_without_echoing_values(
+    base_settings: Settings,
+    field_name: str,
+    unsafe_value: str,
+    setting_name: str,
+) -> None:
+    settings = base_settings.model_copy(update={field_name: unsafe_value})
+
+    with pytest.raises(RuntimeError, match=setting_name) as error:
+        validate_api_runtime(settings)
+
+    assert unsafe_value not in str(error.value)
+
+
+@pytest.mark.parametrize("app_env", ["test", "staging"])
+def test_every_non_development_environment_rejects_local_auth(
+    app_env: str,
+) -> None:
+    settings = Settings(
+        app_env=app_env,
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+        agent_dispatch_jwt_secret="runtime-dispatch-secret-with-at-least-32-bytes",
+        auth_mode="local",
+        local_auth_token="local-token-sentinel-that-must-not-be-reported",
+    )
+
+    with pytest.raises(RuntimeError, match="AUTH_MODE") as error:
+        validate_api_runtime(settings)
+
+    assert "local-token-sentinel-that-must-not-be-reported" not in str(error.value)
+
+
 @pytest.mark.parametrize("app_env", ["test", "staging"])
 @pytest.mark.parametrize(
     "unsafe_secret",
@@ -290,6 +336,10 @@ def test_api_import_rejects_invalid_production_settings_before_startup() -> None
         **os.environ,
         "APP_ENV": "production",
         "AGENT_DISPATCH_JWT_SECRET": "",
+        "AUTH_MODE": "clerk",
+        "BILLING_MODE": "stripe",
+        "CARRIER_LOOKUP_MODE": "telnyx",
+        "TELEPHONY_MODE": "telnyx",
     }
 
     result = subprocess.run(
@@ -477,6 +527,50 @@ def test_development_services_load_local_env_files_without_empty_secret_override
     assert "DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call" in api_service
     assert "API_BASE_URL: http://api:8000" in agent_service
     assert "API_BASE_URL: http://api:8000" in web_service
+
+
+def test_development_compose_scopes_local_identity_and_provider_modes() -> None:
+    compose_dev = (REPO_ROOT / "compose.dev.yaml").read_text()
+    api_env_example = (REPO_ROOT / "apps" / "api" / ".env.example").read_text()
+    api_service = compose_dev.split("\n  api:", 1)[1].split("\n  worker:", 1)[0]
+    worker_service = compose_dev.split("\n  worker:", 1)[1].split("\n  agent:", 1)[0]
+    web_service = compose_dev.split("\n  web:", 1)[1].split("\nvolumes:", 1)[0]
+
+    for setting in (
+        "AUTH_MODE: local",
+        "BILLING_MODE: fake",
+        "CARRIER_LOOKUP_MODE: fake",
+        "TELEPHONY_MODE: fake",
+        "LOCAL_AUTH_TOKEN: presvo-local-development-token",
+    ):
+        assert setting in api_service
+
+    assert "TELEPHONY_MODE: fake" in worker_service
+    for forbidden_setting in (
+        "AUTH_MODE:",
+        "BILLING_MODE:",
+        "CARRIER_LOOKUP_MODE:",
+        "LOCAL_AUTH_TOKEN:",
+    ):
+        assert forbidden_setting not in worker_service
+        assert forbidden_setting not in web_service
+    assert "NEXT_PUBLIC_LOCAL_AUTH_TOKEN" not in compose_dev
+
+    local_examples = (
+        "AUTH_MODE=local",
+        "LOCAL_AUTH_TOKEN=presvo-local-development-token",
+        "BILLING_MODE=fake",
+        "CARRIER_LOOKUP_MODE=fake",
+        "TELEPHONY_MODE=fake",
+    )
+    active_example_lines = {
+        line.strip()
+        for line in api_env_example.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    for example in local_examples:
+        assert f"# {example}" in api_env_example
+        assert example not in active_example_lines
 
 
 def test_worker_secrets_are_least_privilege_and_agent_shutdown_can_drain() -> None:

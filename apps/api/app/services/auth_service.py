@@ -1,23 +1,15 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import extract_primary_email
-from app.repositories.agent_config_repository import AgentConfigRepository
-from app.repositories.business_profile_repository import BusinessProfileRepository
-from app.repositories.customer_activation_repository import (
-    CustomerActivationRepository,
-)
-from app.repositories.user_repository import UserRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
+from app.services.user_bootstrap_service import UserBootstrapService
 
 
 class AuthService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
-        self.user_repository = UserRepository(session)
-        self.agent_config_repository = AgentConfigRepository(session)
-        self.business_profile_repository = BusinessProfileRepository(session)
-        self.customer_activation_repository = CustomerActivationRepository(session)
         self.webhook_event_repository = WebhookEventRepository(session)
+        self.user_bootstrap_service = UserBootstrapService(session)
 
     async def sync_clerk_user(
         self,
@@ -31,21 +23,12 @@ class AuthService:
             event_type=event_type,
             payload=payload,
         )
-        if not is_new_event:
-            await self.session.commit()
-            return False
-
-        user_data = payload["data"]
-        clerk_user_id = user_data["id"]
-        existing_user = await self.user_repository.get_by_clerk_user_id(clerk_user_id)
-        if existing_user is None:
-            user = await self.user_repository.create(
-                clerk_user_id=clerk_user_id,
+        if is_new_event:
+            user_data = payload["data"]
+            await self.user_bootstrap_service.ensure_user(
+                external_user_id=user_data["id"],
                 email=extract_primary_email(user_data),
             )
-            await self.agent_config_repository.create_default(user.id)
-            await self.business_profile_repository.get_or_create_for_update(user.id)
-            await self.customer_activation_repository.get_or_create_for_update(user.id)
 
         await self.session.commit()
-        return True
+        return is_new_event

@@ -48,6 +48,25 @@ def validate_api_runtime(settings: Settings) -> None:
     if environment == "development":
         return
 
+    invalid_modes: list[str] = []
+    if settings.auth_mode != "clerk":
+        invalid_modes.append("AUTH_MODE")
+    if environment == "production":
+        required_modes = {
+            "BILLING_MODE": (settings.billing_mode, "stripe"),
+            "CARRIER_LOOKUP_MODE": (settings.carrier_lookup_mode, "telnyx"),
+            "TELEPHONY_MODE": (settings.telephony_mode, "telnyx"),
+        }
+        invalid_modes.extend(
+            name
+            for name, (configured, required) in required_modes.items()
+            if configured != required
+        )
+    if invalid_modes:
+        raise RuntimeError(
+            f"Missing or invalid required runtime settings: {', '.join(invalid_modes)}"
+        )
+
     if not is_dispatch_secret_safe(settings.agent_dispatch_jwt_secret):
         raise RuntimeError(
             "Missing or invalid required runtime settings: "
