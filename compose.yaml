@@ -1,6 +1,7 @@
 x-worker-environment: &worker-environment
   APP_ENV: production
   TELEPHONY_MODE: telnyx
+  ACTIVATION_FLOW_ENABLED: ${ACTIVATION_FLOW_ENABLED:?ACTIVATION_FLOW_ENABLED is required}
   DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
   REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
   LIVEKIT_URL: ${LIVEKIT_URL:?LIVEKIT_URL is required}
@@ -97,6 +98,7 @@ services:
     <<: *service-hardening
     image: ${WEB_IMAGE:?WEB_IMAGE is required}
     environment:
+      AUTH_MODE: clerk
       API_BASE_URL: ${API_BASE_URL:?API_BASE_URL is required}
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?NEXT_PUBLIC_API_BASE_URL is required}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:?NEXT_PUBLIC_APP_URL is required}

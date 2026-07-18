@@ -206,7 +206,7 @@ async function executeActivationAction<TSchema extends z.ZodType, TResult>({
   }
 }
 
-export function saveBusinessProfileAction(input: unknown): Promise<ActivationActionResult<BusinessProfile>> {
+export async function saveBusinessProfileAction(input: unknown): Promise<ActivationActionResult<BusinessProfile>> {
   return executeActivationAction({
     input,
     schema: businessProfileSchema,
@@ -215,7 +215,7 @@ export function saveBusinessProfileAction(input: unknown): Promise<ActivationAct
   });
 }
 
-export function lookupCarrierAction(input: unknown = {}): Promise<ActivationActionResult<CarrierLookupResponse>> {
+export async function lookupCarrierAction(input: unknown = {}): Promise<ActivationActionResult<CarrierLookupResponse>> {
   return executeActivationAction({
     input,
     schema: emptyCommandSchema,
@@ -224,7 +224,7 @@ export function lookupCarrierAction(input: unknown = {}): Promise<ActivationActi
   });
 }
 
-export function confirmProfileAction(input: unknown = {}): Promise<ActivationActionResult> {
+export async function confirmProfileAction(input: unknown = {}): Promise<ActivationActionResult> {
   return executeActivationAction({
     input,
     schema: emptyCommandSchema,
@@ -233,7 +233,7 @@ export function confirmProfileAction(input: unknown = {}): Promise<ActivationAct
   });
 }
 
-export function confirmProvisioningAction(input: unknown = {}): Promise<ActivationActionResult> {
+export async function confirmProvisioningAction(input: unknown = {}): Promise<ActivationActionResult> {
   return executeActivationAction({
     input,
     schema: emptyCommandSchema,
@@ -242,7 +242,7 @@ export function confirmProvisioningAction(input: unknown = {}): Promise<Activati
   });
 }
 
-export function retryProvisioningAction(input: unknown = {}): Promise<ActivationActionResult> {
+export async function retryProvisioningAction(input: unknown = {}): Promise<ActivationActionResult> {
   return executeActivationAction({
     input,
     schema: emptyCommandSchema,
@@ -251,7 +251,7 @@ export function retryProvisioningAction(input: unknown = {}): Promise<Activation
   });
 }
 
-export function openVerificationWindowAction(input: unknown = {}): Promise<ActivationActionResult> {
+export async function openVerificationWindowAction(input: unknown = {}): Promise<ActivationActionResult> {
   return executeActivationAction({
     input,
     schema: emptyCommandSchema,
@@ -260,7 +260,7 @@ export function openVerificationWindowAction(input: unknown = {}): Promise<Activ
   });
 }
 
-export function goLiveAction(input: unknown = {}): Promise<ActivationActionResult> {
+export async function goLiveAction(input: unknown = {}): Promise<ActivationActionResult> {
   return executeActivationAction({
     input,
     schema: emptyCommandSchema,
@@ -269,7 +269,7 @@ export function goLiveAction(input: unknown = {}): Promise<ActivationActionResul
   });
 }
 
-export function activateDevelopmentStarterAction(input: unknown = {}): Promise<ActivationActionResult> {
+export async function activateDevelopmentStarterAction(input: unknown = {}): Promise<ActivationActionResult> {
   return executeActivationAction({
     input,
     schema: emptyCommandSchema,
@@ -305,7 +305,7 @@ export async function createActivationCheckoutAction(
   }
 }
 
-export function simulateDevelopmentForwardedCallAction(input: unknown = {}): Promise<ActivationActionResult> {
+export async function simulateDevelopmentForwardedCallAction(input: unknown = {}): Promise<ActivationActionResult> {
   return executeActivationAction({
     input,
     schema: emptyCommandSchema,

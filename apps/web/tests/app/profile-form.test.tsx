@@ -387,7 +387,8 @@ describe("profile form", () => {
 
     await waitFor(() => expect(confirmProfileMock).toHaveBeenCalledTimes(1));
     expect(order).toEqual(["save", "confirm"]);
-    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(pushMock).toHaveBeenCalledWith("/activate?milestone=number");
+    expect(refreshMock).not.toHaveBeenCalled();
   });
 
   it("does not navigate or confirm when the flush save fails", async () => {
