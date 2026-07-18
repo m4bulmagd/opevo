@@ -1,3 +1,4 @@
+import hmac
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from app.core.config import Settings, get_settings
 from app.core.database import get_session
 from app.core.logging import report_safe_exception
 from app.repositories.user_repository import UserRepository
+from app.services.user_bootstrap_service import UserBootstrapService
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +99,26 @@ class ClerkAuthProvider(AuthProvider):
         return self._jwk_client
 
 
+class LocalAuthProvider(AuthProvider):
+    def __init__(self, *, token: str) -> None:
+        self._token = token.encode("utf-8")
+
+    def verify_token(self, token: str) -> UserIdentity:
+        if not hmac.compare_digest(token.encode("utf-8"), self._token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token",
+            )
+        return UserIdentity(clerk_user_id="local_presvo_user")
+
+
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_auth_provider(request: Request) -> AuthProvider:
     settings = getattr(request.app.state, "settings", None) or get_settings()
+    if settings.auth_mode == "local":
+        return LocalAuthProvider(token=settings.local_auth_token)
     return ClerkAuthProvider(settings=settings)
 
 
@@ -128,13 +145,27 @@ async def require_user_identity(
             detail="Invalid token",
         ) from None
 
-    user = await UserRepository(session).get_by_clerk_user_id(identity.clerk_user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not synced")
+    if isinstance(auth_provider, LocalAuthProvider):
+        local_user = await UserBootstrapService(session).ensure_user(
+            external_user_id="local_presvo_user",
+            email="local@presvo.invalid",
+        )
+        await session.commit()
+        internal_user_id = local_user.id
+    else:
+        synced_user = await UserRepository(session).get_by_clerk_user_id(
+            identity.clerk_user_id
+        )
+        if synced_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not synced",
+            )
+        internal_user_id = synced_user.id
 
     return AuthenticatedUserIdentity(
         clerk_user_id=identity.clerk_user_id,
-        internal_user_id=user.id,
+        internal_user_id=internal_user_id,
     )
 
 

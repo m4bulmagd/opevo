@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     realtime_enabled: bool = False
     activation_flow_enabled: bool = False
     cors_allowed_origins: str | None = None
+    auth_mode: Literal["clerk", "local"] = "clerk"
+    local_auth_token: str = "presvo-local-development-token"
     clerk_issuer: str = ""
     clerk_audience: str | None = None
     clerk_jwt_key: str | None = None

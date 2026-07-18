@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
@@ -25,6 +25,18 @@ class UserRepository:
         self.session.add(user)
         await self.session.flush()
         return user
+
+    async def acquire_bootstrap_lock(self, *, external_user_id: str) -> None:
+        if self.session.get_bind().dialect.name != "postgresql":
+            return
+        await self.session.execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:lock_key, 0)"
+                ")"
+            ),
+            {"lock_key": f"user.bootstrap:{external_user_id}"},
+        )
 
     async def get_by_clerk_user_id(self, clerk_user_id: str) -> User | None:
         result = await self.session.execute(

@@ -1,4 +1,9 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
+
+from app.services.auth_service import AuthService
+from app.services.user_bootstrap_service import UserBootstrapService
 
 
 @pytest.mark.anyio
@@ -103,3 +108,57 @@ async def test_clerk_user_created_bootstraps_activation_aggregate_idempotently(
         "business_profile": 1,
         "customer_activation": 1,
     }
+
+
+@pytest.mark.anyio
+async def test_shared_user_bootstrap_flushes_without_committing(db_session) -> None:
+    service = UserBootstrapService(db_session)
+
+    commit = AsyncMock(wraps=db_session.commit)
+    flush = AsyncMock(wraps=db_session.flush)
+    with (
+        patch.object(db_session, "commit", commit),
+        patch.object(db_session, "flush", flush),
+    ):
+        user = await service.ensure_user(
+            external_user_id="shared_bootstrap_user",
+            email="shared@example.com",
+        )
+
+    assert user.clerk_user_id == "shared_bootstrap_user"
+    flush.assert_awaited()
+    commit.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_clerk_sync_delegates_once_and_keeps_one_final_commit_per_event(
+    db_session,
+    clerk_user_created_payload,
+) -> None:
+    service = AuthService(db_session)
+    bootstrap = getattr(service, "user_bootstrap_service", None)
+    assert bootstrap is not None, "AuthService must delegate to UserBootstrapService"
+    bootstrap.ensure_user = AsyncMock()
+    commit = AsyncMock(wraps=db_session.commit)
+
+    with patch.object(db_session, "commit", commit):
+        first = await service.sync_clerk_user(
+            clerk_user_created_payload,
+            event_id="evt_shared_bootstrap",
+            event_type="user.created",
+        )
+        duplicate = await service.sync_clerk_user(
+            clerk_user_created_payload,
+            event_id="evt_shared_bootstrap",
+            event_type="user.created",
+        )
+
+    assert first is True
+    assert duplicate is False
+    bootstrap.ensure_user.assert_awaited_once_with(
+        external_user_id=clerk_user_created_payload["data"]["id"],
+        email=clerk_user_created_payload["data"]["email_addresses"][0][
+            "email_address"
+        ],
+    )
+    assert commit.await_count == 2
