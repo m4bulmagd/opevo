@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from collections.abc import Iterator
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
@@ -96,6 +97,31 @@ class FakeRoomListEgressClient:
 
 class _EquivalentPath(str):
     pass
+
+
+class _RepeatedIteratorConstructionFailure:
+    def __iter__(self) -> Iterator[object]:
+        raise RuntimeError("repeated iterator unavailable")
+
+
+class _RepeatedIterationFailure:
+    def __iter__(self) -> Iterator[object]:
+        yield {"filename": "calls/user-1/call-1.ogg"}
+        raise RuntimeError("repeated iteration failed")
+
+
+class _InfiniteLikeRepeated:
+    def __init__(self) -> None:
+        self.inspections = 0
+
+    def __iter__(self) -> Iterator[object]:
+        return self
+
+    def __next__(self) -> object:
+        self.inspections += 1
+        if self.inspections > 65:
+            raise RuntimeError("repeated input consumed past sentinel")
+        return {"filename": "calls/user-1/call-1.ogg"}
 
 
 def twirp_error(*, code: str, status: int) -> api.TwirpError:
@@ -662,6 +688,45 @@ async def test_list_room_egresses_marks_malformed_mapping_paths_untrusted(
         endpoint_url="http://minio:9000",
     )
     assert evidence.state == "invalid"
+
+
+@pytest.mark.parametrize(
+    "repeated",
+    [_RepeatedIteratorConstructionFailure(), _RepeatedIterationFailure()],
+)
+@pytest.mark.parametrize("field_name", ["fileResults", "fileOutputs"])
+def test_object_key_evidence_contains_malformed_repeated_iteration(
+    field_name: str,
+    repeated: object,
+) -> None:
+    egress = (
+        {"fileResults": repeated}
+        if field_name == "fileResults"
+        else {"roomComposite": {"fileOutputs": repeated}}
+    )
+
+    evidence = normalized_egress_object_key_evidence(
+        egress,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert evidence.state == "invalid"
+    assert evidence.object_key is None
+
+
+def test_object_key_evidence_bounds_infinite_like_repeated_input() -> None:
+    repeated = _InfiniteLikeRepeated()
+
+    evidence = normalized_egress_object_key_evidence(
+        {"fileResults": repeated},
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert evidence.state == "invalid"
+    assert evidence.object_key is None
+    assert repeated.inspections == 65
 
 
 @pytest.mark.anyio

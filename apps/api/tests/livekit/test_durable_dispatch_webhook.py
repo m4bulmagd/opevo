@@ -1,3 +1,4 @@
+from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 
 import pytest
@@ -60,6 +61,83 @@ class _Pool:
         self.jobs.append((name, payload))
         if self.fail:
             raise RuntimeError("queue unavailable")
+
+
+class _CountingList(list[object]):
+    def __init__(
+        self,
+        values: list[object],
+        *,
+        fail_after: int | None = None,
+    ) -> None:
+        super().__init__(values)
+        self.fail_after = fail_after
+        self.visits = 0
+
+    def __iter__(self) -> Iterator[object]:
+        for value in super().__iter__():
+            self.visits += 1
+            if self.fail_after is not None and self.visits > self.fail_after:
+                raise RuntimeError("alias sequence consumed past its budget")
+            yield value
+
+
+class _MappingItemsFailure(Mapping[object, object]):
+    def __init__(self, *, phase: str, failure_type: type[BaseException]) -> None:
+        self.phase = phase
+        self.failure_type = failure_type
+
+    def __getitem__(self, key: object) -> object:
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[object]:
+        return iter(())
+
+    def __len__(self) -> int:
+        return 0
+
+    def items(self):
+        if self.phase == "construction":
+            raise self.failure_type("mapping items unavailable")
+
+        def broken_items():
+            yield ("safe", "safe")
+            raise self.failure_type("mapping items iteration failed")
+
+        return broken_items()
+
+
+class _AliasAbort(BaseException):
+    pass
+
+
+def _convert_event_with_duplicate_alias_extension(extension: object):
+    egress = {
+        "egressId": "EG_exact",
+        "roomName": "room-owned",
+        "status": 1,
+        "extension": extension,
+    }
+    return livekit_webhook_module._convert_livekit_event(
+        {
+            "id": "EV_bounded_alias",
+            "event": "egress_updated",
+            "egressInfo": egress,
+            "egress_info": egress,
+        },
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+
+def _assert_invalid_egress_alias_result(converted) -> None:
+    assert converted.path_state == "invalid"
+    assert converted.payload["egress"] == {
+        "egress_id": None,
+        "room_name": None,
+        "status": None,
+        "object_key": None,
+    }
 
 
 def _forbid_provider_and_storage_io(monkeypatch: pytest.MonkeyPatch) -> dict:
@@ -644,6 +722,60 @@ def test_convert_over_budget_alias_graph_fails_closed_without_provider_io(
         "object_key": None,
     }
     assert provider_calls == {"recording": 0, "storage": 0}
+
+
+def test_convert_alias_sequence_stops_before_post_budget_iterator_failure() -> None:
+    extension = _CountingList(list(range(600)), fail_after=300)
+
+    converted = _convert_event_with_duplicate_alias_extension(extension)
+
+    _assert_invalid_egress_alias_result(converted)
+    assert extension.visits <= 256
+
+
+def test_convert_alias_sequence_does_not_traverse_entire_large_input() -> None:
+    extension = _CountingList(list(range(600)))
+
+    converted = _convert_event_with_duplicate_alias_extension(extension)
+
+    _assert_invalid_egress_alias_result(converted)
+    assert extension.visits <= 256
+
+
+@pytest.mark.parametrize("phase", ["construction", "iteration"])
+def test_convert_mapping_alias_iteration_errors_fail_closed(phase: str) -> None:
+    extension = _MappingItemsFailure(phase=phase, failure_type=RuntimeError)
+
+    converted = _convert_event_with_duplicate_alias_extension(extension)
+
+    _assert_invalid_egress_alias_result(converted)
+
+
+def test_convert_mapping_alias_does_not_canonicalize_value_after_key_conflict() -> (
+    None
+):
+    cyclic_key: list[object] = []
+    cyclic_key.append(cyclic_key)
+    dangerous_value = _CountingList(["must-not-be-read"], fail_after=0)
+
+    class KeyConflictMapping(_MappingItemsFailure):
+        def items(self):
+            return iter(((cyclic_key, dangerous_value),))
+
+    converted = _convert_event_with_duplicate_alias_extension(
+        KeyConflictMapping(phase="iteration", failure_type=RuntimeError)
+    )
+
+    _assert_invalid_egress_alias_result(converted)
+    assert dangerous_value.visits == 0
+
+
+@pytest.mark.parametrize("phase", ["construction", "iteration"])
+def test_convert_mapping_alias_does_not_catch_base_exception(phase: str) -> None:
+    extension = _MappingItemsFailure(phase=phase, failure_type=_AliasAbort)
+
+    with pytest.raises(_AliasAbort):
+        _convert_event_with_duplicate_alias_extension(extension)
 
 
 @pytest.mark.parametrize(

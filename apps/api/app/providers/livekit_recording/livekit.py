@@ -32,6 +32,7 @@ _MISSING = object()
 _ALIAS_CONFLICT = object()
 _ALIAS_MAX_DEPTH = 12
 _ALIAS_MAX_NODES = 256
+_LIVEKIT_REPEATED_MAX_ITEMS = 64
 _LIVEKIT_ALIAS_NAMES = {
     "egressInfo": "egress_info",
     "egressId": "egress_id",
@@ -130,35 +131,41 @@ def _canonical_alias_value(
         traversal.active_containers.add(container_id)
         try:
             normalized: list[tuple[object, object]] = []
-            for key, item in value.items():
-                canonical_key_value = (
-                    _LIVEKIT_ALIAS_NAMES.get(key, key) if type(key) is str else key
-                )
-                canonical_key = _canonical_alias_value(
-                    canonical_key_value,
-                    traversal=traversal,
-                    depth=depth + 1,
-                )
-                canonical_item = _canonical_alias_value(
-                    item,
-                    traversal=traversal,
-                    depth=depth + 1,
-                )
-                if (
-                    canonical_key is _ALIAS_CONFLICT
-                    or canonical_item is _ALIAS_CONFLICT
-                ):
-                    return _ALIAS_CONFLICT
-                for existing_key, existing_item in normalized:
-                    if not _canonical_values_equivalent(existing_key, canonical_key):
-                        continue
-                    if not _canonical_values_equivalent(
-                        existing_item, canonical_item
-                    ):
+            try:
+                for key, item in value.items():
+                    canonical_key_value = (
+                        _LIVEKIT_ALIAS_NAMES.get(key, key)
+                        if type(key) is str
+                        else key
+                    )
+                    canonical_key = _canonical_alias_value(
+                        canonical_key_value,
+                        traversal=traversal,
+                        depth=depth + 1,
+                    )
+                    if canonical_key is _ALIAS_CONFLICT:
                         return _ALIAS_CONFLICT
-                    break
-                else:
-                    normalized.append((canonical_key, canonical_item))
+                    canonical_item = _canonical_alias_value(
+                        item,
+                        traversal=traversal,
+                        depth=depth + 1,
+                    )
+                    if canonical_item is _ALIAS_CONFLICT:
+                        return _ALIAS_CONFLICT
+                    for existing_key, existing_item in normalized:
+                        if not _canonical_values_equivalent(
+                            existing_key, canonical_key
+                        ):
+                            continue
+                        if not _canonical_values_equivalent(
+                            existing_item, canonical_item
+                        ):
+                            return _ALIAS_CONFLICT
+                        break
+                    else:
+                        normalized.append((canonical_key, canonical_item))
+            except Exception:
+                return _ALIAS_CONFLICT
             return _CanonicalMapping(tuple(normalized))
         finally:
             traversal.active_containers.remove(container_id)
@@ -168,19 +175,22 @@ def _canonical_alias_value(
             return _ALIAS_CONFLICT
         traversal.active_containers.add(container_id)
         try:
-            normalized_items = tuple(
-                _canonical_alias_value(
-                    item,
-                    traversal=traversal,
-                    depth=depth + 1,
-                )
-                for item in value
-            )
+            normalized_items: list[object] = []
+            try:
+                for item in value:
+                    canonical_item = _canonical_alias_value(
+                        item,
+                        traversal=traversal,
+                        depth=depth + 1,
+                    )
+                    if canonical_item is _ALIAS_CONFLICT:
+                        return _ALIAS_CONFLICT
+                    normalized_items.append(canonical_item)
+            except Exception:
+                return _ALIAS_CONFLICT
         finally:
             traversal.active_containers.remove(container_id)
-        if any(item is _ALIAS_CONFLICT for item in normalized_items):
-            return _ALIAS_CONFLICT
-        return _CanonicalSequence(normalized_items)
+        return _CanonicalSequence(tuple(normalized_items))
     return _CanonicalLeaf(value)
 
 
@@ -356,10 +366,16 @@ def _items(value: object) -> tuple[object, ...] | None:
         return None
     if isinstance(value, (str, bytes, Mapping)):
         return None
+    items: list[object] = []
     try:
-        return tuple(value)  # type: ignore[arg-type]
-    except TypeError:
+        iterator = iter(value)  # type: ignore[call-overload]
+        for index, item in enumerate(iterator):
+            if index == _LIVEKIT_REPEATED_MAX_ITEMS:
+                return None
+            items.append(item)
+    except Exception:
         return None
+    return tuple(items)
 
 
 def normalized_egress_object_key_evidence(
