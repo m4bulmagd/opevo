@@ -9,6 +9,7 @@ from app.providers.livekit_recording import base as recording_base
 from app.providers.livekit_recording.livekit import (
     LiveKitRecordingProvider,
     LiveKitRecordingProviderError,
+    normalized_egress_object_key_evidence,
 )
 
 
@@ -168,9 +169,7 @@ async def test_ensure_stopped_retries_when_initial_egress_lookup_is_missing() ->
     assert exc_info.value.error_class == "unavailable"
     assert str(exc_info.value) == "provider_retryable"
     assert client.stop_requests == []
-    assert telemetry.calls == [
-        ("livekit", "ensure_recording_stopped", "error")
-    ]
+    assert telemetry.calls == [("livekit", "ensure_recording_stopped", "error")]
     assert telemetry.error_classes == ["unavailable"]
 
 
@@ -222,9 +221,7 @@ async def test_ensure_stopped_reports_failed_terminal_egress_as_provider_error(
     assert exc_info.value.error_class == expected_error_class
     assert str(exc_info.value) == "provider_terminal"
     assert client.stop_requests == []
-    assert telemetry.calls == [
-        ("livekit", "ensure_recording_stopped", "error")
-    ]
+    assert telemetry.calls == [("livekit", "ensure_recording_stopped", "error")]
     assert telemetry.error_classes == [expected_error_class]
 
 
@@ -255,9 +252,7 @@ async def test_ensure_not_running_accepts_failed_terminal_egress_while_ensure_st
     assert exc_info.value.category == "provider_terminal"
     assert stop_job_client.stop_requests == []
     assert deletion_client.stop_requests == []
-    assert telemetry.calls == [
-        ("livekit", "ensure_recording_not_running", "success")
-    ]
+    assert telemetry.calls == [("livekit", "ensure_recording_not_running", "success")]
 
 
 @pytest.mark.anyio
@@ -272,9 +267,7 @@ async def test_ensure_not_running_accepts_failed_terminal_egress_while_ensure_st
 async def test_ensure_stopped_stops_and_rechecks_active_egress(
     active_status: int,
 ) -> None:
-    client = FakeEgressClient(
-        [[active_status], [api.EgressStatus.EGRESS_COMPLETE]]
-    )
+    client = FakeEgressClient([[active_status], [api.EgressStatus.EGRESS_COMPLETE]])
 
     await ensure_stopped(build_provider(client), "egress-1")
 
@@ -461,6 +454,9 @@ def test_recording_provider_error_start_outcome_is_immutable() -> None:
         None,
         SimpleNamespace(),
         SimpleNamespace(egress_id=""),
+        SimpleNamespace(egress_id="   "),
+        SimpleNamespace(egress_id="bad\x00id"),
+        SimpleNamespace(egress_id="E" * 256),
         SimpleNamespace(egress_id=object()),
     ],
 )
@@ -503,10 +499,7 @@ async def test_list_room_egresses_returns_sanitized_primitive_snapshots() -> Non
         ]
     )
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
-
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
     assert snapshots == (
         recording_base.RecordingEgressSnapshot(
             egress_id="egress-room-composite",
@@ -536,6 +529,105 @@ async def test_list_room_egresses_returns_sanitized_primitive_snapshots() -> Non
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "item",
+    [
+        {
+            "egressId": "egress-mapping",
+            "roomName": "room-owned",
+            "status": int(api.EgressStatus.EGRESS_ACTIVE),
+            "roomComposite": {"fileOutputs": [{"filepath": "calls/user-1/call-1.ogg"}]},
+        },
+        {
+            "egress_id": "egress-mapping",
+            "room_name": "room-owned",
+            "status": int(api.EgressStatus.EGRESS_ACTIVE),
+            "file_results": [{"filename": "calls/user-1/call-1.ogg"}],
+        },
+    ],
+)
+async def test_list_room_egresses_normalizes_mapping_aliases(item: dict) -> None:
+    client = FakeRoomListEgressClient([item])
+
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
+    assert snapshots == (
+        recording_base.RecordingEgressSnapshot(
+            egress_id="egress-mapping",
+            room_name="room-owned",
+            status=int(api.EgressStatus.EGRESS_ACTIVE),
+            object_key="calls/user-1/call-1.ogg",
+        ),
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "path_shape",
+    [
+        {"roomComposite": "not-an-object"},
+        {"roomComposite": {"file": "not-an-object"}},
+        {"roomComposite": {"file": {"filepath": None}}},
+        {"fileResults": [None]},
+        {"fileResults": ["not-an-object"]},
+        {
+            "room_composite": {"file": {"filepath": "calls/user-1/call-1.ogg"}},
+            "roomComposite": {"file": {"filepath": "calls/user-1/other.ogg"}},
+        },
+        {"fileResults": [{"filename": "calls/user-1/call-1.ogg\x00suffix"}]},
+        {"fileResults": [{"filename": "   "}]},
+    ],
+)
+async def test_list_room_egresses_marks_malformed_mapping_paths_untrusted(
+    path_shape: dict,
+) -> None:
+    item = {
+        "egressId": "egress-mapping",
+        "roomName": "room-owned",
+        "status": int(api.EgressStatus.EGRESS_ACTIVE),
+        **path_shape,
+    }
+
+    snapshots = await build_provider(
+        FakeRoomListEgressClient([item])
+    ).list_room_egresses(room_name="room-owned")
+
+    assert snapshots[0].object_key is None
+    evidence = normalized_egress_object_key_evidence(
+        item,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+    assert evidence.state == "invalid"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"egressId": "   ", "roomName": "room", "status": 1},
+        {"egressId": "bad\x00id", "roomName": "room", "status": 1},
+        {"egressId": "E" * 256, "roomName": "room", "status": 1},
+        {"egressId": "EG", "roomName": "bad\x00room", "status": 1},
+        {"egressId": "EG", "roomName": "   ", "status": 1},
+        {"egressId": "EG", "roomName": "R" * 256, "status": 1},
+        {
+            "egressId": "EG_first",
+            "egress_id": "EG_second",
+            "roomName": "room",
+            "status": 1,
+        },
+    ],
+)
+async def test_list_room_egresses_rejects_unsafe_mapping_identity(item: dict) -> None:
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await build_provider(FakeRoomListEgressClient([item])).list_room_egresses(
+            room_name="room-owned"
+        )
+
+    assert exc_info.value.error_class == "unknown"
+
+
+@pytest.mark.anyio
 async def test_list_room_egresses_normalizes_repeated_request_file_output() -> None:
     object_key = "calls/user-1/call-1.ogg"
     client = FakeRoomListEgressClient(
@@ -551,9 +643,7 @@ async def test_list_room_egresses_normalizes_repeated_request_file_output() -> N
         ]
     )
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
     assert snapshots[0].object_key == object_key
 
@@ -581,9 +671,7 @@ async def test_list_room_egresses_normalizes_legacy_file_shapes(
 ) -> None:
     client = FakeRoomListEgressClient([egress])
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
     assert snapshots[0].object_key == "calls/user-1/call-1.ogg"
 
@@ -623,9 +711,7 @@ async def test_list_room_egresses_normalizes_location_only_file_result(
         ]
     )
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
     assert snapshots[0].object_key == expected_object_key
 
@@ -651,16 +737,15 @@ async def test_list_room_egresses_prefers_filename_over_storage_locator() -> Non
         ]
     )
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
     assert snapshots[0].object_key == object_key
 
 
 @pytest.mark.anyio
-async def test_list_room_egresses_rejects_unprovable_location_with_composite_path(
-) -> None:
+async def test_list_room_egresses_rejects_unprovable_location_with_composite_path() -> (
+    None
+):
     object_key = "calls/user-1/call-1.ogg"
     client = FakeRoomListEgressClient(
         [
@@ -683,9 +768,7 @@ async def test_list_room_egresses_rejects_unprovable_location_with_composite_pat
         ]
     )
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
     assert snapshots[0].object_key is None
 
@@ -695,10 +778,7 @@ async def test_list_room_egresses_rejects_unprovable_location_with_composite_pat
     "unprovable_location",
     [
         "s3://different-bucket/calls/user-1/different-call.ogg",
-        (
-            "https://unrecognized.example/recordings/"
-            "calls/user-1/different-call.ogg"
-        ),
+        ("https://unrecognized.example/recordings/calls/user-1/different-call.ogg"),
     ],
 )
 async def test_list_room_egresses_rejects_unprovable_location_with_file_result(
@@ -719,9 +799,7 @@ async def test_list_room_egresses_rejects_unprovable_location_with_file_result(
         ]
     )
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
     assert snapshots[0].object_key is None
 
@@ -743,9 +821,7 @@ async def test_list_room_egresses_ignores_absent_file_info_path() -> None:
         ]
     )
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
     assert snapshots[0].object_key == object_key
 
@@ -763,16 +839,13 @@ async def test_list_room_egresses_sanitizes_malformed_location_only_result() -> 
         ]
     )
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
     assert snapshots[0].object_key is None
 
 
 @pytest.mark.anyio
-async def test_list_room_egresses_rejects_malformed_location_with_valid_path(
-) -> None:
+async def test_list_room_egresses_rejects_malformed_location_with_valid_path() -> None:
     object_key = "calls/user-1/call-1.ogg"
     client = FakeRoomListEgressClient(
         [
@@ -788,9 +861,7 @@ async def test_list_room_egresses_rejects_malformed_location_with_valid_path(
         ]
     )
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
     assert snapshots[0].object_key is None
 
@@ -806,8 +877,7 @@ async def test_list_room_egresses_sanitizes_malformed_configured_endpoint() -> N
                 file_results=[
                     api.FileInfo(
                         location=(
-                            "http://minio:9000/recordings/"
-                            "calls/user-1/call-1.ogg"
+                            "http://minio:9000/recordings/calls/user-1/call-1.ogg"
                         )
                     )
                 ],
@@ -832,19 +902,13 @@ async def test_list_room_egresses_fails_closed_for_conflicting_paths() -> None:
                 room_name="room-owned",
                 status=api.EgressStatus.EGRESS_ACTIVE,
                 room_composite=api.RoomCompositeEgressRequest(
-                    file=api.EncodedFileOutput(
-                        filepath="calls/user-1/call-1.ogg"
-                    )
+                    file=api.EncodedFileOutput(filepath="calls/user-1/call-1.ogg")
                 ),
-                file_results=[
-                    api.FileInfo(filename="calls/user-1/different-call.ogg")
-                ],
+                file_results=[api.FileInfo(filename="calls/user-1/different-call.ogg")],
             )
         ]
     )
 
-    snapshots = await build_provider(client).list_room_egresses(
-        room_name="room-owned"
-    )
+    snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
     assert snapshots[0].object_key is None

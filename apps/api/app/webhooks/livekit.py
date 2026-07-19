@@ -1,5 +1,8 @@
 import logging
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,16 +17,58 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
+from app.providers.livekit_recording.livekit import (
+    EgressObjectKeyEvidence,
+    normalized_egress_object_key_evidence,
+)
 from app.services.livekit_dispatch_service import (
     LiveKitDispatchService,
     normalize_participant_kind,
 )
 from app.services.livekit_recording_service import LiveKitRecordingService
+from app.services.recording_lifecycle_service import (
+    RecordingEgressEventFact,
+    RecordingLifecycleService,
+)
 from app.services.realtime_service import RealtimeService
 
 
 router = APIRouter(prefix="/webhooks", tags=["livekit"])
 logger = logging.getLogger(__name__)
+EGRESS_EVENT_TYPES = frozenset({"egress_started", "egress_updated", "egress_ended"})
+SAFE_LOG_EVENT_TYPES = EGRESS_EVENT_TYPES | frozenset(
+    {"participant_joined", "participant_left", "room_finished"}
+)
+_MISSING = object()
+_ALIAS_CONFLICT = object()
+
+
+@dataclass(frozen=True)
+class _ConvertedLiveKitEvent:
+    payload: dict
+    path_state: Literal["absent", "exact", "invalid"] | None = None
+
+
+def _field(value: object, *names: str) -> object:
+    if isinstance(value, Mapping):
+        candidates = [value[name] for name in names if name in value]
+    else:
+        candidates = []
+        for name in names:
+            candidate = getattr(value, name, _MISSING)
+            if candidate is not _MISSING:
+                candidates.append(candidate)
+    if not candidates:
+        return _MISSING
+    first = candidates[0]
+    for candidate in candidates[1:]:
+        try:
+            agrees = first == candidate
+        except Exception:
+            return _ALIAS_CONFLICT
+        if type(agrees) is not bool or not agrees:
+            return _ALIAS_CONFLICT
+    return first
 
 
 def get_realtime_service(request: Request) -> RealtimeService | None:
@@ -41,32 +86,89 @@ def get_webhook_receiver(request: Request):
     return api.WebhookReceiver(verifier)
 
 
-def convert_livekit_event(event) -> dict:
-    if isinstance(event, dict):
+def _convert_livekit_event(
+    event: object,
+    *,
+    bucket_name: str,
+    endpoint_url: str,
+) -> _ConvertedLiveKitEvent:
+    event_id = _field(event, "id")
+    event_type = _field(event, "event")
+    if type(event_type) is str and event_type in EGRESS_EVENT_TYPES:
+        egress = _field(event, "egress_info", "egressInfo", "egress")
+        evidence = (
+            EgressObjectKeyEvidence("invalid")
+            if egress is _ALIAS_CONFLICT
+            else normalized_egress_object_key_evidence(
+                egress,
+                bucket_name=bucket_name,
+                endpoint_url=endpoint_url,
+            )
+        )
+        return _ConvertedLiveKitEvent(
+            payload={
+                "id": None if event_id is _MISSING else event_id,
+                "event": event_type,
+                "egress": {
+                    "egress_id": _none_if_missing(
+                        _field(egress, "egress_id", "egressId")
+                    ),
+                    "room_name": _none_if_missing(
+                        _field(egress, "room_name", "roomName")
+                    ),
+                    "status": _none_if_missing(_field(egress, "status")),
+                    "object_key": evidence.object_key,
+                },
+            },
+            path_state=evidence.state,
+        )
+
+    if isinstance(event, Mapping):
         room = event.get("room") or {}
         participant = event.get("participant") or {}
-        return {
-            "id": event.get("id"),
-            "event": event.get("event"),
-            "room": {"name": room.get("name")},
-            "participant": {
-                "identity": participant.get("identity"),
-                "kind": normalize_participant_kind(participant.get("kind")),
-                "attributes": dict(participant.get("attributes") or {}),
-            },
-        }
+        return _ConvertedLiveKitEvent(
+            payload={
+                "id": event.get("id"),
+                "event": event.get("event"),
+                "room": {"name": room.get("name")},
+                "participant": {
+                    "identity": participant.get("identity"),
+                    "kind": normalize_participant_kind(participant.get("kind")),
+                    "attributes": dict(participant.get("attributes") or {}),
+                },
+            }
+        )
 
     participant = getattr(event, "participant", None)
-    return {
-        "id": getattr(event, "id", None),
-        "event": getattr(event, "event", None),
-        "room": {"name": getattr(getattr(event, "room", None), "name", None)},
-        "participant": {
-            "identity": getattr(participant, "identity", None),
-            "kind": normalize_participant_kind(getattr(participant, "kind", None)),
-            "attributes": dict(getattr(participant, "attributes", {}) or {}),
-        },
-    }
+    return _ConvertedLiveKitEvent(
+        payload={
+            "id": getattr(event, "id", None),
+            "event": getattr(event, "event", None),
+            "room": {"name": getattr(getattr(event, "room", None), "name", None)},
+            "participant": {
+                "identity": getattr(participant, "identity", None),
+                "kind": normalize_participant_kind(getattr(participant, "kind", None)),
+                "attributes": dict(getattr(participant, "attributes", {}) or {}),
+            },
+        }
+    )
+
+
+def _none_if_missing(value: object) -> object | None:
+    return None if value is _MISSING or value is _ALIAS_CONFLICT else value
+
+
+def convert_livekit_event(
+    event: object,
+    *,
+    bucket_name: str = "recordings",
+    endpoint_url: str = "http://minio:9000",
+) -> dict:
+    return _convert_livekit_event(
+        event,
+        bucket_name=bucket_name,
+        endpoint_url=endpoint_url,
+    ).payload
 
 
 @router.post("/livekit", status_code=status.HTTP_202_ACCEPTED)
@@ -82,22 +184,34 @@ async def handle_livekit_webhook(
     try:
         body = (await request.body()).decode("utf-8")
         event = webhook_receiver.receive(body, request.headers.get("authorization"))
-        event_payload = convert_livekit_event(event)
+        request_state = getattr(getattr(request, "app", None), "state", None)
+        settings = getattr(request_state, "settings", None) or get_settings()
+        converted = _convert_livekit_event(
+            event,
+            bucket_name=settings.storage_bucket_name,
+            endpoint_url=settings.s3_endpoint_url or "http://minio:9000",
+        )
+        event_payload = converted.payload
 
         event_id = event_payload.get("id")
         event_type = event_payload.get("event")
-        if not isinstance(event_id, str) or not event_id.strip():
+        if not _bounded_webhook_string(event_id, max_length=255):
             logger.warning(
                 "livekit webhook rejected event=missing_event_id event_type=%s",
-                event_type,
+                _safe_event_type(event_type),
             )
             return Response(status_code=status.HTTP_202_ACCEPTED)
+        if not _bounded_webhook_string(event_type, max_length=100):
+            logger.warning("livekit webhook rejected event=invalid_event_type")
+            return Response(status_code=status.HTTP_202_ACCEPTED)
+        event_id = cast(str, event_id)
+        event_type = cast(str, event_type)
 
         outcome = "error"
         is_new = await WebhookEventRepository(session).record_if_new(
             provider="livekit",
             external_event_id=event_id,
-            event_type=str(event_type or "unknown"),
+            event_type=event_type,
             payload={},
         )
         if not is_new:
@@ -107,11 +221,33 @@ async def handle_livekit_webhook(
 
         logger.info(
             "livekit webhook received event=%s participant_kind=%s",
-            event_type,
+            _safe_event_type(event_type),
             event_payload.get("participant", {}).get("kind"),
         )
 
-        if event_payload["event"] in ("participant_joined", "participant_left"):
+        if event_type in EGRESS_EVENT_TYPES:
+            egress = event_payload.get("egress", {})
+            await RecordingLifecycleService(session).accept_egress_event(
+                RecordingEgressEventFact(
+                    external_event_id=event_id,
+                    event_type=cast(
+                        Literal[
+                            "egress_started",
+                            "egress_updated",
+                            "egress_ended",
+                        ],
+                        event_type,
+                    ),
+                    egress_id=cast(str, egress.get("egress_id")),
+                    room_name=cast(str, egress.get("room_name")),
+                    status=cast(int, egress.get("status")),
+                    object_key=cast(str | None, egress.get("object_key")),
+                    object_key_evidence=converted.path_state or "invalid",
+                )
+            )
+            await session.commit()
+            await _best_effort_outbox_wakeup(request)
+        elif event_type in ("participant_joined", "participant_left"):
             service = LiveKitDispatchService(
                 session,
                 phone_number_repository=PhoneNumberRepository(session),
@@ -124,7 +260,7 @@ async def handle_livekit_webhook(
                 recording_service=LiveKitRecordingService(),
                 arq_pool=getattr(request.app.state, "arq_pool", None),
             )
-            if event_payload["event"] == "participant_joined":
+            if event_type == "participant_joined":
                 await service.handle_participant_joined(event_payload)
             else:
                 await service.handle_participant_left(event_payload)
@@ -133,5 +269,38 @@ async def handle_livekit_webhook(
 
         outcome = "accepted"
         return Response(status_code=status.HTTP_202_ACCEPTED)
+    except Exception:
+        if outcome == "error":
+            await session.rollback()
+        raise
     finally:
         telemetry.record_webhook("livekit", outcome, time.monotonic() - started)
+
+
+def _bounded_webhook_string(value: object, *, max_length: int) -> bool:
+    return (
+        type(value) is str
+        and bool(value.strip())
+        and len(value) <= max_length
+        and "\x00" not in value
+    )
+
+
+def _safe_event_type(value: object) -> str:
+    if type(value) is str and value in SAFE_LOG_EVENT_TYPES:
+        return value
+    return "unknown"
+
+
+async def _best_effort_outbox_wakeup(request: Request) -> None:
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if arq_pool is None:
+        return
+    try:
+        await arq_pool.enqueue_job("outbox_delivery_job", {})
+    except Exception as error:
+        logger.warning(
+            "outbox wakeup enqueue failed operation=livekit_egress_webhook "
+            "error_type=%s",
+            type(error).__name__,
+        )
