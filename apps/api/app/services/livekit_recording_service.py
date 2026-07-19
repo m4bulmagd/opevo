@@ -1,77 +1,46 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from uuid import UUID
 
 from app.core.config import get_settings
+from app.providers.livekit_recording.base import (
+    RecordingEgressResult,
+    RecordingEgressSnapshot,
+    RecordingProvider,
+    build_recording_object_key,
+)
 from app.providers.livekit_recording.livekit import LiveKitRecordingProvider
 
 
 class LiveKitRecordingService:
-    def __init__(self, provider=None) -> None:
+    def __init__(self, provider: RecordingProvider | None = None) -> None:
         self.provider = provider
 
-    async def start_room_recording(self, *, room_name: str, user_id, call_id):
-        if self.provider is not None:
-            return await self.provider.start_room_recording(
-                room_name=room_name,
-                user_id=str(user_id),
-                call_id=str(call_id),
-            )
-
-        from livekit import api
-
-        settings = get_settings()
-        if not settings.livekit_url or not settings.livekit_api_key or not settings.livekit_api_secret:
-            raise ValueError("LiveKit settings are not configured")
-
-        lkapi = api.LiveKitAPI(
-            url=settings.livekit_url,
-            api_key=settings.livekit_api_key,
-            api_secret=settings.livekit_api_secret,
-        )
-        try:
-            provider = LiveKitRecordingProvider(
-                egress_client=lkapi.egress,
-                bucket_name=settings.storage_bucket_name,
-                endpoint_url=settings.s3_endpoint_url or "http://minio:9000",
-                access_key=settings.s3_access_key,
-                secret_key=settings.s3_secret_key,
-                region=settings.s3_region,
-            )
+    async def start_room_recording(
+        self,
+        *,
+        room_name: str,
+        user_id: UUID | str,
+        call_id: UUID | str,
+    ) -> RecordingEgressResult:
+        object_key = build_recording_object_key(user_id=user_id, call_id=call_id)
+        async with self._provider_session() as provider:
             return await provider.start_room_recording(
                 room_name=room_name,
-                user_id=str(user_id),
-                call_id=str(call_id),
+                object_key=object_key,
             )
-        finally:
-            await lkapi.aclose()
+
+    async def list_room_egresses(
+        self,
+        *,
+        room_name: str,
+    ) -> tuple[RecordingEgressSnapshot, ...]:
+        async with self._provider_session() as provider:
+            return await provider.list_room_egresses(room_name=room_name)
 
     async def stop_room_recording(self, *, egress_id: str) -> None:
-        if self.provider is not None:
-            await self.provider.stop_room_recording(egress_id=egress_id)
-            return
-
-        from livekit import api
-
-        settings = get_settings()
-        if not settings.livekit_url or not settings.livekit_api_key or not settings.livekit_api_secret:
-            raise ValueError("LiveKit settings are not configured")
-
-        lkapi = api.LiveKitAPI(
-            url=settings.livekit_url,
-            api_key=settings.livekit_api_key,
-            api_secret=settings.livekit_api_secret,
-        )
-        try:
-            provider = LiveKitRecordingProvider(
-                egress_client=lkapi.egress,
-                bucket_name=settings.storage_bucket_name,
-                endpoint_url=settings.s3_endpoint_url or "http://minio:9000",
-                access_key=settings.s3_access_key,
-                secret_key=settings.s3_secret_key,
-                region=settings.s3_region,
-            )
+        async with self._provider_session() as provider:
             await provider.stop_room_recording(egress_id=egress_id)
-        finally:
-            await lkapi.aclose()
 
     async def ensure_stopped(self, egress_id: str) -> None:
         async with self._provider_session() as provider:
@@ -82,7 +51,7 @@ class LiveKitRecordingService:
             await provider.ensure_not_running(egress_id)
 
     @asynccontextmanager
-    async def _provider_session(self):
+    async def _provider_session(self) -> AsyncIterator[RecordingProvider]:
         if self.provider is not None:
             yield self.provider
             return
@@ -90,7 +59,11 @@ class LiveKitRecordingService:
         from livekit import api
 
         settings = get_settings()
-        if not settings.livekit_url or not settings.livekit_api_key or not settings.livekit_api_secret:
+        if (
+            not settings.livekit_url
+            or not settings.livekit_api_key
+            or not settings.livekit_api_secret
+        ):
             raise ValueError("LiveKit settings are not configured")
 
         lkapi = api.LiveKitAPI(
