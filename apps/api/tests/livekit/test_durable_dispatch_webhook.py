@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from livekit import api
 from sqlalchemy import func, select
 
 from app.models.call import Call
@@ -136,6 +137,32 @@ def _egress_event(
     if location is not None:
         egress["fileResults"] = [{"location": location}]
     return {"id": event_id, "event": event_type, "egressInfo": egress}
+
+
+def _protobuf_empty_path_egress_info(shape: str, *, status: int) -> api.EgressInfo:
+    path_shapes = {
+        "room_composite": {
+            "room_composite": api.RoomCompositeEgressRequest(),
+        },
+        "room_composite_file": {
+            "room_composite": api.RoomCompositeEgressRequest(
+                file=api.EncodedFileOutput()
+            ),
+        },
+        "room_composite_file_outputs": {
+            "room_composite": api.RoomCompositeEgressRequest(
+                file_outputs=[api.EncodedFileOutput()]
+            ),
+        },
+        "file": {"file": api.FileInfo()},
+        "file_results": {"file_results": [api.FileInfo()]},
+    }
+    return api.EgressInfo(
+        egress_id="EG_exact",
+        room_name="room-owned",
+        status=status,
+        **path_shapes[shape],
+    )
 
 
 def test_webhook_receiver_fallback_uses_app_bound_settings(
@@ -285,6 +312,206 @@ def test_convert_sdk_status_zero_is_valid_numeric_status() -> None:
 
     assert converted["egress"]["status"] == 0
     assert type(converted["egress"]["status"]) is int
+
+
+def test_convert_real_protobuf_absent_path_and_status_zero_are_valid() -> None:
+    converted = livekit_webhook_module._convert_livekit_event(
+        api.WebhookEvent(
+            id="EV_status_zero",
+            event="egress_started",
+            egress_info=api.EgressInfo(
+                egress_id="EG_exact",
+                room_name="room-owned",
+                status=0,
+            ),
+        ),
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert converted.path_state == "absent"
+    assert converted.payload["egress"]["object_key"] is None
+    assert converted.payload["egress"]["status"] == 0
+    assert type(converted.payload["egress"]["status"]) is int
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "room_composite",
+        "room_composite_file",
+        "room_composite_file_outputs",
+        "file",
+        "file_results",
+    ],
+)
+def test_convert_real_protobuf_present_empty_path_is_invalid(shape: str) -> None:
+    converted = livekit_webhook_module._convert_livekit_event(
+        api.WebhookEvent(
+            id="EV_empty_path",
+            event="egress_ended",
+            egress_info=_protobuf_empty_path_egress_info(shape, status=3),
+        ),
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert converted.path_state == "invalid"
+    assert converted.payload["egress"]["object_key"] is None
+
+
+@pytest.mark.parametrize(
+    "path_shape",
+    [
+        {"roomComposite": {}},
+        {"roomComposite": {"file": {}}},
+        {"roomComposite": {"fileOutputs": [{}]}},
+        {"file": {}},
+        {"fileResults": [{}]},
+    ],
+)
+def test_convert_mapping_present_empty_path_is_invalid(path_shape: dict) -> None:
+    converted = livekit_webhook_module._convert_livekit_event(
+        {
+            "id": "EV_empty_path",
+            "event": "egress_ended",
+            "egressInfo": {
+                "egressId": "EG_exact",
+                "roomName": "room-owned",
+                "status": 3,
+                **path_shape,
+            },
+        },
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert converted.path_state == "invalid"
+    assert converted.payload["egress"]["object_key"] is None
+
+
+@pytest.mark.parametrize(
+    ("field_name", "unsafe_value"),
+    [
+        ("id", {"composite": "EV"}),
+        ("id", "   "),
+        ("id", "EV_bad\x00suffix"),
+        ("id", "E" * 256),
+        ("egress_id", ["EG_composite"]),
+        ("egress_id", "   "),
+        ("egress_id", "EG_bad\x00suffix"),
+        ("egress_id", "E" * 256),
+        ("room_name", {"composite": "room"}),
+        ("room_name", "   "),
+        ("room_name", "room_bad\x00suffix"),
+        ("room_name", "R" * 256),
+        ("status", True),
+        ("status", "1"),
+        ("status", 1.0),
+        ("status", -1),
+        ("status", 7),
+    ],
+)
+def test_convert_egress_event_rejects_nonprimitive_or_unsafe_fields(
+    field_name: str,
+    unsafe_value: object,
+) -> None:
+    event: dict[str, object] = {
+        "id": "EV_exact",
+        "event": "egress_started",
+        "egressInfo": {
+            "egressId": "EG_exact",
+            "roomName": "room-owned",
+            "status": 1,
+        },
+    }
+    output_field = field_name
+    if field_name == "id":
+        event["id"] = unsafe_value
+    else:
+        egress = event["egressInfo"]
+        assert isinstance(egress, dict)
+        input_field = {
+            "egress_id": "egressId",
+            "room_name": "roomName",
+            "status": "status",
+        }[field_name]
+        egress[input_field] = unsafe_value
+
+    converted = convert_livekit_event(event)
+
+    sanitized = converted if output_field == "id" else converted["egress"]
+    assert sanitized[output_field] is None
+
+
+def test_convert_egress_event_preserves_exact_bounded_primitives() -> None:
+    converted = convert_livekit_event(
+        {
+            "id": "EV_exact",
+            "event": "egress_started",
+            "egressInfo": {
+                "egressId": "EG_exact",
+                "roomName": "room-owned",
+                "status": 0,
+            },
+        }
+    )
+
+    assert converted == {
+        "id": "EV_exact",
+        "event": "egress_started",
+        "egress": {
+            "egress_id": "EG_exact",
+            "room_name": "room-owned",
+            "status": 0,
+            "object_key": None,
+        },
+    }
+    assert type(converted["id"]) is str
+    assert type(converted["egress"]["egress_id"]) is str
+    assert type(converted["egress"]["room_name"]) is str
+    assert type(converted["egress"]["status"]) is int
+
+
+def test_convert_semantically_equivalent_top_level_aliases() -> None:
+    object_key = "calls/user-id/call-id.ogg"
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        {
+            "id": "EV_equivalent_aliases",
+            "event": "egress_started",
+            "egressInfo": {
+                "egressId": "EG_exact",
+                "roomName": "room-owned",
+                "status": 1,
+                "roomComposite": {
+                    "fileOutputs": [{"filepath": object_key}],
+                },
+            },
+            "egress_info": {
+                "egress_id": "EG_exact",
+                "room_name": "room-owned",
+                "status": 1,
+                "room_composite": {
+                    "file_outputs": [{"filepath": object_key}],
+                },
+            },
+        },
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert converted.path_state == "exact"
+    assert converted.payload == {
+        "id": "EV_equivalent_aliases",
+        "event": "egress_started",
+        "egress": {
+            "egress_id": "EG_exact",
+            "room_name": "room-owned",
+            "status": 1,
+            "object_key": object_key,
+        },
+    }
 
 
 @pytest.mark.parametrize(
@@ -623,6 +850,64 @@ async def test_signed_invalid_path_is_not_treated_as_absent_for_known_identity(
     await db_session.refresh(operation)
     assert operation.provider_terminal_at is None
     assert operation.last_error_code is None
+    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert provider_calls == {"recording": 0, "storage": 0}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "room_composite",
+        "room_composite_file",
+        "room_composite_file_outputs",
+        "file",
+        "file_results",
+    ],
+)
+async def test_signed_real_protobuf_empty_path_cannot_change_known_terminal_state(
+    db_session,
+    active_user,
+    settings,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+) -> None:
+    call, operation = await _starting_recording(db_session, active_user)
+    service = RecordingLifecycleService(db_session)
+    await service.record_start_success(
+        operation.id,
+        RecordingEgressResult(
+            egress_id="EG_exact",
+            object_key=operation.expected_object_key,
+            url="s3://private/preserved",
+        ),
+    )
+    await db_session.commit()
+    pool = _Pool()
+    provider_calls = _forbid_provider_and_storage_io(monkeypatch)
+    event = api.WebhookEvent(
+        id="EV_protobuf_empty_path",
+        event="egress_ended",
+        egress_info=_protobuf_empty_path_egress_info(shape, status=3),
+    )
+
+    response = await handle_livekit_webhook(
+        _Request(arq_pool=pool, settings=settings),
+        session=db_session,
+        webhook_receiver=_Receiver(event),
+        realtime_service=None,
+    )
+
+    assert response.status_code == 202
+    await db_session.refresh(call)
+    await db_session.refresh(operation)
+    assert operation.start_state == "started"
+    assert operation.provider_egress_id == "EG_exact"
+    assert operation.provider_terminal_at is None
+    assert operation.last_error_code is None
+    assert call.recording_object_key == operation.expected_object_key
+    assert call.recording_egress_id == "EG_exact"
+    assert call.recording_url == "s3://private/preserved"
     assert pool.jobs == [("outbox_delivery_job", {})]
     assert provider_calls == {"recording": 0, "storage": 0}
 
