@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -24,11 +25,15 @@ from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.usage_ledger import UsageLedger
-from app.repositories.outbox_repository import OutboxRepository
+from app.repositories.outbox_repository import OutboxRepository, OutboxSnapshot
 from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
 )
 from app.repositories.phone_number_repository import PhoneNumberRepository
+from app.repositories.recording_egress_operation_repository import (
+    RecordingEgressOperationRepository,
+    RecordingOperationObservabilitySnapshot,
+)
 from app.services.outbox_service import OutboxService
 from app.services.activation_provisioning_service import ActivationProvisioningService
 from app.services.activation_go_live_service import ActivationGoLiveService
@@ -846,6 +851,151 @@ async def test_reconciliation_sweep_recovers_committed_event_without_wakeup(
 
     assert result["delivered"] == 1
     assert calls == [event.idempotency_key]
+
+
+@pytest.mark.parametrize(
+    ("failure_target", "failed_operation"),
+    [
+        ("outbox_query", "collect_outbox_snapshot"),
+        ("outbox_metric", "collect_outbox_snapshot"),
+        ("recording_query", "collect_recording_operation_snapshot"),
+        ("recording_metric", "collect_recording_operation_snapshot"),
+    ],
+)
+@pytest.mark.anyio
+async def test_reconciliation_snapshot_failures_are_independently_isolated(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure_target: str,
+    failed_operation: str,
+) -> None:
+    from app.workers.jobs.outbox_delivery import outbox_reconciliation_job
+
+    event = await _add_event(outbox_session_factory)
+    delivered: list[str] = []
+    query_attempts: list[str] = []
+    snapshot_sessions: list[AsyncSession] = []
+    metric_attempts: list[str] = []
+    recording_clock = datetime(2026, 7, 19, 12, 30, tzinfo=UTC)
+    recording_clocks: list[datetime] = []
+    private_exception_message = "customer-room credential=do-not-log"
+
+    outbox_snapshot = OutboxSnapshot(
+        counts={
+            "pending": 0,
+            "processing": 0,
+            "delivered": 1,
+            "failed": 0,
+        },
+        oldest_unfinished_age_seconds=0.0,
+    )
+    recording_snapshot = RecordingOperationObservabilitySnapshot(
+        counts={
+            "prepared": 0,
+            "starting": 0,
+            "started": 0,
+            "not_started": 0,
+            "uncertain": 0,
+        },
+        oldest_unresolved_age_seconds=0.0,
+        pending_stop_count=0,
+        oldest_pending_stop_age_seconds=0.0,
+        pending_deletion_count=0,
+        oldest_pending_deletion_age_seconds=0.0,
+    )
+
+    async def collect_outbox_snapshot(
+        repository: OutboxRepository,
+        _now: datetime,
+    ) -> OutboxSnapshot:
+        query_attempts.append("outbox")
+        snapshot_sessions.append(repository.session)
+        if failure_target == "outbox_query":
+            raise RuntimeError(private_exception_message)
+        return outbox_snapshot
+
+    async def collect_recording_snapshot(
+        repository: RecordingEgressOperationRepository,
+        now: datetime,
+    ) -> RecordingOperationObservabilitySnapshot:
+        query_attempts.append("recording")
+        snapshot_sessions.append(repository.session)
+        recording_clocks.append(now)
+        if failure_target == "recording_query":
+            raise RuntimeError(private_exception_message)
+        return recording_snapshot
+
+    class SnapshotObservability:
+        def record_outbox_snapshot(self, snapshot: OutboxSnapshot) -> None:
+            assert snapshot is outbox_snapshot
+            metric_attempts.append("outbox")
+            if failure_target == "outbox_metric":
+                raise RuntimeError(private_exception_message)
+
+        def record_recording_operation_snapshot(
+            self,
+            snapshot: RecordingOperationObservabilitySnapshot,
+        ) -> None:
+            assert snapshot is recording_snapshot
+            metric_attempts.append("recording")
+            if failure_target == "recording_metric":
+                raise RuntimeError(private_exception_message)
+
+    async def handler(_ctx: dict, item: OutboxEvent) -> None:
+        delivered.append(item.idempotency_key)
+
+    monkeypatch.setattr(
+        OutboxRepository,
+        "observability_snapshot",
+        collect_outbox_snapshot,
+    )
+    monkeypatch.setattr(
+        RecordingEgressOperationRepository,
+        "observability_snapshot",
+        collect_recording_snapshot,
+    )
+    caplog.set_level(
+        logging.WARNING,
+        logger="app.workers.jobs.outbox_delivery",
+    )
+
+    result = await outbox_reconciliation_job(
+        {
+            "session_factory": outbox_session_factory,
+            "outbox_handlers": {"phone.disable": handler},
+            "observability": SnapshotObservability(),
+            "recording_observability_now": lambda: recording_clock,
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
+    assert delivered == [event.idempotency_key]
+    assert query_attempts == ["outbox", "recording"]
+    assert len(snapshot_sessions) == 2
+    assert snapshot_sessions[0] is not snapshot_sessions[1]
+    assert recording_clocks == [recording_clock]
+
+    expected_metric_attempts = ["outbox", "recording"]
+    if failure_target == "outbox_query":
+        expected_metric_attempts.remove("outbox")
+    if failure_target == "recording_query":
+        expected_metric_attempts.remove("recording")
+    assert metric_attempts == expected_metric_attempts
+
+    warning_records = [
+        record
+        for record in caplog.records
+        if record.name == "app.workers.jobs.outbox_delivery"
+        and record.levelno == logging.WARNING
+    ]
+    assert len(warning_records) == 1
+    assert warning_records[0].getMessage() == (
+        "event=observability_snapshot_failed "
+        f"operation={failed_operation} "
+        "error_type=RuntimeError status=failed"
+    )
+    assert private_exception_message not in caplog.text
 
 
 class _CapturingRoutingProvider:
