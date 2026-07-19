@@ -25,9 +25,11 @@ the snapshotted call ID. It then rechecks the operation by its original ID:
   `recording_identity_conflict`, leave object and terminal proof unset, and
   hide every customer-visible recording projection.
 - If another worker already restored the operation, revalidate its immutable
-  call, room, legacy, and object-key identity. Preserve a compatible known
-  identity; otherwise retain the operation as an unknown sticky conflict. Hide
-  the projection in either case.
+  call, room, legacy, and object-key identity. Preserve its known provider ID
+  even when the newly observed exact ID differs, retain sticky conflict, and
+  stop the distinct union of the stored and observed IDs after commit. If the
+  restored operation has no provider ID, keep it uncertain and conflicted. Hide
+  the projection in every case.
 - If the call is missing or its immutable identity cannot be recovered safely,
   do not perform provider or storage I/O. Return a bounded non-exhausting retry.
 
