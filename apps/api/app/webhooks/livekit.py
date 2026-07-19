@@ -258,9 +258,8 @@ async def handle_livekit_webhook(
             return Response(status_code=status.HTTP_202_ACCEPTED)
 
         logger.info(
-            "livekit webhook received event=%s participant_kind=%s",
+            "livekit webhook received event=%s",
             _safe_event_type(event_type),
-            event_payload.get("participant", {}).get("kind"),
         )
 
         if event_type in EGRESS_EVENT_TYPES:
@@ -340,9 +339,8 @@ async def _best_effort_outbox_wakeup(request: Request) -> None:
         return
     try:
         await arq_pool.enqueue_job("outbox_delivery_job", {})
-    except Exception as error:
+    except Exception:
         logger.warning(
             "outbox wakeup enqueue failed operation=livekit_egress_webhook "
-            "error_type=%s",
-            type(error).__name__,
+            "error_type=unknown"
         )
