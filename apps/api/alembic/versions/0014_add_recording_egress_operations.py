@@ -113,9 +113,18 @@ def _backfill_sqlite(bind: Connection) -> None:
             calls.c.recording_url,
         ).where(
             sa.or_(
-                calls.c.recording_object_key.is_not(None),
-                calls.c.recording_egress_id.is_not(None),
-                calls.c.recording_url.is_not(None),
+                sa.and_(
+                    calls.c.recording_object_key.is_not(None),
+                    calls.c.recording_object_key != "",
+                ),
+                sa.and_(
+                    calls.c.recording_egress_id.is_not(None),
+                    calls.c.recording_egress_id != "",
+                ),
+                sa.and_(
+                    calls.c.recording_url.is_not(None),
+                    calls.c.recording_url != "",
+                ),
             )
         )
     ).mappings().all()
@@ -241,9 +250,9 @@ def _backfill_postgresql() -> None:
                 CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP
             FROM calls
-            WHERE calls.recording_object_key IS NOT NULL
-                OR calls.recording_egress_id IS NOT NULL
-                OR calls.recording_url IS NOT NULL
+            WHERE NULLIF(calls.recording_object_key, '') IS NOT NULL
+                OR NULLIF(calls.recording_egress_id, '') IS NOT NULL
+                OR NULLIF(calls.recording_url, '') IS NOT NULL
             """
         )
     )
@@ -315,9 +324,9 @@ def _backfill_postgresql() -> None:
                     )
                 )
                 AND (
-                    calls.recording_object_key IS NOT NULL
-                    OR calls.recording_egress_id IS NOT NULL
-                    OR calls.recording_url IS NOT NULL
+                    NULLIF(calls.recording_object_key, '') IS NOT NULL
+                    OR NULLIF(calls.recording_egress_id, '') IS NOT NULL
+                    OR NULLIF(calls.recording_url, '') IS NOT NULL
                 )
             """
         )
