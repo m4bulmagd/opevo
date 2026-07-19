@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -25,6 +26,9 @@ from app.services.recording_lifecycle_service import (
     START_RESULT_LEASE,
     RecordingLifecycleService,
 )
+from app.workers.jobs import outbox_topics
+from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+from app.workers.jobs.outbox_topics import deliver_recording_reconcile
 from app.workers.jobs.recording_reconciliation import (
     ReconciliationResult,
     RecordingReconciler,
@@ -56,6 +60,7 @@ class MatrixCase:
     operation_removed: bool = False
     expected_provider_calls: tuple[tuple[str, str], ...] = ()
     expected_storage_calls: tuple[tuple[str, str], ...] = ()
+    expected_conflict_category: str | None = None
 
 
 MATRIX = (
@@ -168,6 +173,7 @@ MATRIX = (
         ),
         ensure_failures=frozenset({"EG_first"}),
         expected_result=ReconciliationResult("retry", "recording_identity_conflict"),
+        expected_conflict_category="multiple_exact_match",
         expected_state="uncertain",
         expected_error="recording_identity_conflict",
         expected_provider_calls=(
@@ -212,6 +218,47 @@ MATRIX = (
         expected_storage_calls=(("delete_object", OBJECT_KEY),),
     ),
 )
+
+
+class _HandlerReconciler:
+    def __init__(self, result: object | Exception) -> None:
+        self.result = result
+        self.calls: list[UUID] = []
+
+    async def reconcile(self, operation_id: UUID) -> object:
+        self.calls.append(operation_id)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+class _RecordingObservability:
+    def __init__(self) -> None:
+        self.results: list[str] = []
+        self.multiple_exact_count = 0
+        self.events: list[str] = []
+
+    def record_recording_reconciliation_result(self, result: str) -> None:
+        self.results.append(result)
+        self.events.append(f"result:{result}")
+
+    def record_multiple_exact_match_conflict(self) -> None:
+        self.multiple_exact_count += 1
+        self.events.append("multiple_exact_match")
+
+
+def _recording_reconcile_event(operation_id: UUID) -> OutboxEvent:
+    return OutboxEvent(
+        id=uuid4(),
+        idempotency_key=f"recording.reconcile:{operation_id}:task7-handler",
+        topic="recording.reconcile",
+        aggregate_type="recording-egress-operation",
+        aggregate_id=operation_id,
+        payload={"operation_id": str(operation_id)},
+        status="processing",
+        attempt_count=1,
+        next_attempt_at=NOW,
+    )
 
 
 class TrackingSessionFactory:
@@ -651,7 +698,12 @@ async def test_recording_reconciliation_matrix(
         assert result == ReconciliationResult("complete")
         result = await reconciler.reconcile(operation_id)
 
-    assert result == case.expected_result
+    if case.expected_conflict_category is None:
+        assert result == case.expected_result
+    else:
+        assert result.outcome == case.expected_result.outcome
+        assert result.error_code == case.expected_result.error_code
+        assert result.conflict_category == case.expected_conflict_category
     assert provider.calls == list(case.expected_provider_calls)
     assert storage.calls == list(case.expected_storage_calls)
     assert tracker.open_contexts == 0
@@ -815,6 +867,59 @@ async def test_identity_conflict_is_sticky_across_later_singleton_listing(
     assert call.recording_object_key is None
     assert call.recording_egress_id is None
     assert call.recording_url is None
+
+
+@pytest.mark.anyio
+async def test_already_conflicted_multiple_exact_listing_keeps_specific_signal(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(name="sticky multiple conflict", start_state="uncertain")
+    _, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    operation = await db_session.get(RecordingEgressOperation, operation_id)
+    assert operation is not None
+    operation.last_error_code = "recording_identity_conflict"
+    await db_session.commit()
+    tracker = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+    provider = FakeProvider(
+        tracker,
+        snapshots=(
+            RecordingEgressSnapshot(
+                egress_id="EG_first",
+                room_name="room-owned",
+                status=1,
+                object_key=OBJECT_KEY,
+            ),
+            RecordingEgressSnapshot(
+                egress_id="EG_second",
+                room_name="room-owned",
+                status=1,
+                object_key=OBJECT_KEY,
+            ),
+        ),
+    )
+
+    result = await RecordingReconciler(
+        tracker,
+        provider,
+        FakeStorage(tracker),
+        now_provider=lambda: NOW,
+    ).reconcile(operation_id)
+
+    assert result.outcome == "retry"
+    assert result.error_code == "recording_identity_conflict"
+    assert result.conflict_category == "multiple_exact_match"
+    assert provider.calls == [
+        ("list_room_egresses", "room-owned"),
+        ("ensure_not_running", "EG_first"),
+        ("ensure_not_running", "EG_second"),
+    ]
 
 
 @pytest.mark.anyio
@@ -1680,6 +1785,7 @@ async def test_multiple_exact_evidence_restores_uncertain_authority_after_cleanu
     assert result == ReconciliationResult(
         "retry",
         "recording_identity_conflict",
+        "multiple_exact_match",
     )
     assert provider.calls == [
         ("list_room_egresses", "room-owned"),
@@ -2064,7 +2170,11 @@ async def test_multiple_listing_racing_direct_success_never_deletes_on_partial_s
         now_provider=lambda: NOW,
     ).reconcile(operation_id)
 
-    assert result == ReconciliationResult("retry", "recording_identity_conflict")
+    assert result == ReconciliationResult(
+        "retry",
+        "recording_identity_conflict",
+        "multiple_exact_match",
+    )
     assert provider.calls == [
         ("list_room_egresses", "room-owned"),
         ("ensure_not_running", "EG_B"),
@@ -2354,3 +2464,183 @@ async def test_conflict_racing_operation_removal_preserves_existing_object_proof
     assert call.recording_object_key is None
     assert call.recording_egress_id is None
     assert call.recording_url is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("result", "expected_metric"),
+    [
+        (ReconciliationResult("complete"), "complete"),
+        (
+            ReconciliationResult("retry", "recording_unresolved"),
+            "recording_unresolved",
+        ),
+        (
+            ReconciliationResult("retry", "recording_provider_unavailable"),
+            "recording_provider_unavailable",
+        ),
+        (
+            ReconciliationResult("retry", "recording_storage_unavailable"),
+            "recording_storage_unavailable",
+        ),
+        (
+            ReconciliationResult("retry", "recording_identity_mismatch"),
+            "recording_identity_mismatch",
+        ),
+        (
+            ReconciliationResult("retry", "recording_identity_conflict"),
+            "recording_identity_conflict",
+        ),
+        (
+            ReconciliationResult("retry", "recording_legacy_incomplete"),
+            "recording_legacy_incomplete",
+        ),
+    ],
+)
+async def test_recording_handler_emits_one_bounded_result_per_valid_invocation(
+    result: ReconciliationResult,
+    expected_metric: str,
+) -> None:
+    operation_id = uuid4()
+    reconciler = _HandlerReconciler(result)
+    observability = _RecordingObservability()
+
+    if result.outcome == "complete":
+        await deliver_recording_reconcile(
+            {
+                "recording_reconciler": reconciler,
+                "observability": observability,
+            },
+            _recording_reconcile_event(operation_id),
+        )
+    else:
+        with pytest.raises(OutboxDeliveryError) as exc_info:
+            await deliver_recording_reconcile(
+                {
+                    "recording_reconciler": reconciler,
+                    "observability": observability,
+                },
+                _recording_reconcile_event(operation_id),
+            )
+        assert exc_info.value.error_code == expected_metric
+        assert exc_info.value.retryable is True
+        assert exc_info.value.exhaustible is False
+
+    assert reconciler.calls == [operation_id]
+    assert observability.results == [expected_metric]
+    assert observability.multiple_exact_count == 0
+
+
+@pytest.mark.anyio
+async def test_recording_handler_does_not_emit_for_invalid_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation_id = uuid4()
+    reconciler = _HandlerReconciler(ReconciliationResult("complete"))
+    observability = _RecordingObservability()
+    event = _recording_reconcile_event(operation_id)
+    event.payload = {"operation_id": str(uuid4())}
+    observability_gets = 0
+
+    def get_observability() -> _RecordingObservability:
+        nonlocal observability_gets
+        observability_gets += 1
+        return observability
+
+    monkeypatch.setattr(outbox_topics, "get_observability", get_observability)
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_recording_reconcile(
+            {"recording_reconciler": reconciler},
+            event,
+        )
+
+    assert exc_info.value.error_code == "invalid_payload"
+    assert reconciler.calls == []
+    assert observability_gets == 0
+    assert observability.results == []
+    assert observability.multiple_exact_count == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "result",
+    [
+        RuntimeError("PRIVATE_RECONCILER_FAILURE"),
+        SimpleNamespace(outcome="unexpected", error_code=None),
+        SimpleNamespace(
+            outcome="retry",
+            error_code="recording_identity_conflict",
+            conflict_category="PRIVATE_CONFLICT_CATEGORY",
+        ),
+    ],
+)
+async def test_recording_handler_maps_failure_or_invalid_shape_to_one_unresolved_result(
+    result: object | Exception,
+) -> None:
+    operation_id = uuid4()
+    observability = _RecordingObservability()
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_recording_reconcile(
+            {
+                "recording_reconciler": _HandlerReconciler(result),
+                "observability": observability,
+            },
+            _recording_reconcile_event(operation_id),
+        )
+
+    assert exc_info.value.error_code == "recording_unresolved"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.exhaustible is False
+    assert observability.results == ["recording_unresolved"]
+    assert observability.multiple_exact_count == 0
+
+
+@pytest.mark.anyio
+async def test_recording_handler_counts_multiple_exact_before_conflict_retry() -> None:
+    operation_id = uuid4()
+    observability = _RecordingObservability()
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_recording_reconcile(
+            {
+                "recording_reconciler": _HandlerReconciler(
+                    SimpleNamespace(
+                        outcome="retry",
+                        error_code="recording_identity_conflict",
+                        conflict_category="multiple_exact_match",
+                    )
+                ),
+                "observability": observability,
+            },
+            _recording_reconcile_event(operation_id),
+        )
+
+    assert exc_info.value.error_code == "recording_identity_conflict"
+    assert observability.events == [
+        "result:recording_identity_conflict",
+        "multiple_exact_match",
+    ]
+    assert observability.multiple_exact_count == 1
+
+
+@pytest.mark.anyio
+async def test_recording_handler_uses_default_observability_for_valid_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation_id = uuid4()
+    observability = _RecordingObservability()
+    monkeypatch.setattr(
+        outbox_topics,
+        "get_observability",
+        lambda: observability,
+        raising=False,
+    )
+
+    await deliver_recording_reconcile(
+        {"recording_reconciler": _HandlerReconciler(ReconciliationResult("complete"))},
+        _recording_reconcile_event(operation_id),
+    )
+
+    assert observability.results == ["complete"]

@@ -45,6 +45,7 @@ RECORDING_RECONCILIATION_ERROR_CODES = frozenset(
 class ReconciliationResult:
     outcome: Literal["complete", "retry"]
     error_code: RecordingReconciliationErrorCode | None = None
+    conflict_category: Literal["multiple_exact_match"] | None = None
 
 
 @dataclass(frozen=True)
@@ -253,14 +254,23 @@ class RecordingReconciler:
         exact = tuple(exact_by_id.values())
 
         if len(exact) > 1:
+            conflict_category: Literal["multiple_exact_match"] = "multiple_exact_match"
             status, refreshed = await self._persist_identity_conflict(snapshot)
             if status == "missing":
-                return ReconciliationResult("complete")
+                return ReconciliationResult(
+                    "complete",
+                    conflict_category=conflict_category,
+                )
             if status not in {"updated", "conflict"} or refreshed is None:
-                return ReconciliationResult("retry", "recording_unresolved")
+                return ReconciliationResult(
+                    "retry",
+                    "recording_unresolved",
+                    conflict_category,
+                )
             return await self._stop_conflicting_identities(
                 refreshed,
                 tuple(item.egress_id for item in exact),
+                conflict_category=conflict_category,
             )
 
         if len(exact) == 1:
@@ -306,18 +316,34 @@ class RecordingReconciler:
                     and item.object_key == snapshot.expected_object_key
                 )
             )
+        conflict_category: Literal["multiple_exact_match"] | None = (
+            "multiple_exact_match" if len(exact_ids) > 1 else None
+        )
 
         status, refreshed = await self._persist_identity_conflict(snapshot)
         if status == "missing":
-            return ReconciliationResult("complete")
+            return ReconciliationResult(
+                "complete",
+                conflict_category=conflict_category,
+            )
         if status != "updated" or refreshed is None:
-            return ReconciliationResult("retry", "recording_unresolved")
-        return await self._stop_conflicting_identities(refreshed, exact_ids)
+            return ReconciliationResult(
+                "retry",
+                "recording_unresolved",
+                conflict_category,
+            )
+        return await self._stop_conflicting_identities(
+            refreshed,
+            exact_ids,
+            conflict_category=conflict_category,
+        )
 
     async def _stop_conflicting_identities(
         self,
         snapshot: _OperationSnapshot,
         exact_ids: tuple[str, ...],
+        *,
+        conflict_category: Literal["multiple_exact_match"] | None = None,
     ) -> ReconciliationResult:
         safe_ids = tuple(
             dict.fromkeys(
@@ -331,7 +357,11 @@ class RecordingReconciler:
                 await self.provider.ensure_not_running(egress_id)
             except Exception:
                 continue
-        return ReconciliationResult("retry", RECORDING_IDENTITY_CONFLICT_CODE)
+        return ReconciliationResult(
+            "retry",
+            RECORDING_IDENTITY_CONFLICT_CODE,
+            conflict_category,
+        )
 
     async def _delete_object_and_operation(
         self,

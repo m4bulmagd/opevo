@@ -36,6 +36,8 @@ from app.services.recording_lifecycle_service import (
     RecordingLifecycleService,
     RecordingStartClaim,
 )
+from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+from app.workers.jobs.outbox_topics import deliver_recording_reconcile
 from app.workers.jobs.recording_reconciliation import RecordingReconciler
 
 
@@ -107,6 +109,44 @@ class _NoListingProvider:
 
     async def ensure_not_running(self, egress_id: str) -> None:
         pytest.fail(f"definitive non-start must not stop egress {egress_id}")
+
+
+class _ExactListingProvider:
+    def __init__(
+        self,
+        snapshots: tuple[RecordingEgressSnapshot, ...],
+        *,
+        stop_failures: frozenset[str] = frozenset(),
+    ) -> None:
+        self.snapshots = snapshots
+        self.stop_failures = stop_failures
+        self.listed_rooms: list[str] = []
+        self.stop_attempts: list[str] = []
+
+    async def list_room_egresses(
+        self,
+        *,
+        room_name: str,
+    ) -> tuple[RecordingEgressSnapshot, ...]:
+        self.listed_rooms.append(room_name)
+        return self.snapshots
+
+    async def ensure_not_running(self, egress_id: str) -> None:
+        self.stop_attempts.append(egress_id)
+        if egress_id in self.stop_failures:
+            raise RuntimeError("synthetic task7 stop failure")
+
+
+class _RecordingSignalObservability:
+    def __init__(self) -> None:
+        self.results: list[str] = []
+        self.multiple_exact_count = 0
+
+    def record_recording_reconciliation_result(self, result: str) -> None:
+        self.results.append(result)
+
+    def record_multiple_exact_match_conflict(self) -> None:
+        self.multiple_exact_count += 1
 
 
 class _RecordingStorage:
@@ -871,6 +911,95 @@ async def test_schedule_5_duplicate_signed_fact_and_direct_success_converge(
     assert all(
         event.payload == {"operation_id": str(seed.operation_id)} for event in events
     )
+
+
+@pytest.mark.anyio
+async def test_schedule_6_two_exact_matches_stay_conflicted_and_signal_once(
+    recording_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_prepared_operation(
+        recording_session_factory,
+        suffix="two-exact-matches",
+    )
+    room_name = "task7-room-two-exact-matches"
+    first_id = "task7-egress-exact-first"
+    second_id = "task7-egress-exact-second"
+
+    async with recording_session_factory() as seed_session:
+        operation = await seed_session.get(
+            RecordingEgressOperation,
+            seed.operation_id,
+        )
+        call = await seed_session.get(Call, seed.call_id)
+        event = await seed_session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.aggregate_type == "recording-egress-operation",
+                OutboxEvent.aggregate_id == seed.operation_id,
+            )
+        )
+        assert operation is not None
+        assert call is not None
+        assert call.deleted_at is None
+        assert event is not None
+        operation.start_state = "uncertain"
+        operation.start_attempted_at = FIXED_NOW
+        await seed_session.commit()
+
+    provider = _ExactListingProvider(
+        (
+            RecordingEgressSnapshot(
+                egress_id=first_id,
+                room_name=room_name,
+                status=1,
+                object_key=seed.expected_object_key,
+            ),
+            RecordingEgressSnapshot(
+                egress_id=second_id,
+                room_name=room_name,
+                status=1,
+                object_key=seed.expected_object_key,
+            ),
+        ),
+        stop_failures=frozenset({first_id}),
+    )
+    observability = _RecordingSignalObservability()
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_recording_reconcile(
+            {
+                "session_factory": recording_session_factory,
+                "livekit_recording_provider": provider,
+                "storage_provider": _RecordingStorage(),
+                "recording_reconciliation_now": lambda: STOP_NOW,
+                "observability": observability,
+            },
+            event,
+        )
+
+    assert exc_info.value.error_code == "recording_identity_conflict"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.exhaustible is False
+    assert provider.listed_rooms == [room_name]
+    assert provider.stop_attempts == [first_id, second_id]
+    assert observability.results == ["recording_identity_conflict"]
+    assert observability.multiple_exact_count == 1
+
+    async with recording_session_factory() as assertion_session:
+        operation = await assertion_session.get(
+            RecordingEgressOperation,
+            seed.operation_id,
+        )
+        call = await assertion_session.get(Call, seed.call_id)
+
+    assert operation is not None
+    assert operation.start_state == "uncertain"
+    assert operation.provider_egress_id is None
+    assert operation.last_error_code == "recording_identity_conflict"
+    assert call is not None
+    assert call.deleted_at is None
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
 
 
 @pytest.mark.anyio
