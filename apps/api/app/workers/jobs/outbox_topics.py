@@ -6,6 +6,7 @@ from uuid import UUID
 
 from app.core.config import get_settings
 from app.core.dispatch_token import create_dispatch_token
+from app.core.observability import get_observability
 from app.core.verification_token import create_verification_token
 from app.core.database import get_session_factory
 from app.models.agent_config import AgentConfig
@@ -1249,6 +1250,7 @@ async def deliver_recording_reconcile(
     event: OutboxEvent,
 ) -> None:
     operation_id = _validated_recording_operation_reference(event)
+    observability = ctx.get("observability") or get_observability()
     try:
         from app.workers.jobs.recording_reconciliation import (
             RECORDING_RECONCILIATION_ERROR_CODES,
@@ -1256,21 +1258,33 @@ async def deliver_recording_reconcile(
 
         reconciler = build_recording_reconciler(ctx)
         result = await reconciler.reconcile(operation_id)
+        conflict_category = result.conflict_category
+        if conflict_category not in {None, "multiple_exact_match"}:
+            raise ValueError("Recording reconciliation conflict is invalid")
         if result.outcome == "complete":
             if result.error_code is not None:
                 raise ValueError("Completed reconciliation returned an error")
-            return
-        if result.outcome != "retry":
+            result_label = "complete"
+        elif result.outcome == "retry":
+            error_code = result.error_code or "recording_unresolved"
+            if error_code not in RECORDING_RECONCILIATION_ERROR_CODES:
+                raise ValueError("Recording reconciliation error is invalid")
+            result_label = error_code
+        else:
             raise ValueError("Recording reconciliation outcome is invalid")
-        error_code = result.error_code or "recording_unresolved"
-        if error_code not in RECORDING_RECONCILIATION_ERROR_CODES:
-            raise ValueError("Recording reconciliation error is invalid")
     except Exception:
+        observability.record_recording_reconciliation_result("recording_unresolved")
         raise OutboxDeliveryError(
             "recording_unresolved",
             retryable=True,
             exhaustible=False,
         ) from None
+
+    observability.record_recording_reconciliation_result(result_label)
+    if conflict_category == "multiple_exact_match":
+        observability.record_multiple_exact_match_conflict()
+    if result.outcome == "complete":
+        return
     raise OutboxDeliveryError(
         error_code,
         retryable=True,
