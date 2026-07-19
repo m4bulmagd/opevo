@@ -708,6 +708,8 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
         "object_active": uuid4(),
         "empty_metadata_active": uuid4(),
         "url_active": uuid4(),
+        "blank_provider_key": uuid4(),
+        "blank_provider_url": uuid4(),
         "missing_room": uuid4(),
         "deleted": uuid4(),
         "known_active": uuid4(),
@@ -757,6 +759,28 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
             "recording_object_key": None,
             "recording_egress_id": None,
             "recording_url": "https://playback.example/url-only",
+        },
+        {
+            "id": ids["blank_provider_key"],
+            "user_id": user_ids["blank_provider_key"],
+            "livekit_room_id": "",
+            "status": "connected",
+            "ended_at": None,
+            "deleted_at": None,
+            "recording_object_key": "calls/legacy/blank-provider-key.ogg",
+            "recording_egress_id": "",
+            "recording_url": None,
+        },
+        {
+            "id": ids["blank_provider_url"],
+            "user_id": user_ids["blank_provider_url"],
+            "livekit_room_id": "room-blank-provider-url",
+            "status": "ending",
+            "ended_at": None,
+            "deleted_at": None,
+            "recording_object_key": None,
+            "recording_egress_id": "",
+            "recording_url": "https://playback.example/blank-provider-url",
         },
         {
             "id": ids["missing_room"],
@@ -875,6 +899,18 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
         f"calls/{user_ids['url_active']}/{ids['url_active']}.ogg"
     )
 
+    blank_provider_key = operation_rows[ids["blank_provider_key"]]
+    assert blank_provider_key["room_name"] is None
+    assert bool(blank_provider_key["legacy_incomplete"]) is True
+    assert blank_provider_key["provider_egress_id"] is None
+    assert blank_provider_key["start_state"] == "uncertain"
+
+    blank_provider_url = operation_rows[ids["blank_provider_url"]]
+    assert blank_provider_url["room_name"] == "room-blank-provider-url"
+    assert blank_provider_url["legacy_incomplete"] in (False, 0)
+    assert blank_provider_url["provider_egress_id"] is None
+    assert blank_provider_url["start_state"] == "uncertain"
+
     missing_room = operation_rows[ids["missing_room"]]
     assert missing_room["room_name"] is None
     assert bool(missing_room["legacy_incomplete"]) is True
@@ -896,8 +932,13 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
         ids["known_terminal"],
         ids["object_active"],
         ids["url_active"],
+        ids["blank_provider_key"],
+        ids["blank_provider_url"],
         ids["deleted"],
     }
+    reconcile_keys = {row["idempotency_key"] for row in reconcile_events}
+    assert f"recording.reconcile:{ids['blank_provider_key']}:start" in reconcile_keys
+    assert f"recording.reconcile:{ids['blank_provider_url']}:start" in reconcile_keys
     assert all(
         _as_uuid(row["aggregate_id"]) != ids["empty_metadata_active"]
         for row in reconcile_events
@@ -1141,9 +1182,12 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
     call_names = (
         "active",
         "terminal",
+        "terminal_no_end",
         "deleted",
         "empty_metadata",
         "incomplete_room",
+        "blank_provider_key",
+        "blank_provider_url",
     )
     call_ids = {name: uuid4() for name in call_names}
     user_ids = {name: uuid4() for name in call_names}
@@ -1155,7 +1199,9 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
     active_object_key = "calls/synthetic-active/original.ogg"
     deleted_object_key = "calls/synthetic-deleted/original.ogg"
     incomplete_object_key = "calls/synthetic-incomplete/original.ogg"
+    blank_provider_object_key = "calls/synthetic-blank-provider/original.ogg"
     terminal_egress_id = "EG_synthetic_terminal"
+    terminal_no_end_egress_id = "EG_synthetic_terminal_no_end"
     deleted_egress_id = "EG_synthetic_deleted"
 
     try:
@@ -1232,6 +1278,23 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                         "updated_at": terminal_ended_at,
                     },
                     {
+                        "id": call_ids["terminal_no_end"],
+                        "user_id": user_ids["terminal_no_end"],
+                        "livekit_room_id": "room-synthetic-terminal-no-end",
+                        "caller_number": "+353000000006",
+                        "status": "completed",
+                        "state_changed_at": terminal_ended_at,
+                        "started_at": active_started_at,
+                        "ended_at": None,
+                        "deleted_at": None,
+                        "summary_text": "synthetic terminal no-end summary",
+                        "recording_object_key": None,
+                        "recording_egress_id": terminal_no_end_egress_id,
+                        "recording_url": None,
+                        "created_at": created_at,
+                        "updated_at": terminal_ended_at,
+                    },
+                    {
                         "id": call_ids["deleted"],
                         "user_id": user_ids["deleted"],
                         "livekit_room_id": "room-synthetic-deleted",
@@ -1239,7 +1302,7 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                         "status": "completed",
                         "state_changed_at": deleted_ended_at,
                         "started_at": active_started_at,
-                        "ended_at": deleted_ended_at,
+                        "ended_at": None,
                         "deleted_at": deleted_at,
                         "summary_text": "synthetic deleted summary",
                         "recording_object_key": deleted_object_key,
@@ -1282,10 +1345,45 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                         "created_at": created_at,
                         "updated_at": active_started_at,
                     },
+                    {
+                        "id": call_ids["blank_provider_key"],
+                        "user_id": user_ids["blank_provider_key"],
+                        "livekit_room_id": "",
+                        "caller_number": "+353000000007",
+                        "status": "connected",
+                        "state_changed_at": active_started_at,
+                        "started_at": active_started_at,
+                        "ended_at": None,
+                        "deleted_at": None,
+                        "summary_text": "synthetic blank provider key summary",
+                        "recording_object_key": blank_provider_object_key,
+                        "recording_egress_id": "",
+                        "recording_url": None,
+                        "created_at": created_at,
+                        "updated_at": active_started_at,
+                    },
+                    {
+                        "id": call_ids["blank_provider_url"],
+                        "user_id": user_ids["blank_provider_url"],
+                        "livekit_room_id": "room-synthetic-blank-provider-url",
+                        "caller_number": "+353000000008",
+                        "status": "finalizing",
+                        "state_changed_at": active_started_at,
+                        "started_at": active_started_at,
+                        "ended_at": None,
+                        "deleted_at": None,
+                        "summary_text": "synthetic blank provider url summary",
+                        "recording_object_key": None,
+                        "recording_egress_id": "",
+                        "recording_url": "https://synthetic.invalid/blank-provider",
+                        "created_at": created_at,
+                        "updated_at": active_started_at,
+                    },
                 ],
             )
 
             legacy_statuses = ("pending", "processing", "delivered", "failed")
+            legacy_event_ids = {status: uuid4() for status in legacy_statuses}
             await connection.execute(
                 sa.text(
                     "INSERT INTO outbox_events "
@@ -1300,7 +1398,7 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                 ),
                 [
                     {
-                        "id": uuid4(),
+                        "id": legacy_event_ids[status],
                         "idempotency_key": (
                             f"recording.stop:{call_ids['terminal']}:{status}"
                         ),
@@ -1322,6 +1420,7 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                     for status in legacy_statuses
                 ],
             )
+            no_replacement_event_id = uuid4()
             await connection.execute(
                 sa.text(
                     "INSERT INTO outbox_events "
@@ -1335,7 +1434,7 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                     ":created_at, :updated_at)"
                 ),
                 {
-                    "id": uuid4(),
+                    "id": no_replacement_event_id,
                     "idempotency_key": (
                         f"recording.stop:{call_ids['empty_metadata']}:no-replacement"
                     ),
@@ -1346,36 +1445,92 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                     "updated_at": active_started_at,
                 },
             )
+            seeded_legacy_events = {
+                row["idempotency_key"]: dict(row)
+                for row in (
+                    await connection.execute(
+                        sa.text(
+                            "SELECT * FROM outbox_events "
+                            "WHERE topic = 'recording.stop' "
+                            "ORDER BY idempotency_key"
+                        )
+                    )
+                ).mappings()
+            }
 
+        retained_legacy_keys = {
+            f"recording.stop:{call_ids['terminal']}:delivered",
+            f"recording.stop:{call_ids['terminal']}:failed",
+            f"recording.stop:{call_ids['empty_metadata']}:no-replacement",
+        }
+        removed_legacy_event_ids = {
+            legacy_event_ids["pending"],
+            legacy_event_ids["processing"],
+        }
+        retained_legacy_events = {
+            key: seeded_legacy_events[key] for key in retained_legacy_keys
+        }
+
+        async with migration_engine.connect() as connection:
+            migration_db_started_at = await connection.scalar(
+                sa.text("SELECT clock_timestamp()")
+            )
+        assert isinstance(migration_db_started_at, datetime)
         await migration_engine.dispose()
         migration_engine = None
-        upgrade_started_at = datetime.now(UTC)
         run_alembic("upgrade", "0014_recording_egress_ops")
-        upgrade_finished_at = datetime.now(UTC)
         migration_engine = create_async_engine(migration_url)
 
         async with migration_engine.connect() as connection:
+            migration_db_finished_at = await connection.scalar(
+                sa.text("SELECT clock_timestamp()")
+            )
             revision = await connection.scalar(
                 sa.text("SELECT version_num FROM alembic_version")
             )
-            constraint_names = set(
+            constraint_rows = (
                 (
                     await connection.execute(
                         sa.text(
-                            "SELECT conname FROM pg_constraint "
-                            "WHERE conrelid = "
-                            "'recording_egress_operations'::regclass"
+                            "SELECT conname, pg_get_constraintdef(oid) AS definition "
+                            "FROM pg_constraint WHERE conrelid = "
+                            "'recording_egress_operations'::regclass "
+                            "ORDER BY conname"
                         )
                     )
-                ).scalars()
+                )
+                .mappings()
+                .all()
+            )
+            foreign_key_delete_action = await connection.scalar(
+                sa.text(
+                    "SELECT confdeltype::text FROM pg_constraint "
+                    "WHERE conrelid = 'recording_egress_operations'::regclass "
+                    "AND conname = "
+                    "'fk_recording_egress_operations_call_id_calls'"
+                )
             )
             index_rows = (
                 (
                     await connection.execute(
                         sa.text(
-                            "SELECT indexname, indexdef FROM pg_indexes "
-                            "WHERE schemaname = current_schema() "
-                            "AND tablename = 'recording_egress_operations'"
+                            "SELECT index_class.relname AS index_name, "
+                            "indexes.indisunique, "
+                            "array_agg(attributes.attname "
+                            "ORDER BY keys.ordinality) AS columns "
+                            "FROM pg_index AS indexes "
+                            "JOIN pg_class AS index_class "
+                            "ON index_class.oid = indexes.indexrelid "
+                            "CROSS JOIN LATERAL "
+                            "unnest(indexes.indkey) WITH ORDINALITY "
+                            "AS keys(attnum, ordinality) "
+                            "JOIN pg_attribute AS attributes "
+                            "ON attributes.attrelid = indexes.indrelid "
+                            "AND attributes.attnum = keys.attnum "
+                            "WHERE indexes.indrelid = "
+                            "'recording_egress_operations'::regclass "
+                            "GROUP BY index_class.relname, indexes.indisunique "
+                            "ORDER BY index_class.relname"
                         )
                     )
                 )
@@ -1396,9 +1551,7 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                 (
                     await connection.execute(
                         sa.text(
-                            "SELECT id, idempotency_key, topic, aggregate_type, "
-                            "aggregate_id, payload, status, attempt_count, "
-                            "last_error_code, delivered_at "
+                            "SELECT * "
                             "FROM outbox_events "
                             "WHERE topic IN ('recording.stop', 'recording.reconcile') "
                             "ORDER BY idempotency_key"
@@ -1410,35 +1563,81 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
             )
 
         assert revision == "0014_recording_egress_ops"
-        assert constraint_names == {
-            "pk_recording_egress_operations",
-            "fk_recording_egress_operations_call_id_calls",
-            "uq_recording_egress_operations_call_id",
-            "uq_recording_egress_operations_provider_egress_id",
-            "ck_recording_egress_operations_start_state_allowed",
-            "ck_recording_egress_operations_provider_identity_consistent",
-            "ck_recording_egress_operations_legacy_room_consistent",
-            "ck_recording_egress_operations_prepared_attempt_consistent",
-            "ck_recording_egress_operations_delete_implies_stop",
-            "ck_recording_egress_operations_object_delete_implies_request",
+        assert {row["conname"]: row["definition"] for row in constraint_rows} == {
+            "ck_recording_egress_operations_delete_implies_stop": (
+                "CHECK (((delete_requested_at IS NULL) OR "
+                "(stop_requested_at IS NOT NULL)))"
+            ),
+            "ck_recording_egress_operations_legacy_room_consistent": (
+                "CHECK ((((legacy_incomplete = false) AND "
+                "(room_name IS NOT NULL)) OR ((legacy_incomplete = true) AND "
+                "(room_name IS NULL) AND ((start_state)::text = ANY "
+                "((ARRAY['started'::character varying, "
+                "'uncertain'::character varying])::text[])))))"
+            ),
+            "ck_recording_egress_operations_object_delete_implies_request": (
+                "CHECK (((object_deleted_at IS NULL) OR "
+                "(delete_requested_at IS NOT NULL)))"
+            ),
+            "ck_recording_egress_operations_prepared_attempt_consistent": (
+                "CHECK ((((start_state)::text <> 'prepared'::text) OR "
+                "(start_attempted_at IS NULL)))"
+            ),
+            "ck_recording_egress_operations_provider_identity_consistent": (
+                "CHECK (((((start_state)::text = 'started'::text) AND "
+                "(provider_egress_id IS NOT NULL)) OR "
+                "(((start_state)::text <> 'started'::text) AND "
+                "(provider_egress_id IS NULL))))"
+            ),
+            "ck_recording_egress_operations_start_state_allowed": (
+                "CHECK (((start_state)::text = ANY "
+                "((ARRAY['prepared'::character varying, "
+                "'starting'::character varying, 'started'::character varying, "
+                "'not_started'::character varying, "
+                "'uncertain'::character varying])::text[])))"
+            ),
+            "fk_recording_egress_operations_call_id_calls": (
+                "FOREIGN KEY (call_id) REFERENCES calls(id) ON DELETE RESTRICT"
+            ),
+            "pk_recording_egress_operations": "PRIMARY KEY (id)",
+            "uq_recording_egress_operations_call_id": "UNIQUE (call_id)",
+            "uq_recording_egress_operations_provider_egress_id": (
+                "UNIQUE (provider_egress_id)"
+            ),
         }
-        indexes = {row["indexname"]: row["indexdef"] for row in index_rows}
-        assert set(indexes) == {
-            "pk_recording_egress_operations",
-            "uq_recording_egress_operations_call_id",
-            "uq_recording_egress_operations_provider_egress_id",
-            "ix_recording_egress_operations_due_work",
+        assert foreign_key_delete_action == "r"
+        assert {
+            row["index_name"]: (
+                row["indisunique"],
+                tuple(row["columns"]),
+            )
+            for row in index_rows
+        } == {
+            "ix_recording_egress_operations_due_work": (
+                False,
+                (
+                    "start_state",
+                    "stop_requested_at",
+                    "delete_requested_at",
+                    "updated_at",
+                ),
+            ),
+            "pk_recording_egress_operations": (True, ("id",)),
+            "uq_recording_egress_operations_call_id": (True, ("call_id",)),
+            "uq_recording_egress_operations_provider_egress_id": (
+                True,
+                ("provider_egress_id",),
+            ),
         }
-        assert indexes["ix_recording_egress_operations_due_work"].endswith(
-            "USING btree (start_state, stop_requested_at, "
-            "delete_requested_at, updated_at)"
-        )
 
         assert set(operation_rows) == {
             call_ids["active"],
             call_ids["terminal"],
+            call_ids["terminal_no_end"],
             call_ids["deleted"],
             call_ids["incomplete_room"],
+            call_ids["blank_provider_key"],
+            call_ids["blank_provider_url"],
         }
         private_columns = {
             "id",
@@ -1480,11 +1679,21 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
         assert terminal["stop_requested_at"] == terminal_ended_at
         assert terminal["delete_requested_at"] is None
 
+        terminal_no_end = operation_rows[call_ids["terminal_no_end"]]
+        assert terminal_no_end["provider_egress_id"] == terminal_no_end_egress_id
+        assert terminal_no_end["start_state"] == "started"
+        assert (
+            migration_db_started_at
+            <= terminal_no_end["stop_requested_at"]
+            <= migration_db_finished_at
+        )
+        assert terminal_no_end["delete_requested_at"] is None
+
         deleted = operation_rows[call_ids["deleted"]]
         assert deleted["expected_object_key"] == deleted_object_key
         assert deleted["provider_egress_id"] == deleted_egress_id
         assert deleted["start_state"] == "started"
-        assert deleted["stop_requested_at"] == deleted_ended_at
+        assert deleted["stop_requested_at"] == deleted_at
         assert deleted["delete_requested_at"] == deleted_at
 
         incomplete = operation_rows[call_ids["incomplete_room"]]
@@ -1496,13 +1705,34 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
         assert incomplete["stop_requested_at"] is None
         assert incomplete["delete_requested_at"] is None
 
+        blank_provider_key = operation_rows[call_ids["blank_provider_key"]]
+        assert blank_provider_key["room_name"] is None
+        assert blank_provider_key["legacy_incomplete"] is True
+        assert blank_provider_key["expected_object_key"] == blank_provider_object_key
+        assert blank_provider_key["provider_egress_id"] is None
+        assert blank_provider_key["start_state"] == "uncertain"
+
+        blank_provider_url = operation_rows[call_ids["blank_provider_url"]]
+        assert blank_provider_url["room_name"] == ("room-synthetic-blank-provider-url")
+        assert blank_provider_url["legacy_incomplete"] is False
+        assert blank_provider_url["expected_object_key"] == (
+            f"calls/{user_ids['blank_provider_url']}/"
+            f"{call_ids['blank_provider_url']}.ogg"
+        )
+        assert blank_provider_url["provider_egress_id"] is None
+        assert blank_provider_url["start_state"] == "uncertain"
+
         for operation in operation_rows.values():
             assert operation["start_attempted_at"] is None
             assert operation["provider_terminal_at"] is None
             assert operation["object_deleted_at"] is None
             assert operation["last_reconciled_at"] is None
             assert operation["last_error_code"] is None
-            assert upgrade_started_at <= operation["created_at"] <= upgrade_finished_at
+            assert (
+                migration_db_started_at
+                <= operation["created_at"]
+                <= migration_db_finished_at
+            )
             assert operation["updated_at"] == operation["created_at"]
 
         reconcile_events = [
@@ -1511,8 +1741,11 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
         assert {row["idempotency_key"] for row in reconcile_events} == {
             f"recording.reconcile:{call_ids['active']}:start",
             f"recording.reconcile:{call_ids['terminal']}:stop",
+            f"recording.reconcile:{call_ids['terminal_no_end']}:stop",
             f"recording.reconcile:{call_ids['deleted']}:delete",
             f"recording.reconcile:{call_ids['incomplete_room']}:start",
+            f"recording.reconcile:{call_ids['blank_provider_key']}:start",
+            f"recording.reconcile:{call_ids['blank_provider_url']}:start",
         }
         for event in reconcile_events:
             operation_id = _as_uuid(event["aggregate_id"])
@@ -1522,6 +1755,18 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
             assert event["attempt_count"] == 0
             assert event["last_error_code"] is None
             assert event["delivered_at"] is None
+            migration_event_timestamps = {
+                event["next_attempt_at"],
+                event["created_at"],
+                event["updated_at"],
+            }
+            assert len(migration_event_timestamps) == 1
+            migration_event_timestamp = migration_event_timestamps.pop()
+            assert (
+                migration_db_started_at
+                <= migration_event_timestamp
+                <= migration_db_finished_at
+            )
 
         legacy_events = {
             row["idempotency_key"]: row
@@ -1533,19 +1778,11 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
             f"recording.stop:{call_ids['terminal']}:failed",
             (f"recording.stop:{call_ids['empty_metadata']}:no-replacement"),
         }
-        assert (
-            legacy_events[f"recording.stop:{call_ids['terminal']}:delivered"]["status"]
-            == "delivered"
-        )
-        assert (
-            legacy_events[f"recording.stop:{call_ids['terminal']}:failed"]["status"]
-            == "failed"
-        )
-        assert (
-            legacy_events[
-                f"recording.stop:{call_ids['empty_metadata']}:no-replacement"
-            ]["status"]
-            == "pending"
+        assert {
+            key: dict(row) for key, row in legacy_events.items()
+        } == retained_legacy_events
+        assert removed_legacy_event_ids.isdisjoint(
+            {_as_uuid(row["id"]) for row in event_rows}
         )
 
         operation_insert = sa.text(
@@ -1558,6 +1795,36 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
             ":start_attempted_at, :stop_requested_at, :delete_requested_at, "
             ":object_deleted_at)"
         )
+
+        async def assert_insert_succeeds(
+            *,
+            start_state: str,
+            room_name: str | None = "room-synthetic-valid",
+            legacy_incomplete: bool = False,
+            provider_egress_id: str | None = None,
+        ) -> None:
+            operation_id = uuid4()
+            async with migration_engine.begin() as connection:
+                await connection.execute(
+                    operation_insert,
+                    {
+                        "id": operation_id,
+                        "call_id": call_ids["empty_metadata"],
+                        "room_name": room_name,
+                        "legacy_incomplete": legacy_incomplete,
+                        "expected_object_key": "calls/synthetic-valid.ogg",
+                        "provider_egress_id": provider_egress_id,
+                        "start_state": start_state,
+                        "start_attempted_at": None,
+                        "stop_requested_at": None,
+                        "delete_requested_at": None,
+                        "object_deleted_at": None,
+                    },
+                )
+                await connection.execute(
+                    sa.text("DELETE FROM recording_egress_operations WHERE id = :id"),
+                    {"id": operation_id},
+                )
 
         async def assert_insert_fails(
             *,
@@ -1591,6 +1858,31 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                         },
                     )
             assert constraint_name in str(error.value.orig)
+
+        for valid_state in (
+            "prepared",
+            "starting",
+            "started",
+            "not_started",
+            "uncertain",
+        ):
+            await assert_insert_succeeds(
+                start_state=valid_state,
+                provider_egress_id=(
+                    "EG_synthetic_valid_started" if valid_state == "started" else None
+                ),
+            )
+        await assert_insert_succeeds(
+            start_state="started",
+            room_name=None,
+            legacy_incomplete=True,
+            provider_egress_id="EG_synthetic_valid_legacy_started",
+        )
+        await assert_insert_succeeds(
+            start_state="uncertain",
+            room_name=None,
+            legacy_incomplete=True,
+        )
 
         await assert_insert_fails(
             constraint_name="uq_recording_egress_operations_call_id",
@@ -1650,7 +1942,7 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                     "WHERE idempotency_key = :idempotency_key"
                 ),
                 {
-                    "finished_at": upgrade_finished_at,
+                    "finished_at": migration_db_finished_at,
                     "idempotency_key": (
                         f"recording.reconcile:{call_ids['active']}:start"
                     ),
@@ -1688,26 +1980,38 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                     "AND aggregate_type = 'recording-egress-operation'"
                 )
             )
-            legacy_after_downgrade = set(
-                (
+            legacy_after_downgrade = {
+                row["idempotency_key"]: dict(row)
+                for row in (
                     await connection.execute(
                         sa.text(
-                            "SELECT idempotency_key FROM outbox_events "
-                            "WHERE topic = 'recording.stop'"
+                            "SELECT * FROM outbox_events "
+                            "WHERE topic = 'recording.stop' "
+                            "ORDER BY idempotency_key"
                         )
                     )
-                ).scalars()
+                ).mappings()
+            }
+            reupgrade_db_started_at = await connection.scalar(
+                sa.text("SELECT clock_timestamp()")
             )
         assert downgraded_revision == "0013_outbox_routing_target"
         assert operation_table is None
         assert remaining_revision_events == 0
-        assert legacy_after_downgrade == set(legacy_events)
+        assert legacy_after_downgrade == retained_legacy_events
+        assert removed_legacy_event_ids.isdisjoint(
+            {_as_uuid(row["id"]) for row in legacy_after_downgrade.values()}
+        )
+        assert isinstance(reupgrade_db_started_at, datetime)
 
         await migration_engine.dispose()
         migration_engine = None
         run_alembic("upgrade", "0014_recording_egress_ops")
         migration_engine = create_async_engine(migration_url)
         async with migration_engine.connect() as connection:
+            reupgrade_db_finished_at = await connection.scalar(
+                sa.text("SELECT clock_timestamp()")
+            )
             reupgraded_revision = await connection.scalar(
                 sa.text("SELECT version_num FROM alembic_version")
             )
@@ -1722,9 +2026,7 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                 (
                     await connection.execute(
                         sa.text(
-                            "SELECT id, idempotency_key, aggregate_type, "
-                            "aggregate_id, payload, status, attempt_count, "
-                            "last_error_code, delivered_at "
+                            "SELECT * "
                             "FROM outbox_events "
                             "WHERE topic = 'recording.reconcile' "
                             "ORDER BY idempotency_key"
@@ -1734,6 +2036,18 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
                 .mappings()
                 .all()
             )
+            legacy_after_reupgrade = {
+                row["idempotency_key"]: dict(row)
+                for row in (
+                    await connection.execute(
+                        sa.text(
+                            "SELECT * FROM outbox_events "
+                            "WHERE topic = 'recording.stop' "
+                            "ORDER BY idempotency_key"
+                        )
+                    )
+                ).mappings()
+            }
 
         assert reupgraded_revision == "0014_recording_egress_ops"
         assert {_as_uuid(value) for value in reupgraded_operation_ids} == set(
@@ -1745,6 +2059,10 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
         assert first_revision_event_ids.isdisjoint(
             {_as_uuid(row["id"]) for row in replacement_events}
         )
+        assert legacy_after_reupgrade == retained_legacy_events
+        assert removed_legacy_event_ids.isdisjoint(
+            {_as_uuid(row["id"]) for row in legacy_after_reupgrade.values()}
+        )
         for event in replacement_events:
             operation_id = _as_uuid(event["aggregate_id"])
             assert event["aggregate_type"] == "recording-egress-operation"
@@ -1753,6 +2071,18 @@ async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination
             assert event["attempt_count"] == 0
             assert event["last_error_code"] is None
             assert event["delivered_at"] is None
+            replacement_timestamps = {
+                event["next_attempt_at"],
+                event["created_at"],
+                event["updated_at"],
+            }
+            assert len(replacement_timestamps) == 1
+            replacement_timestamp = replacement_timestamps.pop()
+            assert (
+                reupgrade_db_started_at
+                <= replacement_timestamp
+                <= reupgrade_db_finished_at
+            )
     finally:
         if migration_engine is not None:
             await migration_engine.dispose()
