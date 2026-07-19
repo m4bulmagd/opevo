@@ -588,6 +588,76 @@ async def test_list_room_egresses_normalizes_legacy_file_shapes(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("location", "expected_object_key"),
+    [
+        (
+            "s3://recordings/calls/user-1/call-1.ogg",
+            "calls/user-1/call-1.ogg",
+        ),
+        (
+            "http://minio:9000/recordings/calls/user-1/call-1.ogg",
+            "calls/user-1/call-1.ogg",
+        ),
+        ("s3://different-bucket/calls/user-1/call-1.ogg", None),
+        (
+            "https://unrecognized.example/recordings/calls/user-1/call-1.ogg",
+            None,
+        ),
+        ("calls/user-1/call-1.ogg", "calls/user-1/call-1.ogg"),
+    ],
+)
+async def test_list_room_egresses_normalizes_location_only_file_result(
+    location: str,
+    expected_object_key: str | None,
+) -> None:
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-location-only",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_COMPLETE,
+                file_results=[api.FileInfo(location=location)],
+            )
+        ]
+    )
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots[0].object_key == expected_object_key
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_prefers_filename_over_storage_locator() -> None:
+    object_key = "calls/user-1/call-1.ogg"
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-filename-first",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_COMPLETE,
+                file_results=[
+                    api.FileInfo(
+                        filename=object_key,
+                        location=(
+                            "s3://different-bucket/calls/user-1/different-call.ogg"
+                        ),
+                    )
+                ],
+            )
+        ]
+    )
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots[0].object_key == object_key
+
+
+@pytest.mark.anyio
 async def test_list_room_egresses_fails_closed_for_conflicting_paths() -> None:
     client = FakeRoomListEgressClient(
         [
