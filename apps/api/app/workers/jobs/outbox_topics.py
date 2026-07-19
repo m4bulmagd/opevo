@@ -1256,6 +1256,33 @@ async def deliver_recording_stop(
         raise OutboxDeliveryError("provider_retryable", retryable=True) from None
 
 
+async def deliver_recording_reconcile(
+    _ctx: dict[str, Any],
+    event: OutboxEvent,
+) -> None:
+    _validated_recording_operation_reference(event)
+    raise OutboxDeliveryError(
+        "recording_unresolved",
+        retryable=True,
+        exhaustible=False,
+    )
+
+
+def _validated_recording_operation_reference(event: OutboxEvent) -> UUID:
+    try:
+        operation_id = UUID(event.payload["operation_id"])
+    except (KeyError, TypeError, ValueError):
+        raise OutboxDeliveryError("invalid_payload", retryable=False) from None
+    if (
+        event.topic != "recording.reconcile"
+        or event.aggregate_type != "recording-egress-operation"
+        or event.aggregate_id != operation_id
+        or event.payload != {"operation_id": str(operation_id)}
+    ):
+        raise OutboxDeliveryError("invalid_payload", retryable=False)
+    return operation_id
+
+
 def _validated_post_call_reference(
     event: OutboxEvent,
     *,
@@ -1282,5 +1309,6 @@ DEFAULT_OUTBOX_HANDLERS = {
     "livekit.dispatch": deliver_livekit_dispatch,
     "livekit.verification_dispatch": deliver_livekit_verification_dispatch,
     "summary.generate": deliver_summary_generate,
+    "recording.reconcile": deliver_recording_reconcile,
     "recording.stop": deliver_recording_stop,
 }

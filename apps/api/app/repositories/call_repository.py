@@ -133,6 +133,18 @@ class CallRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_id_including_deleted_for_update(
+        self,
+        call_id: UUID,
+    ) -> Call | None:
+        result = await self.session.execute(
+            select(Call)
+            .where(Call.id == call_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
     async def list_stale_pending_ids(
         self,
         *,
@@ -236,6 +248,20 @@ class CallRepository:
     ) -> Call | None:
         result = await self.session.execute(
             select(Call).where(Call.id == call_id, Call.user_id == user_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_id_for_user_including_deleted_for_update(
+        self,
+        call_id: UUID,
+        *,
+        user_id: UUID,
+    ) -> Call | None:
+        result = await self.session.execute(
+            select(Call)
+            .where(Call.id == call_id, Call.user_id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
 
