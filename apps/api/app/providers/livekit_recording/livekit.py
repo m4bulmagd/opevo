@@ -37,7 +37,10 @@ def _location_object_key(
     bucket_name: str,
     endpoint_url: str,
 ) -> str | None:
-    parsed = urlsplit(location)
+    try:
+        parsed = urlsplit(location)
+    except ValueError:
+        return None
     if not parsed.scheme and not parsed.netloc:
         if (
             parsed.path != location
@@ -54,7 +57,10 @@ def _location_object_key(
         object_key = parsed.path[1:]
         return object_key if object_key and not object_key.startswith("/") else None
 
-    endpoint = urlsplit(endpoint_url)
+    try:
+        endpoint = urlsplit(endpoint_url)
+    except ValueError:
+        return None
     if (
         parsed.scheme not in {"http", "https"}
         or parsed.scheme != endpoint.scheme
