@@ -30,14 +30,70 @@ class EgressObjectKeyEvidence:
 
 _MISSING = object()
 _ALIAS_CONFLICT = object()
+_LIVEKIT_ALIAS_NAMES = {
+    "egressInfo": "egress_info",
+    "egressId": "egress_id",
+    "roomName": "room_name",
+    "roomComposite": "room_composite",
+    "fileOutputs": "file_outputs",
+    "fileResults": "file_results",
+}
 
 
-def _values_agree(left: object, right: object) -> bool:
+def _raw_values_agree(left: object, right: object) -> bool:
     try:
         result = left == right
     except Exception:
         return False
     return type(result) is bool and result
+
+
+def _canonical_alias_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        normalized: dict[object, object] = {}
+        for key, item in value.items():
+            canonical_key = _LIVEKIT_ALIAS_NAMES.get(key, key)
+            canonical_item = _canonical_alias_value(item)
+            if canonical_item is _ALIAS_CONFLICT:
+                return _ALIAS_CONFLICT
+            if canonical_key in normalized and not _raw_values_agree(
+                normalized[canonical_key], canonical_item
+            ):
+                return _ALIAS_CONFLICT
+            normalized[canonical_key] = canonical_item
+        return normalized
+    if isinstance(value, (list, tuple)):
+        normalized_items = tuple(_canonical_alias_value(item) for item in value)
+        if any(item is _ALIAS_CONFLICT for item in normalized_items):
+            return _ALIAS_CONFLICT
+        return normalized_items
+    return value
+
+
+def livekit_alias_values_equivalent(left: object, right: object) -> bool:
+    """Compare only the bounded camel/snake vocabulary Presvo consumes."""
+    canonical_left = _canonical_alias_value(left)
+    canonical_right = _canonical_alias_value(right)
+    if canonical_left is _ALIAS_CONFLICT or canonical_right is _ALIAS_CONFLICT:
+        return False
+    return _raw_values_agree(canonical_left, canonical_right)
+
+
+def livekit_field_is_present(value: object, name: str) -> bool:
+    """Honor protobuf message presence without probing proto3 scalars."""
+    descriptor = getattr(value, "DESCRIPTOR", None)
+    fields_by_name = getattr(descriptor, "fields_by_name", None)
+    field = fields_by_name.get(name) if fields_by_name is not None else None
+    if field is None or not getattr(field, "has_presence", False):
+        return True
+    has_field = getattr(value, "HasField", None)
+    if not callable(has_field):
+        return False
+    try:
+        presence = has_field(name)
+    except (TypeError, ValueError):
+        return False
+    return type(presence) is bool and presence
 
 
 def _field(value: object, *names: str) -> object:
@@ -47,12 +103,15 @@ def _field(value: object, *names: str) -> object:
         candidates = []
         for name in names:
             candidate = getattr(value, name, _MISSING)
-            if candidate is not _MISSING:
+            if candidate is not _MISSING and livekit_field_is_present(value, name):
                 candidates.append(candidate)
     if not candidates:
         return _MISSING
     first = candidates[0]
-    if any(not _values_agree(first, candidate) for candidate in candidates[1:]):
+    if any(
+        not livekit_alias_values_equivalent(first, candidate)
+        for candidate in candidates[1:]
+    ):
         return _ALIAS_CONFLICT
     return first
 
@@ -164,7 +223,7 @@ def _file_info_path_evidence(
     if location is None:
         if location_value is not _MISSING and location_value != "":
             return EgressObjectKeyEvidence("invalid")
-        return EgressObjectKeyEvidence("absent")
+        return EgressObjectKeyEvidence("invalid")
     object_key = _location_object_key(
         location,
         bucket_name=bucket_name,
@@ -222,11 +281,13 @@ def normalized_egress_object_key_evidence(
         )
         if singular_path is not None:
             paths.add(singular_path)
-        elif singular_path_value is not _MISSING and singular_path_value != "":
+        elif singular_output is not _MISSING:
             return EgressObjectKeyEvidence("invalid")
 
         outputs = _items(_field(room_composite, "file_outputs", "fileOutputs"))
         if outputs is None:
+            return EgressObjectKeyEvidence("invalid")
+        if singular_output is _MISSING and not outputs:
             return EgressObjectKeyEvidence("invalid")
         for output in outputs:
             if output is None or not _is_record(output):
@@ -237,7 +298,7 @@ def normalized_egress_object_key_evidence(
             path = _bounded_nonempty_string(path_value, max_length=512)
             if path is not None:
                 paths.add(path)
-            elif path_value is not _MISSING and path_value != "":
+            else:
                 return EgressObjectKeyEvidence("invalid")
     elif room_composite is not _MISSING:
         return EgressObjectKeyEvidence("invalid")
@@ -450,8 +511,7 @@ class LiveKitRecordingProvider(RecordingProvider):
             if (
                 egress_id is None
                 or item_room_name is None
-                or isinstance(status, bool)
-                or not isinstance(status, int)
+                or type(status) is not int
                 or status not in range(7)
             ):
                 raise LiveKitRecordingProviderError(
@@ -462,7 +522,7 @@ class LiveKitRecordingProvider(RecordingProvider):
                 RecordingEgressSnapshot(
                     egress_id=egress_id,
                     room_name=item_room_name,
-                    status=int(status),
+                    status=status,
                     object_key=normalized_egress_object_key(
                         item,
                         bucket_name=self.bucket_name,

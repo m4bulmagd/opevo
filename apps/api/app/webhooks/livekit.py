@@ -19,6 +19,8 @@ from app.repositories.user_repository import UserRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
 from app.providers.livekit_recording.livekit import (
     EgressObjectKeyEvidence,
+    livekit_alias_values_equivalent,
+    livekit_field_is_present,
     normalized_egress_object_key_evidence,
 )
 from app.services.livekit_dispatch_service import (
@@ -56,17 +58,13 @@ def _field(value: object, *names: str) -> object:
         candidates = []
         for name in names:
             candidate = getattr(value, name, _MISSING)
-            if candidate is not _MISSING:
+            if candidate is not _MISSING and livekit_field_is_present(value, name):
                 candidates.append(candidate)
     if not candidates:
         return _MISSING
     first = candidates[0]
     for candidate in candidates[1:]:
-        try:
-            agrees = first == candidate
-        except Exception:
-            return _ALIAS_CONFLICT
-        if type(agrees) is not bool or not agrees:
+        if not livekit_alias_values_equivalent(first, candidate):
             return _ALIAS_CONFLICT
     return first
 
@@ -107,16 +105,18 @@ def _convert_livekit_event(
         )
         return _ConvertedLiveKitEvent(
             payload={
-                "id": None if event_id is _MISSING else event_id,
+                "id": _sanitized_webhook_string(event_id, max_length=255),
                 "event": event_type,
                 "egress": {
-                    "egress_id": _none_if_missing(
-                        _field(egress, "egress_id", "egressId")
+                    "egress_id": _sanitized_webhook_string(
+                        _field(egress, "egress_id", "egressId"),
+                        max_length=255,
                     ),
-                    "room_name": _none_if_missing(
-                        _field(egress, "room_name", "roomName")
+                    "room_name": _sanitized_webhook_string(
+                        _field(egress, "room_name", "roomName"),
+                        max_length=255,
                     ),
-                    "status": _none_if_missing(_field(egress, "status")),
+                    "status": _sanitized_egress_status(_field(egress, "status")),
                     "object_key": evidence.object_key,
                 },
             },
@@ -154,8 +154,14 @@ def _convert_livekit_event(
     )
 
 
-def _none_if_missing(value: object) -> object | None:
-    return None if value is _MISSING or value is _ALIAS_CONFLICT else value
+def _sanitized_webhook_string(value: object, *, max_length: int) -> str | None:
+    if not _bounded_webhook_string(value, max_length=max_length):
+        return None
+    return cast(str, value)
+
+
+def _sanitized_egress_status(value: object) -> int | None:
+    return value if type(value) is int and value in range(7) else None
 
 
 def convert_livekit_event(

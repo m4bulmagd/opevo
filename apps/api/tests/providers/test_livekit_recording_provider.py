@@ -561,6 +561,37 @@ async def test_list_room_egresses_normalizes_mapping_aliases(item: dict) -> None
 
 
 @pytest.mark.anyio
+async def test_list_room_egresses_accepts_semantically_equivalent_path_aliases() -> None:
+    object_key = "calls/user-1/call-1.ogg"
+    item = {
+        "egressId": "egress-mapping",
+        "egress_id": "egress-mapping",
+        "roomName": "room-owned",
+        "room_name": "room-owned",
+        "status": int(api.EgressStatus.EGRESS_ACTIVE),
+        "roomComposite": {
+            "fileOutputs": [{"filepath": object_key}],
+        },
+        "room_composite": {
+            "file_outputs": [{"filepath": object_key}],
+        },
+    }
+
+    snapshots = await build_provider(
+        FakeRoomListEgressClient([item])
+    ).list_room_egresses(room_name="room-owned")
+
+    assert snapshots[0].object_key == object_key
+    evidence = normalized_egress_object_key_evidence(
+        item,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+    assert evidence.state == "exact"
+    assert evidence.object_key == object_key
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "path_shape",
     [
@@ -624,6 +655,26 @@ async def test_list_room_egresses_rejects_unsafe_mapping_identity(item: dict) ->
             room_name="room-owned"
         )
 
+    assert exc_info.value.error_class == "unknown"
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_rejects_int_subclass_status() -> None:
+    class ProviderStatus(int):
+        pass
+
+    item = {
+        "egressId": "EG_exact",
+        "roomName": "room-owned",
+        "status": ProviderStatus(api.EgressStatus.EGRESS_ACTIVE),
+    }
+
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await build_provider(FakeRoomListEgressClient([item])).list_room_egresses(
+            room_name="room-owned"
+        )
+
+    assert exc_info.value.category == "provider_retryable"
     assert exc_info.value.error_class == "unknown"
 
 
@@ -805,7 +856,7 @@ async def test_list_room_egresses_rejects_unprovable_location_with_file_result(
 
 
 @pytest.mark.anyio
-async def test_list_room_egresses_ignores_absent_file_info_path() -> None:
+async def test_list_room_egresses_marks_explicit_empty_file_result_invalid() -> None:
     object_key = "calls/user-1/call-1.ogg"
     client = FakeRoomListEgressClient(
         [
@@ -823,7 +874,13 @@ async def test_list_room_egresses_ignores_absent_file_info_path() -> None:
 
     snapshots = await build_provider(client).list_room_egresses(room_name="room-owned")
 
-    assert snapshots[0].object_key == object_key
+    assert snapshots[0].object_key is None
+    evidence = normalized_egress_object_key_evidence(
+        client.items[0],
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+    assert evidence.state == "invalid"
 
 
 @pytest.mark.anyio
