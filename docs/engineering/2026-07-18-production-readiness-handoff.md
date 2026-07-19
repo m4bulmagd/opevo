@@ -3,9 +3,10 @@
 ## Purpose
 
 This document is the durable continuation point for the local-first Presvo
-production-readiness program completed on 2026-07-18. It exists so a later
-coding session can continue without relying on ignored worktree notes or prior
-conversation history.
+production-readiness program completed on 2026-07-18 and the recording-egress
+design checkpoint approved on 2026-07-19. It exists so a later coding session
+can continue without relying on ignored worktree notes or prior conversation
+history.
 
 At this checkpoint the implementation is production-oriented and locally
 verified, but it is not production-certified. No cloud deployment, live
@@ -14,17 +15,19 @@ this program.
 
 ## Git checkpoint
 
-- Intended continuation branch: `feat/presvo-production-readiness`
+- The completed `feat/presvo-production-readiness` branch was fast-forwarded
+  into local `main` after the user's manual test passed, then deleted locally.
 - Base branch: `main`
 - Base commit: `c5a5994cb1162d7f3e600cf6fc25ab54cc01e430`
 - Last implementation commit before this handoff:
   `64ceb309232a7777326dfdd5a3a1d7d4291c3d67`
 - Final implementation review: `SPEC PASS`, `QUALITY APPROVED`, ready to merge,
   with no Critical, Important, or Minor findings.
-- User checkpoint: pause implementation while the user performs manual tests.
+- User checkpoint: manual testing passed. The next recording-egress design is
+  approved and documented, but its implementation has not started.
 
-The handoff document itself is committed after the implementation checkpoint,
-so use `git log -1` to obtain the current branch head.
+Use `git log -1` to obtain the current local `main` head. Nothing was pushed or
+deployed as part of the merge or design work.
 
 ## Product decisions that remain authoritative
 
@@ -162,29 +165,32 @@ Do not describe Presvo as production-ready until the applicable gates in
 4. Advanced capabilities: live monitoring/intervention, human transfer, tools,
    outbound calls, mobile, multiple numbers/plans, and additional countries.
 
-## Recommended next implementation unit
+## Approved next implementation unit
 
-After the user completes manual testing and explicitly asks to continue, design
-the narrow recording-egress start/pending-stop synchronization fix first. Keep
-it independent from account deletion and other compliance work so its state
-machine, retry behavior, and failure recovery can be reviewed and tested in
-isolation.
+Implement the narrow recording-egress start/pending-stop synchronization fix
+described in
+`docs/superpowers/specs/2026-07-19-recording-egress-synchronization-design.md`.
+Keep it independent from account deletion and other compliance work so its
+state machine, retry behavior, and failure recovery remain reviewable and
+testable in isolation.
 
-Do not start that implementation from this handoff alone. First collect the
-user's manual-test results and confirm that this remains the preferred next
-unit.
+Do not start implementation from this handoff alone. Read the approved design,
+have the user review the committed specification, and create a detailed
+test-first implementation plan before editing product code.
 
 ## Resume procedure for a new coding session
 
-1. Check out `feat/presvo-production-readiness` and verify a clean worktree.
+1. Check out local `main` and verify a clean worktree.
 2. Read this handoff, `README.md`, `docs/PROJECT_STATUS.md`, and
    `docs/architecture/local-self-service-activation.md` completely.
 3. Inspect recent commits from `64ceb30` through branch head.
-4. Ask for the user's manual-test results before changing code.
-5. If a defect was found, reproduce it and use the repository's test-first and
+4. Read
+   `docs/superpowers/specs/2026-07-19-recording-egress-synchronization-design.md`
+   and the root `CONTEXT.md`.
+5. Confirm the user has reviewed the written specification, then create a
+   focused test-first implementation plan before editing product code.
+6. If a defect is found, reproduce it and use the repository's test-first and
    systematic-debugging workflows.
-6. If manual tests pass and the user approves the recommended next unit, create
-   a focused design and implementation plan before editing.
 7. Preserve the boundary: local development and test infrastructure are
    authorized; provider accounts, cloud resources, deployments, real
    credentials, and external publishing require separate approval.
