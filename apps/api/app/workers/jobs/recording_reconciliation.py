@@ -14,9 +14,11 @@ from app.repositories.recording_egress_operation_repository import (
     RecordingEgressOperationRepository,
 )
 from app.services.recording_lifecycle_service import (
+    RECORDING_AGGREGATE_TYPE,
     RECORDING_IDENTITY_CONFLICT_CODE,
     START_RESULT_LEASE,
 )
+from app.services.outbox_service import OutboxService
 
 
 RecordingReconciliationErrorCode = Literal[
@@ -254,7 +256,7 @@ class RecordingReconciler:
             status, refreshed = await self._persist_identity_conflict(snapshot)
             if status == "missing":
                 return ReconciliationResult("complete")
-            if status != "updated" or refreshed is None:
+            if status not in {"updated", "conflict"} or refreshed is None:
                 return ReconciliationResult("retry", "recording_unresolved")
             return await self._stop_conflicting_identities(
                 refreshed,
@@ -492,8 +494,11 @@ class RecordingReconciler:
                 await session.rollback()
                 return "changed", None
             if locked is None:
-                await session.commit()
-                return "missing", None
+                return await self._restore_or_merge_missing_conflict(
+                    session,
+                    snapshot,
+                    exact.egress_id,
+                )
             call, operation = locked
             if (
                 operation.call_id != snapshot.call_id
@@ -574,6 +579,74 @@ class RecordingReconciler:
             await session.commit()
             return "updated", refreshed
 
+    async def _restore_or_merge_missing_conflict(
+        self,
+        session: AsyncSession,
+        snapshot: _OperationSnapshot,
+        recovered_provider_id: str | None,
+    ) -> tuple[_PersistenceStatus, _OperationSnapshot | None]:
+        calls = CallRepository(session)
+        operations = RecordingEgressOperationRepository(session)
+        call = await calls.get_by_id_including_deleted_for_update(snapshot.call_id)
+        if call is None:
+            await session.rollback()
+            return "changed", None
+
+        operation = await operations.get_by_id_for_update(snapshot.operation_id)
+        if operation is None:
+            operation = await operations.add(
+                RecordingEgressOperation(
+                    id=snapshot.operation_id,
+                    call_id=snapshot.call_id,
+                    room_name=snapshot.room_name,
+                    legacy_incomplete=snapshot.legacy_incomplete,
+                    expected_object_key=snapshot.expected_object_key,
+                    provider_egress_id=recovered_provider_id,
+                    start_state=(
+                        "started"
+                        if recovered_provider_id is not None
+                        else "uncertain"
+                    ),
+                    stop_requested_at=snapshot.stop_requested_at,
+                    delete_requested_at=snapshot.delete_requested_at,
+                    last_reconciled_at=_as_utc(self.now()),
+                    last_error_code=RECORDING_IDENTITY_CONFLICT_CODE,
+                )
+            )
+        elif (
+            operation.call_id != snapshot.call_id
+            or operation.room_name != snapshot.room_name
+            or operation.legacy_incomplete != snapshot.legacy_incomplete
+            or operation.expected_object_key != snapshot.expected_object_key
+        ):
+            await session.rollback()
+            return "changed", None
+        else:
+            if operation.provider_egress_id is None:
+                operation.start_state = "uncertain"
+            if operation.stop_requested_at is None:
+                operation.stop_requested_at = snapshot.stop_requested_at
+            if operation.delete_requested_at is None:
+                operation.delete_requested_at = snapshot.delete_requested_at
+            operation.last_reconciled_at = _as_utc(self.now())
+            operation.last_error_code = RECORDING_IDENTITY_CONFLICT_CODE
+
+        self._hide_playback_projection(call)
+        await OutboxService(session, now_provider=self.now).add(
+            topic="recording.reconcile",
+            aggregate_type=RECORDING_AGGREGATE_TYPE,
+            aggregate_id=operation.id,
+            idempotency_key=(
+                f"recording.reconcile:{operation.id}:missing-operation-conflict"
+            ),
+            payload={"operation_id": str(operation.id)},
+            next_attempt_at=_as_utc(self.now()),
+        )
+        await session.flush()
+        refreshed = self._snapshot(call, operation)
+        await session.commit()
+        return "conflict", refreshed
+
     async def _persist_identity_conflict(
         self,
         snapshot: _OperationSnapshot,
@@ -588,8 +661,11 @@ class RecordingReconciler:
                 await session.rollback()
                 return "changed", None
             if locked is None:
-                await session.commit()
-                return "missing", None
+                return await self._restore_or_merge_missing_conflict(
+                    session,
+                    snapshot,
+                    None,
+                )
             call, operation = locked
             if (
                 operation.call_id != snapshot.call_id
