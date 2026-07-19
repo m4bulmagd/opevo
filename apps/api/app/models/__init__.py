@@ -50,6 +50,7 @@ from app.models.notification import Notification  # noqa: E402,F401
 from app.models.outbox_event import OutboxEvent  # noqa: E402,F401
 from app.models.phone_number import PhoneNumber  # noqa: E402,F401
 from app.models.phone_number_provisioning import PhoneNumberProvisioning  # noqa: E402,F401
+from app.models.recording_egress_operation import RecordingEgressOperation  # noqa: E402,F401
 from app.models.subscription import Subscription  # noqa: E402,F401
 from app.models.usage_ledger import UsageLedger  # noqa: E402,F401
 from app.models.user import User  # noqa: E402,F401
