@@ -94,6 +94,10 @@ class FakeRoomListEgressClient:
         return SimpleNamespace(items=self.items)
 
 
+class _EquivalentPath(str):
+    pass
+
+
 def twirp_error(*, code: str, status: int) -> api.TwirpError:
     return api.TwirpError(code, "provider detail must not escape", status=status)
 
@@ -589,6 +593,35 @@ async def test_list_room_egresses_accepts_semantically_equivalent_path_aliases()
     )
     assert evidence.state == "exact"
     assert evidence.object_key == object_key
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_rejects_equal_path_leaves_of_different_types() -> None:
+    object_key = "calls/user-1/call-1.ogg"
+    item = {
+        "egressId": "egress-mapping",
+        "roomName": "room-owned",
+        "status": int(api.EgressStatus.EGRESS_ACTIVE),
+        "roomComposite": {
+            "fileOutputs": [{"filepath": _EquivalentPath(object_key)}],
+        },
+        "room_composite": {
+            "file_outputs": ({"filepath": object_key},),
+        },
+    }
+
+    snapshots = await build_provider(
+        FakeRoomListEgressClient([item])
+    ).list_room_egresses(room_name="room-owned")
+    evidence = normalized_egress_object_key_evidence(
+        item,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert snapshots[0].object_key is None
+    assert evidence.state == "invalid"
+    assert evidence.object_key is None
 
 
 @pytest.mark.anyio
