@@ -35,6 +35,46 @@ async def _user(db_session, suffix: str) -> User:
     return user
 
 
+async def _add_migrated_pending_recording(
+    db_session,
+    call: Call,
+    *,
+    now: datetime,
+    suffix: str,
+) -> RecordingEgressOperation:
+    room_name = f"room-migrated-{suffix}"
+    provider_egress_id = f"egress-migrated-{suffix}"
+    object_key = f"calls/{call.user_id}/{call.id}.ogg"
+    call.livekit_room_id = room_name
+    call.recording_object_key = object_key
+    call.recording_egress_id = provider_egress_id
+    call.recording_url = f"https://recordings.example/{suffix}.ogg"
+    operation = RecordingEgressOperation(
+        id=call.id,
+        call_id=call.id,
+        room_name=room_name,
+        legacy_incomplete=False,
+        expected_object_key=object_key,
+        provider_egress_id=provider_egress_id,
+        start_state="started",
+    )
+    db_session.add_all(
+        [
+            operation,
+            OutboxEvent(
+                idempotency_key=f"recording.reconcile:{operation.id}:start",
+                topic="recording.reconcile",
+                aggregate_type="recording-egress-operation",
+                aggregate_id=operation.id,
+                payload={"operation_id": str(operation.id)},
+                next_attempt_at=now + timedelta(days=30),
+            ),
+        ]
+    )
+    await db_session.flush()
+    return operation
+
+
 @pytest.mark.skipif(not HAS_RECONCILIATION, reason="reconciliation missing")
 @pytest.mark.anyio
 async def test_reconciliation_recovers_each_stale_nonterminal_state(
@@ -112,6 +152,114 @@ async def test_reconciliation_recovers_each_stale_nonterminal_state(
     assert stored[3].finalization_attempt_count == 2
     assert result.failed == 1
     assert result.recovered == 3
+
+
+@pytest.mark.skipif(not HAS_RECONCILIATION, reason="reconciliation missing")
+@pytest.mark.anyio
+async def test_stale_pending_failure_requests_stop_for_migrated_recording(
+    db_session,
+) -> None:
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+    user = await _user(db_session, "pending_migrated_recording")
+    call = Call(
+        user_id=user.id,
+        status="pending",
+        state_changed_at=now - timedelta(seconds=121),
+    )
+    db_session.add(call)
+    await db_session.flush()
+    operation = await _add_migrated_pending_recording(
+        db_session,
+        call,
+        now=now,
+        suffix="stale-timeout",
+    )
+    call_id = call.id
+    operation_id = operation.id
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    await CallReconciliationService(factory).reconcile(now)
+
+    db_session.expire_all()
+    stored_call = await db_session.get(Call, call_id)
+    stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
+    stop_events = (
+        await db_session.scalars(
+            select(OutboxEvent).where(
+                OutboxEvent.idempotency_key
+                == f"recording.reconcile:{operation_id}:stop"
+            )
+        )
+    ).all()
+    assert stored_call is not None
+    assert stored_call.status == "failed"
+    assert stored_call.failure_code == "dispatch_timeout"
+    assert stored_operation is not None
+    assert stored_operation.id == operation_id
+    assert stored_operation.provider_egress_id == "egress-migrated-stale-timeout"
+    assert stored_operation.stop_requested_at is not None
+    assert stored_operation.stop_requested_at.replace(tzinfo=UTC) == now
+    assert len(stop_events) == 1
+    assert stop_events[0].payload == {"operation_id": str(operation_id)}
+
+
+@pytest.mark.skipif(not HAS_RECONCILIATION, reason="reconciliation missing")
+@pytest.mark.anyio
+async def test_stale_pending_failure_rolls_back_when_recording_stop_fails(
+    db_session,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+    changed_at = now - timedelta(seconds=121)
+    user = await _user(db_session, "pending_stop_rollback")
+    call = Call(
+        user_id=user.id,
+        status="pending",
+        state_changed_at=changed_at,
+    )
+    db_session.add(call)
+    await db_session.flush()
+    operation = await _add_migrated_pending_recording(
+        db_session,
+        call,
+        now=now,
+        suffix="stale-rollback",
+    )
+    call_id = call.id
+    operation_id = operation.id
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    async def fail_request_stop(self, _call):
+        raise RuntimeError("forced recording stop failure")
+
+    monkeypatch.setattr(
+        reconciliation_module.RecordingLifecycleService,
+        "request_stop",
+        fail_request_stop,
+    )
+
+    with pytest.raises(RuntimeError, match="forced recording stop failure"):
+        await CallReconciliationService(factory).reconcile(now)
+
+    db_session.expire_all()
+    stored_call = await db_session.get(Call, call_id)
+    stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
+    stop_event = await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation_id}:stop"
+        )
+    )
+    assert stored_call is not None
+    assert stored_call.status == "pending"
+    assert stored_call.failure_code is None
+    assert stored_call.last_reconciled_at is None
+    assert stored_call.state_changed_at.replace(tzinfo=UTC) == changed_at
+    assert stored_operation is not None
+    assert stored_operation.stop_requested_at is None
+    assert stop_event is None
 
 
 @pytest.mark.skipif(not HAS_RECONCILIATION, reason="reconciliation missing")
