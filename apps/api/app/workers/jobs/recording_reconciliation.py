@@ -13,7 +13,10 @@ from app.repositories.call_repository import CallRepository
 from app.repositories.recording_egress_operation_repository import (
     RecordingEgressOperationRepository,
 )
-from app.services.recording_lifecycle_service import START_RESULT_LEASE
+from app.services.recording_lifecycle_service import (
+    RECORDING_IDENTITY_CONFLICT_CODE,
+    START_RESULT_LEASE,
+)
 
 
 RecordingReconciliationErrorCode = Literal[
@@ -114,6 +117,8 @@ class RecordingReconciler:
             return ReconciliationResult("retry", "recording_unresolved")
         if snapshot is None:
             return ReconciliationResult("complete")
+        if snapshot.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE:
+            return await self._reconcile_conflict(snapshot)
         if snapshot.provider_egress_id is not None:
             return await self._reconcile_known(snapshot)
         if snapshot.start_state == "not_started":
@@ -133,20 +138,25 @@ class RecordingReconciler:
                 return None
             call, operation = locked
 
-            if (
-                operation.start_state == "prepared"
-                and _as_utc(operation.created_at) <= stale_before
-            ):
-                operation.start_state = "not_started"
-                operation.last_error_code = None
-            elif operation.start_state == "starting" and (
-                operation.start_attempted_at is None
-                or _as_utc(operation.start_attempted_at) <= stale_before
-            ):
-                operation.start_state = "uncertain"
+            if operation.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE:
+                if operation.provider_egress_id is None:
+                    operation.start_state = "uncertain"
+                self._hide_playback_projection(call)
+            else:
+                if (
+                    operation.start_state == "prepared"
+                    and _as_utc(operation.created_at) <= stale_before
+                ):
+                    operation.start_state = "not_started"
+                    operation.last_error_code = None
+                elif operation.start_state == "starting" and (
+                    operation.start_attempted_at is None
+                    or _as_utc(operation.start_attempted_at) <= stale_before
+                ):
+                    operation.start_state = "uncertain"
 
-            if self._is_definitively_complete_without_io(operation):
-                operation.last_error_code = None
+                if self._is_definitively_complete_without_io(operation):
+                    operation.last_error_code = None
             operation.last_reconciled_at = now
             await session.flush()
             snapshot = self._snapshot(call, operation)
@@ -188,6 +198,11 @@ class RecordingReconciler:
             status, refreshed = await self._persist_provider_terminal(snapshot)
             if status == "missing":
                 return ReconciliationResult("complete")
+            if status == "conflict":
+                return ReconciliationResult(
+                    "retry",
+                    RECORDING_IDENTITY_CONFLICT_CODE,
+                )
             if status != "updated" or refreshed is None:
                 return ReconciliationResult("retry", "recording_unresolved")
             snapshot = refreshed
@@ -216,20 +231,11 @@ class RecordingReconciler:
         if snapshot.start_state == "prepared":
             return await self._record_retry(snapshot, "recording_unresolved")
 
-        sticky_conflict = (
-            snapshot.last_error_code == "recording_identity_conflict"
-        )
         try:
             listed = await self.provider.list_room_egresses(
                 room_name=snapshot.room_name
             )
         except Exception:
-            if sticky_conflict:
-                return await self._record_retry(
-                    snapshot,
-                    "recording_provider_unavailable",
-                    persisted_code="recording_identity_conflict",
-                )
             return await self._record_retry(
                 snapshot,
                 "recording_provider_unavailable",
@@ -244,20 +250,15 @@ class RecordingReconciler:
                 exact_by_id.setdefault(item.egress_id, item)
         exact = tuple(exact_by_id.values())
 
-        if sticky_conflict or len(exact) > 1:
-            for item in exact:
-                try:
-                    await self.provider.ensure_not_running(item.egress_id)
-                except Exception:
-                    continue
-            status, _ = await self._persist_identity_conflict(snapshot)
+        if len(exact) > 1:
+            status, refreshed = await self._persist_identity_conflict(snapshot)
             if status == "missing":
                 return ReconciliationResult("complete")
-            if status == "changed":
+            if status != "updated" or refreshed is None:
                 return ReconciliationResult("retry", "recording_unresolved")
-            return ReconciliationResult(
-                "retry",
-                "recording_identity_conflict",
+            return await self._stop_conflicting_identities(
+                refreshed,
+                tuple(item.egress_id for item in exact),
             )
 
         if len(exact) == 1:
@@ -268,25 +269,77 @@ class RecordingReconciler:
             if status == "missing":
                 return ReconciliationResult("complete")
             if status == "conflict":
-                return ReconciliationResult(
-                    "retry",
-                    "recording_identity_conflict",
+                if refreshed is None:
+                    return ReconciliationResult("retry", "recording_unresolved")
+                return await self._stop_conflicting_identities(
+                    refreshed,
+                    (exact[0].egress_id,),
                 )
             if status != "updated" or refreshed is None:
                 return ReconciliationResult("retry", "recording_unresolved")
             return await self._reconcile_known(refreshed)
 
         error_code: RecordingReconciliationErrorCode = (
-            "recording_unresolved"
-            if not listed
-            else "recording_identity_mismatch"
+            "recording_unresolved" if not listed else "recording_identity_mismatch"
         )
         return await self._record_retry(snapshot, error_code)
+
+    async def _reconcile_conflict(
+        self,
+        snapshot: _OperationSnapshot,
+    ) -> ReconciliationResult:
+        exact_ids: tuple[str, ...] = ()
+        if not snapshot.legacy_incomplete and snapshot.room_name:
+            try:
+                listed = await self.provider.list_room_egresses(
+                    room_name=snapshot.room_name
+                )
+            except Exception:
+                listed = ()
+            exact_ids = tuple(
+                dict.fromkeys(
+                    item.egress_id
+                    for item in listed
+                    if item.room_name == snapshot.room_name
+                    and item.object_key == snapshot.expected_object_key
+                )
+            )
+
+        status, refreshed = await self._persist_identity_conflict(snapshot)
+        if status == "missing":
+            return ReconciliationResult("complete")
+        if status != "updated" or refreshed is None:
+            return ReconciliationResult("retry", "recording_unresolved")
+        return await self._stop_conflicting_identities(refreshed, exact_ids)
+
+    async def _stop_conflicting_identities(
+        self,
+        snapshot: _OperationSnapshot,
+        exact_ids: tuple[str, ...],
+    ) -> ReconciliationResult:
+        safe_ids = tuple(
+            dict.fromkeys(
+                candidate
+                for candidate in (snapshot.provider_egress_id, *exact_ids)
+                if candidate is not None
+            )
+        )
+        for egress_id in safe_ids:
+            try:
+                await self.provider.ensure_not_running(egress_id)
+            except Exception:
+                continue
+        return ReconciliationResult("retry", RECORDING_IDENTITY_CONFLICT_CODE)
 
     async def _delete_object_and_operation(
         self,
         snapshot: _OperationSnapshot,
     ) -> ReconciliationResult:
+        if snapshot.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE:
+            return ReconciliationResult(
+                "retry",
+                RECORDING_IDENTITY_CONFLICT_CODE,
+            )
         if not self._safe_to_delete_object(snapshot):
             return await self._record_retry(snapshot, "recording_unresolved")
 
@@ -306,6 +359,11 @@ class RecordingReconciler:
             status, refreshed = await self._persist_object_deleted(snapshot)
             if status == "missing":
                 return ReconciliationResult("complete")
+            if status == "conflict":
+                return ReconciliationResult(
+                    "retry",
+                    RECORDING_IDENTITY_CONFLICT_CODE,
+                )
             if status != "updated" or refreshed is None:
                 return ReconciliationResult("retry", "recording_unresolved")
             snapshot = refreshed
@@ -313,33 +371,30 @@ class RecordingReconciler:
         status = await self._remove_deleted_operation(snapshot)
         if status in {"updated", "missing"}:
             return ReconciliationResult("complete")
+        if status == "conflict":
+            return ReconciliationResult(
+                "retry",
+                RECORDING_IDENTITY_CONFLICT_CODE,
+            )
         return ReconciliationResult("retry", "recording_unresolved")
 
     async def _record_retry(
         self,
         snapshot: _OperationSnapshot,
         error_code: RecordingReconciliationErrorCode,
-        *,
-        persisted_code: RecordingReconciliationErrorCode | None = None,
     ) -> ReconciliationResult:
         status, current_error = await self._persist_inspection_error(
             snapshot,
-            persisted_code or error_code,
+            error_code,
         )
         if status == "missing":
             return ReconciliationResult("complete")
         if status == "changed":
             return ReconciliationResult("retry", "recording_unresolved")
-        if current_error == "recording_identity_conflict" and (
-            error_code
-            not in {
-                "recording_provider_unavailable",
-                "recording_identity_conflict",
-            }
-        ):
+        if status == "conflict" or current_error == RECORDING_IDENTITY_CONFLICT_CODE:
             return ReconciliationResult(
                 "retry",
-                "recording_identity_conflict",
+                RECORDING_IDENTITY_CONFLICT_CODE,
             )
         return ReconciliationResult("retry", error_code)
 
@@ -360,17 +415,20 @@ class RecordingReconciler:
             if locked is None:
                 await session.commit()
                 return "missing", None
-            _, operation = locked
+            call, operation = locked
+            if operation.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE:
+                self._hide_playback_projection(call)
+                operation.last_reconciled_at = _as_utc(self.now())
+                await session.flush()
+                await session.commit()
+                return "conflict", RECORDING_IDENTITY_CONFLICT_CODE
             if not self._same_unknown_or_known_state(operation, snapshot):
                 current_error = operation.last_error_code
                 await session.rollback()
                 return "changed", current_error
 
-            if operation.last_error_code == "recording_identity_conflict":
-                durable_error = "recording_identity_conflict"
-            else:
-                operation.last_error_code = error_code
-                durable_error = error_code
+            operation.last_error_code = error_code
+            durable_error = error_code
             operation.last_reconciled_at = _as_utc(self.now())
             await session.flush()
             await session.commit()
@@ -393,6 +451,13 @@ class RecordingReconciler:
                 await session.commit()
                 return "missing", None
             call, operation = locked
+            if operation.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE:
+                self._hide_playback_projection(call)
+                operation.last_reconciled_at = _as_utc(self.now())
+                await session.flush()
+                refreshed = self._snapshot(call, operation)
+                await session.commit()
+                return "conflict", refreshed
             if (
                 operation.call_id != snapshot.call_id
                 or operation.provider_egress_id != snapshot.provider_egress_id
@@ -432,29 +497,68 @@ class RecordingReconciler:
             call, operation = locked
             if (
                 operation.call_id != snapshot.call_id
-                or operation.provider_egress_id is not None
-                or operation.start_state not in {"starting", "uncertain"}
                 or operation.room_name != snapshot.room_name
+                or operation.legacy_incomplete != snapshot.legacy_incomplete
                 or operation.expected_object_key != snapshot.expected_object_key
-                or operation.last_error_code == "recording_identity_conflict"
             ):
                 await session.rollback()
                 return "changed", None
 
+            if operation.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE:
+                self._hide_playback_projection(call)
+                operation.last_reconciled_at = _as_utc(self.now())
+                await session.flush()
+                refreshed = self._snapshot(call, operation)
+                await session.commit()
+                return "conflict", refreshed
+
             projection_conflicts = call.deleted_at is None and (
-                call.recording_object_key
-                not in {None, operation.expected_object_key}
+                call.recording_object_key not in {None, operation.expected_object_key}
                 or call.recording_egress_id not in {None, exact.egress_id}
             )
-            if projection_conflicts:
-                operation.start_state = "uncertain"
-                operation.last_error_code = "recording_identity_conflict"
+            known_identity_conflict = (
+                operation.provider_egress_id is not None
+                and operation.provider_egress_id != exact.egress_id
+            )
+            if known_identity_conflict or projection_conflicts:
+                if operation.provider_egress_id is None:
+                    operation.start_state = "uncertain"
+                operation.last_error_code = RECORDING_IDENTITY_CONFLICT_CODE
                 operation.last_reconciled_at = _as_utc(self.now())
                 self._hide_playback_projection(call)
                 await session.flush()
                 refreshed = self._snapshot(call, operation)
                 await session.commit()
                 return "conflict", refreshed
+
+            if operation.provider_egress_id is not None:
+                if (
+                    operation.start_state != "started"
+                    or operation.provider_egress_id != exact.egress_id
+                ):
+                    await session.rollback()
+                    return "changed", None
+                operation.last_reconciled_at = _as_utc(self.now())
+                if call.deleted_at is not None:
+                    self._hide_playback_projection(call)
+                await session.flush()
+                refreshed = self._snapshot(call, operation)
+                await session.commit()
+                return "updated", refreshed
+
+            if operation.start_state in {"prepared", "not_started"}:
+                operation.start_state = "uncertain"
+                operation.last_error_code = RECORDING_IDENTITY_CONFLICT_CODE
+                operation.last_reconciled_at = _as_utc(self.now())
+                self._hide_playback_projection(call)
+                await session.flush()
+                refreshed = self._snapshot(call, operation)
+                await session.commit()
+                return "conflict", refreshed
+
+            if operation.start_state not in {"starting", "uncertain"}:
+                await session.rollback()
+                return "changed", None
 
             operation.start_state = "started"
             operation.provider_egress_id = exact.egress_id
@@ -489,16 +593,16 @@ class RecordingReconciler:
             call, operation = locked
             if (
                 operation.call_id != snapshot.call_id
-                or operation.provider_egress_id is not None
-                or operation.start_state not in {"starting", "uncertain"}
                 or operation.room_name != snapshot.room_name
+                or operation.legacy_incomplete != snapshot.legacy_incomplete
                 or operation.expected_object_key != snapshot.expected_object_key
             ):
                 await session.rollback()
                 return "changed", None
 
-            operation.start_state = "uncertain"
-            operation.last_error_code = "recording_identity_conflict"
+            if operation.provider_egress_id is None:
+                operation.start_state = "uncertain"
+            operation.last_error_code = RECORDING_IDENTITY_CONFLICT_CODE
             operation.last_reconciled_at = _as_utc(self.now())
             self._hide_playback_projection(call)
             await session.flush()
@@ -523,6 +627,13 @@ class RecordingReconciler:
                 await session.commit()
                 return "missing", None
             call, operation = locked
+            if operation.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE:
+                self._hide_playback_projection(call)
+                operation.last_reconciled_at = _as_utc(self.now())
+                await session.flush()
+                refreshed = self._snapshot(call, operation)
+                await session.commit()
+                return "conflict", refreshed
             if (
                 operation.call_id != snapshot.call_id
                 or operation.expected_object_key != snapshot.expected_object_key
@@ -563,7 +674,13 @@ class RecordingReconciler:
             if locked is None:
                 await session.commit()
                 return "missing"
-            _, operation = locked
+            call, operation = locked
+            if operation.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE:
+                self._hide_playback_projection(call)
+                operation.last_reconciled_at = _as_utc(self.now())
+                await session.flush()
+                await session.commit()
+                return "conflict"
             if (
                 operation.call_id != snapshot.call_id
                 or operation.expected_object_key != snapshot.expected_object_key
@@ -594,9 +711,9 @@ class RecordingReconciler:
         if discovered is None:
             return None
         discovered_call_id = discovered.call_id
-        call = await CallRepository(
-            session
-        ).get_by_id_including_deleted_for_update(discovered_call_id)
+        call = await CallRepository(session).get_by_id_including_deleted_for_update(
+            discovered_call_id
+        )
         if call is None:
             raise _ConcurrentStateChange
         operation = await operations.get_by_id_for_update(operation_id)
@@ -630,18 +747,24 @@ class RecordingReconciler:
 
     @staticmethod
     def _safe_to_delete_object(snapshot: _OperationSnapshot) -> bool:
-        return snapshot.start_state == "not_started" or (
-            snapshot.provider_egress_id is not None
-            and snapshot.provider_terminal_at is not None
+        return snapshot.last_error_code != RECORDING_IDENTITY_CONFLICT_CODE and (
+            snapshot.start_state == "not_started"
+            or (
+                snapshot.provider_egress_id is not None
+                and snapshot.provider_terminal_at is not None
+            )
         )
 
     @staticmethod
     def _safe_to_delete_operation_object(
         operation: RecordingEgressOperation,
     ) -> bool:
-        return operation.start_state == "not_started" or (
-            operation.provider_egress_id is not None
-            and operation.provider_terminal_at is not None
+        return operation.last_error_code != RECORDING_IDENTITY_CONFLICT_CODE and (
+            operation.start_state == "not_started"
+            or (
+                operation.provider_egress_id is not None
+                and operation.provider_terminal_at is not None
+            )
         )
 
     @staticmethod

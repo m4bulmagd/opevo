@@ -115,7 +115,9 @@ async def test_prepare_start_relocks_call_then_operation_for_postgresql(
         if execute_state.is_select:
             statements.append(execute_state.statement)
 
-    sqlalchemy_event.listen(db_session.sync_session, "do_orm_execute", capture_statement)
+    sqlalchemy_event.listen(
+        db_session.sync_session, "do_orm_execute", capture_statement
+    )
     try:
         await RecordingLifecycleService(
             db_session,
@@ -159,9 +161,12 @@ async def test_repeated_prepare_preserves_operation_event_and_first_due_time(
     second = await service.prepare_start(call)
 
     assert second.id == first.id
-    assert await db_session.scalar(
-        select(func.count()).select_from(RecordingEgressOperation)
-    ) == 1
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(RecordingEgressOperation)
+        )
+        == 1
+    )
     events = list(
         (
             await db_session.scalars(
@@ -190,9 +195,12 @@ async def test_prepare_start_rolls_back_operation_and_event_together(
     ).prepare_start(call)
     await db_session.rollback()
 
-    assert await db_session.scalar(
-        select(func.count()).select_from(RecordingEgressOperation)
-    ) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(RecordingEgressOperation)
+        )
+        == 0
+    )
     assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
@@ -209,9 +217,12 @@ async def test_prepare_start_rejects_missing_room_without_legacy_marker(
             now_provider=lambda: FIXED_NOW,
         ).prepare_start(call)
 
-    assert await db_session.scalar(
-        select(func.count()).select_from(RecordingEgressOperation)
-    ) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(RecordingEgressOperation)
+        )
+        == 0
+    )
 
 
 @pytest.mark.anyio
@@ -231,7 +242,9 @@ async def test_including_deleted_call_locks_are_owner_scoped_and_postgresql_safe
         if execute_state.is_select:
             statements.append(execute_state.statement)
 
-    sqlalchemy_event.listen(db_session.sync_session, "do_orm_execute", capture_statement)
+    sqlalchemy_event.listen(
+        db_session.sync_session, "do_orm_execute", capture_statement
+    )
     try:
         repository = CallRepository(db_session)
         by_id = await repository.get_by_id_including_deleted_for_update(call.id)
@@ -303,7 +316,9 @@ async def test_begin_start_discovers_then_locks_call_before_operation(
         if execute_state.is_select:
             statements.append(execute_state.statement)
 
-    sqlalchemy_event.listen(db_session.sync_session, "do_orm_execute", capture_statement)
+    sqlalchemy_event.listen(
+        db_session.sync_session, "do_orm_execute", capture_statement
+    )
     try:
         claim = await RecordingLifecycleService(
             db_session,
@@ -415,8 +430,7 @@ async def test_start_success_persists_identity_projects_and_accelerates(
     assert call.recording_url == "s3://private/recording.ogg"
     event = await db_session.scalar(
         select(OutboxEvent).where(
-            OutboxEvent.idempotency_key
-            == f"recording.reconcile:{operation.id}:start"
+            OutboxEvent.idempotency_key == f"recording.reconcile:{operation.id}:start"
         )
     )
     assert event is not None
@@ -493,6 +507,46 @@ async def test_late_start_success_never_projects_to_tombstone(
 
 
 @pytest.mark.anyio
+async def test_late_start_success_preserves_durable_identity_conflict(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    call = await _call(db_session, user_id=active_user.id)
+    service = RecordingLifecycleService(
+        db_session,
+        now_provider=lambda: FIXED_NOW,
+    )
+    operation = await service.prepare_start(call)
+    assert await service.begin_start(operation.id) is not None
+    operation.start_state = "uncertain"
+    operation.last_error_code = "recording_identity_conflict"
+    call.recording_object_key = None
+    call.recording_egress_id = None
+    call.recording_url = None
+    await db_session.commit()
+
+    recorded = await RecordingLifecycleService(
+        db_session,
+        now_provider=lambda: FIXED_NOW,
+    ).record_start_success(
+        operation.id,
+        RecordingEgressResult(
+            egress_id="EG_trusted_late",
+            object_key=operation.expected_object_key,
+            url="s3://must-remain-hidden",
+        ),
+    )
+
+    assert recorded is not None
+    assert recorded.start_state == "started"
+    assert recorded.provider_egress_id == "EG_trusted_late"
+    assert recorded.last_error_code == "recording_identity_conflict"
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
+
+
+@pytest.mark.anyio
 async def test_start_success_rejects_object_key_conflict_without_mutation(
     db_session: AsyncSession,
     active_user,
@@ -556,7 +610,9 @@ async def test_repeated_start_success_rejects_provider_identity_conflict(
     assert call.recording_egress_id == "EG_first"
 
 
-def test_recording_start_error_codes_are_the_exact_bounded_provider_vocabulary() -> None:
+def test_recording_start_error_codes_are_the_exact_bounded_provider_vocabulary() -> (
+    None
+):
     assert RECORDING_START_ERROR_CODES == frozenset(
         {
             "timeout",
@@ -606,8 +662,7 @@ async def test_start_error_records_classified_outcome_and_accelerates(
     assert _as_utc(operation.start_attempted_at) == FIXED_NOW
     event = await db_session.scalar(
         select(OutboxEvent).where(
-            OutboxEvent.idempotency_key
-            == f"recording.reconcile:{operation.id}:start"
+            OutboxEvent.idempotency_key == f"recording.reconcile:{operation.id}:start"
         )
     )
     assert event is not None
@@ -642,6 +697,37 @@ async def test_uncertain_start_never_regresses_to_not_started_or_starting(
     assert operation.start_state == "uncertain"
     assert operation.last_error_code == "validation"
     assert claim is None
+
+
+@pytest.mark.anyio
+async def test_late_start_error_preserves_durable_identity_conflict(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    call = await _call(db_session, user_id=active_user.id)
+    service = RecordingLifecycleService(
+        db_session,
+        now_provider=lambda: FIXED_NOW,
+    )
+    operation = await service.prepare_start(call)
+    assert await service.begin_start(operation.id) is not None
+    operation.start_state = "uncertain"
+    operation.last_error_code = "recording_identity_conflict"
+    await db_session.commit()
+
+    recorded = await RecordingLifecycleService(
+        db_session,
+        now_provider=lambda: FIXED_NOW,
+    ).record_start_error(
+        operation.id,
+        outcome="unknown",
+        error_code="timeout",
+    )
+
+    assert recorded is not None
+    assert recorded.start_state == "uncertain"
+    assert recorded.provider_egress_id is None
+    assert recorded.last_error_code == "recording_identity_conflict"
 
 
 @pytest.mark.anyio
@@ -874,7 +960,9 @@ async def test_request_stop_relocks_call_before_operation_for_postgresql(
         if execute_state.is_select:
             statements.append(execute_state.statement)
 
-    sqlalchemy_event.listen(db_session.sync_session, "do_orm_execute", capture_statement)
+    sqlalchemy_event.listen(
+        db_session.sync_session, "do_orm_execute", capture_statement
+    )
     try:
         stopped = await RecordingLifecycleService(
             db_session,
@@ -1009,11 +1097,14 @@ async def test_missing_legacy_room_is_incomplete_only_when_metadata_exists(
     ).request_deletion(no_metadata_call)
 
     assert absent is None
-    assert await db_session.scalar(
-        select(func.count())
-        .select_from(RecordingEgressOperation)
-        .where(RecordingEgressOperation.call_id == no_metadata_call.id)
-    ) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(RecordingEgressOperation)
+            .where(RecordingEgressOperation.call_id == no_metadata_call.id)
+        )
+        == 0
+    )
 
 
 @pytest.mark.anyio
@@ -1041,11 +1132,14 @@ async def test_empty_legacy_recording_values_count_as_absent(
     ).request_deletion(call)
 
     assert operation is None
-    assert await db_session.scalar(
-        select(func.count())
-        .select_from(RecordingEgressOperation)
-        .where(RecordingEgressOperation.call_id == call.id)
-    ) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(RecordingEgressOperation)
+            .where(RecordingEgressOperation.call_id == call.id)
+        )
+        == 0
+    )
 
 
 @pytest.mark.anyio
@@ -1091,6 +1185,5 @@ async def test_every_lifecycle_event_payload_is_operation_reference_only(
     assert all(event.topic == "recording.reconcile" for event in events)
     assert all(set(event.payload) == {"operation_id"} for event in events)
     assert all(
-        event.payload == {"operation_id": str(event.aggregate_id)}
-        for event in events
+        event.payload == {"operation_id": str(event.aggregate_id)} for event in events
     )

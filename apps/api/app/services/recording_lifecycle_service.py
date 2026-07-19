@@ -23,6 +23,9 @@ from app.services.outbox_service import OutboxService
 
 START_RESULT_LEASE = timedelta(minutes=2)
 RECORDING_AGGREGATE_TYPE = "recording-egress-operation"
+RECORDING_IDENTITY_CONFLICT_CODE: Literal["recording_identity_conflict"] = (
+    "recording_identity_conflict"
+)
 RECORDING_START_ERROR_CODES = frozenset(
     {
         "timeout",
@@ -73,8 +76,8 @@ class RecordingLifecycleService:
         self.outbox_service = OutboxService(session, now_provider=self.now)
 
     async def prepare_start(self, call: Call) -> RecordingEgressOperation:
-        locked_call = (
-            await self.call_repository.get_by_id_including_deleted_for_update(call.id)
+        locked_call = await self.call_repository.get_by_id_including_deleted_for_update(
+            call.id
         )
         if locked_call is None:
             raise RecordingLifecycleError("Recording call is unavailable")
@@ -160,15 +163,16 @@ class RecordingLifecycleService:
         call, operation = locked
         if result.object_key != operation.expected_object_key:
             raise RecordingLifecycleError("Recording result object key conflicts")
+        identity_conflict = (
+            operation.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE
+        )
         if operation.start_state == "started":
             if operation.provider_egress_id != result.egress_id:
-                raise RecordingLifecycleError(
-                    "Recording provider identity conflicts"
-                )
+                raise RecordingLifecycleError("Recording provider identity conflicts")
         elif operation.start_state not in {"starting", "uncertain"}:
             raise RecordingLifecycleError("Recording start state conflicts")
 
-        if call.deleted_at is None:
+        if call.deleted_at is None and not identity_conflict:
             if call.recording_object_key not in {None, result.object_key}:
                 raise RecordingLifecycleError(
                     "Recording projection object key conflicts"
@@ -180,8 +184,12 @@ class RecordingLifecycleService:
 
         operation.start_state = "started"
         operation.provider_egress_id = result.egress_id
-        operation.last_error_code = None
-        if call.deleted_at is None:
+        if identity_conflict:
+            operation.last_error_code = RECORDING_IDENTITY_CONFLICT_CODE
+            self._hide_playback_projection(call)
+        else:
+            operation.last_error_code = None
+        if call.deleted_at is None and not identity_conflict:
             call.recording_object_key = result.object_key
             call.recording_egress_id = result.egress_id
             call.recording_url = result.url
@@ -210,9 +218,14 @@ class RecordingLifecycleService:
         if locked is None:
             return None
         _, operation = locked
+        identity_conflict = (
+            operation.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE
+        )
         if operation.start_state == "prepared":
             raise RecordingLifecycleError("Recording start state conflicts")
-        if operation.start_state == "starting":
+        if identity_conflict and operation.start_state in {"starting", "uncertain"}:
+            operation.start_state = "uncertain"
+        elif operation.start_state == "starting":
             operation.start_state = (
                 "not_started" if outcome == "not_started" else "uncertain"
             )
@@ -221,7 +234,9 @@ class RecordingLifecycleService:
         elif operation.start_state == "not_started":
             operation.start_state = "not_started"
 
-        if operation.start_state != "started":
+        if identity_conflict:
+            operation.last_error_code = RECORDING_IDENTITY_CONFLICT_CODE
+        elif operation.start_state != "started":
             operation.last_error_code = error_code
         await self.outbox_repository.make_oldest_pending_due(
             aggregate_type=RECORDING_AGGREGATE_TYPE,
@@ -248,8 +263,8 @@ class RecordingLifecycleService:
         call: Call,
         phase: Literal["stop", "delete"],
     ) -> RecordingEgressOperation | None:
-        locked_call = (
-            await self.call_repository.get_by_id_including_deleted_for_update(call.id)
+        locked_call = await self.call_repository.get_by_id_including_deleted_for_update(
+            call.id
         )
         if locked_call is None:
             return None
@@ -340,3 +355,9 @@ class RecordingLifecycleService:
         if operation is None or operation.call_id != call.id:
             return None
         return call, operation
+
+    @staticmethod
+    def _hide_playback_projection(call: Call) -> None:
+        call.recording_object_key = None
+        call.recording_egress_id = None
+        call.recording_url = None
