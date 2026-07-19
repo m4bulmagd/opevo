@@ -1,31 +1,26 @@
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
-from livekit import api
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.phone_number import PhoneNumber
+from app.models.outbox_event import OutboxEvent
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.user import User
-from app.providers.livekit_recording.livekit import LiveKitRecordingProvider
-from app.providers.storage.base import StorageProviderError
-from app.providers.storage.s3 import S3Storage
 from app.repositories.call_repository import CallRepository
 from app.repositories.message_repository import MessageRepository
 from app.schemas.agent_runtime import TranscriptAppendRequest
 from app.services.call_lifecycle_service import CallLifecycleService
-from app.services.call_history_service import CallDeleteRetryableError, CallHistoryService
-from app.services.livekit_recording_service import LiveKitRecordingService
-from app.services.recording_service import (
-    RecordingDeleteRetryableError,
-    RecordingService,
-)
+from app.services.call_history_service import CallHistoryService
+from app.services.recording_service import RecordingService
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.services.transcript_service import TranscriptCallNotFoundError, TranscriptService
+from app.routers import calls as calls_router
 
 
 class FakeRecordingService:
@@ -37,51 +32,6 @@ class FakeRecordingService:
         recording_object_key: str | None,
     ) -> None:
         return None
-
-
-class RecordingStorage:
-    def __init__(self) -> None:
-        self.delete_object = AsyncMock()
-
-
-class OrderedRecordingStorage:
-    def __init__(self, events: list[str]) -> None:
-        self.events = events
-
-    async def delete_object(self, *, object_key: str) -> None:
-        self.events.append(f"delete_object:{object_key}")
-
-
-class RecordingEgressStopper:
-    def __init__(self, events: list[str], *, failure: Exception | None = None) -> None:
-        self.events = events
-        self.failure = failure
-
-    async def ensure_not_running(self, egress_id: str) -> None:
-        self.events.append(f"ensure_not_running:{egress_id}")
-        if self.failure is not None:
-            raise self.failure
-
-
-class StatusRecordingEgressClient:
-    def __init__(self, status: int, events: list[str]) -> None:
-        self.status = status
-        self.events = events
-        self.stop_requests: list[object] = []
-
-    async def list_egress(self, request):
-        self.events.append(f"ensure_not_running:{request.egress_id}")
-        return SimpleNamespace(
-            items=[
-                SimpleNamespace(
-                    egress_id=request.egress_id,
-                    status=self.status,
-                )
-            ]
-        )
-
-    async def stop_egress(self, request) -> None:
-        self.stop_requests.append(request)
 
 
 async def seed_call_history(
@@ -425,278 +375,230 @@ async def test_has_recording_uses_private_object_key_not_legacy_url(db_session) 
 
 
 @pytest.mark.anyio
-async def test_recording_service_deletes_by_private_object_key() -> None:
-    storage = RecordingStorage()
-    service = RecordingService(provider=storage)
-
-    await service.delete_recording(
-        call_id=UUID("00000000-0000-0000-0000-000000000001"),
-        recording_object_key="calls/user_calls/call.mp3",
-    )
-
-    storage.delete_object.assert_awaited_once_with(
-        object_key="calls/user_calls/call.mp3"
-    )
-
-
-@pytest.mark.anyio
-async def test_delete_call_stops_egress_then_deletes_object_then_purges_content(
+async def test_delete_call_is_provider_free_and_persists_private_cleanup_intent(
     db_session,
-    monkeypatch,
 ) -> None:
-    events: list[str] = []
-    storage = OrderedRecordingStorage(events)
-    recording_service = RecordingService(
-        provider=storage,
-        egress_stopper=RecordingEgressStopper(events),
-    )
     call = await seed_call_into_session(
         db_session,
-        recording_url="https://stored.example.com/legacy",
-        recording_object_key="calls/user_calls/call.mp3",
-        summary_text="Caller wants to arrange an appointment.",
-        summary_data={
-            "summary_text": "Caller wants to arrange an appointment.",
-            "caller_intent": "Book a consultation",
-            "action_items": ["Return the call"],
-            "sentiment": "positive",
-            "follow_up_required": True,
-        },
+        status="connected",
+        recording_object_key="calls/owner/deleted-call.ogg",
+        recording_url="https://legacy.invalid/deleted-call.ogg",
+        summary_text="Private customer summary",
     )
-    call.summary_transcript_max_sequence = 1
-    call.recording_egress_id = "egress-1"
+    call.livekit_room_id = "room-delete-durable"
+    call.recording_egress_id = "egress-delete-durable"
+    lifecycle = RecordingLifecycleService(db_session)
+    operation = await lifecycle.prepare_start(call)
+    call_id = call.id
+    user_id = call.user_id
+    operation_id = operation.id
+    call.status = "completed"
     db_session.add(
         CallMessage(
             call_id=call.id,
             speaker="CALLER",
-            text="Please call me back.",
+            text="Private customer transcript",
             sequence_number=1,
         )
     )
     await db_session.commit()
 
+    await CallHistoryService(
+        db_session,
+        recording_service=None,
+        recording_lifecycle_service=lifecycle,
+    ).delete_call(user_id, call_id)
+
+    db_session.expire_all()
+    deleted_call = await db_session.get(Call, call_id)
+    stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
+    reconcile = await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation_id}:delete"
+        )
+    )
+    assert deleted_call is not None
+    assert deleted_call.deleted_at is not None
+    assert deleted_call.caller_number is None
+    assert deleted_call.summary_text is None
+    assert deleted_call.summary_data is None
+    assert deleted_call.recording_object_key is None
+    assert deleted_call.recording_egress_id is None
+    assert deleted_call.recording_url is None
+    assert await MessageRepository(db_session).list_by_call_id(call_id) == []
+    assert stored_operation is not None
+    assert stored_operation.stop_requested_at is not None
+    assert stored_operation.delete_requested_at is not None
+    assert reconcile is not None
+    assert reconcile.payload == {"operation_id": str(operation_id)}
+
+
+@pytest.mark.anyio
+async def test_delete_dependency_has_no_playback_or_provider_capability(db_session) -> None:
+    service = calls_router.get_call_deletion_service(session=db_session)
+
+    assert service.recording_service is None
+    assert isinstance(
+        service.recording_lifecycle_service,
+        RecordingLifecycleService,
+    )
+
+
+@pytest.mark.anyio
+async def test_delete_transaction_failure_rolls_back_intent_purge_and_tombstone(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    call = await seed_call_into_session(
+        db_session,
+        status="connected",
+        recording_object_key="calls/owner/rollback.ogg",
+        summary_text="Keep after rollback",
+    )
+    call.livekit_room_id = "room-delete-rollback"
+    operation = await RecordingLifecycleService(db_session).prepare_start(call)
+    call.status = "completed"
+    db_session.add(
+        CallMessage(
+            call_id=call.id,
+            speaker="CALLER",
+            text="Keep transcript after rollback",
+            sequence_number=1,
+        )
+    )
+    await db_session.commit()
+    call_id = call.id
+    user_id = call.user_id
+    operation_id = operation.id
+    start_event = await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation_id}:start"
+        )
+    )
+    assert start_event is not None
+    start_event_id = start_event.id
+    original_start_due_at = start_event.next_attempt_at
     original_purge = CallRepository.purge_customer_content
 
-    async def track_purge(repository, purged_call):
-        events.append("purge")
-        return await original_purge(repository, purged_call)
+    async def fail_after_local_purge(repository, purged_call):
+        await original_purge(repository, purged_call)
+        raise RuntimeError("forced local delete rollback")
 
-    monkeypatch.setattr(CallRepository, "purge_customer_content", track_purge)
-
-    await CallHistoryService(
-        db_session,
-        recording_service=recording_service,
-    ).delete_call(call.user_id, call.id)
-
-    assert events == [
-        "ensure_not_running:egress-1",
-        "delete_object:calls/user_calls/call.mp3",
-        "purge",
-    ]
-    assert await MessageRepository(db_session).list_by_call_id(call.id) == []
-    await db_session.refresh(call)
-    assert call.caller_number is None
-    assert call.summary_text is None
-    assert call.summary_data is None
-    assert call.summary_transcript_max_sequence is None
-    assert call.recording_object_key is None
-    assert call.recording_url is None
-    assert call.recording_egress_id is None
-    assert call.deleted_at is not None
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    "terminal_status",
-    [
-        api.EgressStatus.EGRESS_FAILED,
-        api.EgressStatus.EGRESS_ABORTED,
-    ],
-)
-async def test_delete_call_accepts_failed_terminal_egress_before_storage_and_purge(
-    db_session,
-    monkeypatch,
-    terminal_status: int,
-) -> None:
-    events: list[str] = []
-    egress_client = StatusRecordingEgressClient(terminal_status, events)
-    egress_service = LiveKitRecordingService(
-        provider=LiveKitRecordingProvider(
-            egress_client=egress_client,
-            bucket_name="recordings",
-            endpoint_url="http://minio:9000",
-            access_key="key",
-            secret_key="secret",
-            region="us-east-1",
-        )
+    monkeypatch.setattr(
+        CallRepository,
+        "purge_customer_content",
+        fail_after_local_purge,
     )
-    recording_service = RecordingService(
-        provider=OrderedRecordingStorage(events),
-        egress_stopper=egress_service,
-    )
-    call = await seed_call_into_session(
-        db_session,
-        recording_object_key="calls/user_calls/terminal.mp3",
-    )
-    call.recording_egress_id = "egress-terminal"
-    await db_session.commit()
 
-    original_purge = CallRepository.purge_customer_content
-
-    async def track_purge(repository, purged_call):
-        events.append("purge")
-        return await original_purge(repository, purged_call)
-
-    monkeypatch.setattr(CallRepository, "purge_customer_content", track_purge)
-
-    await CallHistoryService(
-        db_session,
-        recording_service=recording_service,
-    ).delete_call(call.user_id, call.id)
-
-    assert events == [
-        "ensure_not_running:egress-terminal",
-        "delete_object:calls/user_calls/terminal.mp3",
-        "purge",
-    ]
-    assert egress_client.stop_requests == []
-    await db_session.refresh(call)
-    assert call.recording_egress_id is None
-    assert call.recording_object_key is None
-    assert call.deleted_at is not None
-
-
-@pytest.mark.anyio
-async def test_delete_call_egress_stop_failure_leaves_storage_and_database_unchanged(
-    db_session,
-) -> None:
-    events: list[str] = []
-    recording_service = RecordingService(
-        provider=OrderedRecordingStorage(events),
-        egress_stopper=RecordingEgressStopper(
-            events,
-            failure=RuntimeError("egress stop uncertain"),
-        ),
-    )
-    call = await seed_call_into_session(
-        db_session,
-        recording_url="https://stored.example.com/legacy",
-        recording_object_key="calls/user_calls/retry-egress.mp3",
-        summary_text="Keep content until egress stop is proven.",
-    )
-    call.recording_egress_id = "egress-retry"
-    db_session.add(
-        CallMessage(
-            call_id=call.id,
-            speaker="CALLER",
-            text="Keep this transcript for the retry.",
-            sequence_number=1,
-        )
-    )
-    await db_session.commit()
-
-    with pytest.raises(CallDeleteRetryableError):
+    with pytest.raises(RuntimeError, match="forced local delete rollback"):
         await CallHistoryService(
             db_session,
-            recording_service=recording_service,
-        ).delete_call(call.user_id, call.id)
+            recording_service=None,
+            recording_lifecycle_service=RecordingLifecycleService(db_session),
+        ).delete_call(user_id, call_id)
 
-    assert events == ["ensure_not_running:egress-retry"]
-    await db_session.refresh(call)
-    assert call.deleted_at is None
-    assert call.caller_number == "+33123456789"
-    assert call.summary_text == "Keep content until egress stop is proven."
-    assert call.recording_object_key == "calls/user_calls/retry-egress.mp3"
-    assert call.recording_egress_id == "egress-retry"
-    assert len(await MessageRepository(db_session).list_by_call_id(call.id)) == 1
-
-
-@pytest.mark.anyio
-async def test_delete_call_storage_failure_keeps_customer_content_for_retry(
-    db_session,
-) -> None:
-    storage = RecordingStorage()
-    storage.delete_object.side_effect = StorageProviderError(
-        "provider_retryable",
-        error_class="unavailable",
-    )
-    call = await seed_call_into_session(
-        db_session,
-        recording_url="https://stored.example.com/legacy",
-        recording_object_key="calls/user_calls/retry.mp3",
-        summary_text="Keep this visible until storage deletion succeeds.",
-        summary_data={
-            "summary_text": "Keep this visible until storage deletion succeeds.",
-            "caller_intent": "Request a callback",
-            "action_items": ["Return the call"],
-            "sentiment": "neutral",
-            "follow_up_required": True,
-        },
-    )
-    db_session.add(
-        CallMessage(
-            call_id=call.id,
-            speaker="CALLER",
-            text="Keep this transcript for the retry.",
-            sequence_number=1,
+    db_session.expire_all()
+    stored_call = await db_session.get(Call, call_id)
+    stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
+    assert stored_call is not None
+    assert stored_call.deleted_at is None
+    assert stored_call.summary_text == "Keep after rollback"
+    assert stored_call.recording_object_key == "calls/owner/rollback.ogg"
+    assert len(await MessageRepository(db_session).list_by_call_id(call_id)) == 1
+    assert stored_operation is not None
+    assert stored_operation.stop_requested_at is None
+    assert stored_operation.delete_requested_at is None
+    stored_start_event = await db_session.get(OutboxEvent, start_event_id)
+    assert stored_start_event is not None
+    assert stored_start_event.status == "pending"
+    assert stored_start_event.next_attempt_at == original_start_due_at
+    assert await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation_id}:delete"
         )
-    )
-    await db_session.commit()
-
-    with pytest.raises(Exception) as exc_info:
-        await CallHistoryService(
-            db_session,
-            recording_service=RecordingService(provider=storage),
-        ).delete_call(call.user_id, call.id)
-
-    await db_session.refresh(call)
-    assert call.deleted_at is None
-    assert call.caller_number == "+33123456789"
-    assert call.summary_text == "Keep this visible until storage deletion succeeds."
-    assert call.recording_object_key == "calls/user_calls/retry.mp3"
-    assert len(await MessageRepository(db_session).list_by_call_id(call.id)) == 1
-    assert type(exc_info.value).__name__ == "CallDeleteRetryableError"
+    ) is None
+    assert await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation_id}:stop"
+        )
+    ) is None
 
 
 @pytest.mark.anyio
-async def test_delete_call_treats_missing_recording_as_success(db_session) -> None:
-    storage = RecordingStorage()
-    storage.delete_object.side_effect = FileNotFoundError("recording already absent")
-    call = await seed_call_into_session(
-        db_session,
-        recording_object_key="calls/user_calls/missing.mp3",
-    )
-
-    await CallHistoryService(
-        db_session,
-        recording_service=RecordingService(provider=storage),
-    ).delete_call(call.user_id, call.id)
-
-    await db_session.refresh(call)
-    assert call.deleted_at is not None
-    assert call.recording_object_key is None
-
-
-@pytest.mark.anyio
-async def test_delete_call_is_idempotent_without_repeating_storage_delete(
+async def test_repeat_delete_repairs_missing_tombstone_cleanup_once(
     db_session,
 ) -> None:
-    storage = RecordingStorage()
-    call = await seed_call_into_session(
-        db_session,
-        recording_object_key="calls/user_calls/once.mp3",
-    )
+    call = await seed_call_into_session(db_session, status="connected")
+    call.livekit_room_id = "room-delete-repair"
+    operation = await RecordingLifecycleService(db_session).prepare_start(call)
+    call.status = "completed"
+    await CallRepository(db_session).purge_customer_content(call)
+    await db_session.commit()
+    call_id = call.id
+    user_id = call.user_id
+    operation_id = operation.id
     service = CallHistoryService(
         db_session,
-        recording_service=RecordingService(provider=storage),
+        recording_service=None,
+        recording_lifecycle_service=RecordingLifecycleService(db_session),
     )
 
-    await service.delete_call(call.user_id, call.id)
-    await service.delete_call(call.user_id, call.id)
+    await service.delete_call(user_id, call_id)
+    await service.delete_call(user_id, call_id)
 
-    storage.delete_object.assert_awaited_once_with(
-        object_key="calls/user_calls/once.mp3"
+    db_session.expire_all()
+    stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
+    assert stored_operation is not None
+    assert stored_operation.stop_requested_at is not None
+    assert stored_operation.delete_requested_at is not None
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(OutboxEvent)
+        .where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation_id}:delete"
+        )
+    ) == 1
+
+
+def test_recording_service_is_playback_only() -> None:
+    assert [
+        name
+        for name, value in vars(RecordingService).items()
+        if not name.startswith("_") and callable(value)
+    ] == ["get_access_url"]
+
+
+@pytest.mark.anyio
+async def test_delete_call_without_recording_operation_is_still_idempotent(
+    db_session,
+) -> None:
+    call = await seed_call_into_session(db_session)
+    call_id = call.id
+    user_id = call.user_id
+    service = CallHistoryService(
+        db_session,
+        recording_service=None,
+        recording_lifecycle_service=RecordingLifecycleService(db_session),
     )
+
+    await service.delete_call(user_id, call_id)
+    await service.delete_call(user_id, call_id)
+
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert stored is not None
+    assert stored.deleted_at is not None
+    assert stored.recording_object_key is None
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(RecordingEgressOperation)
+        .where(RecordingEgressOperation.call_id == call_id)
+    ) == 0
 
 
 @pytest.mark.anyio
@@ -706,7 +608,8 @@ async def test_deleted_call_rejects_delayed_transcript_and_lifecycle_writers(
     call = await seed_call_into_session(db_session)
     await CallHistoryService(
         db_session,
-        recording_service=RecordingService(provider=RecordingStorage()),
+        recording_service=None,
+        recording_lifecycle_service=RecordingLifecycleService(db_session),
     ).delete_call(call.user_id, call.id)
 
     with pytest.raises(TranscriptCallNotFoundError):
@@ -960,16 +863,7 @@ async def test_delete_call_rejects_active_call_without_mutating_customer_content
     async_client,
     client_database_url,
     rs256_clerk_token_for,
-    monkeypatch,
 ) -> None:
-    delete_attempts: list[str | None] = []
-
-    async def track_delete(
-        self, *, call_id, recording_object_key, recording_egress_id
-    ):
-        delete_attempts.append(recording_object_key)
-
-    monkeypatch.setattr(RecordingService, "delete_recording", track_delete)
     call_id = await seed_call_with_transcript(
         client_database_url,
         clerk_user_id="user_calls",
@@ -984,7 +878,6 @@ async def test_delete_call_rejects_active_call_without_mutating_customer_content
 
     assert response.status_code == 409
     assert response.json() == {"detail": {"code": "call_delete_active"}}
-    assert delete_attempts == []
     assert detail_response.status_code == 200
     assert len(detail_response.json()["transcript"]) == 3
     assert refreshed_call.deleted_at is None
@@ -1034,20 +927,11 @@ async def test_delete_call_returns_404_for_unknown_call(
 
 
 @pytest.mark.anyio
-async def test_delete_call_repeat_owner_returns_204_without_repeating_storage_delete(
+async def test_delete_call_repeat_owner_returns_provider_free_204(
     async_client,
     client_database_url,
     rs256_clerk_token_for,
-    monkeypatch,
 ) -> None:
-    deleted_object_keys: list[str | None] = []
-
-    async def track_delete(
-        self, *, call_id, recording_object_key, recording_egress_id
-    ):
-        deleted_object_keys.append(recording_object_key)
-
-    monkeypatch.setattr(RecordingService, "delete_recording", track_delete)
     call_id = await seed_call_with_recording(
         client_database_url,
         clerk_user_id="user_calls",
@@ -1059,92 +943,48 @@ async def test_delete_call_repeat_owner_returns_204_without_repeating_storage_de
 
     first_response = await async_client.delete(f"/api/calls/{call_id}", headers=headers)
     repeat_response = await async_client.delete(f"/api/calls/{call_id}", headers=headers)
+    stored = await fetch_call(client_database_url, call_id=call_id)
 
     assert first_response.status_code == 204
     assert repeat_response.status_code == 204
-    assert deleted_object_keys == ["calls/user_calls/delete-once.mp3"]
+    assert stored.deleted_at is not None
+    assert stored.recording_object_key is None
 
 
 @pytest.mark.anyio
-async def test_delete_call_returns_safe_retryable_error_without_purging_content(
+async def test_delete_call_outbox_wake_failure_does_not_change_provider_free_204(
     async_client,
+    test_app,
     client_database_url,
     rs256_clerk_token_for,
-    monkeypatch,
 ) -> None:
-    async def fail_delete(
-        self, *, call_id, recording_object_key, recording_egress_id
-    ):
-        raise RecordingDeleteRetryableError
+    class FailingPool:
+        def __init__(self) -> None:
+            self.jobs: list[tuple[str, dict]] = []
 
-    monkeypatch.setattr(RecordingService, "delete_recording", fail_delete)
+        async def enqueue_job(self, name: str, payload: dict) -> None:
+            self.jobs.append((name, payload))
+            raise RuntimeError("redis unavailable")
+
+    pool = FailingPool()
+    test_app.state.arq_pool = pool
     call_id = await seed_call_with_recording(
         client_database_url,
         clerk_user_id="user_calls",
         email="calls@example.com",
         recording_url="https://stored.example.com/legacy",
-        recording_object_key="calls/user_calls/retry.mp3",
+        recording_object_key="calls/user_calls/provider-free-delete.ogg",
+        recording_egress_id="egress-provider-free-delete",
     )
 
     response = await async_client.delete(
         f"/api/calls/{call_id}",
         headers={"authorization": f"Bearer {rs256_clerk_token_for('user_calls')}"},
     )
-    refreshed_call = await fetch_call(client_database_url, call_id=call_id)
+    stored = await fetch_call(client_database_url, call_id=call_id)
 
-    assert response.status_code == 503
-    assert response.json() == {"detail": {"code": "call_delete_retryable"}}
-    assert refreshed_call.deleted_at is None
-    assert refreshed_call.summary_text == "Caller request: Opening hours."
-    assert refreshed_call.caller_number == "+33123456789"
-    assert refreshed_call.recording_object_key == "calls/user_calls/retry.mp3"
-
-
-@pytest.mark.anyio
-async def test_delete_call_returns_safe_retryable_error_when_egress_stop_is_uncertain(
-    async_client,
-    client_database_url,
-    rs256_clerk_token_for,
-    monkeypatch,
-) -> None:
-    egress_attempts: list[str] = []
-    storage_attempts: list[str] = []
-
-    async def fail_stop(self, egress_id):
-        egress_attempts.append(egress_id)
-        raise RuntimeError("egress state unavailable")
-
-    async def track_storage_delete(self, *, object_key):
-        storage_attempts.append(object_key)
-
-    monkeypatch.setattr(
-        LiveKitRecordingService,
-        "ensure_not_running",
-        fail_stop,
-        raising=False,
-    )
-    monkeypatch.setattr(S3Storage, "delete_object", track_storage_delete)
-    call_id = await seed_call_with_recording(
-        client_database_url,
-        clerk_user_id="user_calls",
-        email="calls@example.com",
-        recording_url="https://stored.example.com/legacy",
-        recording_object_key="calls/user_calls/retry-egress.mp3",
-        recording_egress_id="egress-retry",
-    )
-
-    response = await async_client.delete(
-        f"/api/calls/{call_id}",
-        headers={"authorization": f"Bearer {rs256_clerk_token_for('user_calls')}"},
-    )
-    refreshed_call = await fetch_call(client_database_url, call_id=call_id)
-
-    assert response.status_code == 503
-    assert response.json() == {"detail": {"code": "call_delete_retryable"}}
-    assert egress_attempts == ["egress-retry"]
-    assert storage_attempts == []
-    assert refreshed_call.deleted_at is None
-    assert refreshed_call.summary_text == "Caller request: Opening hours."
-    assert refreshed_call.caller_number == "+33123456789"
-    assert refreshed_call.recording_object_key == "calls/user_calls/retry-egress.mp3"
-    assert refreshed_call.recording_egress_id == "egress-retry"
+    assert response.status_code == 204
+    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert stored.deleted_at is not None
+    assert stored.recording_object_key is None
+    assert stored.recording_egress_id is None

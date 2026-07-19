@@ -6,9 +6,11 @@ from sqlalchemy import select
 from app.models.call import Call
 from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.usage_ledger import UsageLedger
 from app.services import call_lifecycle_service as lifecycle_module
 from app.services.call_lifecycle_service import CallLifecycleService
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 
 
 HAS_TWO_PHASE_LIFECYCLE = all(
@@ -107,6 +109,96 @@ async def test_sip_leave_before_connection_fails_safely(
     assert result.duration_seconds == 0
 
 
+@pytest.mark.anyio
+async def test_agent_end_requests_operation_scoped_stop_in_same_transaction(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(
+        user_id=active_user.id,
+        status="connected",
+        livekit_room_id="room-durable-end",
+        started_at=datetime.now(UTC) - timedelta(seconds=7),
+    )
+    db_session.add(call)
+    await db_session.flush()
+    operation = await RecordingLifecycleService(db_session).prepare_start(call)
+    await db_session.commit()
+
+    ended = await CallLifecycleService(db_session).end_from_agent(
+        call_id=call.id,
+        duration_seconds=7,
+    )
+    await db_session.commit()
+
+    stored_operation = await db_session.get(RecordingEgressOperation, operation.id)
+    stop_event = await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation.id}:stop"
+        )
+    )
+    assert ended.status == "ending"
+    assert stored_operation is not None
+    assert stored_operation.stop_requested_at is not None
+    assert stop_event is not None
+    assert stop_event.aggregate_id == operation.id
+    assert stop_event.payload == {"operation_id": str(operation.id)}
+
+
+@pytest.mark.anyio
+async def test_repeated_terminal_completion_repairs_missing_stop_without_rewriting_facts(
+    db_session,
+    active_user,
+) -> None:
+    frozen_end = datetime(2026, 7, 19, 10, 0, tzinfo=UTC)
+    call = Call(
+        user_id=active_user.id,
+        status="connected",
+        livekit_room_id="room-terminal-stop-repair",
+        started_at=frozen_end - timedelta(seconds=11),
+    )
+    db_session.add(call)
+    await db_session.flush()
+    operation = await RecordingLifecycleService(db_session).prepare_start(call)
+    service = CallLifecycleService(db_session)
+    await service.end_from_agent(
+        call_id=call.id,
+        duration_seconds=11,
+        ended_at=frozen_end,
+    )
+    await db_session.commit()
+    stop_event = await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation.id}:stop"
+        )
+    )
+    assert stop_event is not None
+    operation.stop_requested_at = None
+    await db_session.delete(stop_event)
+    await db_session.commit()
+
+    repeated = await service.end_from_agent(
+        call_id=call.id,
+        duration_seconds=999,
+        ended_at=frozen_end + timedelta(hours=1),
+    )
+    await db_session.commit()
+
+    await db_session.refresh(operation)
+    assert repeated.status == "ending"
+    assert repeated.ended_at.replace(tzinfo=UTC) == frozen_end
+    assert repeated.duration_seconds == 11
+    assert operation.stop_requested_at is not None
+    assert await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation.id}:stop"
+        )
+    ) is not None
+
+
 @pytest.mark.skipif(not HAS_TWO_PHASE_LIFECYCLE, reason="two-phase lifecycle missing")
 @pytest.mark.anyio
 async def test_two_phase_finalization_commits_only_reference_intents(
@@ -176,7 +268,6 @@ async def test_two_phase_finalization_commits_only_reference_intents(
         ).scalars()
     )
     assert [(intent.topic, intent.aggregate_type) for intent in intents] == [
-        ("recording.stop", "call-recording"),
         ("summary.generate", "call-summary"),
     ]
     phone_disable = await db_session.scalar(

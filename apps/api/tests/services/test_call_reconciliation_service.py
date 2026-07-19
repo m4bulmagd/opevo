@@ -2,12 +2,16 @@ from datetime import UTC, datetime, timedelta
 from importlib.util import find_spec
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.call import Call
+from app.models.outbox_event import OutboxEvent
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.services import call_reconciliation_service as reconciliation_module
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 
 
 HAS_RECONCILIATION = find_spec("app.services.call_reconciliation_service") is not None
@@ -295,6 +299,58 @@ async def test_ending_recovery_derives_missing_duration_at_exact_boundary(
     stored = await db_session.get(Call, call_id)
     assert stored.status == "completed"
     assert stored.duration_seconds == 30
+
+
+@pytest.mark.anyio
+async def test_ending_recovery_persists_recording_stop_before_phase_b(
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    user = await _user(db_session, "recording_stop")
+    call = Call(
+        user_id=user.id,
+        status="connected",
+        livekit_room_id="room-stale-ending",
+        started_at=now - timedelta(seconds=90),
+    )
+    db_session.add(call)
+    await db_session.flush()
+    operation = await RecordingLifecycleService(db_session).prepare_start(call)
+    operation_id = operation.id
+    call_id = call.id
+    call.status = "ending"
+    call.ended_at = now - timedelta(seconds=61)
+    call.duration_seconds = 29
+    call.state_changed_at = now - timedelta(seconds=61)
+    db_session.add(
+        UsageLedger(
+            user_id=user.id,
+            event_type="subscription_activated",
+            source_id="in_reconcile_recording_stop",
+            minutes_delta=1,
+            balance_after=1,
+        )
+    )
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    await CallReconciliationService(factory).reconcile(now)
+
+    db_session.expire_all()
+    stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
+    event = await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation_id}:stop"
+        )
+    )
+    stored_call = await db_session.get(Call, call_id)
+    assert stored_call is not None
+    assert stored_call.status == "completed"
+    assert stored_operation is not None
+    assert stored_operation.stop_requested_at is not None
+    assert event is not None
+    assert event.payload == {"operation_id": str(operation_id)}
 
 
 @pytest.mark.skipif(not HAS_RECONCILIATION, reason="reconciliation missing")

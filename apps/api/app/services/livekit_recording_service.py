@@ -1,13 +1,10 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from uuid import UUID
-
 from app.core.config import get_settings
 from app.providers.livekit_recording.base import (
     RecordingEgressResult,
     RecordingEgressSnapshot,
     RecordingProvider,
-    build_recording_object_key,
 )
 from app.providers.livekit_recording.livekit import LiveKitRecordingProvider
 
@@ -20,10 +17,8 @@ class LiveKitRecordingService:
         self,
         *,
         room_name: str,
-        user_id: UUID | str,
-        call_id: UUID | str,
+        object_key: str,
     ) -> RecordingEgressResult:
-        object_key = build_recording_object_key(user_id=user_id, call_id=call_id)
         async with self._provider_session() as provider:
             return await provider.start_room_recording(
                 room_name=room_name,

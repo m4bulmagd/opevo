@@ -18,7 +18,6 @@ from app.models.subscription import Subscription
 from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
-from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
 from app.providers.summaries.gemini import GeminiSummaryProvider
 from app.providers.telephony.base import TelephonyProviderError
 from app.providers.telephony.factory import create_telephony_provider
@@ -1223,39 +1222,6 @@ async def deliver_summary_generate(
         await session.commit()
 
 
-async def deliver_recording_stop(
-    ctx: dict[str, Any],
-    event: OutboxEvent,
-) -> None:
-    call_id = _validated_post_call_reference(
-        event,
-        topic="recording.stop",
-        aggregate_type="call-recording",
-    )
-    session_factory = ctx.get("session_factory") or get_session_factory()
-    async with session_factory() as session:
-        call = await CallRepository(session).get_by_id(call_id)
-        if call is None:
-            await session.rollback()
-            raise OutboxDeliveryError("provider_terminal", retryable=False)
-        egress_id = call.recording_egress_id
-        await session.commit()
-    if not egress_id:
-        return
-
-    provider = ctx.get("livekit_recording_provider")
-    provider = provider or LiveKitRecordingService()
-    try:
-        await provider.ensure_stopped(egress_id)
-    except LiveKitRecordingProviderError as exc:
-        raise OutboxDeliveryError(
-            exc.category,
-            retryable=exc.retryable,
-        ) from None
-    except Exception:
-        raise OutboxDeliveryError("provider_retryable", retryable=True) from None
-
-
 def build_recording_reconciler(ctx: dict[str, Any]):
     reconciler = ctx.get("recording_reconciler")
     if reconciler is not None:
@@ -1354,5 +1320,4 @@ DEFAULT_OUTBOX_HANDLERS = {
     "livekit.verification_dispatch": deliver_livekit_verification_dispatch,
     "summary.generate": deliver_summary_generate,
     "recording.reconcile": deliver_recording_reconcile,
-    "recording.stop": deliver_recording_stop,
 }

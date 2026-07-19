@@ -14,16 +14,13 @@ from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.providers.telephony.base import TelephonyProviderError
-from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
 from app.workers.jobs.outbox_delivery import (
     OutboxDeliveryError,
     _outbox_error_class,
-    outbox_delivery_job,
 )
 from app.workers.jobs.outbox_topics import (
     deliver_phone_provision,
     deliver_phone_routing,
-    deliver_recording_stop,
     deliver_summary_generate,
 )
 
@@ -75,100 +72,6 @@ def test_recording_reconciliation_errors_are_bounded_and_safely_classified(
 
     assert str(error) == error_code
     assert _outbox_error_class(error_code) == error_class
-
-
-@pytest.mark.anyio
-async def test_recording_provider_exception_is_translated_to_safe_retry(
-    db_session,
-    active_user,
-) -> None:
-    call = Call(
-        user_id=active_user.id,
-        status="completed",
-        recording_egress_id="egress-safe-error",
-    )
-    db_session.add(call)
-    await db_session.commit()
-    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-
-    class SecretBearingProvider:
-        async def ensure_stopped(self, _egress_id: str) -> None:
-            raise RuntimeError("LIVEKIT_AUTHORIZATION_SENTINEL")
-
-    with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_recording_stop(
-            {
-                "session_factory": factory,
-                "livekit_recording_provider": SecretBearingProvider(),
-            },
-            _event(
-                call.id,
-                topic="recording.stop",
-                aggregate_type="call-recording",
-            ),
-        )
-
-    assert exc_info.value.error_code == "provider_retryable"
-    assert exc_info.value.retryable is True
-    assert "LIVEKIT_AUTHORIZATION_SENTINEL" not in str(exc_info.value)
-
-
-@pytest.mark.anyio
-async def test_failed_recording_egress_is_durably_terminal_on_first_outbox_attempt(
-    db_session,
-    active_user,
-) -> None:
-    now = datetime.now(UTC)
-    call = Call(
-        user_id=active_user.id,
-        status="completed",
-        recording_egress_id="egress-definitively-failed",
-    )
-    db_session.add(call)
-    await db_session.flush()
-    event = OutboxEvent(
-        idempotency_key=f"recording.stop:{call.id}",
-        topic="recording.stop",
-        aggregate_type="call-recording",
-        aggregate_id=call.id,
-        payload={"call_id": str(call.id)},
-        status="pending",
-        next_attempt_at=now,
-    )
-    db_session.add(event)
-    await db_session.commit()
-    event_id = event.id
-    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-
-    class FailedTerminalProvider:
-        async def ensure_stopped(self, _egress_id: str) -> None:
-            raise LiveKitRecordingProviderError(
-                "provider_terminal",
-                error_class="unknown",
-            )
-
-    terminal_metrics: list[tuple[str, str]] = []
-    result = await outbox_delivery_job(
-        {
-            "session_factory": factory,
-            "outbox_handlers": {"recording.stop": deliver_recording_stop},
-            "livekit_recording_provider": FailedTerminalProvider(),
-            "outbox_now": lambda: now,
-            "outbox_terminal_failure_metric": (
-                lambda topic, code: terminal_metrics.append((topic, code))
-            ),
-        }
-    )
-
-    async with factory() as session:
-        stored = await session.get(OutboxEvent, event_id)
-
-    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
-    assert stored is not None
-    assert stored.status == "failed"
-    assert stored.attempt_count == 1
-    assert stored.last_error_code == "provider_terminal"
-    assert terminal_metrics == [("recording.stop", "provider_terminal")]
 
 
 @pytest.mark.anyio

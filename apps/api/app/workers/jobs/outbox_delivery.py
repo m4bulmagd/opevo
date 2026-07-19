@@ -51,7 +51,6 @@ SAFE_OUTBOX_ERROR_CODES = frozenset(
 _CALL_TOPIC_AGGREGATE_TYPES = {
     "livekit.dispatch": "call",
     "summary.generate": "call-summary",
-    "recording.stop": "call-recording",
 }
 
 

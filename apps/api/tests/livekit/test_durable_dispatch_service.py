@@ -13,8 +13,10 @@ from app.models.call import Call
 from app.models.customer_activation import CustomerActivation
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
+from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
 from app.schemas.agent_content import (
     AGENT_NAME_MAX_LENGTH,
     KNOWLEDGE_BASE_MAX_LENGTH,
@@ -25,8 +27,9 @@ from app.schemas.agent_content import (
 from app.schemas.livekit import LiveKitDispatchMetadata
 from app.schemas.business_profile import WEEKDAYS
 from app.services.routing_fingerprint import routing_fingerprint
+from app.services.call_lifecycle_service import CallLifecycleService
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.services.livekit_dispatch_service import LiveKitDispatchService
-from app.workers.jobs.outbox_topics import deliver_recording_stop
 
 
 @pytest.fixture(autouse=True)
@@ -76,12 +79,12 @@ class _Recording:
         self.starts: list[dict] = []
         self.stops: list[str] = []
 
-    async def start_room_recording(self, *, room_name, user_id, call_id):
+    async def start_room_recording(self, *, room_name, object_key):
         self.starts.append(
-            {"room_name": room_name, "user_id": user_id, "call_id": call_id}
+            {"room_name": room_name, "object_key": object_key}
         )
         return SimpleNamespace(
-            object_key=f"calls/{user_id}/{call_id}.ogg",
+            object_key=object_key,
             egress_id="egress-1",
             url=None,
         )
@@ -98,12 +101,27 @@ class _CommitAwareRecording(_Recording):
         super().__init__()
         self.session = session
 
-    async def start_room_recording(self, *, room_name, user_id, call_id):
+    async def start_room_recording(self, *, room_name, object_key):
         assert self.session.in_transaction() is False
+        observer_factory = async_sessionmaker(
+            self.session.bind,
+            expire_on_commit=False,
+        )
+        async with observer_factory() as observer:
+            operation = await observer.scalar(
+                select(RecordingEgressOperation).where(
+                    RecordingEgressOperation.room_name == room_name
+                )
+            )
+            assert operation is not None
+            assert operation.start_state == "starting"
+            assert operation.expected_object_key == object_key
+            connected_call = await observer.get(Call, operation.call_id)
+            assert connected_call is not None
+            assert connected_call.status == "connected"
         return await super().start_room_recording(
             room_name=room_name,
-            user_id=user_id,
-            call_id=call_id,
+            object_key=object_key,
         )
 
 
@@ -112,27 +130,77 @@ class _CompletingRecording(_Recording):
         super().__init__()
         self.session_factory = session_factory
 
-    async def start_room_recording(self, *, room_name, user_id, call_id):
+    async def start_room_recording(self, *, room_name, object_key):
         recording = await super().start_room_recording(
             room_name=room_name,
-            user_id=user_id,
-            call_id=call_id,
+            object_key=object_key,
         )
+        call_id = UUID(object_key.rsplit("/", 1)[1].removesuffix(".ogg"))
         async with self.session_factory() as session:
-            call = await session.get(Call, call_id)
-            assert call is not None
-            call.status = "completed"
-            call.ended_at = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
-            call.duration_seconds = 17
-            call.minutes_charged = 1
+            lifecycle = CallLifecycleService(session)
+            await lifecycle.end_from_agent(
+                call_id=call_id,
+                duration_seconds=17,
+                ended_at=datetime(2026, 7, 13, 12, 0, tzinfo=UTC),
+            )
             await session.commit()
+            claim = await lifecycle.claim_finalization(call_id)
+            await lifecycle.complete_finalization(
+                call_id,
+                generation=claim.generation,
+            )
         return recording
 
 
-class _FailingCleanupRecording(_CompletingRecording):
-    async def ensure_stopped(self, egress_id: str) -> None:
-        self.stops.append(egress_id)
-        raise RuntimeError("cleanup unavailable")
+class _UntypedFailingRecording:
+    def __init__(self) -> None:
+        self.starts: list[dict] = []
+
+    async def start_room_recording(self, *, room_name, object_key):
+        self.starts.append({"room_name": room_name, "object_key": object_key})
+        raise RuntimeError("PROVIDER_SECRET caller transcript")
+
+
+class _TypedFailingRecording(_UntypedFailingRecording):
+    async def start_room_recording(self, *, room_name, object_key):
+        self.starts.append({"room_name": room_name, "object_key": object_key})
+        raise LiveKitRecordingProviderError(
+            "provider_retryable",
+            error_class="rate_limited",
+            start_outcome="not_started",
+        )
+
+
+class _LostClaimLifecycle(RecordingLifecycleService):
+    def __init__(self, session) -> None:
+        super().__init__(session)
+        self.claims: list[UUID] = []
+
+    async def begin_start(self, operation_id):
+        self.claims.append(operation_id)
+        return None
+
+
+class _FailingPrepareLifecycle(RecordingLifecycleService):
+    async def prepare_start(self, call):
+        await super().prepare_start(call)
+        raise RuntimeError("forced prepare failure")
+
+
+class _FailingResultLifecycle(RecordingLifecycleService):
+    async def record_start_success(self, operation_id, result):
+        raise RuntimeError("forced result persistence failure")
+
+
+class _FailingErrorResultLifecycle(RecordingLifecycleService):
+    async def record_start_error(
+        self,
+        operation_id,
+        *,
+        outcome,
+        error_code,
+    ):
+        raise RuntimeError("forced error persistence failure")
 
 
 class _Pool:
@@ -141,6 +209,12 @@ class _Pool:
 
     async def enqueue_job(self, name: str, payload: dict, **kwargs) -> None:
         self.jobs.append((name, payload, kwargs))
+
+
+class _FailingPool(_Pool):
+    async def enqueue_job(self, name: str, payload: dict, **kwargs) -> None:
+        await super().enqueue_job(name, payload, **kwargs)
+        raise RuntimeError("redis unavailable")
 
 
 async def _seed_eligible_user(db_session):
@@ -693,13 +767,24 @@ async def test_only_expected_agent_identity_connects_and_starts_recording(db_ses
     )
 
     await db_session.refresh(call)
+    operation = await db_session.scalar(
+        select(RecordingEgressOperation).where(
+            RecordingEgressOperation.call_id == call.id
+        )
+    )
     assert wrong.status == "ignored"
     assert accepted.status == "connected"
     assert call.status == "connected"
     assert call.started_at is not None
     assert call.recording_egress_id == "egress-1"
+    assert operation is not None
+    assert operation.start_state == "started"
+    assert operation.provider_egress_id == "egress-1"
     assert recording.starts == [
-        {"room_name": "room-1", "user_id": user.id, "call_id": call.id}
+        {
+            "room_name": "room-1",
+            "object_key": f"calls/{user.id}/{call.id}.ogg",
+        }
     ]
 
 
@@ -750,12 +835,67 @@ async def test_sip_leave_commits_and_enqueues_finalization_without_realtime(
     assert call.ended_at is not None
     assert pool.jobs == [
         ("outbox_delivery_job", {}, {}),
+        ("outbox_delivery_job", {}, {}),
+        ("outbox_delivery_job", {}, {}),
         (
             "call_finalization_job",
             {"call_id": str(call.id)},
             {"_job_id": f"call-finalization:{call.id}"},
         ),
     ]
+
+
+@pytest.mark.anyio
+async def test_sip_leave_outbox_wake_failure_cannot_undo_terminal_intent(
+    db_session,
+) -> None:
+    await _seed_eligible_user(db_session)
+    pool = _FailingPool()
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=None,
+        recording_service=_Recording(),
+        arq_pool=pool,
+    )
+    joined = await service.handle_participant_joined(_sip_join())
+    assert joined.call_id is not None
+    await service.handle_participant_joined(
+        {
+            "event": "participant_joined",
+            "room": {"name": "room-1"},
+            "participant": {
+                "identity": f"agent-call-{joined.call_id}",
+                "kind": "AGENT",
+                "attributes": {},
+            },
+        }
+    )
+
+    result = await service.handle_participant_left(
+        {
+            "event": "participant_left",
+            "room": {"name": "room-1"},
+            "participant": {
+                "identity": "caller",
+                "kind": "SIP",
+                "attributes": {},
+            },
+        }
+    )
+
+    db_session.expire_all()
+    call = await db_session.get(Call, UUID(joined.call_id))
+    operation = await db_session.scalar(
+        select(RecordingEgressOperation).where(
+            RecordingEgressOperation.call_id == UUID(joined.call_id)
+        )
+    )
+    assert result.status == "ending"
+    assert call is not None
+    assert call.status == "ending"
+    assert operation is not None
+    assert operation.stop_requested_at is not None
 
 
 @pytest.mark.anyio
@@ -793,48 +933,187 @@ async def test_agent_join_commits_connected_state_before_recording_io_and_then_p
 
 
 @pytest.mark.anyio
-async def test_recording_metadata_is_not_orphaned_when_completion_races_provider_success(
+async def test_lost_begin_claim_wakes_reconciliation_without_provider_io(
     db_session,
 ) -> None:
     await _seed_eligible_user(db_session)
-    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    recording = _CompletingRecording(session_factory)
+    recording = _Recording()
+    lifecycle = _LostClaimLifecycle(db_session)
+    pool = _Pool()
     service = LiveKitDispatchService(
         db_session,
         _ForbiddenDirectDispatch(),
-        realtime_service=_Realtime(),
+        realtime_service=None,
         recording_service=recording,
+        recording_lifecycle_service=lifecycle,
+        arq_pool=pool,
     )
-    await service.handle_participant_joined(_sip_join())
-    call = await db_session.scalar(select(Call))
-    assert call is not None
+    joined = await service.handle_participant_joined(_sip_join())
+    assert joined.call_id is not None
 
     result = await service.handle_participant_joined(
         {
             "event": "participant_joined",
             "room": {"name": "room-1"},
             "participant": {
-                "identity": f"agent-call-{call.id}",
+                "identity": f"agent-call-{joined.call_id}",
                 "kind": "AGENT",
                 "attributes": {},
             },
         }
     )
 
-    await db_session.refresh(call)
     assert result.status == "connected"
-    assert call.status == "completed"
-    assert call.recording_egress_id is None
-    assert recording.stops == ["egress-1"]
+    assert len(lifecycle.claims) == 1
+    assert recording.starts == []
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {}),
+        ("outbox_delivery_job", {}, {}),
+    ]
 
 
 @pytest.mark.anyio
-async def test_failed_immediate_orphan_cleanup_persists_reference_only_retry(
+async def test_prepare_failure_rolls_back_connection_operation_and_start_event(
+    db_session,
+) -> None:
+    await _seed_eligible_user(db_session)
+    recording = _Recording()
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=None,
+        recording_service=recording,
+        recording_lifecycle_service=_FailingPrepareLifecycle(db_session),
+    )
+    joined = await service.handle_participant_joined(_sip_join())
+    assert joined.call_id is not None
+    call_id = UUID(joined.call_id)
+
+    with pytest.raises(RuntimeError, match="forced prepare failure"):
+        await service.handle_participant_joined(
+            {
+                "event": "participant_joined",
+                "room": {"name": "room-1"},
+                "participant": {
+                    "identity": f"agent-call-{call_id}",
+                    "kind": "AGENT",
+                    "attributes": {},
+                },
+            }
+        )
+
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert stored is not None
+    assert stored.status == "pending"
+    assert recording.starts == []
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(RecordingEgressOperation)
+        .where(RecordingEgressOperation.call_id == call_id)
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(OutboxEvent)
+        .where(OutboxEvent.topic == "recording.reconcile")
+    ) == 0
+
+
+@pytest.mark.anyio
+async def test_result_persistence_failure_leaves_starting_claim_and_cannot_restart(
+    db_session,
+) -> None:
+    await _seed_eligible_user(db_session)
+    recording = _Recording()
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=None,
+        recording_service=recording,
+        recording_lifecycle_service=_FailingResultLifecycle(db_session),
+    )
+    joined = await service.handle_participant_joined(_sip_join())
+    assert joined.call_id is not None
+    call_id = UUID(joined.call_id)
+    event = {
+        "event": "participant_joined",
+        "room": {"name": "room-1"},
+        "participant": {
+            "identity": f"agent-call-{call_id}",
+            "kind": "AGENT",
+            "attributes": {},
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="forced result persistence failure"):
+        await service.handle_participant_joined(event)
+    replay = await service.handle_participant_joined(event)
+
+    operation = await db_session.scalar(
+        select(RecordingEgressOperation).where(
+            RecordingEgressOperation.call_id == call_id
+        )
+    )
+    assert replay.status == "ignored"
+    assert len(recording.starts) == 1
+    assert operation is not None
+    assert operation.start_state == "starting"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "recording",
+    [_TypedFailingRecording(), _UntypedFailingRecording()],
+    ids=["typed", "untyped"],
+)
+async def test_error_result_persistence_failure_cannot_restart_provider(
+    db_session,
+    recording,
+) -> None:
+    await _seed_eligible_user(db_session)
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=None,
+        recording_service=recording,
+        recording_lifecycle_service=_FailingErrorResultLifecycle(db_session),
+    )
+    joined = await service.handle_participant_joined(_sip_join())
+    assert joined.call_id is not None
+    call_id = UUID(joined.call_id)
+    event = {
+        "event": "participant_joined",
+        "room": {"name": "room-1"},
+        "participant": {
+            "identity": f"agent-call-{call_id}",
+            "kind": "AGENT",
+            "attributes": {},
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="forced error persistence failure"):
+        await service.handle_participant_joined(event)
+    replay = await service.handle_participant_joined(event)
+
+    operation = await db_session.scalar(
+        select(RecordingEgressOperation).where(
+            RecordingEgressOperation.call_id == call_id
+        )
+    )
+    assert replay.status == "ignored"
+    assert len(recording.starts) == 1
+    assert operation is not None
+    assert operation.start_state == "starting"
+    assert operation.last_error_code is None
+
+
+@pytest.mark.anyio
+async def test_completion_racing_success_preserves_terminal_facts_and_stop_intent(
     db_session,
 ) -> None:
     await _seed_eligible_user(db_session)
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    recording = _FailingCleanupRecording(session_factory)
+    recording = _CompletingRecording(session_factory)
     service = LiveKitDispatchService(
         db_session,
         _ForbiddenDirectDispatch(),
@@ -860,7 +1139,13 @@ async def test_failed_immediate_orphan_cleanup_persists_reference_only_retry(
 
     db_session.expire_all()
     stored = await db_session.get(Call, call_id)
+    operation = await db_session.scalar(
+        select(RecordingEgressOperation).where(
+            RecordingEgressOperation.call_id == call_id
+        )
+    )
     assert result.status == "connected"
+    assert stored is not None
     assert stored.status == "completed"
     assert stored.ended_at.replace(tzinfo=UTC) == datetime(
         2026, 7, 13, 12, 0, tzinfo=UTC
@@ -869,29 +1154,107 @@ async def test_failed_immediate_orphan_cleanup_persists_reference_only_retry(
     assert stored.minutes_charged == 1
     assert stored.recording_egress_id == "egress-1"
     assert stored.recording_object_key.endswith(f"/{call_id}.ogg")
-    intent = await db_session.scalar(
+    assert operation is not None
+    assert operation.start_state == "started"
+    assert operation.provider_egress_id == "egress-1"
+    assert operation.stop_requested_at is not None
+    assert recording.stops == []
+    stop_intent = await db_session.scalar(
         select(OutboxEvent).where(
-            OutboxEvent.topic == "recording.stop",
-            OutboxEvent.aggregate_id == call_id,
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation.id}:stop"
         )
     )
-    assert intent is not None
-    assert intent.aggregate_type == "call-recording"
-    assert intent.payload == {"call_id": str(call_id)}
+    assert stop_intent is not None
+    assert stop_intent.payload == {"operation_id": str(operation.id)}
 
-    class RetryRecordingProvider:
-        def __init__(self) -> None:
-            self.stops: list[str] = []
 
-        async def ensure_stopped(self, egress_id: str) -> None:
-            self.stops.append(egress_id)
-
-    retry_provider = RetryRecordingProvider()
-    await deliver_recording_stop(
-        {
-            "session_factory": session_factory,
-            "livekit_recording_provider": retry_provider,
-        },
-        intent,
+@pytest.mark.anyio
+async def test_untyped_start_failure_is_unknown_safe_and_never_restarted(
+    db_session,
+    caplog,
+) -> None:
+    await _seed_eligible_user(db_session)
+    recording = _UntypedFailingRecording()
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=None,
+        recording_service=recording,
     )
-    assert retry_provider.stops == ["egress-1"]
+    await service.handle_participant_joined(_sip_join())
+    call = await db_session.scalar(select(Call))
+    assert call is not None
+    event = {
+        "event": "participant_joined",
+        "room": {"name": "room-1"},
+        "participant": {
+            "identity": f"agent-call-{call.id}",
+            "kind": "AGENT",
+            "attributes": {},
+        },
+    }
+
+    with caplog.at_level("ERROR"):
+        first = await service.handle_participant_joined(event)
+        replay = await service.handle_participant_joined(event)
+
+    operation = await db_session.scalar(
+        select(RecordingEgressOperation).where(
+            RecordingEgressOperation.call_id == call.id
+        )
+    )
+    assert first.status == "connected"
+    assert replay.status == "ignored"
+    assert len(recording.starts) == 1
+    assert operation is not None
+    assert operation.start_state == "uncertain"
+    assert operation.last_error_code == "unknown"
+    assert "error_type=unknown" in caplog.text
+    assert "RuntimeError" not in caplog.text
+    assert "PROVIDER_SECRET" not in caplog.text
+    assert "caller transcript" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_typed_start_failure_uses_structured_outcome_and_allowlisted_error(
+    db_session,
+    caplog,
+) -> None:
+    await _seed_eligible_user(db_session)
+    recording = _TypedFailingRecording()
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=None,
+        recording_service=recording,
+    )
+    await service.handle_participant_joined(_sip_join())
+    call = await db_session.scalar(select(Call))
+    assert call is not None
+
+    with caplog.at_level("ERROR"):
+        result = await service.handle_participant_joined(
+            {
+                "event": "participant_joined",
+                "room": {"name": "room-1"},
+                "participant": {
+                    "identity": f"agent-call-{call.id}",
+                    "kind": "AGENT",
+                    "attributes": {},
+                },
+            }
+        )
+
+    operation = await db_session.scalar(
+        select(RecordingEgressOperation).where(
+            RecordingEgressOperation.call_id == call.id
+        )
+    )
+    assert result.status == "connected"
+    assert len(recording.starts) == 1
+    assert operation is not None
+    assert operation.start_state == "not_started"
+    assert operation.last_error_code == "rate_limited"
+    assert "error_type=rate_limited" in caplog.text
+    assert "provider_retryable" not in caplog.text

@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -11,21 +12,36 @@ from app.core.database import get_session
 from app.schemas.calls import CallDetailResponse, CallHistoryListResponse
 from app.services.call_history_service import (
     CallDeleteActiveError,
-    CallDeleteRetryableError,
     CallHistoryNotFoundError,
     CallHistoryService,
 )
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.services.recording_service import RecordingService, get_recording_service
 
 
 router = APIRouter(prefix="/api/calls", tags=["calls"])
+logger = logging.getLogger(__name__)
 
 
 def get_call_history_service(
     session: AsyncSession = Depends(get_session),
     recording_service: RecordingService = Depends(get_recording_service),
 ) -> CallHistoryService:
-    return CallHistoryService(session, recording_service=recording_service)
+    return CallHistoryService(
+        session,
+        recording_service=recording_service,
+        recording_lifecycle_service=RecordingLifecycleService(session),
+    )
+
+
+def get_call_deletion_service(
+    session: AsyncSession = Depends(get_session),
+) -> CallHistoryService:
+    return CallHistoryService(
+        session,
+        recording_service=None,
+        recording_lifecycle_service=RecordingLifecycleService(session),
+    )
 
 
 @router.get("", response_model=CallHistoryListResponse)
@@ -61,7 +77,7 @@ async def delete_call(
     request: Request,
     call_id: UUID,
     identity: AuthenticatedUserIdentity = Depends(require_user_identity),
-    service: CallHistoryService = Depends(get_call_history_service),
+    service: CallHistoryService = Depends(get_call_deletion_service),
 ) -> Response:
     try:
         await service.delete_call(identity.internal_user_id, call_id)
@@ -72,9 +88,13 @@ async def delete_call(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "call_delete_active"},
         ) from None
-    except CallDeleteRetryableError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "call_delete_retryable"},
-        ) from None
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if arq_pool is not None:
+        try:
+            await arq_pool.enqueue_job("outbox_delivery_job", {})
+        except Exception:
+            logger.warning(
+                "outbox wakeup enqueue failed operation=delete_call "
+                "error_type=unknown"
+            )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

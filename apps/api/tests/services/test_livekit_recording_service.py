@@ -1,6 +1,4 @@
 from types import SimpleNamespace
-from uuid import uuid4
-
 import pytest
 from livekit import api
 
@@ -46,25 +44,23 @@ class RecordingProviderSpy:
 
 
 @pytest.mark.anyio
-async def test_start_compatibility_adapter_derives_object_key_before_provider() -> None:
+async def test_start_forwards_committed_object_key_exactly_to_provider() -> None:
     provider = RecordingProviderSpy()
-    user_id = uuid4()
-    call_id = uuid4()
+    expected_object_key = "calls/committed-owner/committed-call.ogg"
 
     result = await LiveKitRecordingService(provider=provider).start_room_recording(
         room_name="room-owned",
-        user_id=user_id,
-        call_id=call_id,
+        object_key=expected_object_key,
     )
 
     assert provider.calls == [
         (
             "start_room_recording",
             "room-owned",
-            f"calls/{user_id}/{call_id}.ogg",
+            expected_object_key,
         )
     ]
-    assert result.object_key == f"calls/{user_id}/{call_id}.ogg"
+    assert result.object_key == expected_object_key
 
 
 @pytest.mark.anyio

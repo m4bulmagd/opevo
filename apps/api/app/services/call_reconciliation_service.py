@@ -8,6 +8,7 @@ from app.repositories.call_repository import CallRepository
 from app.repositories.usage_repository import UsageRepository
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.livekit_dispatch_lock import livekit_dispatch_lock
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 
 
 logger = logging.getLogger(__name__)
@@ -88,9 +89,14 @@ class CallReconciliationService:
                     limit=remaining,
                 )
                 usage_repository = UsageRepository(session)
+                recording_lifecycle = RecordingLifecycleService(
+                    session,
+                    now_provider=lambda: now,
+                )
                 lifecycle = CallLifecycleService(
                     session,
                     call_repository=repository,
+                    recording_lifecycle_service=recording_lifecycle,
                 )
                 for call in rows:
                     scanned += 1
@@ -111,6 +117,7 @@ class CallReconciliationService:
                         recovered += 1
                         continue
 
+                    await recording_lifecycle.request_stop(call)
                     debit = await usage_repository.get_call_debit(call_id=call.id)
                     at_attempt_cap = (
                         call.finalization_attempt_count

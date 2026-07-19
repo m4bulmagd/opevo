@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from app.models.call import Call
 from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.usage_ledger import UsageLedger
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.recording_lifecycle_service import RecordingLifecycleService
@@ -45,12 +46,20 @@ async def _ending_call(db_session, active_user, *, balance: int = 3) -> Call:
 
 
 @pytest.mark.anyio
-async def test_post_call_transaction_persists_reference_only_work(
+async def test_finalization_persists_non_recording_reference_work_only(
     db_session,
     active_user,
 ) -> None:
     call = await _ending_call(db_session, active_user)
     lifecycle = CallLifecycleService(db_session)
+    recording_operation_count = await db_session.scalar(
+        select(func.count()).select_from(RecordingEgressOperation)
+    )
+    recording_event_count = await db_session.scalar(
+        select(func.count())
+        .select_from(OutboxEvent)
+        .where(OutboxEvent.topic.like("recording.%"))
+    )
 
     claim = await lifecycle.claim_finalization(call.id)
     result = await lifecycle.complete_finalization(
@@ -77,11 +86,16 @@ async def test_post_call_transaction_persists_reference_only_work(
             )
         ).scalars()
     )
-    assert [intent.topic for intent in intents] == [
-        "recording.stop",
-        "summary.generate",
-    ]
+    assert [intent.topic for intent in intents] == ["summary.generate"]
     assert all(intent.payload == {"call_id": str(call.id)} for intent in intents)
+    assert await db_session.scalar(
+        select(func.count()).select_from(RecordingEgressOperation)
+    ) == recording_operation_count
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(OutboxEvent)
+        .where(OutboxEvent.topic.like("recording.%"))
+    ) == recording_event_count
 
 
 @pytest.mark.anyio

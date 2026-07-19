@@ -587,6 +587,20 @@ def test_recording_reconcile_outbox_topic_is_allowlisted_without_identity_labels
     ]
 
 
+def test_outbox_metric_topic_allowlist_exactly_matches_supported_topics() -> None:
+    from app.core.observability import _OUTBOX_TOPICS
+
+    assert _OUTBOX_TOPICS == {
+        "phone.provision",
+        "phone.enable",
+        "phone.disable",
+        "livekit.dispatch",
+        "livekit.verification_dispatch",
+        "recording.reconcile",
+        "summary.generate",
+    }
+
+
 @pytest.mark.anyio
 async def test_recording_operation_uuid_is_never_bound_as_call_context() -> None:
     from app.core.observability import bind_call_id
@@ -615,6 +629,15 @@ async def test_recording_operation_uuid_is_never_bound_as_call_context() -> None
 
     assert "presvo.call.id" not in tracer.spans[0].attributes
     assert str(operation_id) not in repr(tracer.spans[0].attributes)
+
+
+def test_call_bound_outbox_topics_are_exactly_call_scoped_aggregates() -> None:
+    from app.workers.jobs.outbox_delivery import _CALL_TOPIC_AGGREGATE_TYPES
+
+    assert _CALL_TOPIC_AGGREGATE_TYPES == {
+        "livekit.dispatch": "call",
+        "summary.generate": "call-summary",
+    }
 
 
 @pytest.mark.anyio
@@ -976,12 +999,6 @@ async def test_transcript_job_extracts_only_valid_call_reference_for_trace() -> 
     [
         ("livekit.dispatch", "call", "livekit", "create_dispatch"),
         ("summary.generate", "call-summary", "gemini", "generate_summary"),
-        (
-            "recording.stop",
-            "call-recording",
-            "livekit",
-            "ensure_recording_stopped",
-        ),
     ],
 )
 async def test_validated_outbox_call_reference_correlates_nested_provider_span(

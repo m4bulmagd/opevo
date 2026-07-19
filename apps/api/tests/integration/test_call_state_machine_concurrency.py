@@ -13,6 +13,7 @@ from app.models import Base
 from app.models.call import Call
 from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.repositories.call_repository import CallRepository, CallTransitionError
@@ -162,19 +163,31 @@ async def test_parallel_reconciliation_claims_stale_ending_once(
             .select_from(Notification)
             .where(Notification.call_id == call_id)
         )
+        operation = await session.scalar(
+            select(RecordingEgressOperation).where(
+                RecordingEgressOperation.call_id == call_id
+            )
+        )
+        assert operation is not None
         intents = list(
             (
                 await session.execute(
-                    select(OutboxEvent).where(OutboxEvent.aggregate_id == call_id)
+                    select(OutboxEvent).where(
+                        OutboxEvent.aggregate_id.in_((call_id, operation.id))
+                    )
                 )
             ).scalars()
         )
     assert debit_count == 1
     assert notification_count == 1
     assert sorted(intent.topic for intent in intents) == [
-        "recording.stop",
+        "recording.reconcile",
         "summary.generate",
     ]
+    reconcile = next(
+        intent for intent in intents if intent.topic == "recording.reconcile"
+    )
+    assert reconcile.payload == {"operation_id": str(operation.id)}
 
 
 @pytest.mark.anyio
@@ -237,7 +250,7 @@ async def test_concurrent_phase_b_creates_each_durable_effect_once(
                 )
             ).scalars()
         )
-    assert sorted(topics) == ["phone.disable", "recording.stop", "summary.generate"]
+    assert sorted(topics) == ["phone.disable", "summary.generate"]
 
 
 @pytest.mark.anyio
