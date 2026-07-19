@@ -15,6 +15,7 @@ from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
 from app.models.usage_ledger import UsageLedger
 from app.services.call_lifecycle_service import CallLifecycleService
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 
 
 async def _ending_call(db_session, active_user, *, balance: int = 3) -> Call:
@@ -110,6 +111,44 @@ async def test_post_call_retry_is_idempotent(db_session, active_user) -> None:
         .select_from(Notification)
         .where(Notification.call_id == call.id)
     ) == 1
+
+
+@pytest.mark.anyio
+async def test_new_recording_lifecycle_never_produces_legacy_stop_topic(
+    db_session,
+    active_user,
+) -> None:
+    now = datetime.now(UTC)
+    call = Call(
+        user_id=active_user.id,
+        status="connected",
+        livekit_room_id="room-recording-lifecycle-only",
+        started_at=now,
+    )
+    db_session.add(call)
+    await db_session.flush()
+    lifecycle = RecordingLifecycleService(
+        db_session,
+        now_provider=lambda: now,
+    )
+    operation = await lifecycle.prepare_start(call)
+    call.status = "completed"
+    call.duration_seconds = 1
+    await lifecycle.request_stop(call)
+    await db_session.commit()
+
+    events = list(
+        (
+            await db_session.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.aggregate_id == operation.id
+                )
+            )
+        ).scalars()
+    )
+    assert events
+    assert all(event.topic == "recording.reconcile" for event in events)
+    assert all(event.payload == {"operation_id": str(operation.id)} for event in events)
 
 
 @pytest.mark.anyio

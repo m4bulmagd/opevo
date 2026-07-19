@@ -40,6 +40,11 @@ SAFE_OUTBOX_ERROR_CODES = frozenset(
         "dispatch_configuration",
         "summary_stale",
         "recording_unresolved",
+        "recording_provider_unavailable",
+        "recording_storage_unavailable",
+        "recording_identity_mismatch",
+        "recording_identity_conflict",
+        "recording_legacy_incomplete",
     }
 )
 
@@ -105,6 +110,11 @@ def _outbox_error_class(error_code: str) -> str:
         "dispatch_configuration": "validation",
         "summary_stale": "conflict",
         "recording_unresolved": "unknown",
+        "recording_provider_unavailable": "unavailable",
+        "recording_storage_unavailable": "unavailable",
+        "recording_identity_mismatch": "validation",
+        "recording_identity_conflict": "conflict",
+        "recording_legacy_incomplete": "validation",
     }.get(error_code, "unknown")
 
 
