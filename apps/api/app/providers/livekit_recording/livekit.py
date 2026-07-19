@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+
 from livekit import api
 
 from app.core.observability import (
@@ -23,14 +25,69 @@ def _nonempty_string(value: object) -> str | None:
     return None
 
 
-def _file_info_path(file_info: object) -> str | None:
+def _location_object_key(
+    location: str,
+    *,
+    bucket_name: str,
+    endpoint_url: str,
+) -> str | None:
+    parsed = urlsplit(location)
+    if not parsed.scheme and not parsed.netloc:
+        if (
+            parsed.path != location
+            or parsed.query
+            or parsed.fragment
+            or location.startswith("/")
+        ):
+            return None
+        return location
+
+    if parsed.scheme == "s3":
+        if parsed.netloc != bucket_name or not parsed.path.startswith("/"):
+            return None
+        object_key = parsed.path[1:]
+        return object_key if object_key and not object_key.startswith("/") else None
+
+    endpoint = urlsplit(endpoint_url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.scheme != endpoint.scheme
+        or parsed.netloc != endpoint.netloc
+    ):
+        return None
+    endpoint_path = endpoint.path.rstrip("/")
+    object_prefix = f"{endpoint_path}/{bucket_name}/"
+    if not parsed.path.startswith(object_prefix):
+        return None
+    object_key = parsed.path[len(object_prefix) :]
+    return object_key or None
+
+
+def _file_info_path(
+    file_info: object,
+    *,
+    bucket_name: str,
+    endpoint_url: str,
+) -> str | None:
     filename = _nonempty_string(getattr(file_info, "filename", None))
     if filename is not None:
         return filename
-    return _nonempty_string(getattr(file_info, "location", None))
+    location = _nonempty_string(getattr(file_info, "location", None))
+    if location is None:
+        return None
+    return _location_object_key(
+        location,
+        bucket_name=bucket_name,
+        endpoint_url=endpoint_url,
+    )
 
 
-def normalized_egress_object_key(egress: object) -> str | None:
+def normalized_egress_object_key(
+    egress: object,
+    *,
+    bucket_name: str,
+    endpoint_url: str,
+) -> str | None:
     """Return one primitive output path, failing closed on disagreement."""
     paths: set[str] = set()
 
@@ -47,11 +104,19 @@ def normalized_egress_object_key(egress: object) -> str | None:
             if path is not None:
                 paths.add(path)
 
-    legacy_path = _file_info_path(getattr(egress, "file", None))
+    legacy_path = _file_info_path(
+        getattr(egress, "file", None),
+        bucket_name=bucket_name,
+        endpoint_url=endpoint_url,
+    )
     if legacy_path is not None:
         paths.add(legacy_path)
     for file_result in getattr(egress, "file_results", ()):
-        path = _file_info_path(file_result)
+        path = _file_info_path(
+            file_result,
+            bucket_name=bucket_name,
+            endpoint_url=endpoint_url,
+        )
         if path is not None:
             paths.add(path)
 
@@ -226,7 +291,11 @@ class LiveKitRecordingProvider(RecordingProvider):
                     egress_id=egress_id,
                     room_name=item_room_name,
                     status=int(status),
-                    object_key=normalized_egress_object_key(item),
+                    object_key=normalized_egress_object_key(
+                        item,
+                        bucket_name=self.bucket_name,
+                        endpoint_url=self.endpoint_url,
+                    ),
                 )
             )
         return tuple(snapshots)
