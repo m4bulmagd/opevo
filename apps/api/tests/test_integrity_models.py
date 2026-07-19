@@ -12,6 +12,7 @@ from app.models import Base
 from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
@@ -68,6 +69,46 @@ def test_models_expose_exact_integrity_constraint_names() -> None:
     assert str(sqlite_predicate) == (
         "status IN ('pending', 'connected', 'ending', 'finalizing')"
     )
+
+
+def test_recording_operation_is_current_private_coordination_metadata() -> None:
+    table = RecordingEgressOperation.__table__
+
+    assert Base.metadata.tables[table.name] is table
+    assert set(table.columns.keys()) == {
+        "id",
+        "call_id",
+        "room_name",
+        "legacy_incomplete",
+        "expected_object_key",
+        "provider_egress_id",
+        "start_state",
+        "start_attempted_at",
+        "stop_requested_at",
+        "delete_requested_at",
+        "provider_terminal_at",
+        "object_deleted_at",
+        "last_reconciled_at",
+        "last_error_code",
+        "created_at",
+        "updated_at",
+    }
+    assert _constraint_names(RecordingEgressOperation) == {
+        "uq_recording_egress_operations_call_id",
+        "uq_recording_egress_operations_provider_egress_id",
+        "ck_recording_egress_operations_start_state_allowed",
+        "ck_recording_egress_operations_provider_identity_consistent",
+        "ck_recording_egress_operations_legacy_room_consistent",
+        "ck_recording_egress_operations_prepared_attempt_consistent",
+        "ck_recording_egress_operations_delete_implies_stop",
+        "ck_recording_egress_operations_object_delete_implies_request",
+    }
+    assert set(_indexes(RecordingEgressOperation)) == {
+        "ix_recording_egress_operations_due_work"
+    }
+    foreign_key = next(iter(table.columns.call_id.foreign_keys))
+    assert foreign_key.target_fullname == "calls.id"
+    assert foreign_key.ondelete == "RESTRICT"
 
 
 def test_phone_number_provisioning_checks_use_final_task7_state_set() -> None:
