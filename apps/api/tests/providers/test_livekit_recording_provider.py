@@ -101,11 +101,12 @@ def build_provider(
     client: FakeEgressClient,
     *,
     observability=None,
+    endpoint_url: str = "http://minio:9000",
 ) -> LiveKitRecordingProvider:
     return LiveKitRecordingProvider(
         egress_client=client,
         bucket_name="recordings",
-        endpoint_url="http://minio:9000",
+        endpoint_url=endpoint_url,
         access_key="key",
         secret_key="secret",
         region="us-east-1",
@@ -747,6 +748,79 @@ async def test_list_room_egresses_ignores_absent_file_info_path() -> None:
     )
 
     assert snapshots[0].object_key == object_key
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_sanitizes_malformed_location_only_result() -> None:
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-malformed-location",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_COMPLETE,
+                file_results=[api.FileInfo(location="http://[malformed")],
+            )
+        ]
+    )
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots[0].object_key is None
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_rejects_malformed_location_with_valid_path(
+) -> None:
+    object_key = "calls/user-1/call-1.ogg"
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-malformed-with-composite",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_COMPLETE,
+                room_composite=api.RoomCompositeEgressRequest(
+                    file=api.EncodedFileOutput(filepath=object_key)
+                ),
+                file_results=[api.FileInfo(location="http://[malformed")],
+            )
+        ]
+    )
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots[0].object_key is None
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_sanitizes_malformed_configured_endpoint() -> None:
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-malformed-endpoint",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_COMPLETE,
+                file_results=[
+                    api.FileInfo(
+                        location=(
+                            "http://minio:9000/recordings/"
+                            "calls/user-1/call-1.ogg"
+                        )
+                    )
+                ],
+            )
+        ]
+    )
+
+    snapshots = await build_provider(
+        client,
+        endpoint_url="http://[malformed",
+    ).list_room_egresses(room_name="room-owned")
+
+    assert snapshots[0].object_key is None
 
 
 @pytest.mark.anyio
