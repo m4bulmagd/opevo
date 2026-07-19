@@ -55,16 +55,29 @@ class RecordingEgressOperationRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_provider_egress_id(
+        self,
+        provider_egress_id: str,
+    ) -> RecordingEgressOperation | None:
+        result = await self.session.execute(
+            select(RecordingEgressOperation).where(
+                RecordingEgressOperation.provider_egress_id == provider_egress_id
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_room_name(
         self,
         room_name: str,
     ) -> RecordingEgressOperation | None:
-        result = await self.session.execute(
-            select(RecordingEgressOperation).where(
-                RecordingEgressOperation.room_name == room_name
+        matches = list(
+            await self.session.scalars(
+                select(RecordingEgressOperation)
+                .where(RecordingEgressOperation.room_name == room_name)
+                .limit(2)
             )
         )
-        return result.scalar_one_or_none()
+        return matches[0] if len(matches) == 1 else None
 
     async def add(
         self,

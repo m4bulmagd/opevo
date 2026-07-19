@@ -37,6 +37,9 @@ RECORDING_START_ERROR_CODES = frozenset(
         "unknown",
     }
 )
+EGRESS_EVENT_TYPES = frozenset({"egress_started", "egress_updated", "egress_ended"})
+EGRESS_STATUSES = frozenset(range(7))
+EGRESS_TERMINAL_STATUSES = frozenset({3, 4, 5, 6})
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ class RecordingEgressEventFact:
     room_name: str
     status: int
     object_key: str | None
+    object_key_evidence: Literal["absent", "exact", "invalid"]
 
 
 @dataclass(frozen=True)
@@ -245,6 +249,183 @@ class RecordingLifecycleService:
         )
         await self.session.flush()
         return operation
+
+    async def accept_egress_event(
+        self,
+        fact: RecordingEgressEventFact,
+    ) -> Literal["accepted", "missing", "mismatch", "conflict"]:
+        if not self._valid_egress_fact(fact):
+            return "missing"
+        if fact.object_key_evidence == "invalid":
+            return "mismatch"
+
+        discovered = await self.operation_repository.get_by_provider_egress_id(
+            fact.egress_id
+        )
+        if discovered is None:
+            discovered = await self.operation_repository.get_by_room_name(
+                fact.room_name
+            )
+        if discovered is None:
+            return "missing"
+
+        locked = await self._lock_call_then_operation(discovered.id)
+        if locked is None:
+            return "missing"
+        call, operation = locked
+
+        if (
+            operation.room_name != fact.room_name
+            or call.livekit_room_id != fact.room_name
+        ):
+            return "mismatch"
+        if (
+            fact.object_key is not None
+            and fact.object_key != operation.expected_object_key
+        ):
+            return "mismatch"
+
+        known_identity = operation.provider_egress_id
+        if known_identity is None and fact.object_key is None:
+            return "mismatch"
+        if (
+            known_identity is not None
+            and known_identity != fact.egress_id
+            and fact.object_key_evidence == "absent"
+        ):
+            return "mismatch"
+        if known_identity is not None and known_identity != fact.egress_id:
+            await self._persist_egress_conflict(call, operation)
+            return "conflict"
+
+        contradictory_start = operation.start_state in {
+            "prepared",
+            "not_started",
+        }
+        sticky_conflict = operation.last_error_code == RECORDING_IDENTITY_CONFLICT_CODE
+        projection_conflict = call.deleted_at is None and (
+            call.recording_object_key not in {None, operation.expected_object_key}
+            or call.recording_egress_id not in {None, fact.egress_id}
+        )
+        if contradictory_start or sticky_conflict or projection_conflict:
+            terminal_changed = False
+            if known_identity == fact.egress_id:
+                terminal_changed = self._record_egress_terminal(operation, fact)
+            await self._persist_egress_conflict(call, operation)
+            if terminal_changed:
+                await self._ensure_egress_reconcile_event(operation, "terminal")
+            return "conflict"
+
+        identity_attached = False
+        if known_identity is None:
+            if operation.start_state not in {"starting", "uncertain"}:
+                await self._persist_egress_conflict(call, operation)
+                return "conflict"
+            operation.start_state = "started"
+            operation.provider_egress_id = fact.egress_id
+            operation.last_error_code = None
+            identity_attached = True
+
+        if call.deleted_at is not None:
+            self._hide_playback_projection(call)
+        else:
+            call.recording_object_key = operation.expected_object_key
+            call.recording_egress_id = fact.egress_id
+
+        terminal_changed = self._record_egress_terminal(operation, fact)
+        if identity_attached:
+            await self._ensure_egress_reconcile_event(operation, "identity")
+        if terminal_changed:
+            await self._ensure_egress_reconcile_event(operation, "terminal")
+        await self.outbox_repository.make_oldest_pending_due(
+            aggregate_type=RECORDING_AGGREGATE_TYPE,
+            aggregate_id=operation.id,
+            due_at=self.now(),
+        )
+        await self.session.flush()
+        return "accepted"
+
+    @staticmethod
+    def _valid_egress_fact(fact: RecordingEgressEventFact) -> bool:
+        string_values = (
+            (fact.external_event_id, 255),
+            (fact.event_type, 100),
+            (fact.egress_id, 255),
+            (fact.room_name, 255),
+        )
+        return (
+            all(
+                type(value) is str
+                and bool(value.strip())
+                and len(value) <= limit
+                and "\x00" not in value
+                for value, limit in string_values
+            )
+            and fact.event_type in EGRESS_EVENT_TYPES
+            and type(fact.status) is int
+            and fact.status in EGRESS_STATUSES
+            and type(fact.object_key_evidence) is str
+            and fact.object_key_evidence in {"absent", "exact", "invalid"}
+            and (
+                (
+                    fact.object_key_evidence == "exact"
+                    and type(fact.object_key) is str
+                    and bool(fact.object_key.strip())
+                    and len(fact.object_key) <= 512
+                    and "\x00" not in fact.object_key
+                )
+                or (
+                    fact.object_key_evidence in {"absent", "invalid"}
+                    and fact.object_key is None
+                )
+            )
+        )
+
+    def _record_egress_terminal(
+        self,
+        operation: RecordingEgressOperation,
+        fact: RecordingEgressEventFact,
+    ) -> bool:
+        if (
+            fact.event_type != "egress_ended"
+            or fact.status not in EGRESS_TERMINAL_STATUSES
+            or operation.provider_egress_id != fact.egress_id
+            or operation.provider_terminal_at is not None
+        ):
+            return False
+        operation.provider_terminal_at = self.now()
+        return True
+
+    async def _persist_egress_conflict(
+        self,
+        call: Call,
+        operation: RecordingEgressOperation,
+    ) -> None:
+        if operation.start_state in {"prepared", "not_started"}:
+            operation.start_state = "uncertain"
+        operation.last_error_code = RECORDING_IDENTITY_CONFLICT_CODE
+        self._hide_playback_projection(call)
+        await self._ensure_egress_reconcile_event(operation, "conflict")
+        await self.outbox_repository.make_oldest_pending_due(
+            aggregate_type=RECORDING_AGGREGATE_TYPE,
+            aggregate_id=operation.id,
+            due_at=self.now(),
+        )
+        await self.session.flush()
+
+    async def _ensure_egress_reconcile_event(
+        self,
+        operation: RecordingEgressOperation,
+        phase: Literal["identity", "terminal", "conflict"],
+    ) -> None:
+        await self.outbox_service.add(
+            topic="recording.reconcile",
+            aggregate_type=RECORDING_AGGREGATE_TYPE,
+            aggregate_id=operation.id,
+            idempotency_key=(f"recording.reconcile:{operation.id}:webhook-{phase}"),
+            payload={"operation_id": str(operation.id)},
+            next_attempt_at=self.now(),
+        )
 
     async def request_stop(
         self,

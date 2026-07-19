@@ -1,4 +1,6 @@
-from enum import Enum, auto
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import urlsplit
 
 from livekit import api
@@ -20,9 +22,39 @@ class _LocalStartValidationError(ValueError):
     pass
 
 
-class _FileInfoPathState(Enum):
-    ABSENT = auto()
-    UNPROVABLE = auto()
+@dataclass(frozen=True)
+class EgressObjectKeyEvidence:
+    state: Literal["absent", "exact", "invalid"]
+    object_key: str | None = None
+
+
+_MISSING = object()
+_ALIAS_CONFLICT = object()
+
+
+def _values_agree(left: object, right: object) -> bool:
+    try:
+        result = left == right
+    except Exception:
+        return False
+    return type(result) is bool and result
+
+
+def _field(value: object, *names: str) -> object:
+    if isinstance(value, Mapping):
+        candidates = [value[name] for name in names if name in value]
+    else:
+        candidates = []
+        for name in names:
+            candidate = getattr(value, name, _MISSING)
+            if candidate is not _MISSING:
+                candidates.append(candidate)
+    if not candidates:
+        return _MISSING
+    first = candidates[0]
+    if any(not _values_agree(first, candidate) for candidate in candidates[1:]):
+        return _ALIAS_CONFLICT
+    return first
 
 
 def _nonempty_string(value: object) -> str | None:
@@ -31,12 +63,33 @@ def _nonempty_string(value: object) -> str | None:
     return None
 
 
+def _bounded_nonempty_string(value: object, *, max_length: int) -> str | None:
+    candidate = _nonempty_string(value)
+    if (
+        candidate is None
+        or not candidate.strip()
+        or len(candidate) > max_length
+        or "\x00" in candidate
+    ):
+        return None
+    return candidate
+
+
+def _is_record(value: object) -> bool:
+    return isinstance(value, Mapping) or not isinstance(
+        value,
+        (str, bytes, int, float, bool, list, tuple, set, frozenset),
+    )
+
+
 def _location_object_key(
     location: str,
     *,
     bucket_name: str,
     endpoint_url: str,
 ) -> str | None:
+    if "\x00" in location:
+        return None
     try:
         parsed = urlsplit(location)
     except ValueError:
@@ -49,13 +102,20 @@ def _location_object_key(
             or location.startswith("/")
         ):
             return None
-        return location
+        return location if len(location) <= 512 else None
 
     if parsed.scheme == "s3":
         if parsed.netloc != bucket_name or not parsed.path.startswith("/"):
             return None
         object_key = parsed.path[1:]
-        return object_key if object_key and not object_key.startswith("/") else None
+        return (
+            object_key
+            if object_key
+            and len(object_key) <= 512
+            and not object_key.startswith("/")
+            and "\x00" not in object_key
+            else None
+        )
 
     try:
         endpoint = urlsplit(endpoint_url)
@@ -72,29 +132,145 @@ def _location_object_key(
     if not parsed.path.startswith(object_prefix):
         return None
     object_key = parsed.path[len(object_prefix) :]
-    return object_key or None
+    return (
+        object_key
+        if object_key and len(object_key) <= 512 and "\x00" not in object_key
+        else None
+    )
 
 
-def _file_info_path(
+def _file_info_path_evidence(
     file_info: object,
     *,
     bucket_name: str,
     endpoint_url: str,
-) -> str | _FileInfoPathState:
-    filename = _nonempty_string(getattr(file_info, "filename", None))
+) -> EgressObjectKeyEvidence:
+    if file_info is _MISSING or file_info is None:
+        return EgressObjectKeyEvidence("absent" if file_info is _MISSING else "invalid")
+    if file_info is _ALIAS_CONFLICT or not _is_record(file_info):
+        return EgressObjectKeyEvidence("invalid")
+    filename_value = _field(file_info, "filename")
+    if filename_value is _ALIAS_CONFLICT:
+        return EgressObjectKeyEvidence("invalid")
+    filename = _bounded_nonempty_string(filename_value, max_length=512)
     if filename is not None:
-        return filename
-    location = _nonempty_string(getattr(file_info, "location", None))
+        return EgressObjectKeyEvidence("exact", filename)
+    if filename_value is not _MISSING and filename_value != "":
+        return EgressObjectKeyEvidence("invalid")
+    location_value = _field(file_info, "location")
+    if location_value is _ALIAS_CONFLICT:
+        return EgressObjectKeyEvidence("invalid")
+    location = _bounded_nonempty_string(location_value, max_length=2048)
     if location is None:
-        return _FileInfoPathState.ABSENT
+        if location_value is not _MISSING and location_value != "":
+            return EgressObjectKeyEvidence("invalid")
+        return EgressObjectKeyEvidence("absent")
     object_key = _location_object_key(
         location,
         bucket_name=bucket_name,
         endpoint_url=endpoint_url,
     )
     if object_key is None:
-        return _FileInfoPathState.UNPROVABLE
-    return object_key
+        return EgressObjectKeyEvidence("invalid")
+    return EgressObjectKeyEvidence("exact", object_key)
+
+
+def _items(value: object) -> tuple[object, ...] | None:
+    if value is _MISSING:
+        return ()
+    if value is None or value is _ALIAS_CONFLICT:
+        return None
+    if isinstance(value, (str, bytes, Mapping)):
+        return None
+    try:
+        return tuple(value)  # type: ignore[arg-type]
+    except TypeError:
+        return None
+
+
+def normalized_egress_object_key_evidence(
+    egress: object,
+    *,
+    bucket_name: str,
+    endpoint_url: str,
+) -> EgressObjectKeyEvidence:
+    """Return exact, absent, or invalid path evidence without provider objects."""
+    paths: set[str] = set()
+
+    if egress is _ALIAS_CONFLICT or not _is_record(egress):
+        return EgressObjectKeyEvidence("invalid")
+
+    room_composite = _field(egress, "room_composite", "roomComposite")
+    if room_composite is _ALIAS_CONFLICT:
+        return EgressObjectKeyEvidence("invalid")
+    if room_composite is not _MISSING and room_composite is not None:
+        if not _is_record(room_composite):
+            return EgressObjectKeyEvidence("invalid")
+        singular_output = _field(room_composite, "file")
+        if singular_output is _ALIAS_CONFLICT:
+            return EgressObjectKeyEvidence("invalid")
+        if singular_output is not _MISSING and (
+            singular_output is None or not _is_record(singular_output)
+        ):
+            return EgressObjectKeyEvidence("invalid")
+        singular_path_value = _field(singular_output, "filepath")
+        if singular_path_value is _ALIAS_CONFLICT:
+            return EgressObjectKeyEvidence("invalid")
+        singular_path = _bounded_nonempty_string(
+            singular_path_value,
+            max_length=512,
+        )
+        if singular_path is not None:
+            paths.add(singular_path)
+        elif singular_path_value is not _MISSING and singular_path_value != "":
+            return EgressObjectKeyEvidence("invalid")
+
+        outputs = _items(_field(room_composite, "file_outputs", "fileOutputs"))
+        if outputs is None:
+            return EgressObjectKeyEvidence("invalid")
+        for output in outputs:
+            if output is None or not _is_record(output):
+                return EgressObjectKeyEvidence("invalid")
+            path_value = _field(output, "filepath")
+            if path_value is _ALIAS_CONFLICT:
+                return EgressObjectKeyEvidence("invalid")
+            path = _bounded_nonempty_string(path_value, max_length=512)
+            if path is not None:
+                paths.add(path)
+            elif path_value is not _MISSING and path_value != "":
+                return EgressObjectKeyEvidence("invalid")
+    elif room_composite is not _MISSING:
+        return EgressObjectKeyEvidence("invalid")
+
+    legacy_evidence = _file_info_path_evidence(
+        _field(egress, "file"),
+        bucket_name=bucket_name,
+        endpoint_url=endpoint_url,
+    )
+    if legacy_evidence.state == "invalid":
+        return legacy_evidence
+    if legacy_evidence.object_key is not None:
+        paths.add(legacy_evidence.object_key)
+
+    results = _items(_field(egress, "file_results", "fileResults"))
+    if results is None:
+        return EgressObjectKeyEvidence("invalid")
+    for file_result in results:
+        result_evidence = _file_info_path_evidence(
+            file_result,
+            bucket_name=bucket_name,
+            endpoint_url=endpoint_url,
+        )
+        if result_evidence.state == "invalid":
+            return result_evidence
+        if result_evidence.object_key is not None:
+            paths.add(result_evidence.object_key)
+
+    if not paths:
+        return EgressObjectKeyEvidence("absent")
+    if len(paths) != 1:
+        return EgressObjectKeyEvidence("invalid")
+    return EgressObjectKeyEvidence("exact", next(iter(paths)))
 
 
 def normalized_egress_object_key(
@@ -104,44 +280,11 @@ def normalized_egress_object_key(
     endpoint_url: str,
 ) -> str | None:
     """Return one primitive output path, failing closed on disagreement."""
-    paths: set[str] = set()
-
-    room_composite = getattr(egress, "room_composite", None)
-    if room_composite is not None:
-        singular_output = getattr(room_composite, "file", None)
-        singular_path = _nonempty_string(
-            getattr(singular_output, "filepath", None)
-        )
-        if singular_path is not None:
-            paths.add(singular_path)
-        for output in getattr(room_composite, "file_outputs", ()):
-            path = _nonempty_string(getattr(output, "filepath", None))
-            if path is not None:
-                paths.add(path)
-
-    legacy_path = _file_info_path(
-        getattr(egress, "file", None),
+    return normalized_egress_object_key_evidence(
+        egress,
         bucket_name=bucket_name,
         endpoint_url=endpoint_url,
-    )
-    if legacy_path is _FileInfoPathState.UNPROVABLE:
-        return None
-    if isinstance(legacy_path, str):
-        paths.add(legacy_path)
-    for file_result in getattr(egress, "file_results", ()):
-        file_result_path = _file_info_path(
-            file_result,
-            bucket_name=bucket_name,
-            endpoint_url=endpoint_url,
-        )
-        if file_result_path is _FileInfoPathState.UNPROVABLE:
-            return None
-        if isinstance(file_result_path, str):
-            paths.add(file_result_path)
-
-    if len(paths) != 1:
-        return None
-    return next(iter(paths))
+    ).object_key
 
 
 class LiveKitRecordingProviderError(Exception):
@@ -253,7 +396,10 @@ class LiveKitRecordingProvider(RecordingProvider):
                 start_outcome=self.start_outcome_for(exc),
             ) from None
 
-        egress_id = _nonempty_string(getattr(info, "egress_id", None))
+        egress_id = _bounded_nonempty_string(
+            getattr(info, "egress_id", None),
+            max_length=255,
+        )
         if egress_id is None:
             raise LiveKitRecordingProviderError(
                 "provider_retryable",
@@ -292,14 +438,21 @@ class LiveKitRecordingProvider(RecordingProvider):
 
         snapshots: list[RecordingEgressSnapshot] = []
         for item in items:
-            egress_id = _nonempty_string(getattr(item, "egress_id", None))
-            item_room_name = _nonempty_string(getattr(item, "room_name", None))
-            status = getattr(item, "status", None)
+            egress_id = _bounded_nonempty_string(
+                _field(item, "egress_id", "egressId"),
+                max_length=255,
+            )
+            item_room_name = _bounded_nonempty_string(
+                _field(item, "room_name", "roomName"),
+                max_length=255,
+            )
+            status = _field(item, "status")
             if (
                 egress_id is None
                 or item_room_name is None
                 or isinstance(status, bool)
                 or not isinstance(status, int)
+                or status not in range(7)
             ):
                 raise LiveKitRecordingProviderError(
                     "provider_retryable",
@@ -346,8 +499,7 @@ class LiveKitRecordingProvider(RecordingProvider):
         await self._ensure_terminal_status(
             egress_id,
             accepted_terminal_statuses=(
-                self._SUCCESSFUL_TERMINAL_STATUSES
-                | self._FAILED_TERMINAL_STATUSES
+                self._SUCCESSFUL_TERMINAL_STATUSES | self._FAILED_TERMINAL_STATUSES
             ),
         )
 
