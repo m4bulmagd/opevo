@@ -21,10 +21,12 @@ the snapshotted call ID. It then rechecks the operation by its original ID:
 
 - If the operation is still absent after a singleton exact observation,
   recreate that same operation ID for the same call, room, and expected object
-  key. Record the exact provider ID as a trusted `started` identity, copy the
-  original stop and deletion intents, set `recording_identity_conflict`, leave
-  object and terminal proof unset, and hide every customer-visible recording
-  projection.
+  key. Record the exact provider ID as a trusted `started` identity, retain the
+  snapshotted stop and deletion intents, and recover a missing deletion intent
+  from the locked call's later tombstone. Deletion implies stop; an existing
+  earlier stop timestamp is never replaced by the later tombstone. Set
+  `recording_identity_conflict`, leave object and terminal proof unset, and hide
+  every customer-visible recording projection.
 - If the operation is still absent after multiple distinct exact observations,
   recreate it with `start_state="uncertain"` and no provider ID because no
   single identity is authoritative. Preserve the same intents and sticky
@@ -107,6 +109,9 @@ error during one worker's provider listing:
 - Two stale workers racing to restore authority remain idempotent: one operation
   and one recovery event exist, all exact identities remain covered, and no
   uniqueness failure escapes.
+- W1 snapshotting after terminal stop but before owner deletion, followed by W2
+  tombstone/delete intent and full operation removal, restores the later
+  deletion timestamp from the call while preserving W1's earlier stop time.
 
 Run the complete Task 4 focused suites, prescribed worker regressions, Ruff,
 mypy, and the provider-free API suite before rereview.
