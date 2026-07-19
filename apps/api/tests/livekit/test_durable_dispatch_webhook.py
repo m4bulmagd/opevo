@@ -147,10 +147,13 @@ class _FieldAccessFailureMapping(Mapping[str, object]):
         self.target = target
         self.phase = phase
         self.failure_type = failure_type
+        self.target_accesses = 0
 
     def __getitem__(self, key: str) -> object:
-        if self.phase == "item" and key == self.target:
-            raise self.failure_type("mapping item unavailable")
+        if key == self.target:
+            self.target_accesses += 1
+            if self.phase == "item":
+                raise self.failure_type("mapping item unavailable")
         return self.values[key]
 
     def __iter__(self) -> Iterator[str]:
@@ -176,14 +179,29 @@ class _SdkAttributeFailure:
         self.values = values
         self.target = target
         self.failure_type = failure_type
+        self.target_accesses = 0
 
     def __getattr__(self, name: str) -> object:
         if name == self.target:
+            self.target_accesses += 1
             raise self.failure_type("SDK attribute unavailable")
         try:
             return self.values[name]
         except KeyError:
             raise AttributeError(name) from None
+
+
+class _ProtocolClassificationFailure:
+    def __init__(
+        self,
+        *,
+        failure_type: type[BaseException] = RuntimeError,
+    ) -> None:
+        self.failure_type = failure_type
+
+    @property
+    def __class__(self) -> type:
+        raise self.failure_type("protocol classification unavailable")
 
 
 class _PresenceProbeRecord:
@@ -432,6 +450,133 @@ def test_convert_protoish_preserves_signed_event_id_and_agent_kind() -> None:
             "attributes": {"untrusted": "kept for logic, never logged"},
         },
     }
+
+
+@pytest.mark.parametrize("record_kind", ["mapping", "sdk"])
+@pytest.mark.parametrize("target", ["id", "event"])
+def test_convert_top_level_field_conflict_returns_fixed_fallback(
+    record_kind: str,
+    target: str,
+) -> None:
+    values: dict[str, object] = {
+        "id": "EV_malformed_top_level",
+        "event": "participant_joined",
+        "room": {"name": "room-must-not-escape"},
+        "participant": {
+            "identity": "identity-must-not-escape",
+            "kind": 3,
+            "attributes": {"secret": "must-not-escape"},
+        },
+    }
+    malformed = (
+        _FieldAccessFailureMapping(values, target=target, phase="item")
+        if record_kind == "mapping"
+        else _SdkAttributeFailure(values, target=target)
+    )
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        malformed,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert converted.payload == {"id": None, "event": None}
+    assert converted.path_state == "invalid"
+    assert malformed.target_accesses == 1
+
+
+@pytest.mark.parametrize("record_kind", ["mapping", "sdk"])
+def test_convert_top_level_field_does_not_catch_base_exception(
+    record_kind: str,
+) -> None:
+    values: dict[str, object] = {
+        "id": "EV_malformed_top_level",
+        "event": "participant_joined",
+    }
+    malformed = (
+        _FieldAccessFailureMapping(
+            values,
+            target="event",
+            phase="item",
+            failure_type=_AliasAbort,
+        )
+        if record_kind == "mapping"
+        else _SdkAttributeFailure(
+            values,
+            target="event",
+            failure_type=_AliasAbort,
+        )
+    )
+
+    with pytest.raises(_AliasAbort):
+        convert_livekit_event(malformed)
+
+
+def test_alias_protocol_classification_failure_fails_closed() -> None:
+    malformed = _ProtocolClassificationFailure()
+
+    assert livekit_alias_values_equivalent(malformed, malformed) is False
+
+
+def test_convert_protocol_classification_failure_returns_fixed_fallback() -> None:
+    converted = livekit_webhook_module._convert_livekit_event(
+        _ProtocolClassificationFailure(),
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert converted.payload == {"id": None, "event": None}
+    assert converted.path_state == "invalid"
+
+
+def test_object_key_protocol_classification_failure_is_invalid() -> None:
+    evidence = normalized_egress_object_key_evidence(
+        _ProtocolClassificationFailure(),
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert evidence.state == "invalid"
+    assert evidence.object_key is None
+
+
+def test_repeated_output_protocol_classification_failure_is_invalid() -> None:
+    evidence = normalized_egress_object_key_evidence(
+        {"fileResults": _ProtocolClassificationFailure()},
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert evidence.state == "invalid"
+    assert evidence.object_key is None
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    ["alias", "converter", "object-key", "repeated-output"],
+)
+def test_protocol_classification_does_not_catch_base_exception(
+    boundary: str,
+) -> None:
+    malformed = _ProtocolClassificationFailure(failure_type=_AliasAbort)
+
+    with pytest.raises(_AliasAbort):
+        if boundary == "alias":
+            livekit_alias_values_equivalent(malformed, malformed)
+        elif boundary == "converter":
+            convert_livekit_event(malformed)
+        elif boundary == "object-key":
+            normalized_egress_object_key_evidence(
+                malformed,
+                bucket_name="recordings",
+                endpoint_url="http://minio:9000",
+            )
+        else:
+            normalized_egress_object_key_evidence(
+                {"fileResults": malformed},
+                bucket_name="recordings",
+                endpoint_url="http://minio:9000",
+            )
 
 
 @pytest.mark.parametrize(

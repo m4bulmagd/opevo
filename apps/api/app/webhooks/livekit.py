@@ -53,10 +53,15 @@ class _ConvertedLiveKitEvent:
 
 def _field(value: object, *names: str) -> object:
     candidates: list[object] = []
-    if isinstance(value, Mapping):
+    try:
+        is_mapping = isinstance(value, Mapping)
+    except Exception:
+        return _ALIAS_CONFLICT
+    if is_mapping:
+        mapping_value = cast(Mapping, value)
         for name in names:
             try:
-                candidate = value[name]
+                candidate = mapping_value[name]
             except KeyError:
                 continue
             except Exception:
@@ -105,6 +110,8 @@ def _convert_livekit_event(
 ) -> _ConvertedLiveKitEvent:
     event_id = _field(event, "id")
     event_type = _field(event, "event")
+    if event_id is _ALIAS_CONFLICT or event_type is _ALIAS_CONFLICT:
+        return _invalid_converted_livekit_event()
     if type(event_type) is str and event_type in EGRESS_EVENT_TYPES:
         egress = _field(event, "egress_info", "egressInfo", "egress")
         evidence = (
@@ -136,13 +143,18 @@ def _convert_livekit_event(
             path_state=evidence.state,
         )
 
-    if isinstance(event, Mapping):
-        room = event.get("room") or {}
-        participant = event.get("participant") or {}
+    try:
+        is_mapping = isinstance(event, Mapping)
+    except Exception:
+        return _invalid_converted_livekit_event()
+    if is_mapping:
+        mapping_event = cast(Mapping, event)
+        room = mapping_event.get("room") or {}
+        participant = mapping_event.get("participant") or {}
         return _ConvertedLiveKitEvent(
             payload={
-                "id": event.get("id"),
-                "event": event.get("event"),
+                "id": mapping_event.get("id"),
+                "event": mapping_event.get("event"),
                 "room": {"name": room.get("name")},
                 "participant": {
                     "identity": participant.get("identity"),
@@ -164,6 +176,13 @@ def _convert_livekit_event(
                 "attributes": dict(getattr(participant, "attributes", {}) or {}),
             },
         }
+    )
+
+
+def _invalid_converted_livekit_event() -> _ConvertedLiveKitEvent:
+    return _ConvertedLiveKitEvent(
+        payload={"id": None, "event": None},
+        path_state="invalid",
     )
 
 

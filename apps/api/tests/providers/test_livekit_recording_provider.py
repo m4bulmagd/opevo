@@ -166,6 +166,19 @@ class _ProviderPresenceProbeFailure:
         raise self.failure_type("protobuf presence unavailable")
 
 
+class _ProviderProtocolClassificationFailure:
+    def __init__(
+        self,
+        *,
+        failure_type: type[BaseException] = RuntimeError,
+    ) -> None:
+        self.failure_type = failure_type
+
+    @property
+    def __class__(self) -> type:
+        raise self.failure_type("protocol classification unavailable")
+
+
 def twirp_error(*, code: str, status: int) -> api.TwirpError:
     return api.TwirpError(code, "provider detail must not escape", status=status)
 
@@ -841,6 +854,18 @@ async def test_list_room_egresses_contains_record_accessor_errors(
 
 
 @pytest.mark.anyio
+async def test_list_room_egresses_contains_protocol_classification_failure() -> None:
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await build_provider(
+            FakeRoomListEgressClient([_ProviderProtocolClassificationFailure()])
+        ).list_room_egresses(room_name="room-owned")
+
+    assert exc_info.value.category == "provider_retryable"
+    assert exc_info.value.error_class == "unknown"
+    assert str(exc_info.value) == "provider_retryable"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "item",
     [
@@ -855,6 +880,22 @@ async def test_list_room_egresses_does_not_catch_record_base_exception(
         await build_provider(FakeRoomListEgressClient([item])).list_room_egresses(
             room_name="room-owned"
         )
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_does_not_catch_classification_base_exception() -> (
+    None
+):
+    with pytest.raises(_ProviderAbort):
+        await build_provider(
+            FakeRoomListEgressClient(
+                [
+                    _ProviderProtocolClassificationFailure(
+                        failure_type=_ProviderAbort
+                    )
+                ]
+            )
+        ).list_room_egresses(room_name="room-owned")
 
 
 @pytest.mark.anyio
