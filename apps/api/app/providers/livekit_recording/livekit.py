@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 from livekit import api
@@ -83,18 +83,19 @@ def _raw_values_agree(left: object, right: object) -> bool:
 def _canonical_values_equivalent(left: object, right: object) -> bool:
     if type(left) is not type(right):
         return False
-    if isinstance(left, _CanonicalLeaf) and isinstance(right, _CanonicalLeaf):
+    if type(left) is _CanonicalLeaf:
+        assert type(right) is _CanonicalLeaf
         return _raw_values_agree(left.value, right.value)
-    if isinstance(left, _CanonicalSequence) and isinstance(
-        right, _CanonicalSequence
-    ):
+    if type(left) is _CanonicalSequence:
+        assert type(right) is _CanonicalSequence
         left_items = left.items
         right_items = right.items
         return len(left_items) == len(right_items) and all(
             _canonical_values_equivalent(left_item, right_item)
             for left_item, right_item in zip(left_items, right_items, strict=True)
         )
-    if isinstance(left, _CanonicalMapping) and isinstance(right, _CanonicalMapping):
+    if type(left) is _CanonicalMapping:
+        assert type(right) is _CanonicalMapping
         left_items = left.items
         right_items = right.items
         if len(left_items) != len(right_items):
@@ -124,7 +125,12 @@ def _canonical_alias_value(
 ) -> object:
     if not traversal.consume(depth=depth):
         return _ALIAS_CONFLICT
-    if isinstance(value, Mapping):
+    try:
+        is_mapping = isinstance(value, Mapping)
+    except Exception:
+        return _ALIAS_CONFLICT
+    if is_mapping:
+        mapping_value = cast(Mapping, value)
         container_id = id(value)
         if container_id in traversal.active_containers:
             return _ALIAS_CONFLICT
@@ -132,7 +138,7 @@ def _canonical_alias_value(
         try:
             normalized: list[tuple[object, object]] = []
             try:
-                for key, item in value.items():
+                for key, item in mapping_value.items():
                     canonical_key_value = (
                         _LIVEKIT_ALIAS_NAMES.get(key, key)
                         if type(key) is str
@@ -169,7 +175,12 @@ def _canonical_alias_value(
             return _CanonicalMapping(tuple(normalized))
         finally:
             traversal.active_containers.remove(container_id)
-    if isinstance(value, (list, tuple)):
+    try:
+        is_sequence = isinstance(value, (list, tuple))
+    except Exception:
+        return _ALIAS_CONFLICT
+    if is_sequence:
+        sequence_value = cast(list[object] | tuple[object, ...], value)
         container_id = id(value)
         if container_id in traversal.active_containers:
             return _ALIAS_CONFLICT
@@ -177,7 +188,7 @@ def _canonical_alias_value(
         try:
             normalized_items: list[object] = []
             try:
-                for item in value:
+                for item in sequence_value:
                     canonical_item = _canonical_alias_value(
                         item,
                         traversal=traversal,
@@ -229,10 +240,15 @@ def livekit_field_is_present(value: object, name: str) -> bool:
 
 def _field(value: object, *names: str) -> object:
     candidates: list[object] = []
-    if isinstance(value, Mapping):
+    try:
+        is_mapping = isinstance(value, Mapping)
+    except Exception:
+        return _ALIAS_CONFLICT
+    if is_mapping:
+        mapping_value = cast(Mapping, value)
         for name in names:
             try:
-                candidate = value[name]
+                candidate = mapping_value[name]
             except KeyError:
                 continue
             except Exception:
@@ -279,10 +295,13 @@ def _bounded_nonempty_string(value: object, *, max_length: int) -> str | None:
 
 
 def _is_record(value: object) -> bool:
-    return isinstance(value, Mapping) or not isinstance(
-        value,
-        (str, bytes, int, float, bool, list, tuple, set, frozenset),
-    )
+    try:
+        return isinstance(value, Mapping) or not isinstance(
+            value,
+            (str, bytes, int, float, bool, list, tuple, set, frozenset),
+        )
+    except Exception:
+        return False
 
 
 def _location_object_key(
@@ -387,7 +406,10 @@ def _items(value: object) -> tuple[object, ...] | None:
         return ()
     if value is None or value is _ALIAS_CONFLICT:
         return None
-    if isinstance(value, (str, bytes, Mapping)):
+    try:
+        if isinstance(value, (str, bytes, Mapping)):
+            return None
+    except Exception:
         return None
     items: list[object] = []
     try:
