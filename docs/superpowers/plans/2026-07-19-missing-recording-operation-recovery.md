@@ -259,6 +259,12 @@ async def _restore_or_merge_missing_conflict(
         return "changed", None
 
     operation = await operations.get_by_id_for_update(snapshot.operation_id)
+    recovered_delete_requested_at = snapshot.delete_requested_at
+    if recovered_delete_requested_at is None and call.deleted_at is not None:
+        recovered_delete_requested_at = _as_utc(call.deleted_at)
+    recovered_stop_requested_at = (
+        snapshot.stop_requested_at or recovered_delete_requested_at
+    )
     if operation is None:
         operation = await operations.add(
             RecordingEgressOperation(
@@ -273,8 +279,8 @@ async def _restore_or_merge_missing_conflict(
                     if recovered_provider_id is not None
                     else "uncertain"
                 ),
-                stop_requested_at=snapshot.stop_requested_at,
-                delete_requested_at=snapshot.delete_requested_at,
+                stop_requested_at=recovered_stop_requested_at,
+                delete_requested_at=recovered_delete_requested_at,
                 last_reconciled_at=_as_utc(self.now()),
                 last_error_code=RECORDING_IDENTITY_CONFLICT_CODE,
             )
@@ -290,6 +296,12 @@ async def _restore_or_merge_missing_conflict(
     else:
         if operation.provider_egress_id is None:
             operation.start_state = "uncertain"
+        if operation.delete_requested_at is None:
+            operation.delete_requested_at = recovered_delete_requested_at
+        if operation.stop_requested_at is None:
+            operation.stop_requested_at = (
+                recovered_stop_requested_at or operation.delete_requested_at
+            )
         operation.last_reconciled_at = _as_utc(self.now())
         operation.last_error_code = RECORDING_IDENTITY_CONFLICT_CODE
 
