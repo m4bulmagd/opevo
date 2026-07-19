@@ -7,12 +7,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
+from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.schemas.agent_content import AGENT_NAME_MAX_LENGTH
 from app.services.outbox_service import OutboxService
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
 from app.workers.jobs.outbox_topics import deliver_livekit_dispatch
 
@@ -153,6 +156,41 @@ async def _seed_dispatch(
     )
     await db_session.commit()
     return call, event, subscription
+
+
+async def _add_migrated_pending_recording(
+    db_session,
+    call: Call,
+    *,
+    now: datetime,
+    suffix: str,
+) -> RecordingEgressOperation:
+    provider_egress_id = f"egress-migrated-{suffix}"
+    object_key = f"calls/{call.user_id}/{call.id}.ogg"
+    call.recording_object_key = object_key
+    call.recording_egress_id = provider_egress_id
+    call.recording_url = f"https://recordings.example/{suffix}.ogg"
+    operation = RecordingEgressOperation(
+        id=call.id,
+        call_id=call.id,
+        room_name=call.livekit_room_id,
+        legacy_incomplete=False,
+        expected_object_key=object_key,
+        provider_egress_id=provider_egress_id,
+        start_state="started",
+    )
+    db_session.add(operation)
+    await db_session.flush()
+    await OutboxService(db_session, now_provider=lambda: now).add(
+        topic="recording.reconcile",
+        aggregate_type="recording-egress-operation",
+        aggregate_id=operation.id,
+        idempotency_key=f"recording.reconcile:{operation.id}:start",
+        payload={"operation_id": str(operation.id)},
+        next_attempt_at=now + timedelta(days=30),
+    )
+    await db_session.flush()
+    return operation
 
 
 @pytest.mark.anyio
@@ -576,6 +614,14 @@ async def test_sixth_provider_failure_atomically_fails_call(
     db_session, monkeypatch
 ) -> None:
     call, event, _subscription = await _seed_dispatch(db_session)
+    operation = await _add_migrated_pending_recording(
+        db_session,
+        call,
+        now=event.next_attempt_at,
+        suffix="dispatch-exhausted",
+    )
+    operation_id = operation.id
+    await db_session.commit()
     provider = _Provider(always_fail=True)
     monkeypatch.setattr(
         "app.workers.jobs.outbox_topics.create_dispatch_token",
@@ -589,6 +635,14 @@ async def test_sixth_provider_failure_atomically_fails_call(
         "outbox_now": lambda: current_time,
     }
 
+    async def complete_recording_reconcile(_ctx, _event) -> None:
+        return None
+
+    ctx["outbox_handlers"] = {
+        "livekit.dispatch": deliver_livekit_dispatch,
+        "recording.reconcile": complete_recording_reconcile,
+    }
+
     for _attempt in range(6):
         await outbox_delivery_job(ctx)
         async with session_factory() as session:
@@ -599,6 +653,86 @@ async def test_sixth_provider_failure_atomically_fails_call(
     await db_session.refresh(call)
     assert call.status == "failed"
     assert call.failure_code == "dispatch_provider_exhausted"
+    db_session.expire_all()
+    stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
+    stop_events = (
+        await db_session.scalars(
+            select(OutboxEvent).where(
+                OutboxEvent.idempotency_key
+                == f"recording.reconcile:{operation_id}:stop"
+            )
+        )
+    ).all()
+    assert stored_operation is not None
+    assert stored_operation.id == operation_id
+    assert stored_operation.provider_egress_id == "egress-migrated-dispatch-exhausted"
+    assert stored_operation.stop_requested_at is not None
+    assert len(stop_events) == 1
+    assert stop_events[0].payload == {"operation_id": str(operation_id)}
+
+
+@pytest.mark.anyio
+async def test_terminal_dispatch_failure_rolls_back_when_recording_stop_fails(
+    db_session,
+    monkeypatch,
+) -> None:
+    call, event, _subscription = await _seed_dispatch(db_session)
+    operation = await _add_migrated_pending_recording(
+        db_session,
+        call,
+        now=event.next_attempt_at,
+        suffix="dispatch-rollback",
+    )
+    operation_id = operation.id
+    call_id = call.id
+    event_id = event.id
+    event.attempt_count = 5
+    await db_session.commit()
+    provider = _Provider(always_fail=True)
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+
+    async def fail_request_stop(self, _call):
+        raise RuntimeError("forced recording stop failure")
+
+    monkeypatch.setattr(
+        RecordingLifecycleService,
+        "request_stop",
+        fail_request_stop,
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(RuntimeError, match="forced recording stop failure"):
+        await outbox_delivery_job(
+            {
+                "session_factory": session_factory,
+                "livekit_dispatch_provider": provider,
+                "outbox_now": lambda: event.next_attempt_at + timedelta(seconds=1),
+            }
+        )
+
+    db_session.expire_all()
+    stored_call = await db_session.get(Call, call_id)
+    stored_event = await db_session.get(OutboxEvent, event_id)
+    stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
+    stop_event = await db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.idempotency_key
+            == f"recording.reconcile:{operation_id}:stop"
+        )
+    )
+    assert stored_call is not None
+    assert stored_call.status == "pending"
+    assert stored_call.failure_code is None
+    assert stored_event is not None
+    assert stored_event.status == "processing"
+    assert stored_event.attempt_count == 6
+    assert stored_event.last_error_code is None
+    assert stored_operation is not None
+    assert stored_operation.stop_requested_at is None
+    assert stop_event is None
 
 
 @pytest.mark.anyio

@@ -12,6 +12,7 @@ from app.repositories.call_repository import CallRepository
 from app.repositories.outbox_repository import OutboxRepository
 from app.services.activation_go_live_service import fail_current_go_live_attempt
 from app.services.outbox_service import OutboxPayloadError, validate_outbox_payload
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 
 
 logger = logging.getLogger(__name__)
@@ -252,6 +253,7 @@ async def _fail_livekit_dispatch_call(
         call,
         failure_code=failure_code,
     )
+    await RecordingLifecycleService(session).request_stop(call)
 
 
 async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:

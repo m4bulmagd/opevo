@@ -63,6 +63,10 @@ class CallReconciliationService:
                         call,
                         failure_code="dispatch_timeout",
                     )
+                    await RecordingLifecycleService(
+                        session,
+                        now_provider=lambda: now,
+                    ).request_stop(call)
                     call.last_reconciled_at = now
                     await session.commit()
                     scanned += 1
