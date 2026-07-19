@@ -10,6 +10,9 @@ from app.core.observability import bind_call_id, get_observability
 from app.models.outbox_event import OutboxEvent
 from app.repositories.call_repository import CallRepository
 from app.repositories.outbox_repository import OutboxRepository
+from app.repositories.recording_egress_operation_repository import (
+    RecordingEgressOperationRepository,
+)
 from app.services.activation_go_live_service import fail_current_go_live_attempt
 from app.services.outbox_service import OutboxPayloadError, validate_outbox_payload
 from app.services.recording_lifecycle_service import RecordingLifecycleService
@@ -273,6 +276,28 @@ async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:
             logger,
             event="observability_snapshot_failed",
             operation="collect_outbox_snapshot",
+            error=error,
+            status="failed",
+            level=logging.WARNING,
+        )
+
+    recording_now_provider = ctx.get(
+        "recording_observability_now",
+        lambda: datetime.now(UTC),
+    )
+    try:
+        async with session_factory() as session:
+            recording_snapshot = await RecordingEgressOperationRepository(
+                session
+            ).observability_snapshot(recording_now_provider())
+        telemetry.record_recording_operation_snapshot(recording_snapshot)
+    except Exception as error:
+        from app.core.logging import report_safe_exception
+
+        report_safe_exception(
+            logger,
+            event="observability_snapshot_failed",
+            operation="collect_recording_operation_snapshot",
             error=error,
             status="failed",
             level=logging.WARNING,
