@@ -127,9 +127,7 @@ MATRIX = (
                 object_key="calls/other/object.ogg",
             ),
         ),
-        expected_result=ReconciliationResult(
-            "retry", "recording_identity_mismatch"
-        ),
+        expected_result=ReconciliationResult("retry", "recording_identity_mismatch"),
         expected_state="uncertain",
         expected_error="recording_identity_mismatch",
         expected_provider_calls=(("list_room_egresses", "room-owned"),),
@@ -166,9 +164,7 @@ MATRIX = (
             ),
         ),
         ensure_failures=frozenset({"EG_first"}),
-        expected_result=ReconciliationResult(
-            "retry", "recording_identity_conflict"
-        ),
+        expected_result=ReconciliationResult("retry", "recording_identity_conflict"),
         expected_state="uncertain",
         expected_error="recording_identity_conflict",
         expected_provider_calls=(
@@ -181,9 +177,7 @@ MATRIX = (
         name="legacy incomplete with unknown identity",
         start_state="uncertain",
         legacy_incomplete=True,
-        expected_result=ReconciliationResult(
-            "retry", "recording_legacy_incomplete"
-        ),
+        expected_result=ReconciliationResult("retry", "recording_legacy_incomplete"),
         expected_state="uncertain",
         expected_error="recording_legacy_incomplete",
     ),
@@ -200,9 +194,7 @@ MATRIX = (
         delete_requested=True,
         provider_terminal=True,
         storage_result="error",
-        expected_result=ReconciliationResult(
-            "retry", "recording_storage_unavailable"
-        ),
+        expected_result=ReconciliationResult("retry", "recording_storage_unavailable"),
         expected_state="started",
         expected_error="recording_storage_unavailable",
         expected_storage_calls=(("delete_object", OBJECT_KEY),),
@@ -295,6 +287,184 @@ class FakeStorage:
             raise FileNotFoundError(object_key)
         if self.result == "error":
             raise RuntimeError("storage-secret-that-must-not-be-persisted")
+
+
+class SimulatedStopInterruption(BaseException):
+    pass
+
+
+class InterruptingConflictProvider(FakeProvider):
+    def __init__(
+        self,
+        tracker: TrackingSessionFactory,
+        session_factory,
+        operation_id: UUID,
+        *,
+        snapshots: tuple[RecordingEgressSnapshot, ...],
+    ) -> None:
+        super().__init__(tracker, snapshots=snapshots)
+        self.session_factory = session_factory
+        self.operation_id = operation_id
+        self.durable_conflict_seen = False
+        self.projection_hidden_seen = False
+
+    async def ensure_not_running(self, egress_id: str) -> None:
+        self._record("ensure_not_running", egress_id)
+        async with self.session_factory() as session:
+            operation = await session.get(
+                RecordingEgressOperation,
+                self.operation_id,
+            )
+            assert operation is not None
+            call = await session.get(Call, operation.call_id)
+            assert call is not None
+            self.durable_conflict_seen = (
+                operation.last_error_code == "recording_identity_conflict"
+            )
+            self.projection_hidden_seen = (
+                call.recording_object_key is None
+                and call.recording_egress_id is None
+                and call.recording_url is None
+            )
+        raise SimulatedStopInterruption
+
+
+class ConflictObservingProvider(FakeProvider):
+    def __init__(
+        self,
+        tracker: TrackingSessionFactory,
+        session_factory,
+        operation_id: UUID,
+        *,
+        snapshots: tuple[RecordingEgressSnapshot, ...] = (),
+        ensure_failures: frozenset[str] = frozenset(),
+    ) -> None:
+        super().__init__(
+            tracker,
+            snapshots=snapshots,
+            ensure_failures=ensure_failures,
+        )
+        self.session_factory = session_factory
+        self.operation_id = operation_id
+        self.list_projection_observations: list[bool] = []
+        self.stop_observations: list[tuple[str, str | None, bool]] = []
+
+    async def list_room_egresses(
+        self,
+        *,
+        room_name: str,
+    ) -> tuple[RecordingEgressSnapshot, ...]:
+        self._record("list_room_egresses", room_name)
+        async with self.session_factory() as session:
+            operation = await session.get(
+                RecordingEgressOperation,
+                self.operation_id,
+            )
+            assert operation is not None
+            call = await session.get(Call, operation.call_id)
+            assert call is not None
+            self.list_projection_observations.append(
+                call.recording_object_key is None
+                and call.recording_egress_id is None
+                and call.recording_url is None
+            )
+        return self.snapshots
+
+    async def ensure_not_running(self, egress_id: str) -> None:
+        async with self.session_factory() as session:
+            operation = await session.get(
+                RecordingEgressOperation,
+                self.operation_id,
+            )
+            assert operation is not None
+            call = await session.get(Call, operation.call_id)
+            assert call is not None
+            self.stop_observations.append(
+                (
+                    egress_id,
+                    operation.last_error_code,
+                    call.recording_object_key is None
+                    and call.recording_egress_id is None
+                    and call.recording_url is None,
+                )
+            )
+        await super().ensure_not_running(egress_id)
+
+
+class ConcurrentListedSuccessProvider(ConflictObservingProvider):
+    def __init__(
+        self,
+        tracker: TrackingSessionFactory,
+        session_factory,
+        operation_id: UUID,
+        *,
+        snapshots: tuple[RecordingEgressSnapshot, ...],
+        concurrent_egress_id: str,
+        ensure_failures: frozenset[str] = frozenset(),
+        add_latest_deletion_intent: bool = False,
+    ) -> None:
+        super().__init__(
+            tracker,
+            session_factory,
+            operation_id,
+            snapshots=snapshots,
+            ensure_failures=ensure_failures,
+        )
+        self.concurrent_egress_id = concurrent_egress_id
+        self.add_latest_deletion_intent = add_latest_deletion_intent
+
+    async def list_room_egresses(
+        self,
+        *,
+        room_name: str,
+    ) -> tuple[RecordingEgressSnapshot, ...]:
+        self._record("list_room_egresses", room_name)
+        async with self.session_factory() as session:
+            operation = await RecordingLifecycleService(
+                session,
+                now_provider=lambda: NOW,
+            ).record_start_success(
+                self.operation_id,
+                RecordingEgressResult(
+                    egress_id=self.concurrent_egress_id,
+                    object_key=OBJECT_KEY,
+                    url="https://private.invalid/concurrent",
+                ),
+            )
+            assert operation is not None
+            if self.add_latest_deletion_intent:
+                requested_at = NOW + timedelta(seconds=1)
+                operation.stop_requested_at = requested_at
+                operation.delete_requested_at = requested_at
+                call = await session.get(Call, operation.call_id)
+                assert call is not None
+                call.deleted_at = requested_at
+                call.recording_object_key = None
+                call.recording_egress_id = None
+                call.recording_url = None
+            await session.commit()
+        return self.snapshots
+
+
+class ConcurrentNotStartedProvider(ConflictObservingProvider):
+    async def list_room_egresses(
+        self,
+        *,
+        room_name: str,
+    ) -> tuple[RecordingEgressSnapshot, ...]:
+        self._record("list_room_egresses", room_name)
+        async with self.session_factory() as session:
+            operation = await RecordingLifecycleService(
+                session,
+                now_provider=lambda: NOW,
+            ).record_start_error(
+                self.operation_id,
+                outcome="not_started",
+                error_code="validation",
+            )
+            assert operation is not None
+            await session.commit()
+        return self.snapshots
 
 
 async def _persist_operation(
@@ -554,6 +724,264 @@ async def test_identity_conflict_is_sticky_across_later_singleton_listing(
 
 
 @pytest.mark.anyio
+async def test_stale_prepared_recovery_cannot_clear_unknown_identity_conflict(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(name="stale prepared conflict", start_state="prepared")
+    call_id, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    operation = await db_session.get(RecordingEgressOperation, operation_id)
+    call = await db_session.get(Call, call_id)
+    assert operation is not None
+    assert call is not None
+    operation.last_error_code = "recording_identity_conflict"
+    call.recording_object_key = OBJECT_KEY
+    call.recording_url = "https://private.invalid/must-hide"
+    await db_session.commit()
+    tracker = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+    provider = FakeProvider(tracker)
+
+    result = await RecordingReconciler(
+        tracker,
+        provider,
+        FakeStorage(tracker),
+        now_provider=lambda: NOW,
+    ).reconcile(operation_id)
+
+    assert result == ReconciliationResult("retry", "recording_identity_conflict")
+    assert provider.calls == [("list_room_egresses", "room-owned")]
+    db_session.expire_all()
+    stored = await db_session.get(RecordingEgressOperation, operation_id)
+    call = await db_session.get(Call, call_id)
+    assert stored is not None
+    assert stored.start_state == "uncertain"
+    assert stored.last_error_code == "recording_identity_conflict"
+    assert call is not None
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
+
+
+@pytest.mark.anyio
+async def test_multiple_match_conflict_is_durable_before_first_stop_and_retry(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(name="interrupted conflict", start_state="uncertain")
+    call_id, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    exact = (
+        RecordingEgressSnapshot(
+            egress_id="EG_first",
+            room_name="room-owned",
+            status=1,
+            object_key=OBJECT_KEY,
+        ),
+        RecordingEgressSnapshot(
+            egress_id="EG_second",
+            room_name="room-owned",
+            status=1,
+            object_key=OBJECT_KEY,
+        ),
+    )
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    tracker = TrackingSessionFactory(base_factory)
+    interrupted_provider = InterruptingConflictProvider(
+        tracker,
+        base_factory,
+        operation_id,
+        snapshots=exact,
+    )
+
+    with pytest.raises(SimulatedStopInterruption):
+        await RecordingReconciler(
+            tracker,
+            interrupted_provider,
+            FakeStorage(tracker),
+            now_provider=lambda: NOW,
+        ).reconcile(operation_id)
+
+    assert interrupted_provider.durable_conflict_seen is True
+    assert interrupted_provider.projection_hidden_seen is True
+
+    retry_provider = FakeProvider(tracker, snapshots=(exact[1],))
+    retry_result = await RecordingReconciler(
+        tracker,
+        retry_provider,
+        FakeStorage(tracker),
+        now_provider=lambda: NOW + timedelta(seconds=1),
+    ).reconcile(operation_id)
+
+    assert retry_result == ReconciliationResult(
+        "retry",
+        "recording_identity_conflict",
+    )
+    db_session.expire_all()
+    stored = await db_session.get(RecordingEgressOperation, operation_id)
+    call = await db_session.get(Call, call_id)
+    assert stored is not None
+    assert stored.start_state == "uncertain"
+    assert stored.provider_egress_id is None
+    assert stored.last_error_code == "recording_identity_conflict"
+    assert call is not None
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
+
+
+@pytest.mark.anyio
+async def test_singleton_projection_conflict_is_persisted_before_exact_stop(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(name="projection conflict", start_state="uncertain")
+    call_id, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    call = await db_session.get(Call, call_id)
+    assert call is not None
+    call.recording_egress_id = "EG_existing_projection"
+    await db_session.commit()
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    tracker = TrackingSessionFactory(base_factory)
+    provider = ConflictObservingProvider(
+        tracker,
+        base_factory,
+        operation_id,
+        snapshots=(
+            RecordingEgressSnapshot(
+                egress_id="EG_exact",
+                room_name="room-owned",
+                status=1,
+                object_key=OBJECT_KEY,
+            ),
+        ),
+    )
+
+    result = await RecordingReconciler(
+        tracker,
+        provider,
+        FakeStorage(tracker),
+        now_provider=lambda: NOW,
+    ).reconcile(operation_id)
+
+    assert result == ReconciliationResult("retry", "recording_identity_conflict")
+    assert provider.calls == [
+        ("list_room_egresses", "room-owned"),
+        ("ensure_not_running", "EG_exact"),
+    ]
+    assert provider.stop_observations == [
+        ("EG_exact", "recording_identity_conflict", True)
+    ]
+    db_session.expire_all()
+    stored = await db_session.get(RecordingEgressOperation, operation_id)
+    call = await db_session.get(Call, call_id)
+    assert stored is not None
+    assert stored.start_state == "uncertain"
+    assert stored.provider_egress_id is None
+    assert stored.last_error_code == "recording_identity_conflict"
+    assert call is not None
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
+
+
+@pytest.mark.anyio
+async def test_known_conflict_survives_empty_and_singleton_listings_and_cleanup_proof(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(
+        name="known sticky conflict",
+        start_state="started",
+        provider_egress_id="EG_known",
+        stop_requested=True,
+        delete_requested=True,
+        provider_terminal=True,
+    )
+    call_id, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    operation = await db_session.get(RecordingEgressOperation, operation_id)
+    call = await db_session.get(Call, call_id)
+    assert operation is not None
+    assert call is not None
+    operation.last_error_code = "recording_identity_conflict"
+    call.recording_object_key = OBJECT_KEY
+    call.recording_egress_id = "EG_known"
+    call.recording_url = "https://private.invalid/must-hide"
+    await db_session.commit()
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    tracker = TrackingSessionFactory(base_factory)
+    provider = ConflictObservingProvider(
+        tracker,
+        base_factory,
+        operation_id,
+    )
+    storage = FakeStorage(tracker)
+    reconciler = RecordingReconciler(
+        tracker,
+        provider,
+        storage,
+        now_provider=lambda: NOW,
+    )
+
+    empty_result = await reconciler.reconcile(operation_id)
+    provider.snapshots = (
+        RecordingEgressSnapshot(
+            egress_id="EG_later",
+            room_name="room-owned",
+            status=1,
+            object_key=OBJECT_KEY,
+        ),
+    )
+    singleton_result = await reconciler.reconcile(operation_id)
+
+    assert empty_result == ReconciliationResult(
+        "retry",
+        "recording_identity_conflict",
+    )
+    assert singleton_result == ReconciliationResult(
+        "retry",
+        "recording_identity_conflict",
+    )
+    assert provider.calls == [
+        ("list_room_egresses", "room-owned"),
+        ("ensure_not_running", "EG_known"),
+        ("list_room_egresses", "room-owned"),
+        ("ensure_not_running", "EG_known"),
+        ("ensure_not_running", "EG_later"),
+    ]
+    assert provider.list_projection_observations == [True, True]
+    assert storage.calls == []
+    db_session.expire_all()
+    stored = await db_session.get(RecordingEgressOperation, operation_id)
+    call = await db_session.get(Call, call_id)
+    assert stored is not None
+    assert stored.start_state == "started"
+    assert stored.provider_egress_id == "EG_known"
+    assert stored.last_error_code == "recording_identity_conflict"
+    assert stored.object_deleted_at is None
+    assert call is not None
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
+
+
+@pytest.mark.anyio
 async def test_exact_recovery_never_restores_projection_to_tombstoned_call(
     db_session: AsyncSession,
     active_user,
@@ -702,9 +1130,7 @@ async def test_provider_failure_is_bounded_and_does_not_persist_exception_text(
         now_provider=lambda: NOW,
     ).reconcile(operation_id)
 
-    assert result == ReconciliationResult(
-        "retry", "recording_provider_unavailable"
-    )
+    assert result == ReconciliationResult("retry", "recording_provider_unavailable")
     db_session.expire_all()
     stored = await db_session.get(RecordingEgressOperation, operation_id)
     assert stored is not None
@@ -771,6 +1197,252 @@ async def test_concurrent_incompatible_change_is_not_overwritten_after_provider_
     assert stored.last_error_code is None
 
 
+@pytest.mark.anyio
+async def test_singleton_exact_racing_not_started_error_conflicts_before_cleanup(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(
+        name="exact not-started race",
+        start_state="starting",
+        stop_requested=True,
+        delete_requested=True,
+    )
+    _, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    operation = await db_session.get(RecordingEgressOperation, operation_id)
+    assert operation is not None
+    operation.start_attempted_at = NOW
+    await db_session.commit()
+    exact = RecordingEgressSnapshot(
+        egress_id="EG_exact",
+        room_name="room-owned",
+        status=1,
+        object_key=OBJECT_KEY,
+    )
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    tracker = TrackingSessionFactory(base_factory)
+    provider = ConcurrentNotStartedProvider(
+        tracker,
+        base_factory,
+        operation_id,
+        snapshots=(exact,),
+    )
+    storage = FakeStorage(tracker)
+
+    result = await RecordingReconciler(
+        tracker,
+        provider,
+        storage,
+        now_provider=lambda: NOW,
+    ).reconcile(operation_id)
+
+    assert result == ReconciliationResult("retry", "recording_identity_conflict")
+    assert provider.calls == [
+        ("list_room_egresses", "room-owned"),
+        ("ensure_not_running", "EG_exact"),
+    ]
+    assert provider.stop_observations == [
+        ("EG_exact", "recording_identity_conflict", True)
+    ]
+    assert storage.calls == []
+    db_session.expire_all()
+    stored = await db_session.get(RecordingEgressOperation, operation_id)
+    assert stored is not None
+    assert stored.start_state == "uncertain"
+    assert stored.provider_egress_id is None
+    assert stored.last_error_code == "recording_identity_conflict"
+    assert stored.object_deleted_at is None
+
+
+@pytest.mark.anyio
+async def test_singleton_listing_racing_different_direct_success_conflicts_and_stops_union(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(name="different direct identity", start_state="uncertain")
+    call_id, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    exact = RecordingEgressSnapshot(
+        egress_id="EG_A",
+        room_name="room-owned",
+        status=1,
+        object_key=OBJECT_KEY,
+    )
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    tracker = TrackingSessionFactory(base_factory)
+    provider = ConcurrentListedSuccessProvider(
+        tracker,
+        base_factory,
+        operation_id,
+        snapshots=(exact,),
+        concurrent_egress_id="EG_B",
+    )
+
+    result = await RecordingReconciler(
+        tracker,
+        provider,
+        FakeStorage(tracker),
+        now_provider=lambda: NOW,
+    ).reconcile(operation_id)
+
+    assert result == ReconciliationResult("retry", "recording_identity_conflict")
+    assert provider.calls == [
+        ("list_room_egresses", "room-owned"),
+        ("ensure_not_running", "EG_B"),
+        ("ensure_not_running", "EG_A"),
+    ]
+    assert provider.stop_observations == [
+        ("EG_B", "recording_identity_conflict", True),
+        ("EG_A", "recording_identity_conflict", True),
+    ]
+    db_session.expire_all()
+    stored = await db_session.get(RecordingEgressOperation, operation_id)
+    call = await db_session.get(Call, call_id)
+    assert stored is not None
+    assert stored.start_state == "started"
+    assert stored.provider_egress_id == "EG_B"
+    assert stored.last_error_code == "recording_identity_conflict"
+    assert call is not None
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
+
+
+@pytest.mark.anyio
+async def test_multiple_listing_racing_direct_success_never_deletes_on_partial_stop(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(
+        name="multiple direct identity deletion race",
+        start_state="uncertain",
+        stop_requested=True,
+        delete_requested=True,
+    )
+    _, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    snapshots = (
+        RecordingEgressSnapshot(
+            egress_id="EG_A",
+            room_name="room-owned",
+            status=1,
+            object_key=OBJECT_KEY,
+        ),
+        RecordingEgressSnapshot(
+            egress_id="EG_A",
+            room_name="room-owned",
+            status=2,
+            object_key=OBJECT_KEY,
+        ),
+        RecordingEgressSnapshot(
+            egress_id="EG_C",
+            room_name="room-owned",
+            status=1,
+            object_key=OBJECT_KEY,
+        ),
+    )
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    tracker = TrackingSessionFactory(base_factory)
+    provider = ConcurrentListedSuccessProvider(
+        tracker,
+        base_factory,
+        operation_id,
+        snapshots=snapshots,
+        concurrent_egress_id="EG_B",
+        ensure_failures=frozenset({"EG_A"}),
+    )
+    storage = FakeStorage(tracker)
+
+    result = await RecordingReconciler(
+        tracker,
+        provider,
+        storage,
+        now_provider=lambda: NOW,
+    ).reconcile(operation_id)
+
+    assert result == ReconciliationResult("retry", "recording_identity_conflict")
+    assert provider.calls == [
+        ("list_room_egresses", "room-owned"),
+        ("ensure_not_running", "EG_B"),
+        ("ensure_not_running", "EG_A"),
+        ("ensure_not_running", "EG_C"),
+    ]
+    assert storage.calls == []
+    db_session.expire_all()
+    stored = await db_session.get(RecordingEgressOperation, operation_id)
+    assert stored is not None
+    assert stored.start_state == "started"
+    assert stored.provider_egress_id == "EG_B"
+    assert stored.last_error_code == "recording_identity_conflict"
+    assert stored.object_deleted_at is None
+
+
+@pytest.mark.anyio
+async def test_singleton_listing_racing_same_direct_success_honors_latest_deletion(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(name="same direct identity", start_state="uncertain")
+    call_id, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    exact = RecordingEgressSnapshot(
+        egress_id="EG_same",
+        room_name="room-owned",
+        status=1,
+        object_key=OBJECT_KEY,
+    )
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    tracker = TrackingSessionFactory(base_factory)
+    provider = ConcurrentListedSuccessProvider(
+        tracker,
+        base_factory,
+        operation_id,
+        snapshots=(exact,),
+        concurrent_egress_id="EG_same",
+        add_latest_deletion_intent=True,
+    )
+    storage = FakeStorage(tracker)
+
+    result = await RecordingReconciler(
+        tracker,
+        provider,
+        storage,
+        now_provider=lambda: NOW + timedelta(seconds=2),
+    ).reconcile(operation_id)
+
+    assert result == ReconciliationResult("complete")
+    assert provider.calls == [
+        ("list_room_egresses", "room-owned"),
+        ("ensure_not_running", "EG_same"),
+    ]
+    assert all(
+        error_code != "recording_identity_conflict"
+        for _, error_code, _ in provider.stop_observations
+    )
+    assert storage.calls == [("delete_object", OBJECT_KEY)]
+    db_session.expire_all()
+    assert await db_session.get(RecordingEgressOperation, operation_id) is None
+    call = await db_session.get(Call, call_id)
+    assert call is not None
+    assert call.deleted_at is not None
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
+
+
 class ConcurrentIdentityStorage(FakeStorage):
     def __init__(
         self,
@@ -788,14 +1460,80 @@ class ConcurrentIdentityStorage(FakeStorage):
             operations = RecordingEgressOperationRepository(session)
             discovered = await operations.get_by_id(self.operation_id)
             assert discovered is not None
-            call = await CallRepository(
-                session
-            ).get_by_id_including_deleted_for_update(discovered.call_id)
+            call = await CallRepository(session).get_by_id_including_deleted_for_update(
+                discovered.call_id
+            )
             assert call is not None
             operation = await operations.get_by_id_for_update(self.operation_id)
             assert operation is not None
             operation.provider_egress_id = "EG_concurrent"
             await session.commit()
+
+
+class ConcurrentConflictStorage(FakeStorage):
+    def __init__(
+        self,
+        tracker: TrackingSessionFactory,
+        session_factory,
+        operation_id: UUID,
+    ) -> None:
+        super().__init__(tracker)
+        self.session_factory = session_factory
+        self.operation_id = operation_id
+
+    async def delete_object(self, *, object_key: str) -> None:
+        await super().delete_object(object_key=object_key)
+        async with self.session_factory() as session:
+            operations = RecordingEgressOperationRepository(session)
+            discovered = await operations.get_by_id(self.operation_id)
+            assert discovered is not None
+            call = await CallRepository(session).get_by_id_including_deleted_for_update(
+                discovered.call_id
+            )
+            assert call is not None
+            operation = await operations.get_by_id_for_update(self.operation_id)
+            assert operation is not None
+            operation.last_error_code = "recording_identity_conflict"
+            call.recording_object_key = OBJECT_KEY
+            call.recording_egress_id = operation.provider_egress_id
+            call.recording_url = "https://private.invalid/racing-conflict"
+            await session.commit()
+
+
+class ConflictInjectingSessionFactory:
+    def __init__(
+        self,
+        base_factory,
+        *,
+        operation_id: UUID,
+        inject_on_entry: int,
+    ) -> None:
+        self.base_factory = base_factory
+        self.operation_id = operation_id
+        self.inject_on_entry = inject_on_entry
+        self.entries = 0
+
+    @asynccontextmanager
+    async def __call__(self) -> AsyncIterator[AsyncSession]:
+        self.entries += 1
+        if self.entries == self.inject_on_entry:
+            async with self.base_factory() as racing_session:
+                operations = RecordingEgressOperationRepository(racing_session)
+                discovered = await operations.get_by_id(self.operation_id)
+                assert discovered is not None
+                call = await CallRepository(
+                    racing_session
+                ).get_by_id_including_deleted_for_update(discovered.call_id)
+                assert call is not None
+                operation = await operations.get_by_id_for_update(self.operation_id)
+                assert operation is not None
+                operation.last_error_code = "recording_identity_conflict"
+                call.recording_object_key = OBJECT_KEY
+                call.recording_egress_id = operation.provider_egress_id
+                call.recording_url = "https://private.invalid/racing-conflict"
+                await racing_session.commit()
+        async with self.base_factory() as session:
+            yield session
 
 
 @pytest.mark.anyio
@@ -832,3 +1570,93 @@ async def test_concurrent_identity_change_blocks_object_deletion_persistence(
     assert stored is not None
     assert stored.provider_egress_id == "EG_concurrent"
     assert stored.object_deleted_at is None
+
+
+@pytest.mark.anyio
+async def test_conflict_racing_storage_blocks_object_proof_and_operation_removal(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(
+        name="storage conflict race",
+        start_state="started",
+        provider_egress_id="EG_known",
+        stop_requested=True,
+        delete_requested=True,
+        provider_terminal=True,
+    )
+    call_id, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    tracker = TrackingSessionFactory(base_factory)
+
+    result = await RecordingReconciler(
+        tracker,
+        FakeProvider(tracker),
+        ConcurrentConflictStorage(tracker, base_factory, operation_id),
+        now_provider=lambda: NOW,
+    ).reconcile(operation_id)
+
+    assert result == ReconciliationResult("retry", "recording_identity_conflict")
+    db_session.expire_all()
+    stored = await db_session.get(RecordingEgressOperation, operation_id)
+    call = await db_session.get(Call, call_id)
+    assert stored is not None
+    assert stored.last_error_code == "recording_identity_conflict"
+    assert stored.object_deleted_at is None
+    assert call is not None
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
+
+
+@pytest.mark.anyio
+async def test_conflict_racing_operation_removal_preserves_existing_object_proof(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(
+        name="operation removal conflict race",
+        start_state="not_started",
+        stop_requested=True,
+        delete_requested=True,
+    )
+    call_id, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    operation = await db_session.get(RecordingEgressOperation, operation_id)
+    assert operation is not None
+    operation.object_deleted_at = NOW
+    await db_session.commit()
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    injecting_factory = ConflictInjectingSessionFactory(
+        base_factory,
+        operation_id=operation_id,
+        inject_on_entry=2,
+    )
+    tracker = TrackingSessionFactory(base_factory)
+
+    result = await RecordingReconciler(
+        injecting_factory,
+        FakeProvider(tracker),
+        FakeStorage(tracker),
+        now_provider=lambda: NOW,
+    ).reconcile(operation_id)
+
+    assert result == ReconciliationResult("retry", "recording_identity_conflict")
+    assert tracker.open_contexts == 0
+    db_session.expire_all()
+    stored = await db_session.get(RecordingEgressOperation, operation_id)
+    call = await db_session.get(Call, call_id)
+    assert stored is not None
+    assert stored.last_error_code == "recording_identity_conflict"
+    assert stored.object_deleted_at is not None
+    assert call is not None
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
