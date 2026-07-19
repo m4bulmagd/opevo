@@ -306,6 +306,7 @@ def _legacy_tables(metadata: sa.MetaData) -> tuple[sa.Table, sa.Table]:
         sa.Column("user_id", sa.Uuid(), nullable=False),
         sa.Column("livekit_room_id", sa.String(255), nullable=True),
         sa.Column("status", sa.String(50), nullable=False),
+        sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("recording_object_key", sa.String(512), nullable=True),
         sa.Column("recording_egress_id", sa.String(255), nullable=True),
@@ -349,11 +350,12 @@ def _insert_legacy_stop(
     call_id: UUID,
     status: str,
     suffix: str,
+    event_id: UUID | None = None,
 ) -> None:
     now = datetime(2026, 7, 19, 8, tzinfo=UTC)
     connection.execute(
         outbox_events.insert().values(
-            id=uuid4(),
+            id=event_id or uuid4(),
             idempotency_key=f"recording.stop:{call_id}:{suffix}",
             topic="recording.stop",
             aggregate_type="call-recording",
@@ -376,13 +378,19 @@ def _as_payload(value: object) -> dict[str, str]:
     return value if isinstance(value, dict) else json.loads(str(value))
 
 
+def _as_utc_datetime(value: object) -> datetime:
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
 def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None:
     migration = _load_migration()
     engine = sa.create_engine("sqlite:///:memory:")
     metadata = sa.MetaData()
     calls, outbox_events = _legacy_tables(metadata)
     metadata.create_all(engine)
-    now = datetime(2026, 7, 19, 8, tzinfo=UTC)
+    terminal_ended_at = datetime(2026, 7, 18, 6, tzinfo=UTC)
+    deleted_at = datetime(2026, 7, 18, 7, tzinfo=UTC)
     ids = {
         "known_terminal": uuid4(),
         "object_active": uuid4(),
@@ -399,6 +407,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
             "user_id": user_ids["known_terminal"],
             "livekit_room_id": "room-known-terminal",
             "status": "completed",
+            "ended_at": terminal_ended_at,
             "deleted_at": None,
             "recording_object_key": None,
             "recording_egress_id": "EG_test",
@@ -409,6 +418,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
             "user_id": user_ids["object_active"],
             "livekit_room_id": "room-object-active",
             "status": "connected",
+            "ended_at": None,
             "deleted_at": None,
             "recording_object_key": "calls/existing/object.ogg",
             "recording_egress_id": None,
@@ -419,6 +429,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
             "user_id": user_ids["empty_object_active"],
             "livekit_room_id": "room-empty-object-active",
             "status": "connected",
+            "ended_at": None,
             "deleted_at": None,
             "recording_object_key": "",
             "recording_egress_id": None,
@@ -429,6 +440,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
             "user_id": user_ids["url_active"],
             "livekit_room_id": "room-url-active",
             "status": "pending",
+            "ended_at": None,
             "deleted_at": None,
             "recording_object_key": None,
             "recording_egress_id": None,
@@ -439,6 +451,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
             "user_id": user_ids["missing_room"],
             "livekit_room_id": None,
             "status": "connected",
+            "ended_at": None,
             "deleted_at": None,
             "recording_object_key": "calls/legacy/missing-room.ogg",
             "recording_egress_id": "EG_missing_room",
@@ -449,7 +462,8 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
             "user_id": user_ids["deleted"],
             "livekit_room_id": "room-deleted",
             "status": "failed",
-            "deleted_at": now,
+            "ended_at": None,
+            "deleted_at": deleted_at,
             "recording_object_key": "calls/legacy/deleted.ogg",
             "recording_egress_id": "EG_deleted",
             "recording_url": None,
@@ -459,6 +473,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
             "user_id": user_ids["known_active"],
             "livekit_room_id": "room-known-active",
             "status": "connected",
+            "ended_at": None,
             "deleted_at": None,
             "recording_object_key": "calls/legacy/known-active.ogg",
             "recording_egress_id": "EG_known_active",
@@ -531,7 +546,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
     assert known["expected_object_key"] == (
         f"calls/{user_ids['known_terminal']}/{ids['known_terminal']}.ogg"
     )
-    assert known["stop_requested_at"] is not None
+    assert _as_utc_datetime(known["stop_requested_at"]) == terminal_ended_at
     assert known["delete_requested_at"] is None
 
     object_only = operation_rows[ids["object_active"]]
@@ -558,8 +573,8 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
     assert operation_rows[ids["object_active"]]["legacy_incomplete"] in (False, 0)
 
     deleted = operation_rows[ids["deleted"]]
-    assert deleted["stop_requested_at"] is not None
-    assert deleted["delete_requested_at"] is not None
+    assert _as_utc_datetime(deleted["stop_requested_at"]) == deleted_at
+    assert _as_utc_datetime(deleted["delete_requested_at"]) == deleted_at
 
     reconcile_events = [
         row for row in event_rows if row["topic"] == "recording.reconcile"
@@ -599,6 +614,112 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
         assert persisted["recording_egress_id"] == original["recording_egress_id"]
         assert persisted["recording_url"] == original["recording_url"]
 
+    engine.dispose()
+
+
+def test_sqlite_downgrade_removes_revision_events_and_reupgrade_is_reversible() -> None:
+    migration = _load_migration()
+    engine = sa.create_engine("sqlite:///:memory:")
+    metadata = sa.MetaData()
+    calls, outbox_events = _legacy_tables(metadata)
+    metadata.create_all(engine)
+    ended_at = datetime(2026, 7, 18, 6, tzinfo=UTC)
+    call_ids = (uuid4(), uuid4())
+    legacy_ids = (uuid4(), uuid4())
+
+    with engine.begin() as connection:
+        connection.execute(
+            calls.insert(),
+            [
+                {
+                    "id": call_id,
+                    "user_id": uuid4(),
+                    "livekit_room_id": f"room-reupgrade-{index}",
+                    "status": "completed",
+                    "ended_at": ended_at,
+                    "deleted_at": None,
+                    "recording_object_key": f"calls/reupgrade/{call_id}.ogg",
+                    "recording_egress_id": f"EG_reupgrade_{index}",
+                    "recording_url": None,
+                }
+                for index, call_id in enumerate(call_ids)
+            ],
+        )
+        _insert_legacy_stop(
+            connection,
+            outbox_events,
+            call_id=call_ids[0],
+            status="delivered",
+            suffix="reupgrade-delivered",
+            event_id=legacy_ids[0],
+        )
+        _insert_legacy_stop(
+            connection,
+            outbox_events,
+            call_id=call_ids[1],
+            status="failed",
+            suffix="reupgrade-failed",
+            event_id=legacy_ids[1],
+        )
+
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.upgrade()
+        connection.execute(
+            outbox_events.update()
+            .where(
+                outbox_events.c.topic == "recording.reconcile",
+                outbox_events.c.aggregate_id == call_ids[0],
+            )
+            .values(status="delivered", delivered_at=ended_at)
+        )
+        connection.execute(
+            outbox_events.update()
+            .where(
+                outbox_events.c.topic == "recording.reconcile",
+                outbox_events.c.aggregate_id == call_ids[1],
+            )
+            .values(status="failed", last_error_code="provider_terminal")
+        )
+        first_revision_event_ids = set(
+            connection.scalars(
+                sa.select(outbox_events.c.id).where(
+                    outbox_events.c.topic == "recording.reconcile"
+                )
+            )
+        )
+        legacy_before = list(
+            connection.execute(
+                sa.select(outbox_events)
+                .where(outbox_events.c.topic == "recording.stop")
+                .order_by(outbox_events.c.idempotency_key)
+            ).mappings()
+        )
+
+        migration.downgrade()
+        migration.upgrade()
+
+        replacement_events = list(
+            connection.execute(
+                sa.select(outbox_events)
+                .where(outbox_events.c.topic == "recording.reconcile")
+                .order_by(outbox_events.c.idempotency_key)
+            ).mappings()
+        )
+        legacy_after = list(
+            connection.execute(
+                sa.select(outbox_events)
+                .where(outbox_events.c.topic == "recording.stop")
+                .order_by(outbox_events.c.idempotency_key)
+            ).mappings()
+        )
+
+    assert len(first_revision_event_ids) == 2
+    assert len(replacement_events) == 2
+    assert first_revision_event_ids.isdisjoint(
+        {row["id"] for row in replacement_events}
+    )
+    assert {row["status"] for row in replacement_events} == {"pending"}
+    assert legacy_after == legacy_before
     engine.dispose()
 
 

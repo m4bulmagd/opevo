@@ -148,6 +148,8 @@ def test_offline_upgrade_generates_full_chain_through_recording_egress_head() ->
     assert "gen_random_uuid()" in output
     assert "json_build_object('operation_id'" in output
     assert "NULLIF(calls.recording_object_key, '')" in output
+    assert "COALESCE(calls.ended_at, calls.deleted_at, CURRENT_TIMESTAMP)" in output
+    assert "WHEN calls.deleted_at IS NOT NULL THEN calls.deleted_at" in output
     assert "version_num='0014_recording_egress_ops'" in output
 
 
