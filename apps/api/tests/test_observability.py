@@ -746,6 +746,101 @@ def test_recording_metric_exporter_failures_are_fail_open_and_redacted(
 
 
 @pytest.mark.anyio
+async def test_recording_telemetry_excludes_every_private_sentinel(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_sentinels = (
+        "ROOM_NAME_PRIVACY_SENTINEL",
+        "calls/EXPECTED_OBJECT_KEY_PRIVACY_SENTINEL.ogg",
+        "EG_PROVIDER_ID_PRIVACY_SENTINEL",
+        "https://storage.invalid/PROVIDER_URL_PRIVACY_SENTINEL",
+        "+33612349876",
+        "TRANSCRIPT_CONTENT_PRIVACY_SENTINEL",
+        "SUMMARY_CONTENT_PRIVACY_SENTINEL",
+        "RAW_WEBHOOK_VALUE_PRIVACY_SENTINEL",
+        "Bearer CREDENTIAL_TOKEN_PRIVACY_SENTINEL",
+    )
+    private_blob = " ".join(private_sentinels)
+    meter = _Meter()
+    tracer = _Tracer()
+    telemetry = _observability(meter=meter, tracer=tracer)
+    snapshot = SimpleNamespace(
+        counts={"prepared": 1}
+        | {sentinel: 99 for sentinel in private_sentinels},
+        oldest_unresolved_age_seconds=11.0,
+        pending_stop_count=2,
+        oldest_pending_stop_age_seconds=12.0,
+        pending_deletion_count=3,
+        oldest_pending_deletion_age_seconds=13.0,
+    )
+
+    telemetry.record_recording_operation_snapshot(snapshot)
+    for sentinel in private_sentinels:
+        telemetry.record_recording_reconciliation_result(sentinel)
+        telemetry.record_recording_webhook_mismatch(sentinel)
+    telemetry.record_multiple_exact_match_conflict()
+
+    with pytest.raises(RuntimeError) as error:
+        async with telemetry.provider_operation(
+            "livekit",
+            "list_recording_egresses",
+            call_id=private_sentinels[4],
+        ):
+            raise RuntimeError(private_blob)
+    assert str(error.value) == private_blob
+
+    failing_telemetry = _observability(
+        meter=_Meter(failure=RuntimeError(private_blob)),
+    )
+    with caplog.at_level(logging.WARNING):
+        failing_telemetry.record_recording_operation_snapshot(snapshot)
+        failing_telemetry.record_recording_reconciliation_result("complete")
+        failing_telemetry.record_recording_webhook_mismatch("conflict")
+        failing_telemetry.record_multiple_exact_match_conflict()
+
+    allowed_attributes = {
+        "state": {
+            "prepared",
+            "starting",
+            "started",
+            "not_started",
+            "uncertain",
+        },
+        "result": {
+            "complete",
+            "recording_unresolved",
+            "recording_provider_unavailable",
+            "recording_storage_unavailable",
+            "recording_identity_mismatch",
+            "recording_identity_conflict",
+            "recording_legacy_incomplete",
+        },
+        "category": {"missing", "mismatch", "conflict"},
+    }
+    for name, instrument in meter.instruments.items():
+        if not name.startswith("presvo.recording."):
+            continue
+        for _value, attributes in instrument.measurements:
+            assert set(attributes) <= set(allowed_attributes)
+            for key, value in attributes.items():
+                assert value in allowed_attributes[key]
+
+    rendered_metrics = repr(
+        {
+            name: instrument.measurements
+            for name, instrument in meter.instruments.items()
+        }
+    )
+    rendered_spans = repr(
+        [(span.name, span.attributes) for span in tracer.spans]
+    )
+    for sentinel in private_sentinels:
+        assert sentinel not in caplog.text
+        assert sentinel not in rendered_metrics
+        assert sentinel not in rendered_spans
+
+
+@pytest.mark.anyio
 async def test_recording_listing_provider_operation_is_allowlisted_and_private() -> None:
     room_sentinel = "ROOM_PRIVATE_LISTING_SENTINEL"
     meter = _Meter()

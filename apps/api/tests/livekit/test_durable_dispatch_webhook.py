@@ -1535,6 +1535,58 @@ def test_livekit_event_type_log_value_is_allow_listed() -> None:
 
 
 @pytest.mark.anyio
+async def test_livekit_webhook_log_omits_provider_controlled_participant_kind(
+    db_session,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_kind = "CALLER_PHONE_SENTINEL"
+
+    with caplog.at_level(logging.INFO, logger="app.webhooks.livekit"):
+        response = await handle_livekit_webhook(
+            _Request(),
+            session=db_session,
+            webhook_receiver=_Receiver(
+                {
+                    "id": "EV_private_participant_kind",
+                    "event": "room_finished",
+                    "participant": {"kind": private_kind},
+                }
+            ),
+            realtime_service=None,
+        )
+
+    assert response.status_code == 202
+    assert "livekit webhook received event=room_finished" in caplog.text
+    assert private_kind not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_livekit_egress_wakeup_log_bounds_exception_class(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_error_type = type(
+        "CredentialTokenWakeupSentinelError",
+        (RuntimeError,),
+        {},
+    )
+
+    class FailingPool:
+        async def enqueue_job(self, *_args, **_kwargs) -> None:
+            raise private_error_type("synthetic private wakeup failure")
+
+    with caplog.at_level(logging.WARNING, logger="app.webhooks.livekit"):
+        await livekit_webhook_module._best_effort_outbox_wakeup(
+            _Request(arq_pool=FailingPool())
+        )
+
+    assert (
+        "outbox wakeup enqueue failed operation=livekit_egress_webhook "
+        "error_type=unknown"
+    ) in caplog.text
+    assert private_error_type.__name__ not in caplog.text
+
+
+@pytest.mark.anyio
 async def test_missing_event_id_fails_closed_without_commit_or_business_logic() -> None:
     session = _SessionWithoutWrites()
     telemetry = _RecordingTelemetry()
