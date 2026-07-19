@@ -495,6 +495,7 @@ class RemovedOperationDuringListingProvider(ConflictObservingProvider):
         snapshots: tuple[RecordingEgressSnapshot, ...],
         cleanup_storage: FakeStorage,
         ensure_failures: frozenset[str] = frozenset(),
+        owner_delete_requested_at: datetime | None = None,
     ) -> None:
         super().__init__(
             tracker,
@@ -504,6 +505,7 @@ class RemovedOperationDuringListingProvider(ConflictObservingProvider):
             ensure_failures=ensure_failures,
         )
         self.cleanup_storage = cleanup_storage
+        self.owner_delete_requested_at = owner_delete_requested_at
 
     async def list_room_egresses(
         self,
@@ -512,10 +514,31 @@ class RemovedOperationDuringListingProvider(ConflictObservingProvider):
     ) -> tuple[RecordingEgressSnapshot, ...]:
         self._record("list_room_egresses", room_name)
         async with self.session_factory() as session:
-            changed = await RecordingLifecycleService(
+            transition_at = self.owner_delete_requested_at or NOW
+            lifecycle = RecordingLifecycleService(
                 session,
-                now_provider=lambda: NOW,
-            ).record_start_error(
+                now_provider=lambda: transition_at,
+            )
+            if self.owner_delete_requested_at is not None:
+                discovered = await RecordingEgressOperationRepository(
+                    session
+                ).get_by_id(self.operation_id)
+                assert discovered is not None
+                calls = CallRepository(session)
+                call = await calls.get_by_id_including_deleted_for_update(
+                    discovered.call_id
+                )
+                assert call is not None
+                operation = await RecordingEgressOperationRepository(
+                    session
+                ).get_by_id_for_update(self.operation_id)
+                assert operation is not None
+                await calls.purge_customer_content(call)
+                call.deleted_at = self.owner_delete_requested_at
+                requested = await lifecycle.request_deletion(call)
+                assert requested is operation
+
+            changed = await lifecycle.record_start_error(
                 self.operation_id,
                 outcome="not_started",
                 error_code="validation",
@@ -527,7 +550,7 @@ class RemovedOperationDuringListingProvider(ConflictObservingProvider):
             self.tracker,
             FakeProvider(self.tracker),
             self.cleanup_storage,
-            now_provider=lambda: NOW + timedelta(seconds=1),
+            now_provider=lambda: transition_at + timedelta(seconds=1),
         ).reconcile(self.operation_id)
         assert cleanup_result == ReconciliationResult("complete")
         async with self.session_factory() as session:
@@ -1419,6 +1442,180 @@ async def test_exact_evidence_restores_authority_after_reclaimed_cleanup(
     assert event.payload == {"operation_id": str(operation_id)}
     assert event.status == "pending"
     assert event.next_attempt_at.replace(tzinfo=UTC) == NOW + timedelta(seconds=2)
+
+
+@pytest.mark.anyio
+async def test_restored_authority_recovers_later_owner_deletion_intent(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    earlier_stop_requested_at = NOW - timedelta(minutes=1)
+    later_delete_requested_at = NOW + timedelta(minutes=1)
+    case = MatrixCase(
+        name="owner deletes during exact listing",
+        start_state="starting",
+        stop_requested=True,
+    )
+    call_id, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    operation = await db_session.get(RecordingEgressOperation, operation_id)
+    assert operation is not None
+    operation.start_attempted_at = NOW
+    operation.stop_requested_at = earlier_stop_requested_at
+    assert operation.delete_requested_at is None
+    await db_session.commit()
+
+    exact = RecordingEgressSnapshot(
+        egress_id="EG_exact",
+        room_name="room-owned",
+        status=1,
+        object_key=OBJECT_KEY,
+    )
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    tracker = TrackingSessionFactory(base_factory)
+    cleanup_storage = FakeStorage(tracker)
+    outer_storage = FakeStorage(tracker)
+    provider = RemovedOperationDuringListingProvider(
+        tracker,
+        base_factory,
+        operation_id,
+        snapshots=(exact,),
+        cleanup_storage=cleanup_storage,
+        owner_delete_requested_at=later_delete_requested_at,
+    )
+
+    result = await RecordingReconciler(
+        tracker,
+        provider,
+        outer_storage,
+        now_provider=lambda: later_delete_requested_at + timedelta(seconds=2),
+    ).reconcile(operation_id)
+
+    assert result == ReconciliationResult(
+        "retry",
+        "recording_identity_conflict",
+    )
+    assert provider.calls == [
+        ("list_room_egresses", "room-owned"),
+        ("ensure_not_running", "EG_exact"),
+    ]
+    assert cleanup_storage.calls == [("delete_object", OBJECT_KEY)]
+    assert outer_storage.calls == []
+
+    db_session.expire_all()
+    restored = await db_session.get(RecordingEgressOperation, operation_id)
+    assert restored is not None
+    assert restored.stop_requested_at is not None
+    assert restored.stop_requested_at.replace(tzinfo=UTC) == earlier_stop_requested_at
+    assert restored.delete_requested_at is not None
+    assert (
+        restored.delete_requested_at.replace(tzinfo=UTC)
+        == later_delete_requested_at
+    )
+    assert restored.last_error_code == "recording_identity_conflict"
+    call = await db_session.get(Call, call_id)
+    assert call is not None
+    assert call.deleted_at is not None
+    assert call.deleted_at.replace(tzinfo=UTC) == later_delete_requested_at
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
+    assert provider.stop_recovery_event_observations == [True]
+
+
+@pytest.mark.anyio
+async def test_missing_conflict_merge_recovers_tombstone_delete_intent(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    current_stop_requested_at = NOW - timedelta(minutes=2)
+    snapshot_stop_requested_at = NOW - timedelta(minutes=1)
+    tombstone_at = NOW + timedelta(minutes=1)
+    case = MatrixCase(
+        name="concurrent restore before missing conflict merge",
+        start_state="starting",
+        stop_requested=True,
+    )
+    call_id, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    operation = await db_session.get(RecordingEgressOperation, operation_id)
+    assert operation is not None
+    operation.start_attempted_at = NOW
+    operation.stop_requested_at = snapshot_stop_requested_at
+    await db_session.commit()
+
+    base_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    tracker = TrackingSessionFactory(base_factory)
+    provider = FakeProvider(tracker)
+    storage = FakeStorage(tracker)
+    reconciler = RecordingReconciler(
+        tracker,
+        provider,
+        storage,
+        now_provider=lambda: tombstone_at + timedelta(seconds=1),
+    )
+    stale_snapshot = await reconciler._load_and_recover_stale_start(operation_id)
+    assert stale_snapshot is not None
+    assert stale_snapshot.stop_requested_at is not None
+    assert (
+        stale_snapshot.stop_requested_at.replace(tzinfo=UTC)
+        == snapshot_stop_requested_at
+    )
+    assert stale_snapshot.delete_requested_at is None
+
+    db_session.expire_all()
+    concurrently_restored = await db_session.get(
+        RecordingEgressOperation,
+        operation_id,
+    )
+    call = await db_session.get(Call, call_id)
+    assert concurrently_restored is not None
+    assert call is not None
+    concurrently_restored.start_state = "started"
+    concurrently_restored.provider_egress_id = "EG_concurrent"
+    concurrently_restored.stop_requested_at = current_stop_requested_at
+    concurrently_restored.delete_requested_at = None
+    call.deleted_at = tombstone_at
+    call.recording_object_key = OBJECT_KEY
+    call.recording_egress_id = "EG_concurrent"
+    call.recording_url = "https://private.invalid/must-hide"
+    await db_session.commit()
+
+    async with base_factory() as session:
+        status, refreshed = await reconciler._restore_or_merge_missing_conflict(
+            session,
+            stale_snapshot,
+            "EG_observed",
+        )
+
+    assert status == "conflict"
+    assert refreshed is not None
+    assert provider.calls == []
+    assert storage.calls == []
+    db_session.expire_all()
+    merged = await db_session.get(RecordingEgressOperation, operation_id)
+    call = await db_session.get(Call, call_id)
+    assert merged is not None
+    assert merged.start_state == "started"
+    assert merged.provider_egress_id == "EG_concurrent"
+    assert merged.stop_requested_at is not None
+    assert (
+        merged.stop_requested_at.replace(tzinfo=UTC)
+        == current_stop_requested_at
+    )
+    assert merged.delete_requested_at is not None
+    assert merged.delete_requested_at.replace(tzinfo=UTC) == tombstone_at
+    assert merged.last_error_code == "recording_identity_conflict"
+    assert call is not None
+    assert call.recording_object_key is None
+    assert call.recording_egress_id is None
+    assert call.recording_url is None
 
 
 @pytest.mark.anyio
