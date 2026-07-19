@@ -33,6 +33,7 @@ def _legacy_calls() -> sa.TableClause:
         sa.column("user_id", sa.Uuid()),
         sa.column("livekit_room_id", sa.String(255)),
         sa.column("status", sa.String(50)),
+        sa.column("ended_at", sa.DateTime(timezone=True)),
         sa.column("deleted_at", sa.DateTime(timezone=True)),
         sa.column("recording_object_key", sa.String(512)),
         sa.column("recording_egress_id", sa.String(255)),
@@ -105,6 +106,7 @@ def _backfill_sqlite(bind: Connection) -> None:
             calls.c.user_id,
             calls.c.livekit_room_id,
             calls.c.status,
+            calls.c.ended_at,
             calls.c.deleted_at,
             calls.c.recording_object_key,
             calls.c.recording_egress_id,
@@ -129,6 +131,11 @@ def _backfill_sqlite(bind: Connection) -> None:
         start_state = (
             "started" if row["recording_egress_id"] is not None else "uncertain"
         )
+        stop_requested_at = None
+        if is_terminal or is_deleted:
+            stop_requested_at = (
+                row["ended_at"] or row["deleted_at"] or migrated_at
+            )
         bind.execute(
             operations.insert().values(
                 id=operation_id,
@@ -139,8 +146,8 @@ def _backfill_sqlite(bind: Connection) -> None:
                 provider_egress_id=row["recording_egress_id"],
                 start_state=start_state,
                 start_attempted_at=None,
-                stop_requested_at=migrated_at if is_terminal or is_deleted else None,
-                delete_requested_at=migrated_at if is_deleted else None,
+                stop_requested_at=stop_requested_at,
+                delete_requested_at=row["deleted_at"] if is_deleted else None,
                 provider_terminal_at=None,
                 object_deleted_at=None,
                 last_reconciled_at=None,
@@ -220,11 +227,11 @@ def _backfill_postgresql() -> None:
                 CASE
                     WHEN calls.deleted_at IS NOT NULL
                         OR calls.status IN ('completed', 'failed')
-                    THEN CURRENT_TIMESTAMP
+                    THEN COALESCE(calls.ended_at, calls.deleted_at, CURRENT_TIMESTAMP)
                     ELSE NULL
                 END,
                 CASE
-                    WHEN calls.deleted_at IS NOT NULL THEN CURRENT_TIMESTAMP
+                    WHEN calls.deleted_at IS NOT NULL THEN calls.deleted_at
                     ELSE NULL
                 END,
                 NULL,
@@ -430,8 +437,7 @@ def downgrade() -> None:
         sa.text(
             "DELETE FROM outbox_events "
             "WHERE topic = 'recording.reconcile' "
-            "AND aggregate_type = 'recording-egress-operation' "
-            "AND status IN ('pending', 'processing')"
+            "AND aggregate_type = 'recording-egress-operation'"
         )
     )
     op.drop_index(
