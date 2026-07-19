@@ -5,8 +5,59 @@ from app.core.observability import (
     instrument_provider,
     validated_error_class,
 )
-from app.providers.livekit_recording.base import RecordingEgressResult
-from app.providers.livekit_recording.base import RecordingProvider
+from app.providers.livekit_recording.base import (
+    RecordingEgressResult,
+    RecordingEgressSnapshot,
+    RecordingProvider,
+    StartOutcome,
+)
+
+
+class _LocalStartValidationError(ValueError):
+    pass
+
+
+def _nonempty_string(value: object) -> str | None:
+    if type(value) is str and value:
+        return value
+    return None
+
+
+def _file_info_path(file_info: object) -> str | None:
+    filename = _nonempty_string(getattr(file_info, "filename", None))
+    if filename is not None:
+        return filename
+    return _nonempty_string(getattr(file_info, "location", None))
+
+
+def normalized_egress_object_key(egress: object) -> str | None:
+    """Return one primitive output path, failing closed on disagreement."""
+    paths: set[str] = set()
+
+    room_composite = getattr(egress, "room_composite", None)
+    if room_composite is not None:
+        singular_output = getattr(room_composite, "file", None)
+        singular_path = _nonempty_string(
+            getattr(singular_output, "filepath", None)
+        )
+        if singular_path is not None:
+            paths.add(singular_path)
+        for output in getattr(room_composite, "file_outputs", ()):
+            path = _nonempty_string(getattr(output, "filepath", None))
+            if path is not None:
+                paths.add(path)
+
+    legacy_path = _file_info_path(getattr(egress, "file", None))
+    if legacy_path is not None:
+        paths.add(legacy_path)
+    for file_result in getattr(egress, "file_results", ()):
+        path = _file_info_path(file_result)
+        if path is not None:
+            paths.add(path)
+
+    if len(paths) != 1:
+        return None
+    return next(iter(paths))
 
 
 class LiveKitRecordingProviderError(Exception):
@@ -15,15 +66,23 @@ class LiveKitRecordingProviderError(Exception):
         category: str,
         *,
         error_class: str | None = None,
+        start_outcome: StartOutcome = "unknown",
     ) -> None:
         if category not in {"provider_retryable", "provider_terminal"}:
             raise ValueError("Unsafe LiveKit recording provider category")
+        if start_outcome not in {"not_started", "unknown"}:
+            raise ValueError("Unsafe LiveKit recording start outcome")
         super().__init__(category)
         self.category = category
         self.retryable = category == "provider_retryable"
         self.error_class = validated_error_class(
             error_class or ("unavailable" if self.retryable else "unknown")
         )
+        self._start_outcome: StartOutcome = start_outcome
+
+    @property
+    def start_outcome(self) -> StartOutcome:
+        return self._start_outcome
 
 
 class LiveKitRecordingProvider(RecordingProvider):
@@ -86,32 +145,91 @@ class LiveKitRecordingProvider(RecordingProvider):
         self,
         *,
         room_name: str,
-        user_id: str,
-        call_id: str,
+        object_key: str,
     ) -> RecordingEgressResult:
-        object_key = f"calls/{user_id}/{call_id}.ogg"
-        request = api.RoomCompositeEgressRequest(
-            room_name=room_name,
-            audio_only=True,
-            file=api.EncodedFileOutput(
-                filepath=object_key,
-                s3=self._build_s3_upload(),
-            ),
-        )
         try:
+            if not room_name or not object_key:
+                raise _LocalStartValidationError(
+                    "Recording room and object key are required"
+                )
+            request = api.RoomCompositeEgressRequest(
+                room_name=room_name,
+                audio_only=True,
+                file=api.EncodedFileOutput(
+                    filepath=object_key,
+                    s3=self._build_s3_upload(),
+                ),
+            )
             info = await self.egress_client.start_room_composite_egress(request)
         except Exception as exc:  # pragma: no cover - exercised by tests via wrapping
             category, error_class = self._exception_details(exc)
             raise LiveKitRecordingProviderError(
                 category,
                 error_class=error_class,
+                start_outcome=self.start_outcome_for(exc),
             ) from None
 
+        egress_id = _nonempty_string(getattr(info, "egress_id", None))
+        if egress_id is None:
+            raise LiveKitRecordingProviderError(
+                "provider_retryable",
+                error_class="unknown",
+                start_outcome="unknown",
+            )
         return RecordingEgressResult(
-            egress_id=info.egress_id,
+            egress_id=egress_id,
             object_key=object_key,
             url=f"{self.endpoint_url}/{self.bucket_name}/{object_key}",
         )
+
+    async def list_room_egresses(
+        self,
+        *,
+        room_name: str,
+    ) -> tuple[RecordingEgressSnapshot, ...]:
+        try:
+            response = await self.egress_client.list_egress(
+                api.ListEgressRequest(room_name=room_name)
+            )
+        except Exception as exc:
+            category, error_class = self._exception_details(exc)
+            raise LiveKitRecordingProviderError(
+                category,
+                error_class=error_class,
+            ) from None
+
+        try:
+            items = tuple(response.items)
+        except (AttributeError, TypeError):
+            raise LiveKitRecordingProviderError(
+                "provider_retryable",
+                error_class="unknown",
+            ) from None
+
+        snapshots: list[RecordingEgressSnapshot] = []
+        for item in items:
+            egress_id = _nonempty_string(getattr(item, "egress_id", None))
+            item_room_name = _nonempty_string(getattr(item, "room_name", None))
+            status = getattr(item, "status", None)
+            if (
+                egress_id is None
+                or item_room_name is None
+                or isinstance(status, bool)
+                or not isinstance(status, int)
+            ):
+                raise LiveKitRecordingProviderError(
+                    "provider_retryable",
+                    error_class="unknown",
+                )
+            snapshots.append(
+                RecordingEgressSnapshot(
+                    egress_id=egress_id,
+                    room_name=item_room_name,
+                    status=int(status),
+                    object_key=normalized_egress_object_key(item),
+                )
+            )
+        return tuple(snapshots)
 
     @instrument_provider("livekit", "stop_recording")
     async def stop_room_recording(self, *, egress_id: str) -> None:
@@ -219,6 +337,8 @@ class LiveKitRecordingProvider(RecordingProvider):
 
     @staticmethod
     def _exception_details(error: Exception) -> tuple[str, str]:
+        if isinstance(error, _LocalStartValidationError):
+            return "provider_terminal", "validation"
         if isinstance(error, TimeoutError):
             return "provider_retryable", "timeout"
         if isinstance(error, api.TwirpError):
@@ -249,3 +369,23 @@ class LiveKitRecordingProvider(RecordingProvider):
         if isinstance(error, (ConnectionError, OSError)):
             return "provider_retryable", "unavailable"
         return "provider_retryable", "unknown"
+
+    @staticmethod
+    def start_outcome_for(error: Exception) -> StartOutcome:
+        if isinstance(error, _LocalStartValidationError):
+            return "not_started"
+        if not isinstance(error, api.TwirpError):
+            return "unknown"
+        if error.code in {
+            "invalid_argument",
+            "not_found",
+            "failed_precondition",
+            "out_of_range",
+            "unimplemented",
+            "unauthenticated",
+            "permission_denied",
+        }:
+            return "not_started"
+        if error.status in {400, 401, 403, 404, 405, 415, 422}:
+            return "not_started"
+        return "unknown"

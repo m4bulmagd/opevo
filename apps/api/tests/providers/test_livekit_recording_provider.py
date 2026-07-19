@@ -1,9 +1,11 @@
-from types import SimpleNamespace
 from contextlib import asynccontextmanager
+from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
 
 import pytest
 from livekit import api
 
+from app.providers.livekit_recording import base as recording_base
 from app.providers.livekit_recording.livekit import (
     LiveKitRecordingProvider,
     LiveKitRecordingProviderError,
@@ -49,17 +51,50 @@ class FakeEgressClient:
         self.stop_requests.append(request)
 
 
+_DEFAULT_START_RESULT = object()
+
+
 class FakeStartEgressClient(FakeEgressClient):
-    def __init__(self, *, failure: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        failure: Exception | None = None,
+        result: object = _DEFAULT_START_RESULT,
+    ) -> None:
         super().__init__([])
         self.failure = failure
+        self.result = result
         self.start_requests = []
 
     async def start_room_composite_egress(self, request):
         self.start_requests.append(request)
         if self.failure is not None:
             raise self.failure
-        return SimpleNamespace(egress_id="egress-started")
+        if self.result is _DEFAULT_START_RESULT:
+            return SimpleNamespace(egress_id="egress-started")
+        return self.result
+
+
+class FakeRoomListEgressClient:
+    def __init__(
+        self,
+        items: list[object],
+        *,
+        failure: Exception | None = None,
+    ) -> None:
+        self.items = items
+        self.failure = failure
+        self.list_requests = []
+
+    async def list_egress(self, request):
+        self.list_requests.append(request)
+        if self.failure is not None:
+            raise self.failure
+        return SimpleNamespace(items=self.items)
+
+
+def twirp_error(*, code: str, status: int) -> api.TwirpError:
+    return api.TwirpError(code, "provider detail must not escape", status=status)
 
 
 def build_provider(
@@ -281,8 +316,7 @@ async def test_start_room_recording_uses_audio_only_direct_minio_output() -> Non
 
     result = await provider.start_room_recording(
         room_name="room-1",
-        user_id="user-1",
-        call_id="call-1",
+        object_key="calls/user-1/call-1.ogg",
     )
 
     assert result.egress_id == "egress-started"
@@ -314,8 +348,7 @@ async def test_start_room_recording_uses_aws_native_s3_shape() -> None:
 
     await provider.start_room_recording(
         room_name="room-aws",
-        user_id="user-aws",
-        call_id="call-aws",
+        object_key="calls/user-aws/call-aws.ogg",
     )
 
     upload = client.start_requests[0].file.s3
@@ -334,12 +367,248 @@ async def test_start_room_recording_wraps_provider_failures() -> None:
     with pytest.raises(LiveKitRecordingProviderError) as exc_info:
         await build_provider(client).start_room_recording(
             room_name="room-1",
-            user_id="user-1",
-            call_id="call-1",
+            object_key="calls/user-1/call-1.ogg",
         )
 
     assert exc_info.value.category == "provider_retryable"
     assert exc_info.value.retryable is True
     assert exc_info.value.error_class == "unknown"
+    assert exc_info.value.start_outcome == "unknown"
     assert str(exc_info.value) == "provider_retryable"
     assert exc_info.value.__cause__ is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (twirp_error(code="invalid_argument", status=400), "not_started"),
+        (TimeoutError(), "unknown"),
+        (ValueError("unexpected provider failure"), "unknown"),
+    ],
+)
+async def test_start_room_recording_exposes_classified_outcome(
+    failure: Exception,
+    expected: str,
+) -> None:
+    client = FakeStartEgressClient(failure=failure)
+
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await build_provider(client).start_room_recording(
+            room_name="room-1",
+            object_key="calls/user-1/call-1.ogg",
+        )
+
+    assert exc_info.value.start_outcome == expected
+
+
+@pytest.mark.anyio
+async def test_start_room_recording_rejects_empty_object_key_before_io() -> None:
+    client = FakeStartEgressClient()
+
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await build_provider(client).start_room_recording(
+            room_name="room-1",
+            object_key="",
+        )
+
+    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.error_class == "validation"
+    assert exc_info.value.start_outcome == "not_started"
+    assert client.start_requests == []
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (ValueError("unexpected provider failure"), "unknown"),
+        (twirp_error(code="invalid_argument", status=400), "not_started"),
+        (twirp_error(code="unauthenticated", status=401), "not_started"),
+        (twirp_error(code="permission_denied", status=403), "not_started"),
+        (TimeoutError(), "unknown"),
+        (ConnectionError(), "unknown"),
+        (twirp_error(code="already_exists", status=409), "unknown"),
+        (twirp_error(code="resource_exhausted", status=429), "unknown"),
+        (twirp_error(code="internal", status=500), "unknown"),
+        (RuntimeError("unexpected"), "unknown"),
+    ],
+)
+def test_start_outcome_classification(
+    error: Exception,
+    expected: str,
+) -> None:
+    assert LiveKitRecordingProvider.start_outcome_for(error) == expected
+
+
+def test_recording_provider_error_start_outcome_is_immutable() -> None:
+    error = LiveKitRecordingProviderError(
+        "provider_terminal",
+        error_class="validation",
+        start_outcome="not_started",
+    )
+
+    with pytest.raises(AttributeError):
+        error.start_outcome = "unknown"
+
+    assert error.start_outcome == "not_started"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "result",
+    [
+        None,
+        SimpleNamespace(),
+        SimpleNamespace(egress_id=""),
+        SimpleNamespace(egress_id=object()),
+    ],
+)
+async def test_start_room_recording_treats_malformed_result_as_unknown(
+    result: object,
+) -> None:
+    client = FakeStartEgressClient(result=result)
+
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await build_provider(client).start_room_recording(
+            room_name="room-1",
+            object_key="calls/user-1/call-1.ogg",
+        )
+
+    assert exc_info.value.category == "provider_retryable"
+    assert exc_info.value.error_class == "unknown"
+    assert exc_info.value.start_outcome == "unknown"
+    assert str(exc_info.value) == "provider_retryable"
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_returns_sanitized_primitive_snapshots() -> None:
+    object_key = "calls/user-1/call-1.ogg"
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-room-composite",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_ACTIVE,
+                room_composite=api.RoomCompositeEgressRequest(
+                    file=api.EncodedFileOutput(filepath=object_key)
+                ),
+            ),
+            api.EgressInfo(
+                egress_id="egress-file-result",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_COMPLETE,
+                file_results=[api.FileInfo(filename=object_key)],
+            ),
+        ]
+    )
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots == (
+        recording_base.RecordingEgressSnapshot(
+            egress_id="egress-room-composite",
+            room_name="room-owned",
+            status=int(api.EgressStatus.EGRESS_ACTIVE),
+            object_key=object_key,
+        ),
+        recording_base.RecordingEgressSnapshot(
+            egress_id="egress-file-result",
+            room_name="room-owned",
+            status=int(api.EgressStatus.EGRESS_COMPLETE),
+            object_key=object_key,
+        ),
+    )
+    assert client.list_requests[0].room_name == "room-owned"
+    assert all(type(snapshot.egress_id) is str for snapshot in snapshots)
+    assert all(type(snapshot.room_name) is str for snapshot in snapshots)
+    assert all(type(snapshot.status) is int for snapshot in snapshots)
+    assert all(
+        snapshot.object_key is None or type(snapshot.object_key) is str
+        for snapshot in snapshots
+    )
+    assert all(not isinstance(snapshot, api.EgressInfo) for snapshot in snapshots)
+
+    with pytest.raises(FrozenInstanceError):
+        snapshots[0].object_key = "provider-controlled-change"
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_normalizes_repeated_request_file_output() -> None:
+    object_key = "calls/user-1/call-1.ogg"
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-repeated-output",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_STARTING,
+                room_composite=api.RoomCompositeEgressRequest(
+                    file_outputs=[api.EncodedFileOutput(filepath=object_key)]
+                ),
+            )
+        ]
+    )
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots[0].object_key == object_key
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "egress",
+    [
+        api.EgressInfo(
+            egress_id="egress-legacy-file",
+            room_name="room-owned",
+            status=api.EgressStatus.EGRESS_ACTIVE,
+            file=api.FileInfo(filename="calls/user-1/call-1.ogg"),
+        ),
+        api.EgressInfo(
+            egress_id="egress-result-location",
+            room_name="room-owned",
+            status=api.EgressStatus.EGRESS_COMPLETE,
+            file_results=[api.FileInfo(location="calls/user-1/call-1.ogg")],
+        ),
+    ],
+)
+async def test_list_room_egresses_normalizes_legacy_file_shapes(
+    egress: api.EgressInfo,
+) -> None:
+    client = FakeRoomListEgressClient([egress])
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots[0].object_key == "calls/user-1/call-1.ogg"
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_fails_closed_for_conflicting_paths() -> None:
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-conflicting-output",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_ACTIVE,
+                room_composite=api.RoomCompositeEgressRequest(
+                    file=api.EncodedFileOutput(
+                        filepath="calls/user-1/call-1.ogg"
+                    )
+                ),
+                file_results=[
+                    api.FileInfo(filename="calls/user-1/different-call.ogg")
+                ],
+            )
+        ]
+    )
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots[0].object_key is None
