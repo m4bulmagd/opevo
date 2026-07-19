@@ -4,7 +4,10 @@ from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from types import ModuleType, SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -13,8 +16,9 @@ from alembic.operations import Operations
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import event as sa_event
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.models.call import Call
 from app.models.recording_egress_operation import (
@@ -39,7 +43,9 @@ SNAPSHOT_NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 
 def _load_migration() -> ModuleType:
     assert MIGRATION_PATH.exists(), "Recording egress operation migration must exist"
-    spec = spec_from_file_location("recording_egress_operation_migration", MIGRATION_PATH)
+    spec = spec_from_file_location(
+        "recording_egress_operation_migration", MIGRATION_PATH
+    )
     assert spec is not None and spec.loader is not None
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -298,7 +304,9 @@ async def test_recording_operation_observability_snapshot_has_exact_empty_shape(
         db_session
     ).observability_snapshot(SNAPSHOT_NOW)
 
-    assert tuple(field.name for field in fields(RecordingOperationObservabilitySnapshot)) == (
+    assert tuple(
+        field.name for field in fields(RecordingOperationObservabilitySnapshot)
+    ) == (
         "counts",
         "oldest_unresolved_age_seconds",
         "pending_stop_count",
@@ -496,7 +504,9 @@ async def test_recording_operation_observability_snapshot_normalizes_naive_utc_a
         delete_requested_at=future,
     )
 
-    snapshot = await repository.observability_snapshot(SNAPSHOT_NOW.replace(tzinfo=None))
+    snapshot = await repository.observability_snapshot(
+        SNAPSHOT_NOW.replace(tzinfo=None)
+    )
 
     assert snapshot.oldest_unresolved_age_seconds == 0.0
     assert snapshot.pending_stop_count == 1
@@ -679,7 +689,9 @@ def _as_payload(value: object) -> dict[str, str]:
 
 
 def _as_utc_datetime(value: object) -> datetime:
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    parsed = (
+        value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    )
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
@@ -880,9 +892,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
         "start",
         "stop",
     }
-    assert {
-        _as_uuid(row["aggregate_id"]) for row in reconcile_events
-    } == {
+    assert {_as_uuid(row["aggregate_id"]) for row in reconcile_events} == {
         ids["known_terminal"],
         ids["object_active"],
         ids["url_active"],
@@ -903,9 +913,14 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
         "failed",
         "no-replacement",
     }
-    assert next(
-        row for row in legacy_events if row["idempotency_key"].endswith(":delivered")
-    )["status"] == "delivered"
+    assert (
+        next(
+            row
+            for row in legacy_events
+            if row["idempotency_key"].endswith(":delivered")
+        )["status"]
+        == "delivered"
+    )
 
     for original in seeded:
         persisted = call_rows[original["id"]]
@@ -1078,10 +1093,680 @@ def test_recording_operation_migration_revision_and_downgrade_order() -> None:
         "drop_table",
     ]
     assert "recording.reconcile" in str(operations.timeline[0][1][0])
-    assert operations.timeline[1][1] == (
-        "ix_recording_egress_operations_due_work",
-    )
-    assert operations.timeline[1][2] == {
-        "table_name": "recording_egress_operations"
-    }
+    assert operations.timeline[1][1] == ("ix_recording_egress_operations_due_work",)
+    assert operations.timeline[1][2] == {"table_name": "recording_egress_operations"}
     assert operations.timeline[2][1] == ("recording_egress_operations",)
+
+
+@pytest.mark.anyio
+async def test_postgresql_0013_to_0014_round_trip_preserves_private_coordination_contract() -> (
+    None
+):
+    database_url = os.getenv("TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("Recording operation migration proof requires TEST_DATABASE_URL")
+    if database_url.startswith("postgresql://"):
+        database_url = database_url.replace(
+            "postgresql://",
+            "postgresql+asyncpg://",
+            1,
+        )
+    if not database_url.startswith("postgresql+asyncpg://"):
+        pytest.skip("TEST_DATABASE_URL must identify PostgreSQL")
+
+    source_url = make_url(database_url)
+    database_name = f"task7_recording_migration_{uuid4().hex}"
+    migration_url = source_url.set(database=database_name)
+    admin_engine = create_async_engine(
+        source_url.set(database="postgres"),
+        isolation_level="AUTOCOMMIT",
+    )
+    migration_engine = None
+
+    def run_alembic(command: str, revision: str) -> None:
+        env = {
+            **os.environ,
+            "DATABASE_URL": migration_url.render_as_string(hide_password=False),
+        }
+        completed = subprocess.run(
+            [sys.executable, "-m", "alembic", command, revision],
+            cwd=MIGRATION_PATH.parents[2],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+    call_names = (
+        "active",
+        "terminal",
+        "deleted",
+        "empty_metadata",
+        "incomplete_room",
+    )
+    call_ids = {name: uuid4() for name in call_names}
+    user_ids = {name: uuid4() for name in call_names}
+    created_at = datetime(2026, 7, 18, 6, tzinfo=UTC)
+    active_started_at = datetime(2026, 7, 18, 7, tzinfo=UTC)
+    terminal_ended_at = datetime(2026, 7, 18, 8, tzinfo=UTC)
+    deleted_ended_at = datetime(2026, 7, 18, 9, tzinfo=UTC)
+    deleted_at = datetime(2026, 7, 18, 10, tzinfo=UTC)
+    active_object_key = "calls/synthetic-active/original.ogg"
+    deleted_object_key = "calls/synthetic-deleted/original.ogg"
+    incomplete_object_key = "calls/synthetic-incomplete/original.ogg"
+    terminal_egress_id = "EG_synthetic_terminal"
+    deleted_egress_id = "EG_synthetic_deleted"
+
+    try:
+        async with admin_engine.connect() as connection:
+            await connection.execute(sa.text(f'CREATE DATABASE "{database_name}"'))
+
+        run_alembic("upgrade", "0013_outbox_routing_target")
+        migration_engine = create_async_engine(migration_url)
+        async with migration_engine.begin() as connection:
+            await connection.execute(
+                sa.text(
+                    "INSERT INTO users "
+                    "(id, clerk_user_id, email, status, created_at, updated_at) "
+                    "VALUES (:id, :clerk_user_id, :email, 'active', "
+                    ":created_at, :updated_at)"
+                ),
+                [
+                    {
+                        "id": user_ids[name],
+                        "clerk_user_id": f"task7-migration-{name}-{user_ids[name]}",
+                        "email": f"task7-migration-{name}-{user_ids[name]}@example.test",
+                        "created_at": created_at,
+                        "updated_at": created_at,
+                    }
+                    for name in call_names
+                ],
+            )
+            await connection.execute(
+                sa.text(
+                    "INSERT INTO calls "
+                    "(id, user_id, livekit_room_id, caller_number, status, "
+                    "state_changed_at, started_at, ended_at, deleted_at, "
+                    "summary_text, recording_object_key, recording_egress_id, "
+                    "recording_url, failure_code, created_at, updated_at) "
+                    "VALUES (:id, :user_id, :livekit_room_id, :caller_number, "
+                    ":status, :state_changed_at, :started_at, :ended_at, "
+                    ":deleted_at, :summary_text, :recording_object_key, "
+                    ":recording_egress_id, :recording_url, NULL, "
+                    ":created_at, :updated_at)"
+                ),
+                [
+                    {
+                        "id": call_ids["active"],
+                        "user_id": user_ids["active"],
+                        "livekit_room_id": "room-synthetic-active",
+                        "caller_number": "+353000000001",
+                        "status": "connected",
+                        "state_changed_at": active_started_at,
+                        "started_at": active_started_at,
+                        "ended_at": None,
+                        "deleted_at": None,
+                        "summary_text": "synthetic active summary",
+                        "recording_object_key": active_object_key,
+                        "recording_egress_id": None,
+                        "recording_url": None,
+                        "created_at": created_at,
+                        "updated_at": active_started_at,
+                    },
+                    {
+                        "id": call_ids["terminal"],
+                        "user_id": user_ids["terminal"],
+                        "livekit_room_id": "room-synthetic-terminal",
+                        "caller_number": "+353000000002",
+                        "status": "completed",
+                        "state_changed_at": terminal_ended_at,
+                        "started_at": active_started_at,
+                        "ended_at": terminal_ended_at,
+                        "deleted_at": None,
+                        "summary_text": "synthetic terminal summary",
+                        "recording_object_key": None,
+                        "recording_egress_id": terminal_egress_id,
+                        "recording_url": "https://synthetic.invalid/terminal",
+                        "created_at": created_at,
+                        "updated_at": terminal_ended_at,
+                    },
+                    {
+                        "id": call_ids["deleted"],
+                        "user_id": user_ids["deleted"],
+                        "livekit_room_id": "room-synthetic-deleted",
+                        "caller_number": "+353000000003",
+                        "status": "completed",
+                        "state_changed_at": deleted_ended_at,
+                        "started_at": active_started_at,
+                        "ended_at": deleted_ended_at,
+                        "deleted_at": deleted_at,
+                        "summary_text": "synthetic deleted summary",
+                        "recording_object_key": deleted_object_key,
+                        "recording_egress_id": deleted_egress_id,
+                        "recording_url": "https://synthetic.invalid/deleted",
+                        "created_at": created_at,
+                        "updated_at": deleted_at,
+                    },
+                    {
+                        "id": call_ids["empty_metadata"],
+                        "user_id": user_ids["empty_metadata"],
+                        "livekit_room_id": "room-synthetic-empty",
+                        "caller_number": "+353000000004",
+                        "status": "connected",
+                        "state_changed_at": active_started_at,
+                        "started_at": active_started_at,
+                        "ended_at": None,
+                        "deleted_at": None,
+                        "summary_text": "synthetic empty metadata summary",
+                        "recording_object_key": "",
+                        "recording_egress_id": "",
+                        "recording_url": "",
+                        "created_at": created_at,
+                        "updated_at": active_started_at,
+                    },
+                    {
+                        "id": call_ids["incomplete_room"],
+                        "user_id": user_ids["incomplete_room"],
+                        "livekit_room_id": None,
+                        "caller_number": "+353000000005",
+                        "status": "connected",
+                        "state_changed_at": active_started_at,
+                        "started_at": active_started_at,
+                        "ended_at": None,
+                        "deleted_at": None,
+                        "summary_text": "synthetic incomplete room summary",
+                        "recording_object_key": incomplete_object_key,
+                        "recording_egress_id": None,
+                        "recording_url": None,
+                        "created_at": created_at,
+                        "updated_at": active_started_at,
+                    },
+                ],
+            )
+
+            legacy_statuses = ("pending", "processing", "delivered", "failed")
+            await connection.execute(
+                sa.text(
+                    "INSERT INTO outbox_events "
+                    "(id, idempotency_key, topic, aggregate_type, aggregate_id, "
+                    "payload, status, attempt_count, next_attempt_at, "
+                    "last_error_code, delivered_at, created_at, updated_at) "
+                    "VALUES (:id, :idempotency_key, 'recording.stop', "
+                    "'call-recording', :aggregate_id, "
+                    "json_build_object('call_id', CAST(:aggregate_id_text AS text)), "
+                    ":status, 1, :next_attempt_at, :last_error_code, "
+                    ":delivered_at, :created_at, :updated_at)"
+                ),
+                [
+                    {
+                        "id": uuid4(),
+                        "idempotency_key": (
+                            f"recording.stop:{call_ids['terminal']}:{status}"
+                        ),
+                        "aggregate_id": call_ids["terminal"],
+                        "aggregate_id_text": str(call_ids["terminal"]),
+                        "status": status,
+                        "next_attempt_at": terminal_ended_at,
+                        "last_error_code": (
+                            "recording_provider_unavailable"
+                            if status == "failed"
+                            else None
+                        ),
+                        "delivered_at": (
+                            terminal_ended_at if status == "delivered" else None
+                        ),
+                        "created_at": created_at,
+                        "updated_at": terminal_ended_at,
+                    }
+                    for status in legacy_statuses
+                ],
+            )
+            await connection.execute(
+                sa.text(
+                    "INSERT INTO outbox_events "
+                    "(id, idempotency_key, topic, aggregate_type, aggregate_id, "
+                    "payload, status, attempt_count, next_attempt_at, "
+                    "last_error_code, delivered_at, created_at, updated_at) "
+                    "VALUES (:id, :idempotency_key, 'recording.stop', "
+                    "'call-recording', :aggregate_id, "
+                    "json_build_object('call_id', CAST(:aggregate_id_text AS text)), "
+                    "'pending', 0, :next_attempt_at, NULL, NULL, "
+                    ":created_at, :updated_at)"
+                ),
+                {
+                    "id": uuid4(),
+                    "idempotency_key": (
+                        f"recording.stop:{call_ids['empty_metadata']}:no-replacement"
+                    ),
+                    "aggregate_id": call_ids["empty_metadata"],
+                    "aggregate_id_text": str(call_ids["empty_metadata"]),
+                    "next_attempt_at": active_started_at,
+                    "created_at": created_at,
+                    "updated_at": active_started_at,
+                },
+            )
+
+        await migration_engine.dispose()
+        migration_engine = None
+        upgrade_started_at = datetime.now(UTC)
+        run_alembic("upgrade", "0014_recording_egress_ops")
+        upgrade_finished_at = datetime.now(UTC)
+        migration_engine = create_async_engine(migration_url)
+
+        async with migration_engine.connect() as connection:
+            revision = await connection.scalar(
+                sa.text("SELECT version_num FROM alembic_version")
+            )
+            constraint_names = set(
+                (
+                    await connection.execute(
+                        sa.text(
+                            "SELECT conname FROM pg_constraint "
+                            "WHERE conrelid = "
+                            "'recording_egress_operations'::regclass"
+                        )
+                    )
+                ).scalars()
+            )
+            index_rows = (
+                (
+                    await connection.execute(
+                        sa.text(
+                            "SELECT indexname, indexdef FROM pg_indexes "
+                            "WHERE schemaname = current_schema() "
+                            "AND tablename = 'recording_egress_operations'"
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            operation_rows = {
+                _as_uuid(row["call_id"]): row
+                for row in (
+                    await connection.execute(
+                        sa.text(
+                            "SELECT * FROM recording_egress_operations ORDER BY call_id"
+                        )
+                    )
+                ).mappings()
+            }
+            event_rows = (
+                (
+                    await connection.execute(
+                        sa.text(
+                            "SELECT id, idempotency_key, topic, aggregate_type, "
+                            "aggregate_id, payload, status, attempt_count, "
+                            "last_error_code, delivered_at "
+                            "FROM outbox_events "
+                            "WHERE topic IN ('recording.stop', 'recording.reconcile') "
+                            "ORDER BY idempotency_key"
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+
+        assert revision == "0014_recording_egress_ops"
+        assert constraint_names == {
+            "pk_recording_egress_operations",
+            "fk_recording_egress_operations_call_id_calls",
+            "uq_recording_egress_operations_call_id",
+            "uq_recording_egress_operations_provider_egress_id",
+            "ck_recording_egress_operations_start_state_allowed",
+            "ck_recording_egress_operations_provider_identity_consistent",
+            "ck_recording_egress_operations_legacy_room_consistent",
+            "ck_recording_egress_operations_prepared_attempt_consistent",
+            "ck_recording_egress_operations_delete_implies_stop",
+            "ck_recording_egress_operations_object_delete_implies_request",
+        }
+        indexes = {row["indexname"]: row["indexdef"] for row in index_rows}
+        assert set(indexes) == {
+            "pk_recording_egress_operations",
+            "uq_recording_egress_operations_call_id",
+            "uq_recording_egress_operations_provider_egress_id",
+            "ix_recording_egress_operations_due_work",
+        }
+        assert indexes["ix_recording_egress_operations_due_work"].endswith(
+            "USING btree (start_state, stop_requested_at, "
+            "delete_requested_at, updated_at)"
+        )
+
+        assert set(operation_rows) == {
+            call_ids["active"],
+            call_ids["terminal"],
+            call_ids["deleted"],
+            call_ids["incomplete_room"],
+        }
+        private_columns = {
+            "id",
+            "call_id",
+            "room_name",
+            "legacy_incomplete",
+            "expected_object_key",
+            "provider_egress_id",
+            "start_state",
+            "start_attempted_at",
+            "stop_requested_at",
+            "delete_requested_at",
+            "provider_terminal_at",
+            "object_deleted_at",
+            "last_reconciled_at",
+            "last_error_code",
+            "created_at",
+            "updated_at",
+        }
+        assert all(set(row) == private_columns for row in operation_rows.values())
+        assert call_ids["empty_metadata"] not in operation_rows
+
+        active = operation_rows[call_ids["active"]]
+        assert _as_uuid(active["id"]) == call_ids["active"]
+        assert active["room_name"] == "room-synthetic-active"
+        assert active["legacy_incomplete"] is False
+        assert active["expected_object_key"] == active_object_key
+        assert active["provider_egress_id"] is None
+        assert active["start_state"] == "uncertain"
+        assert active["stop_requested_at"] is None
+        assert active["delete_requested_at"] is None
+
+        terminal = operation_rows[call_ids["terminal"]]
+        assert terminal["expected_object_key"] == (
+            f"calls/{user_ids['terminal']}/{call_ids['terminal']}.ogg"
+        )
+        assert terminal["provider_egress_id"] == terminal_egress_id
+        assert terminal["start_state"] == "started"
+        assert terminal["stop_requested_at"] == terminal_ended_at
+        assert terminal["delete_requested_at"] is None
+
+        deleted = operation_rows[call_ids["deleted"]]
+        assert deleted["expected_object_key"] == deleted_object_key
+        assert deleted["provider_egress_id"] == deleted_egress_id
+        assert deleted["start_state"] == "started"
+        assert deleted["stop_requested_at"] == deleted_ended_at
+        assert deleted["delete_requested_at"] == deleted_at
+
+        incomplete = operation_rows[call_ids["incomplete_room"]]
+        assert incomplete["room_name"] is None
+        assert incomplete["legacy_incomplete"] is True
+        assert incomplete["expected_object_key"] == incomplete_object_key
+        assert incomplete["provider_egress_id"] is None
+        assert incomplete["start_state"] == "uncertain"
+        assert incomplete["stop_requested_at"] is None
+        assert incomplete["delete_requested_at"] is None
+
+        for operation in operation_rows.values():
+            assert operation["start_attempted_at"] is None
+            assert operation["provider_terminal_at"] is None
+            assert operation["object_deleted_at"] is None
+            assert operation["last_reconciled_at"] is None
+            assert operation["last_error_code"] is None
+            assert upgrade_started_at <= operation["created_at"] <= upgrade_finished_at
+            assert operation["updated_at"] == operation["created_at"]
+
+        reconcile_events = [
+            row for row in event_rows if row["topic"] == "recording.reconcile"
+        ]
+        assert {row["idempotency_key"] for row in reconcile_events} == {
+            f"recording.reconcile:{call_ids['active']}:start",
+            f"recording.reconcile:{call_ids['terminal']}:stop",
+            f"recording.reconcile:{call_ids['deleted']}:delete",
+            f"recording.reconcile:{call_ids['incomplete_room']}:start",
+        }
+        for event in reconcile_events:
+            operation_id = _as_uuid(event["aggregate_id"])
+            assert event["aggregate_type"] == "recording-egress-operation"
+            assert _as_payload(event["payload"]) == {"operation_id": str(operation_id)}
+            assert event["status"] == "pending"
+            assert event["attempt_count"] == 0
+            assert event["last_error_code"] is None
+            assert event["delivered_at"] is None
+
+        legacy_events = {
+            row["idempotency_key"]: row
+            for row in event_rows
+            if row["topic"] == "recording.stop"
+        }
+        assert set(legacy_events) == {
+            f"recording.stop:{call_ids['terminal']}:delivered",
+            f"recording.stop:{call_ids['terminal']}:failed",
+            (f"recording.stop:{call_ids['empty_metadata']}:no-replacement"),
+        }
+        assert (
+            legacy_events[f"recording.stop:{call_ids['terminal']}:delivered"]["status"]
+            == "delivered"
+        )
+        assert (
+            legacy_events[f"recording.stop:{call_ids['terminal']}:failed"]["status"]
+            == "failed"
+        )
+        assert (
+            legacy_events[
+                f"recording.stop:{call_ids['empty_metadata']}:no-replacement"
+            ]["status"]
+            == "pending"
+        )
+
+        operation_insert = sa.text(
+            "INSERT INTO recording_egress_operations "
+            "(id, call_id, room_name, legacy_incomplete, expected_object_key, "
+            "provider_egress_id, start_state, start_attempted_at, "
+            "stop_requested_at, delete_requested_at, object_deleted_at) "
+            "VALUES (:id, :call_id, :room_name, :legacy_incomplete, "
+            ":expected_object_key, :provider_egress_id, :start_state, "
+            ":start_attempted_at, :stop_requested_at, :delete_requested_at, "
+            ":object_deleted_at)"
+        )
+
+        async def assert_insert_fails(
+            *,
+            constraint_name: str,
+            call_id: UUID,
+            room_name: str | None = "room-synthetic-invalid",
+            legacy_incomplete: bool = False,
+            provider_egress_id: str | None = None,
+            start_state: str = "uncertain",
+            start_attempted_at: datetime | None = None,
+            stop_requested_at: datetime | None = None,
+            delete_requested_at: datetime | None = None,
+            object_deleted_at: datetime | None = None,
+        ) -> None:
+            with pytest.raises(IntegrityError) as error:
+                async with migration_engine.begin() as connection:
+                    await connection.execute(
+                        operation_insert,
+                        {
+                            "id": uuid4(),
+                            "call_id": call_id,
+                            "room_name": room_name,
+                            "legacy_incomplete": legacy_incomplete,
+                            "expected_object_key": "calls/synthetic-invalid.ogg",
+                            "provider_egress_id": provider_egress_id,
+                            "start_state": start_state,
+                            "start_attempted_at": start_attempted_at,
+                            "stop_requested_at": stop_requested_at,
+                            "delete_requested_at": delete_requested_at,
+                            "object_deleted_at": object_deleted_at,
+                        },
+                    )
+            assert constraint_name in str(error.value.orig)
+
+        await assert_insert_fails(
+            constraint_name="uq_recording_egress_operations_call_id",
+            call_id=call_ids["active"],
+        )
+        await assert_insert_fails(
+            constraint_name="uq_recording_egress_operations_provider_egress_id",
+            call_id=call_ids["empty_metadata"],
+            provider_egress_id=terminal_egress_id,
+            start_state="started",
+        )
+        await assert_insert_fails(
+            constraint_name="ck_recording_egress_operations_start_state_allowed",
+            call_id=call_ids["empty_metadata"],
+            start_state="mystery",
+        )
+        await assert_insert_fails(
+            constraint_name=(
+                "ck_recording_egress_operations_provider_identity_consistent"
+            ),
+            call_id=call_ids["empty_metadata"],
+            start_state="started",
+        )
+        await assert_insert_fails(
+            constraint_name="ck_recording_egress_operations_legacy_room_consistent",
+            call_id=call_ids["empty_metadata"],
+            room_name=None,
+        )
+        await assert_insert_fails(
+            constraint_name=(
+                "ck_recording_egress_operations_prepared_attempt_consistent"
+            ),
+            call_id=call_ids["empty_metadata"],
+            start_state="prepared",
+            start_attempted_at=active_started_at,
+        )
+        await assert_insert_fails(
+            constraint_name="ck_recording_egress_operations_delete_implies_stop",
+            call_id=call_ids["empty_metadata"],
+            delete_requested_at=deleted_at,
+        )
+        await assert_insert_fails(
+            constraint_name=(
+                "ck_recording_egress_operations_object_delete_implies_request"
+            ),
+            call_id=call_ids["empty_metadata"],
+            stop_requested_at=deleted_ended_at,
+            object_deleted_at=deleted_at,
+        )
+
+        first_revision_event_ids = {_as_uuid(row["id"]) for row in reconcile_events}
+        async with migration_engine.begin() as connection:
+            await connection.execute(
+                sa.text(
+                    "UPDATE outbox_events SET status = 'delivered', "
+                    "delivered_at = :finished_at, last_error_code = NULL "
+                    "WHERE idempotency_key = :idempotency_key"
+                ),
+                {
+                    "finished_at": upgrade_finished_at,
+                    "idempotency_key": (
+                        f"recording.reconcile:{call_ids['active']}:start"
+                    ),
+                },
+            )
+            await connection.execute(
+                sa.text(
+                    "UPDATE outbox_events SET status = 'failed', "
+                    "delivered_at = NULL, "
+                    "last_error_code = 'recording_unresolved' "
+                    "WHERE idempotency_key = :idempotency_key"
+                ),
+                {
+                    "idempotency_key": (
+                        f"recording.reconcile:{call_ids['terminal']}:stop"
+                    )
+                },
+            )
+
+        await migration_engine.dispose()
+        migration_engine = None
+        run_alembic("downgrade", "0013_outbox_routing_target")
+        migration_engine = create_async_engine(migration_url)
+        async with migration_engine.connect() as connection:
+            downgraded_revision = await connection.scalar(
+                sa.text("SELECT version_num FROM alembic_version")
+            )
+            operation_table = await connection.scalar(
+                sa.text("SELECT to_regclass('public.recording_egress_operations')")
+            )
+            remaining_revision_events = await connection.scalar(
+                sa.text(
+                    "SELECT COUNT(*) FROM outbox_events "
+                    "WHERE topic = 'recording.reconcile' "
+                    "AND aggregate_type = 'recording-egress-operation'"
+                )
+            )
+            legacy_after_downgrade = set(
+                (
+                    await connection.execute(
+                        sa.text(
+                            "SELECT idempotency_key FROM outbox_events "
+                            "WHERE topic = 'recording.stop'"
+                        )
+                    )
+                ).scalars()
+            )
+        assert downgraded_revision == "0013_outbox_routing_target"
+        assert operation_table is None
+        assert remaining_revision_events == 0
+        assert legacy_after_downgrade == set(legacy_events)
+
+        await migration_engine.dispose()
+        migration_engine = None
+        run_alembic("upgrade", "0014_recording_egress_ops")
+        migration_engine = create_async_engine(migration_url)
+        async with migration_engine.connect() as connection:
+            reupgraded_revision = await connection.scalar(
+                sa.text("SELECT version_num FROM alembic_version")
+            )
+            reupgraded_operation_ids = set(
+                (
+                    await connection.execute(
+                        sa.text("SELECT id FROM recording_egress_operations")
+                    )
+                ).scalars()
+            )
+            replacement_events = (
+                (
+                    await connection.execute(
+                        sa.text(
+                            "SELECT id, idempotency_key, aggregate_type, "
+                            "aggregate_id, payload, status, attempt_count, "
+                            "last_error_code, delivered_at "
+                            "FROM outbox_events "
+                            "WHERE topic = 'recording.reconcile' "
+                            "ORDER BY idempotency_key"
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+
+        assert reupgraded_revision == "0014_recording_egress_ops"
+        assert {_as_uuid(value) for value in reupgraded_operation_ids} == set(
+            operation_rows
+        )
+        assert {row["idempotency_key"] for row in replacement_events} == {
+            row["idempotency_key"] for row in reconcile_events
+        }
+        assert first_revision_event_ids.isdisjoint(
+            {_as_uuid(row["id"]) for row in replacement_events}
+        )
+        for event in replacement_events:
+            operation_id = _as_uuid(event["aggregate_id"])
+            assert event["aggregate_type"] == "recording-egress-operation"
+            assert _as_payload(event["payload"]) == {"operation_id": str(operation_id)}
+            assert event["status"] == "pending"
+            assert event["attempt_count"] == 0
+            assert event["last_error_code"] is None
+            assert event["delivered_at"] is None
+    finally:
+        if migration_engine is not None:
+            await migration_engine.dispose()
+        try:
+            async with admin_engine.connect() as connection:
+                await connection.execute(
+                    sa.text(
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                        "WHERE datname = :database_name AND pid <> pg_backend_pid()"
+                    ),
+                    {"database_name": database_name},
+                )
+                await connection.execute(
+                    sa.text(f'DROP DATABASE IF EXISTS "{database_name}"')
+                )
+        finally:
+            await admin_engine.dispose()
