@@ -17,6 +17,7 @@ from app.models.call_message import CallMessage
 from app.models.customer_activation import CustomerActivation
 from app.models.notification import Notification
 from app.models.phone_number import PhoneNumber
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User

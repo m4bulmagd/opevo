@@ -115,7 +115,7 @@ def test_activation_revision_follows_call_state_machine() -> None:
     assert migration.down_revision == "0011_call_state_machine"
 
 
-def test_offline_upgrade_generates_full_chain_through_routing_target_head() -> None:
+def test_offline_upgrade_generates_full_chain_through_recording_egress_head() -> None:
     environment = {
         **os.environ,
         "DATABASE_URL": (
@@ -144,7 +144,11 @@ def test_offline_upgrade_generates_full_chain_through_routing_target_head() -> N
     assert completed.returncode == 0, output
     assert "0011_call_state_machine -> 0012_customer_activation" in output
     assert "0012_customer_activation -> 0013_outbox_routing_target" in output
-    assert "version_num='0013_outbox_routing_target'" in output
+    assert "0013_outbox_routing_target -> 0014_recording_egress_ops" in output
+    assert "gen_random_uuid()" in output
+    assert "json_build_object('operation_id'" in output
+    assert "NULLIF(calls.recording_object_key, '')" in output
+    assert "version_num='0014_recording_egress_ops'" in output
 
 
 def test_upgrade_preflights_duplicate_phone_owners_before_ddl(monkeypatch) -> None:
