@@ -39,6 +39,7 @@ SAFE_OUTBOX_ERROR_CODES = frozenset(
         "dispatch_conflict",
         "dispatch_configuration",
         "summary_stale",
+        "recording_unresolved",
     }
 )
 
@@ -103,6 +104,7 @@ def _outbox_error_class(error_code: str) -> str:
         "dispatch_conflict": "conflict",
         "dispatch_configuration": "validation",
         "summary_stale": "conflict",
+        "recording_unresolved": "unknown",
     }.get(error_code, "unknown")
 
 

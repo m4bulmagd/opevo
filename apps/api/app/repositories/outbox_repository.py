@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -32,6 +34,7 @@ class OutboxRepository:
         idempotency_key: str,
         payload: dict,
         next_attempt_at: datetime,
+        created_at: datetime,
     ) -> OutboxEvent:
         event_id = uuid4()
         values = {
@@ -44,6 +47,8 @@ class OutboxRepository:
             "status": "pending",
             "attempt_count": 0,
             "next_attempt_at": next_attempt_at,
+            "created_at": created_at,
+            "updated_at": created_at,
             "last_error_code": None,
             "routing_target_provider_number_id": None,
             "delivered_at": None,
@@ -155,6 +160,38 @@ class OutboxRepository:
             event.next_attempt_at = claim_deadline
         await self.session.flush()
         return events
+
+    async def make_oldest_pending_due(
+        self,
+        *,
+        aggregate_type: str,
+        aggregate_id: UUID,
+        due_at: datetime,
+    ) -> bool:
+        oldest_pending_id = (
+            select(OutboxEvent.id)
+            .where(
+                OutboxEvent.aggregate_type == aggregate_type,
+                OutboxEvent.aggregate_id == aggregate_id,
+                OutboxEvent.status == "pending",
+            )
+            .order_by(OutboxEvent.created_at, OutboxEvent.id)
+            .limit(1)
+            .scalar_subquery()
+        )
+        result = cast(
+            CursorResult[Any],
+            await self.session.execute(
+                update(OutboxEvent)
+                .where(
+                    OutboxEvent.id == oldest_pending_id,
+                    OutboxEvent.status == "pending",
+                    OutboxEvent.next_attempt_at > due_at,
+                )
+                .values(next_attempt_at=due_at)
+            ),
+        )
+        return bool(result.rowcount)
 
     async def mark_delivered(
         self,

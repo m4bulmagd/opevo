@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.call import Call
@@ -21,6 +22,11 @@ async def _missing_handler(*_args, **_kwargs):
 deliver_recording_stop = getattr(
     outbox_topics,
     "deliver_recording_stop",
+    _missing_handler,
+)
+deliver_recording_reconcile = getattr(
+    outbox_topics,
+    "deliver_recording_reconcile",
     _missing_handler,
 )
 deliver_summary_generate = getattr(
@@ -91,6 +97,20 @@ def event(*, call_id, topic: str, aggregate_type: str) -> OutboxEvent:
         aggregate_type=aggregate_type,
         aggregate_id=call_id,
         payload={"call_id": str(call_id)},
+        status="processing",
+        attempt_count=1,
+        next_attempt_at=datetime.now(UTC),
+    )
+
+
+def recording_event(operation_id) -> OutboxEvent:
+    return OutboxEvent(
+        id=uuid4(),
+        idempotency_key=f"recording.reconcile:{operation_id}:start",
+        topic="recording.reconcile",
+        aggregate_type="recording-egress-operation",
+        aggregate_id=operation_id,
+        payload={"operation_id": str(operation_id)},
         status="processing",
         attempt_count=1,
         next_attempt_at=datetime.now(UTC),
@@ -511,6 +531,11 @@ async def test_recording_stop_uncertainty_is_retryable(
     [
         (deliver_summary_generate, "summary.generate", "call-summary"),
         (deliver_recording_stop, "recording.stop", "call-recording"),
+        (
+            deliver_recording_reconcile,
+            "recording.reconcile",
+            "recording-egress-operation",
+        ),
     ],
 )
 async def test_post_call_handlers_validate_exact_aggregate_identity(
@@ -519,10 +544,14 @@ async def test_post_call_handlers_validate_exact_aggregate_identity(
     aggregate_type: str,
 ) -> None:
     call_id = uuid4()
-    malformed = event(
-        call_id=call_id,
-        topic=topic,
-        aggregate_type=aggregate_type,
+    malformed = (
+        recording_event(call_id)
+        if topic == "recording.reconcile"
+        else event(
+            call_id=call_id,
+            topic=topic,
+            aggregate_type=aggregate_type,
+        )
     )
     malformed.aggregate_type = "call"
 
@@ -537,8 +566,49 @@ def test_default_handlers_exactly_match_supported_topics_without_placeholders() 
     assert set(outbox_topics.DEFAULT_OUTBOX_HANDLERS) == set(SUPPORTED_OUTBOX_TOPICS)
     assert "summary.generate" in outbox_topics.DEFAULT_OUTBOX_HANDLERS
     assert "recording.stop" in outbox_topics.DEFAULT_OUTBOX_HANDLERS
+    assert "recording.reconcile" in outbox_topics.DEFAULT_OUTBOX_HANDLERS
     assert "recording.start" not in outbox_topics.DEFAULT_OUTBOX_HANDLERS
     assert "notification.send" not in outbox_topics.DEFAULT_OUTBOX_HANDLERS
+
+
+@pytest.mark.anyio
+async def test_recording_reconcile_holding_handler_remains_pending_after_exhaustion(
+    db_session,
+) -> None:
+    operation_id = uuid4()
+    now = datetime(2026, 7, 19, tzinfo=UTC)
+    event = await OutboxService(db_session).add(
+        topic="recording.reconcile",
+        aggregate_type="recording-egress-operation",
+        aggregate_id=operation_id,
+        idempotency_key=f"recording.reconcile:{operation_id}:start",
+        payload={"operation_id": str(operation_id)},
+        next_attempt_at=now,
+    )
+    event.attempt_count = 5
+    event_id = event.id
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    result = await outbox_delivery_job(
+        {
+            "session_factory": factory,
+            "outbox_handlers": {
+                "recording.reconcile": deliver_recording_reconcile,
+            },
+            "outbox_now": lambda: now,
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
+    db_session.expire_all()
+    stored = await db_session.scalar(
+        select(OutboxEvent).where(OutboxEvent.id == event_id)
+    )
+    assert stored is not None
+    assert stored.status == "pending"
+    assert stored.attempt_count == 6
+    assert stored.last_error_code == "recording_unresolved"
 
 
 @pytest.mark.anyio

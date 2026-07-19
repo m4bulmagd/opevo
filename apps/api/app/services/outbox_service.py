@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -15,6 +16,7 @@ SUPPORTED_OUTBOX_TOPICS = frozenset(
         "livekit.dispatch",
         "livekit.verification_dispatch",
         "summary.generate",
+        "recording.reconcile",
         "recording.stop",
     }
 )
@@ -28,6 +30,7 @@ REFERENCE_PAYLOAD_FIELDS = {
         {"activation_id", "session_id", "room_name"}
     ),
     "summary.generate": frozenset({"call_id"}),
+    "recording.reconcile": frozenset({"operation_id"}),
     "recording.stop": frozenset({"call_id"}),
 }
 
@@ -59,8 +62,14 @@ def validate_outbox_payload(topic: str, payload: dict) -> None:
 
 
 class OutboxService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        now_provider: Callable[[], datetime] | None = None,
+    ) -> None:
         self.repository = OutboxRepository(session)
+        self.now = now_provider or (lambda: datetime.now(UTC))
 
     async def add(
         self,
@@ -70,15 +79,20 @@ class OutboxService:
         aggregate_id: UUID,
         idempotency_key: str,
         payload: dict,
+        next_attempt_at: datetime | None = None,
     ) -> OutboxEvent:
         validate_outbox_payload(topic, payload)
+        created_at = self.now()
         event = await self.repository.add_once(
             topic=topic,
             aggregate_type=aggregate_type,
             aggregate_id=aggregate_id,
             idempotency_key=idempotency_key,
             payload=payload,
-            next_attempt_at=datetime.now(UTC),
+            next_attempt_at=(
+                next_attempt_at if next_attempt_at is not None else created_at
+            ),
+            created_at=created_at,
         )
         if (
             event.topic != topic
