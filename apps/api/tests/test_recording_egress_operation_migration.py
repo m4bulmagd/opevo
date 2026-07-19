@@ -394,7 +394,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
     ids = {
         "known_terminal": uuid4(),
         "object_active": uuid4(),
-        "empty_object_active": uuid4(),
+        "empty_metadata_active": uuid4(),
         "url_active": uuid4(),
         "missing_room": uuid4(),
         "deleted": uuid4(),
@@ -425,15 +425,15 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
             "recording_url": None,
         },
         {
-            "id": ids["empty_object_active"],
-            "user_id": user_ids["empty_object_active"],
-            "livekit_room_id": "room-empty-object-active",
+            "id": ids["empty_metadata_active"],
+            "user_id": user_ids["empty_metadata_active"],
+            "livekit_room_id": "room-empty-metadata-active",
             "status": "connected",
             "ended_at": None,
             "deleted_at": None,
             "recording_object_key": "",
-            "recording_egress_id": None,
-            "recording_url": None,
+            "recording_egress_id": "",
+            "recording_url": "",
         },
         {
             "id": ids["url_active"],
@@ -538,7 +538,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
             for row in connection.execute(sa.select(calls)).mappings()
         }
 
-    assert set(operation_rows) == set(ids.values())
+    assert set(operation_rows) == set(ids.values()) - {ids["empty_metadata_active"]}
     known = operation_rows[ids["known_terminal"]]
     assert _as_uuid(known["id"]) == ids["known_terminal"]
     assert known["start_state"] == "started"
@@ -555,11 +555,7 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
     assert object_only["stop_requested_at"] is None
     assert object_only["delete_requested_at"] is None
 
-    empty_object = operation_rows[ids["empty_object_active"]]
-    assert empty_object["start_state"] == "uncertain"
-    assert empty_object["expected_object_key"] == (
-        f"calls/{user_ids['empty_object_active']}/{ids['empty_object_active']}.ogg"
-    )
+    assert ids["empty_metadata_active"] not in operation_rows
 
     url_only = operation_rows[ids["url_active"]]
     assert url_only["start_state"] == "uncertain"
@@ -589,10 +585,13 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
     } == {
         ids["known_terminal"],
         ids["object_active"],
-        ids["empty_object_active"],
         ids["url_active"],
         ids["deleted"],
     }
+    assert all(
+        _as_uuid(row["aggregate_id"]) != ids["empty_metadata_active"]
+        for row in reconcile_events
+    )
     for event in reconcile_events:
         operation_id = _as_uuid(event["aggregate_id"])
         assert event["aggregate_type"] == "recording-egress-operation"
@@ -615,6 +614,33 @@ def test_sqlite_migration_backfills_operations_and_reference_only_work() -> None
         assert persisted["recording_url"] == original["recording_url"]
 
     engine.dispose()
+
+
+class _ExecuteOperations:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, statement: object) -> None:
+        self.statements.append(" ".join(str(statement).split()))
+
+
+def test_postgresql_backfill_requires_non_empty_legacy_metadata() -> None:
+    migration = _load_migration()
+    operations = _ExecuteOperations()
+    migration.op = operations
+
+    migration._backfill_postgresql()
+
+    operation_backfill = operations.statements[0]
+    legacy_event_replacement = operations.statements[2]
+    for column in (
+        "recording_object_key",
+        "recording_egress_id",
+        "recording_url",
+    ):
+        predicate = f"NULLIF(calls.{column}, '') IS NOT NULL"
+        assert predicate in operation_backfill
+        assert predicate in legacy_event_replacement
 
 
 def test_sqlite_downgrade_removes_revision_events_and_reupgrade_is_reversible() -> None:
