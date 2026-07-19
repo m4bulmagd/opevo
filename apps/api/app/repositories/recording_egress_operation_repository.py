@@ -1,7 +1,8 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.recording_egress_operation import RecordingEgressOperation
@@ -19,6 +20,25 @@ _START_STATE_ORDER = (
 @dataclass(frozen=True)
 class RecordingOperationObservabilitySnapshot:
     counts: dict[str, int]
+    oldest_unresolved_age_seconds: float
+    pending_stop_count: int
+    oldest_pending_stop_age_seconds: float
+    pending_deletion_count: int
+    oldest_pending_deletion_age_seconds: float
+
+
+def _age_seconds(*, now: datetime, oldest: datetime | None) -> float:
+    if oldest is None:
+        return 0.0
+    normalized_now = (
+        now.replace(tzinfo=UTC) if now.tzinfo is None else now.astimezone(UTC)
+    )
+    normalized_oldest = (
+        oldest.replace(tzinfo=UTC)
+        if oldest.tzinfo is None
+        else oldest.astimezone(UTC)
+    )
+    return max(0.0, (normalized_now - normalized_oldest).total_seconds())
 
 
 class RecordingEgressOperationRepository:
@@ -93,15 +113,75 @@ class RecordingEgressOperationRepository:
 
     async def observability_snapshot(
         self,
+        now: datetime,
     ) -> RecordingOperationObservabilitySnapshot:
         rows = await self.session.execute(
             select(
                 RecordingEgressOperation.start_state,
-                func.count(RecordingEgressOperation.id),
+                func.count(),
             ).group_by(RecordingEgressOperation.start_state)
         )
         counts = {state: 0 for state in _START_STATE_ORDER}
         for state, count in rows:
             if state in counts:
                 counts[state] = int(count)
-        return RecordingOperationObservabilitySnapshot(counts=counts)
+
+        pending_stop = and_(
+            RecordingEgressOperation.stop_requested_at.is_not(None),
+            RecordingEgressOperation.start_state != "not_started",
+            or_(
+                RecordingEgressOperation.provider_terminal_at.is_(None),
+                RecordingEgressOperation.last_error_code
+                == "recording_identity_conflict",
+            ),
+        )
+        unresolved = or_(
+            RecordingEgressOperation.start_state.in_(
+                ("prepared", "starting", "uncertain")
+            ),
+            RecordingEgressOperation.last_error_code.is_not(None),
+            pending_stop,
+            RecordingEgressOperation.delete_requested_at.is_not(None),
+        )
+        pending_deletion = and_(
+            RecordingEgressOperation.delete_requested_at.is_not(None),
+            RecordingEgressOperation.object_deleted_at.is_(None),
+        )
+
+        oldest_unresolved = await self.session.scalar(
+            select(func.min(RecordingEgressOperation.created_at)).where(unresolved)
+        )
+        pending_stop_count, oldest_pending_stop = (
+            await self.session.execute(
+                select(
+                    func.count(),
+                    func.min(RecordingEgressOperation.stop_requested_at),
+                ).where(pending_stop)
+            )
+        ).one()
+        pending_deletion_count, oldest_pending_deletion = (
+            await self.session.execute(
+                select(
+                    func.count(),
+                    func.min(RecordingEgressOperation.delete_requested_at),
+                ).where(pending_deletion)
+            )
+        ).one()
+
+        return RecordingOperationObservabilitySnapshot(
+            counts=counts,
+            oldest_unresolved_age_seconds=_age_seconds(
+                now=now,
+                oldest=oldest_unresolved,
+            ),
+            pending_stop_count=int(pending_stop_count),
+            oldest_pending_stop_age_seconds=_age_seconds(
+                now=now,
+                oldest=oldest_pending_stop,
+            ),
+            pending_deletion_count=int(pending_deletion_count),
+            oldest_pending_deletion_age_seconds=_age_seconds(
+                now=now,
+                oldest=oldest_pending_deletion,
+            ),
+        )

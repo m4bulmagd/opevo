@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import fields
+from datetime import UTC, datetime, timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 import json
 from pathlib import Path
@@ -11,6 +12,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import event as sa_event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +24,7 @@ from app.models.recording_egress_operation import (
 from app.models.user import User
 from app.repositories.recording_egress_operation_repository import (
     RecordingEgressOperationRepository,
+    RecordingOperationObservabilitySnapshot,
 )
 
 
@@ -31,6 +34,7 @@ MIGRATION_PATH = (
     / "versions"
     / "0014_add_recording_egress_operations.py"
 )
+SNAPSHOT_NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 
 
 def _load_migration() -> ModuleType:
@@ -209,7 +213,7 @@ async def test_recording_operation_repository_round_trips_and_counts_states(
     assert await repository.get_by_id_for_update(operation.id) is operation
     assert await repository.get_by_call_id_for_update(call.id) is operation
     assert await repository.get_by_room_name("room-round-trip") is operation
-    assert (await repository.observability_snapshot()).counts == {
+    assert (await repository.observability_snapshot(SNAPSHOT_NOW)).counts == {
         "prepared": 1,
         "starting": 0,
         "started": 0,
@@ -220,7 +224,7 @@ async def test_recording_operation_repository_round_trips_and_counts_states(
     await repository.delete(operation)
 
     assert await repository.get_by_id(operation.id) is None
-    assert (await repository.observability_snapshot()).counts == {
+    assert (await repository.observability_snapshot(SNAPSHOT_NOW)).counts == {
         state: 0 for state in RECORDING_START_STATES
     }
 
@@ -248,9 +252,305 @@ async def test_recording_operation_observability_snapshot_counts_all_start_state
             )
         )
 
-    assert (await repository.observability_snapshot()).counts == {
+    assert (await repository.observability_snapshot(SNAPSHOT_NOW)).counts == {
         state: 1 for state in state_inputs
     }
+
+
+async def _add_snapshot_operation(
+    db_session: AsyncSession,
+    repository: RecordingEgressOperationRepository,
+    *,
+    suffix: str,
+    start_state: str,
+    created_at: datetime,
+    stop_requested_at: datetime | None = None,
+    delete_requested_at: datetime | None = None,
+    provider_terminal_at: datetime | None = None,
+    object_deleted_at: datetime | None = None,
+    last_error_code: str | None = None,
+) -> RecordingEgressOperation:
+    call = await _create_call(db_session, suffix=f"snapshot_contract_{suffix}")
+    operation = _operation(
+        call,
+        room_name=f"room-snapshot-contract-{suffix}",
+        start_state=start_state,
+        provider_egress_id=(
+            f"EG_snapshot_contract_{suffix}" if start_state == "started" else None
+        ),
+    )
+    operation.created_at = created_at
+    operation.updated_at = created_at
+    operation.stop_requested_at = stop_requested_at
+    operation.delete_requested_at = delete_requested_at
+    operation.provider_terminal_at = provider_terminal_at
+    operation.object_deleted_at = object_deleted_at
+    operation.last_error_code = last_error_code
+    await repository.add(operation)
+    return operation
+
+
+@pytest.mark.anyio
+async def test_recording_operation_observability_snapshot_has_exact_empty_shape(
+    db_session: AsyncSession,
+) -> None:
+    snapshot = await RecordingEgressOperationRepository(
+        db_session
+    ).observability_snapshot(SNAPSHOT_NOW)
+
+    assert tuple(field.name for field in fields(RecordingOperationObservabilitySnapshot)) == (
+        "counts",
+        "oldest_unresolved_age_seconds",
+        "pending_stop_count",
+        "oldest_pending_stop_age_seconds",
+        "pending_deletion_count",
+        "oldest_pending_deletion_age_seconds",
+    )
+    assert tuple(snapshot.counts) == (
+        "prepared",
+        "starting",
+        "started",
+        "not_started",
+        "uncertain",
+    )
+    assert snapshot.counts == {
+        "prepared": 0,
+        "starting": 0,
+        "started": 0,
+        "not_started": 0,
+        "uncertain": 0,
+    }
+    assert snapshot.oldest_unresolved_age_seconds == 0.0
+    assert snapshot.pending_stop_count == 0
+    assert snapshot.oldest_pending_stop_age_seconds == 0.0
+    assert snapshot.pending_deletion_count == 0
+    assert snapshot.oldest_pending_deletion_age_seconds == 0.0
+
+
+@pytest.mark.anyio
+async def test_recording_operation_observability_snapshot_uses_exact_predicates_and_clocks(
+    db_session: AsyncSession,
+) -> None:
+    repository = RecordingEgressOperationRepository(db_session)
+
+    def seconds_ago(seconds: int) -> datetime:
+        return SNAPSHOT_NOW - timedelta(seconds=seconds)
+
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="healthy_active",
+        start_state="started",
+        created_at=seconds_ago(2_000),
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="clean_non_start",
+        start_state="not_started",
+        created_at=seconds_ago(1_900),
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="unresolved_prepared",
+        start_state="prepared",
+        created_at=seconds_ago(100),
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="unresolved_starting",
+        start_state="starting",
+        created_at=seconds_ago(200),
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="unresolved_uncertain",
+        start_state="uncertain",
+        created_at=seconds_ago(300),
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="unresolved_error",
+        start_state="started",
+        created_at=seconds_ago(400),
+        last_error_code="recording_unresolved",
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="pending_stop",
+        start_state="started",
+        created_at=seconds_ago(500),
+        stop_requested_at=seconds_ago(50),
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="definitive_non_start",
+        start_state="not_started",
+        created_at=seconds_ago(1_800),
+        stop_requested_at=seconds_ago(900),
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="terminal_identity_conflict",
+        start_state="started",
+        created_at=seconds_ago(600),
+        stop_requested_at=seconds_ago(80),
+        provider_terminal_at=seconds_ago(20),
+        last_error_code="recording_identity_conflict",
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="terminal_stop_satisfied",
+        start_state="started",
+        created_at=seconds_ago(1_700),
+        stop_requested_at=seconds_ago(1_000),
+        provider_terminal_at=seconds_ago(900),
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="pending_deletion",
+        start_state="not_started",
+        created_at=seconds_ago(700),
+        stop_requested_at=seconds_ago(80),
+        delete_requested_at=seconds_ago(70),
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="deleted_object_row_retained",
+        start_state="not_started",
+        created_at=seconds_ago(800),
+        stop_requested_at=seconds_ago(100),
+        delete_requested_at=seconds_ago(90),
+        object_deleted_at=seconds_ago(30),
+    )
+
+    snapshot = await repository.observability_snapshot(SNAPSHOT_NOW)
+
+    assert snapshot.counts == {
+        "prepared": 1,
+        "starting": 1,
+        "started": 5,
+        "not_started": 4,
+        "uncertain": 1,
+    }
+    assert snapshot.oldest_unresolved_age_seconds == 800.0
+    assert snapshot.pending_stop_count == 2
+    assert snapshot.oldest_pending_stop_age_seconds == 80.0
+    assert snapshot.pending_deletion_count == 1
+    assert snapshot.oldest_pending_deletion_age_seconds == 70.0
+
+
+@pytest.mark.anyio
+async def test_recording_operation_observability_snapshot_returns_zero_for_no_matches(
+    db_session: AsyncSession,
+) -> None:
+    repository = RecordingEgressOperationRepository(db_session)
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="resolved_started",
+        start_state="started",
+        created_at=SNAPSHOT_NOW - timedelta(days=30),
+    )
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="resolved_not_started",
+        start_state="not_started",
+        created_at=SNAPSHOT_NOW - timedelta(days=30),
+        stop_requested_at=SNAPSHOT_NOW - timedelta(days=29),
+    )
+
+    snapshot = await repository.observability_snapshot(SNAPSHOT_NOW)
+
+    assert snapshot.oldest_unresolved_age_seconds == 0.0
+    assert snapshot.pending_stop_count == 0
+    assert snapshot.oldest_pending_stop_age_seconds == 0.0
+    assert snapshot.pending_deletion_count == 0
+    assert snapshot.oldest_pending_deletion_age_seconds == 0.0
+
+
+@pytest.mark.anyio
+async def test_recording_operation_observability_snapshot_normalizes_naive_utc_and_clamps_future_ages(
+    db_session: AsyncSession,
+) -> None:
+    repository = RecordingEgressOperationRepository(db_session)
+    future = SNAPSHOT_NOW + timedelta(seconds=30)
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="future_pending_cleanup",
+        start_state="started",
+        created_at=future,
+        stop_requested_at=future,
+        delete_requested_at=future,
+    )
+
+    snapshot = await repository.observability_snapshot(SNAPSHOT_NOW.replace(tzinfo=None))
+
+    assert snapshot.oldest_unresolved_age_seconds == 0.0
+    assert snapshot.pending_stop_count == 1
+    assert snapshot.oldest_pending_stop_age_seconds == 0.0
+    assert snapshot.pending_deletion_count == 1
+    assert snapshot.oldest_pending_deletion_age_seconds == 0.0
+
+
+@pytest.mark.anyio
+async def test_recording_operation_observability_snapshot_does_not_select_identities(
+    db_session: AsyncSession,
+) -> None:
+    repository = RecordingEgressOperationRepository(db_session)
+    await _add_snapshot_operation(
+        db_session,
+        repository,
+        suffix="privacy_sentinel",
+        start_state="prepared",
+        created_at=SNAPSHOT_NOW - timedelta(seconds=10),
+    )
+    statements: list[str] = []
+    engine = db_session.bind
+    assert engine is not None
+
+    def capture_statement(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        statements.append(statement.lower())
+
+    sa_event.listen(engine.sync_engine, "before_cursor_execute", capture_statement)
+    try:
+        await repository.observability_snapshot(SNAPSHOT_NOW)
+    finally:
+        sa_event.remove(
+            engine.sync_engine,
+            "before_cursor_execute",
+            capture_statement,
+        )
+
+    assert statements
+    rendered_sql = "\n".join(statements)
+    for forbidden_column in (
+        "recording_egress_operations.id",
+        "recording_egress_operations.call_id",
+        "recording_egress_operations.room_name",
+        "recording_egress_operations.expected_object_key",
+        "recording_egress_operations.provider_egress_id",
+    ):
+        assert forbidden_column not in rendered_sql
 
 
 @pytest.mark.anyio
