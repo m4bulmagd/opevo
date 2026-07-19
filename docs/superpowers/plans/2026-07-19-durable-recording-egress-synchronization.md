@@ -1133,7 +1133,11 @@ customer/provider values as labels.
      projection at most;
   6. two exact matches: neither can become the playback projection;
   7. concurrent repeated deletion: one operation and one delete idempotency key;
-  8. an active outbox processing lease is not stolen by stop acceleration.
+  8. an active outbox processing lease is not stolen by stop acceleration;
+  9. two stale listing workers restoring exact evidence after reclaimed cleanup:
+     the call lock serializes restoration, one operation and one recovery event
+     remain, the stored/observed identity union is stopped, and a later durable
+     call tombstone restores deletion intent without replacing an earlier stop.
 
 ```python
 assert provider.start_count == 1
