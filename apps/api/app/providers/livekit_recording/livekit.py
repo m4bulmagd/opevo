@@ -649,6 +649,7 @@ class LiveKitRecordingProvider(RecordingProvider):
             url=f"{self.endpoint_url}/{self.bucket_name}/{object_key}",
         )
 
+    @instrument_provider("livekit", "list_recording_egresses")
     async def list_room_egresses(
         self,
         *,
