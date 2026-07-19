@@ -265,7 +265,9 @@ async def handle_livekit_webhook(
 
         if event_type in EGRESS_EVENT_TYPES:
             egress = event_payload.get("egress", {})
-            await RecordingLifecycleService(session).accept_egress_event(
+            lifecycle_outcome = await RecordingLifecycleService(
+                session
+            ).accept_egress_event(
                 RecordingEgressEventFact(
                     external_event_id=event_id,
                     event_type=cast(
@@ -284,6 +286,8 @@ async def handle_livekit_webhook(
                 )
             )
             await session.commit()
+            if lifecycle_outcome in {"missing", "mismatch", "conflict"}:
+                telemetry.record_recording_webhook_mismatch(lifecycle_outcome)
             await _best_effort_outbox_wakeup(request)
         elif event_type in ("participant_joined", "participant_left"):
             service = LiveKitDispatchService(

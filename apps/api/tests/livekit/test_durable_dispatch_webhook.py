@@ -1,10 +1,13 @@
+import logging
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 
 import pytest
 from livekit import api
+from opentelemetry import metrics, trace
 from sqlalchemy import func, select
 
+from app.core.observability import Observability
 from app.models.call import Call
 from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.webhook_event import WebhookEvent
@@ -26,9 +29,19 @@ from app.webhooks.livekit import (
 class _Request:
     headers = {"authorization": "Bearer signed"}
 
-    def __init__(self, *, arq_pool=None, settings=None) -> None:
+    def __init__(
+        self,
+        *,
+        arq_pool=None,
+        settings=None,
+        observability=None,
+    ) -> None:
         self.app = SimpleNamespace(
-            state=SimpleNamespace(arq_pool=arq_pool, settings=settings)
+            state=SimpleNamespace(
+                arq_pool=arq_pool,
+                settings=settings,
+                observability=observability,
+            )
         )
 
     async def body(self) -> bytes:
@@ -41,6 +54,39 @@ class _Receiver:
 
     def receive(self, _body, _authorization):
         return self.event
+
+
+class _RejectingReceiver:
+    def receive(self, _body, _authorization):
+        raise ValueError("synthetic invalid signature")
+
+
+class _RecordingTelemetry:
+    def __init__(self, *, order: list[str] | None = None) -> None:
+        self.order = order
+        self.mismatch_categories: list[str] = []
+        self.webhooks: list[tuple[str, str]] = []
+
+    def record_recording_webhook_mismatch(self, category: str) -> None:
+        if self.order is not None:
+            self.order.append("mismatch_metric")
+        self.mismatch_categories.append(category)
+
+    def record_webhook(
+        self,
+        provider: str,
+        outcome: str,
+        _duration_seconds: float,
+    ) -> None:
+        self.webhooks.append((provider, outcome))
+
+
+class _ThrowingCounter:
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    def add(self, _value: int, _attributes: dict) -> None:
+        raise RuntimeError(self.message)
 
 
 class _SessionWithoutWrites:
@@ -1491,8 +1537,9 @@ def test_livekit_event_type_log_value_is_allow_listed() -> None:
 @pytest.mark.anyio
 async def test_missing_event_id_fails_closed_without_commit_or_business_logic() -> None:
     session = _SessionWithoutWrites()
+    telemetry = _RecordingTelemetry()
     response = await handle_livekit_webhook(
-        _Request(),
+        _Request(observability=telemetry),
         session=session,
         webhook_receiver=_Receiver(
             {
@@ -1506,6 +1553,23 @@ async def test_missing_event_id_fails_closed_without_commit_or_business_logic() 
 
     assert response.status_code == 202
     assert session.commits == 0
+    assert telemetry.mismatch_categories == []
+
+
+@pytest.mark.anyio
+async def test_invalid_signature_never_emits_recording_mismatch() -> None:
+    telemetry = _RecordingTelemetry()
+
+    with pytest.raises(ValueError, match="synthetic invalid signature"):
+        await handle_livekit_webhook(
+            _Request(observability=telemetry),
+            session=_SessionWithoutWrites(),
+            webhook_receiver=_RejectingReceiver(),
+            realtime_service=None,
+        )
+
+    assert telemetry.mismatch_categories == []
+    assert telemetry.webhooks == [("livekit", "rejected")]
 
 
 @pytest.mark.anyio
@@ -1548,17 +1612,18 @@ async def test_signed_exact_egress_is_atomic_empty_payload_and_wakes_once(
 ) -> None:
     call, operation = await _starting_recording(db_session, active_user)
     pool = _Pool()
+    telemetry = _RecordingTelemetry()
     provider_calls = _forbid_provider_and_storage_io(monkeypatch)
     event = _egress_event(object_key=operation.expected_object_key)
 
     first = await handle_livekit_webhook(
-        _Request(arq_pool=pool, settings=settings),
+        _Request(arq_pool=pool, settings=settings, observability=telemetry),
         session=db_session,
         webhook_receiver=_Receiver(event),
         realtime_service=None,
     )
     second = await handle_livekit_webhook(
-        _Request(arq_pool=pool, settings=settings),
+        _Request(arq_pool=pool, settings=settings, observability=telemetry),
         session=db_session,
         webhook_receiver=_Receiver(event),
         realtime_service=None,
@@ -1578,19 +1643,41 @@ async def test_signed_exact_egress_is_atomic_empty_payload_and_wakes_once(
     assert stored.payload == {}
     assert pool.jobs == [("outbox_delivery_job", {})]
     assert provider_calls == {"recording": 0, "storage": 0}
+    assert telemetry.mismatch_categories == []
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    "event",
+    ("event", "expected_category"),
     [
-        _egress_event(egress_id="", object_key="calls/ignored.ogg"),
-        _egress_event(egress_id="bad\x00id", object_key="calls/ignored.ogg"),
-        _egress_event(egress_id="E" * 256, object_key="calls/ignored.ogg"),
-        _egress_event(egress_status=True, object_key="calls/ignored.ogg"),
-        _egress_event(egress_status=7, object_key="calls/ignored.ogg"),
-        _egress_event(room_name="wrong-room", object_key="calls/ignored.ogg"),
-        _egress_event(object_key="calls/wrong.ogg"),
+        (_egress_event(egress_id="", object_key="calls/ignored.ogg"), "missing"),
+        (
+            _egress_event(egress_id="bad\x00id", object_key="calls/ignored.ogg"),
+            "missing",
+        ),
+        (
+            _egress_event(egress_id="E" * 256, object_key="calls/ignored.ogg"),
+            "missing",
+        ),
+        (
+            _egress_event(egress_status=True, object_key="calls/ignored.ogg"),
+            "missing",
+        ),
+        (
+            _egress_event(egress_status=7, object_key="calls/ignored.ogg"),
+            "missing",
+        ),
+        (
+            _egress_event(
+                room_name="PRIVATE_ROOM_SENTINEL",
+                object_key="PRIVATE_OBJECT_KEY_SENTINEL",
+            ),
+            "missing",
+        ),
+        (
+            _egress_event(object_key="PRIVATE_OBJECT_KEY_SENTINEL"),
+            "mismatch",
+        ),
     ],
 )
 async def test_signed_missing_or_mismatched_egress_is_safe_and_still_acknowledged(
@@ -1599,13 +1686,15 @@ async def test_signed_missing_or_mismatched_egress_is_safe_and_still_acknowledge
     settings,
     monkeypatch: pytest.MonkeyPatch,
     event: dict,
+    expected_category: str,
 ) -> None:
     call, operation = await _starting_recording(db_session, active_user)
     pool = _Pool()
+    telemetry = _RecordingTelemetry()
     provider_calls = _forbid_provider_and_storage_io(monkeypatch)
 
     response = await handle_livekit_webhook(
-        _Request(arq_pool=pool, settings=settings),
+        _Request(arq_pool=pool, settings=settings, observability=telemetry),
         session=db_session,
         webhook_receiver=_Receiver(event),
         realtime_service=None,
@@ -1623,6 +1712,9 @@ async def test_signed_missing_or_mismatched_egress_is_safe_and_still_acknowledge
     assert stored.payload == {}
     assert pool.jobs == [("outbox_delivery_job", {})]
     assert provider_calls == {"recording": 0, "storage": 0}
+    assert telemetry.mismatch_categories == [expected_category]
+    assert "PRIVATE_ROOM_SENTINEL" not in repr(telemetry.mismatch_categories)
+    assert "PRIVATE_OBJECT_KEY_SENTINEL" not in repr(telemetry.mismatch_categories)
 
 
 @pytest.mark.anyio
@@ -1763,10 +1855,11 @@ async def test_signed_conflict_hides_projection_and_terminal_event_records_fact(
     )
     await db_session.commit()
     pool = _Pool()
+    telemetry = _RecordingTelemetry()
     provider_calls = _forbid_provider_and_storage_io(monkeypatch)
 
     conflict = await handle_livekit_webhook(
-        _Request(arq_pool=pool, settings=settings),
+        _Request(arq_pool=pool, settings=settings, observability=telemetry),
         session=db_session,
         webhook_receiver=_Receiver(
             _egress_event(
@@ -1778,7 +1871,7 @@ async def test_signed_conflict_hides_projection_and_terminal_event_records_fact(
         realtime_service=None,
     )
     terminal = await handle_livekit_webhook(
-        _Request(arq_pool=pool, settings=settings),
+        _Request(arq_pool=pool, settings=settings, observability=telemetry),
         session=db_session,
         webhook_receiver=_Receiver(
             _egress_event(
@@ -1808,6 +1901,7 @@ async def test_signed_conflict_hides_projection_and_terminal_event_records_fact(
         ("outbox_delivery_job", {}),
     ]
     assert provider_calls == {"recording": 0, "storage": 0}
+    assert telemetry.mismatch_categories == ["conflict", "conflict"]
 
 
 @pytest.mark.anyio
@@ -1820,6 +1914,7 @@ async def test_signed_egress_rolls_back_generic_and_business_mutation_together(
     _call_row, operation = await _starting_recording(db_session, active_user)
     operation_id = operation.id
     expected_object_key = operation.expected_object_key
+    telemetry = _RecordingTelemetry()
     provider_calls = _forbid_provider_and_storage_io(monkeypatch)
 
     async def mutate_then_fail(self, _fact):
@@ -1837,7 +1932,11 @@ async def test_signed_egress_rolls_back_generic_and_business_mutation_together(
 
     with pytest.raises(RuntimeError, match="lifecycle failed"):
         await handle_livekit_webhook(
-            _Request(arq_pool=_Pool(), settings=settings),
+            _Request(
+                arq_pool=_Pool(),
+                settings=settings,
+                observability=telemetry,
+            ),
             session=db_session,
             webhook_receiver=_Receiver(_egress_event(object_key=expected_object_key)),
             realtime_service=None,
@@ -1849,6 +1948,7 @@ async def test_signed_egress_rolls_back_generic_and_business_mutation_together(
     assert stored_operation.last_error_code is None
     assert await db_session.scalar(select(func.count()).select_from(WebhookEvent)) == 0
     assert provider_calls == {"recording": 0, "storage": 0}
+    assert telemetry.mismatch_categories == []
 
 
 @pytest.mark.anyio
@@ -1876,6 +1976,50 @@ async def test_signed_egress_queue_failure_keeps_committed_sql_authoritative(
     assert operation.provider_egress_id == "EG_exact"
     assert await db_session.scalar(select(func.count()).select_from(WebhookEvent)) == 1
     assert pool.jobs == [("outbox_delivery_job", {})]
+    assert provider_calls == {"recording": 0, "storage": 0}
+
+
+@pytest.mark.anyio
+async def test_signed_egress_metric_export_failure_keeps_committed_sql_and_202(
+    db_session,
+    active_user,
+    settings,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _call_row, operation = await _starting_recording(db_session, active_user)
+    operation_id = operation.id
+    provider_calls = _forbid_provider_and_storage_io(monkeypatch)
+    private_failure = "PRIVATE_RECORDING_METRIC_EXPORT_FAILURE"
+    telemetry = Observability(
+        meter=metrics.get_meter("presvo-test-livekit-webhook"),
+        tracer=trace.get_tracer("presvo-test-livekit-webhook"),
+    )
+    telemetry.recording_webhook_mismatches = _ThrowingCounter(private_failure)
+
+    with caplog.at_level(logging.WARNING):
+        response = await handle_livekit_webhook(
+            _Request(
+                arq_pool=_Pool(),
+                settings=settings,
+                observability=telemetry,
+            ),
+            session=db_session,
+            webhook_receiver=_Receiver(
+                _egress_event(object_key="PRIVATE_OBJECT_KEY_SENTINEL")
+            ),
+            realtime_service=None,
+        )
+
+    assert response.status_code == 202
+    db_session.expire_all()
+    stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
+    assert stored_operation is not None
+    assert stored_operation.start_state == "starting"
+    assert await db_session.scalar(select(func.count()).select_from(WebhookEvent)) == 1
+    assert "event=observability_metric_record_failed" in caplog.text
+    assert private_failure not in caplog.text
+    assert "PRIVATE_OBJECT_KEY_SENTINEL" not in caplog.text
     assert provider_calls == {"recording": 0, "storage": 0}
 
 
@@ -1920,13 +2064,13 @@ async def test_signed_egress_uses_app_bound_nondefault_storage_normalization(
 
 
 @pytest.mark.anyio
-async def test_signed_egress_orders_generic_lifecycle_commit_then_wake(
+async def test_signed_egress_orders_generic_lifecycle_commit_metric_then_wake(
     db_session,
     active_user,
     settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _call_row, operation = await _starting_recording(db_session, active_user)
+    _call_row, _operation = await _starting_recording(db_session, active_user)
     provider_calls = _forbid_provider_and_storage_io(monkeypatch)
     order: list[str] = []
     original_record = WebhookEventRepository.record_if_new
@@ -1958,18 +2102,27 @@ async def test_signed_egress_orders_generic_lifecycle_commit_then_wake(
     )
     monkeypatch.setattr(db_session, "commit", ordered_commit)
     pool = OrderedPool()
+    telemetry = _RecordingTelemetry(order=order)
 
     response = await handle_livekit_webhook(
-        _Request(arq_pool=pool, settings=settings),
+        _Request(arq_pool=pool, settings=settings, observability=telemetry),
         session=db_session,
         webhook_receiver=_Receiver(
-            _egress_event(object_key=operation.expected_object_key)
+            _egress_event(object_key="PRIVATE_OBJECT_KEY_SENTINEL")
         ),
         realtime_service=None,
     )
 
     assert response.status_code == 202
-    assert order == ["generic", "lifecycle", "commit", "wake"]
+    assert order == [
+        "generic",
+        "lifecycle",
+        "commit",
+        "mismatch_metric",
+        "wake",
+    ]
+    assert telemetry.mismatch_categories == ["mismatch"]
+    assert "PRIVATE_OBJECT_KEY_SENTINEL" not in repr(telemetry.mismatch_categories)
     assert provider_calls == {"recording": 0, "storage": 0}
 
 
@@ -1982,7 +2135,7 @@ async def test_signed_egress_commit_failure_rolls_back_whole_transaction(
 ) -> None:
     _call_row, operation = await _starting_recording(db_session, active_user)
     operation_id = operation.id
-    expected_object_key = operation.expected_object_key
+    telemetry = _RecordingTelemetry()
     provider_calls = _forbid_provider_and_storage_io(monkeypatch)
 
     async def fail_commit() -> None:
@@ -1992,9 +2145,15 @@ async def test_signed_egress_commit_failure_rolls_back_whole_transaction(
 
     with pytest.raises(RuntimeError, match="commit failed"):
         await handle_livekit_webhook(
-            _Request(arq_pool=_Pool(), settings=settings),
+            _Request(
+                arq_pool=_Pool(),
+                settings=settings,
+                observability=telemetry,
+            ),
             session=db_session,
-            webhook_receiver=_Receiver(_egress_event(object_key=expected_object_key)),
+            webhook_receiver=_Receiver(
+                _egress_event(object_key="PRIVATE_OBJECT_KEY_SENTINEL")
+            ),
             realtime_service=None,
         )
 
@@ -2005,6 +2164,7 @@ async def test_signed_egress_commit_failure_rolls_back_whole_transaction(
     assert stored_operation.provider_egress_id is None
     assert await db_session.scalar(select(func.count()).select_from(WebhookEvent)) == 0
     assert provider_calls == {"recording": 0, "storage": 0}
+    assert telemetry.mismatch_categories == []
 
 
 @pytest.mark.anyio
@@ -2017,6 +2177,7 @@ async def test_signed_egress_lifecycle_flush_failure_rolls_back_whole_transactio
     _call_row, operation = await _starting_recording(db_session, active_user)
     operation_id = operation.id
     expected_object_key = operation.expected_object_key
+    telemetry = _RecordingTelemetry()
     provider_calls = _forbid_provider_and_storage_io(monkeypatch)
     original_flush = db_session.flush
     flush_count = 0
@@ -2033,7 +2194,7 @@ async def test_signed_egress_lifecycle_flush_failure_rolls_back_whole_transactio
 
     with pytest.raises(RuntimeError, match="lifecycle flush failed"):
         await handle_livekit_webhook(
-            _Request(arq_pool=pool, settings=settings),
+            _Request(arq_pool=pool, settings=settings, observability=telemetry),
             session=db_session,
             webhook_receiver=_Receiver(_egress_event(object_key=expected_object_key)),
             realtime_service=None,
@@ -2047,6 +2208,7 @@ async def test_signed_egress_lifecycle_flush_failure_rolls_back_whole_transactio
     assert await db_session.scalar(select(func.count()).select_from(WebhookEvent)) == 0
     assert pool.jobs == []
     assert provider_calls == {"recording": 0, "storage": 0}
+    assert telemetry.mismatch_categories == []
 
 
 @pytest.mark.anyio
