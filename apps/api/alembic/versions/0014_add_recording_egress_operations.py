@@ -88,9 +88,9 @@ def _replacement_suffix(row: sa.RowMapping) -> str | None:
         return "delete"
     if row["status"] in _TERMINAL_CALL_STATES:
         return "stop"
-    if (
-        row["status"] in _ACTIVE_CALL_STATES
-        and row["recording_egress_id"] is None
+    if row["status"] in _ACTIVE_CALL_STATES and row["recording_egress_id"] in (
+        None,
+        "",
     ):
         return "start"
     return None
@@ -100,59 +100,61 @@ def _backfill_sqlite(bind: Connection) -> None:
     calls = _legacy_calls()
     operations = _recording_operations()
     outbox = _outbox_events()
-    rows = bind.execute(
-        sa.select(
-            calls.c.id,
-            calls.c.user_id,
-            calls.c.livekit_room_id,
-            calls.c.status,
-            calls.c.ended_at,
-            calls.c.deleted_at,
-            calls.c.recording_object_key,
-            calls.c.recording_egress_id,
-            calls.c.recording_url,
-        ).where(
-            sa.or_(
-                sa.and_(
-                    calls.c.recording_object_key.is_not(None),
-                    calls.c.recording_object_key != "",
-                ),
-                sa.and_(
-                    calls.c.recording_egress_id.is_not(None),
-                    calls.c.recording_egress_id != "",
-                ),
-                sa.and_(
-                    calls.c.recording_url.is_not(None),
-                    calls.c.recording_url != "",
-                ),
+    rows = (
+        bind.execute(
+            sa.select(
+                calls.c.id,
+                calls.c.user_id,
+                calls.c.livekit_room_id,
+                calls.c.status,
+                calls.c.ended_at,
+                calls.c.deleted_at,
+                calls.c.recording_object_key,
+                calls.c.recording_egress_id,
+                calls.c.recording_url,
+            ).where(
+                sa.or_(
+                    sa.and_(
+                        calls.c.recording_object_key.is_not(None),
+                        calls.c.recording_object_key != "",
+                    ),
+                    sa.and_(
+                        calls.c.recording_egress_id.is_not(None),
+                        calls.c.recording_egress_id != "",
+                    ),
+                    sa.and_(
+                        calls.c.recording_url.is_not(None),
+                        calls.c.recording_url != "",
+                    ),
+                )
             )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     migrated_at = datetime.now(UTC)
 
     for row in rows:
         operation_id = row["id"]
         is_deleted = row["deleted_at"] is not None
         is_terminal = row["status"] in _TERMINAL_CALL_STATES
+        room_name = row["livekit_room_id"] or None
+        provider_egress_id = row["recording_egress_id"] or None
         expected_object_key = row["recording_object_key"] or (
             f"calls/{row['user_id']}/{row['id']}.ogg"
         )
-        start_state = (
-            "started" if row["recording_egress_id"] is not None else "uncertain"
-        )
+        start_state = "started" if provider_egress_id is not None else "uncertain"
         stop_requested_at = None
         if is_terminal or is_deleted:
-            stop_requested_at = (
-                row["ended_at"] or row["deleted_at"] or migrated_at
-            )
+            stop_requested_at = row["ended_at"] or row["deleted_at"] or migrated_at
         bind.execute(
             operations.insert().values(
                 id=operation_id,
                 call_id=row["id"],
-                room_name=row["livekit_room_id"],
-                legacy_incomplete=row["livekit_room_id"] is None,
+                room_name=room_name,
+                legacy_incomplete=room_name is None,
                 expected_object_key=expected_object_key,
-                provider_egress_id=row["recording_egress_id"],
+                provider_egress_id=provider_egress_id,
                 start_state=start_state,
                 start_attempted_at=None,
                 stop_requested_at=stop_requested_at,
@@ -221,15 +223,16 @@ def _backfill_postgresql() -> None:
             SELECT
                 calls.id,
                 calls.id,
-                calls.livekit_room_id,
-                calls.livekit_room_id IS NULL,
+                NULLIF(calls.livekit_room_id, ''),
+                NULLIF(calls.livekit_room_id, '') IS NULL,
                 COALESCE(
                     NULLIF(calls.recording_object_key, ''),
                     'calls/' || calls.user_id::text || '/' || calls.id::text || '.ogg'
                 ),
-                calls.recording_egress_id,
+                NULLIF(calls.recording_egress_id, ''),
                 CASE
-                    WHEN calls.recording_egress_id IS NOT NULL THEN 'started'
+                    WHEN NULLIF(calls.recording_egress_id, '') IS NOT NULL
+                    THEN 'started'
                     ELSE 'uncertain'
                 END,
                 NULL,
@@ -302,7 +305,7 @@ def _backfill_postgresql() -> None:
                 OR calls.status IN ('completed', 'failed')
                 OR (
                     calls.status IN ('pending', 'connected', 'ending', 'finalizing')
-                    AND calls.recording_egress_id IS NULL
+                    AND NULLIF(calls.recording_egress_id, '') IS NULL
                 )
             """
         )
@@ -320,7 +323,7 @@ def _backfill_postgresql() -> None:
                     OR calls.status IN ('completed', 'failed')
                     OR (
                         calls.status IN ('pending', 'connected', 'ending', 'finalizing')
-                        AND calls.recording_egress_id IS NULL
+                        AND NULLIF(calls.recording_egress_id, '') IS NULL
                     )
                 )
                 AND (
@@ -374,9 +377,7 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "(start_state = 'started' AND provider_egress_id IS NOT NULL) OR "
             "(start_state <> 'started' AND provider_egress_id IS NULL)",
-            name=op.f(
-                "ck_recording_egress_operations_provider_identity_consistent"
-            ),
+            name=op.f("ck_recording_egress_operations_provider_identity_consistent"),
         ),
         sa.CheckConstraint(
             "(legacy_incomplete = false AND room_name IS NOT NULL) OR "
@@ -386,9 +387,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "start_state <> 'prepared' OR start_attempted_at IS NULL",
-            name=op.f(
-                "ck_recording_egress_operations_prepared_attempt_consistent"
-            ),
+            name=op.f("ck_recording_egress_operations_prepared_attempt_consistent"),
         ),
         sa.CheckConstraint(
             "delete_requested_at IS NULL OR stop_requested_at IS NOT NULL",
@@ -396,9 +395,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "object_deleted_at IS NULL OR delete_requested_at IS NOT NULL",
-            name=op.f(
-                "ck_recording_egress_operations_object_delete_implies_request"
-            ),
+            name=op.f("ck_recording_egress_operations_object_delete_implies_request"),
         ),
         sa.ForeignKeyConstraint(
             ["call_id"],
