@@ -33,6 +33,7 @@ _ALIAS_CONFLICT = object()
 _ALIAS_MAX_DEPTH = 12
 _ALIAS_MAX_NODES = 256
 _LIVEKIT_REPEATED_MAX_ITEMS = 64
+_SAFE_ALIAS_LEAF_TYPES = frozenset({type(None), bool, int, float, str, bytes})
 _LIVEKIT_ALIAS_NAMES = {
     "egressInfo": "egress_info",
     "egressId": "egress_id",
@@ -71,13 +72,12 @@ class _AliasTraversal:
 
 
 def _raw_values_agree(left: object, right: object) -> bool:
-    if type(left) is not type(right):
+    value_type = type(left)
+    if value_type is not type(right):
         return False
-    try:
-        result = left == right
-    except Exception:
-        return False
-    return type(result) is bool and result
+    if value_type not in _SAFE_ALIAS_LEAF_TYPES:
+        return left is right
+    return left == right
 
 
 def _canonical_values_equivalent(left: object, right: object) -> bool:
@@ -207,29 +207,48 @@ def livekit_alias_values_equivalent(left: object, right: object) -> bool:
 def livekit_field_is_present(value: object, name: str) -> bool:
     """Honor protobuf message presence without probing proto3 scalars."""
     descriptor = getattr(value, "DESCRIPTOR", None)
-    fields_by_name = getattr(descriptor, "fields_by_name", None)
-    field = fields_by_name.get(name) if fields_by_name is not None else None
-    if field is None or not getattr(field, "has_presence", False):
+    if descriptor is None:
         return True
-    has_field = getattr(value, "HasField", None)
+    fields_by_name = getattr(descriptor, "fields_by_name")
+    field = fields_by_name.get(name)
+    if field is None:
+        return True
+    has_presence = getattr(field, "has_presence")
+    if type(has_presence) is not bool:
+        raise TypeError("Invalid protobuf field presence metadata")
+    if not has_presence:
+        return True
+    has_field = getattr(value, "HasField")
     if not callable(has_field):
-        return False
-    try:
-        presence = has_field(name)
-    except (TypeError, ValueError):
-        return False
-    return type(presence) is bool and presence
+        raise TypeError("Invalid protobuf presence probe")
+    presence = has_field(name)
+    if type(presence) is not bool:
+        raise TypeError("Invalid protobuf presence result")
+    return presence
 
 
 def _field(value: object, *names: str) -> object:
+    candidates: list[object] = []
     if isinstance(value, Mapping):
-        candidates = [value[name] for name in names if name in value]
-    else:
-        candidates = []
         for name in names:
-            candidate = getattr(value, name, _MISSING)
-            if candidate is not _MISSING and livekit_field_is_present(value, name):
-                candidates.append(candidate)
+            try:
+                candidate = value[name]
+            except KeyError:
+                continue
+            except Exception:
+                return _ALIAS_CONFLICT
+            candidates.append(candidate)
+    else:
+        for name in names:
+            try:
+                candidate = getattr(value, name, _MISSING)
+                if candidate is _MISSING:
+                    continue
+                if not livekit_field_is_present(value, name):
+                    continue
+            except Exception:
+                return _ALIAS_CONFLICT
+            candidates.append(candidate)
     if not candidates:
         return _MISSING
     first = candidates[0]
@@ -339,14 +358,18 @@ def _file_info_path_evidence(
     filename = _bounded_nonempty_string(filename_value, max_length=512)
     if filename is not None:
         return EgressObjectKeyEvidence("exact", filename)
-    if filename_value is not _MISSING and filename_value != "":
+    if filename_value is not _MISSING and not (
+        type(filename_value) is str and filename_value == ""
+    ):
         return EgressObjectKeyEvidence("invalid")
     location_value = _field(file_info, "location")
     if location_value is _ALIAS_CONFLICT:
         return EgressObjectKeyEvidence("invalid")
     location = _bounded_nonempty_string(location_value, max_length=2048)
     if location is None:
-        if location_value is not _MISSING and location_value != "":
+        if location_value is not _MISSING and not (
+            type(location_value) is str and location_value == ""
+        ):
             return EgressObjectKeyEvidence("invalid")
         return EgressObjectKeyEvidence("invalid")
     object_key = _location_object_key(

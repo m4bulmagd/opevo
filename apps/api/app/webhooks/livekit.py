@@ -52,14 +52,27 @@ class _ConvertedLiveKitEvent:
 
 
 def _field(value: object, *names: str) -> object:
+    candidates: list[object] = []
     if isinstance(value, Mapping):
-        candidates = [value[name] for name in names if name in value]
-    else:
-        candidates = []
         for name in names:
-            candidate = getattr(value, name, _MISSING)
-            if candidate is not _MISSING and livekit_field_is_present(value, name):
-                candidates.append(candidate)
+            try:
+                candidate = value[name]
+            except KeyError:
+                continue
+            except Exception:
+                return _ALIAS_CONFLICT
+            candidates.append(candidate)
+    else:
+        for name in names:
+            try:
+                candidate = getattr(value, name, _MISSING)
+                if candidate is _MISSING:
+                    continue
+                if not livekit_field_is_present(value, name):
+                    continue
+            except Exception:
+                return _ALIAS_CONFLICT
+            candidates.append(candidate)
     if not candidates:
         return _MISSING
     first = candidates[0]

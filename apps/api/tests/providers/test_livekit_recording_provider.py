@@ -124,6 +124,48 @@ class _InfiniteLikeRepeated:
         return {"filename": "calls/user-1/call-1.ogg"}
 
 
+class _ProviderAbort(BaseException):
+    pass
+
+
+class _SdkRecordAccessFailure:
+    def __init__(self, *, failure_type: type[BaseException] = RuntimeError) -> None:
+        self.room_name = "room-owned"
+        self.status = int(api.EgressStatus.EGRESS_ACTIVE)
+        self.failure_type = failure_type
+
+    @property
+    def egress_id(self) -> str:
+        raise self.failure_type("SDK identity attribute unavailable")
+
+
+class _ProviderDescriptorAccessFailure:
+    egress_id = "EG_exact"
+    room_name = "room-owned"
+    status = int(api.EgressStatus.EGRESS_ACTIVE)
+
+    @property
+    def DESCRIPTOR(self) -> object:
+        raise RuntimeError("protobuf descriptor unavailable")
+
+
+class _ProviderPresenceProbeFailure:
+    DESCRIPTOR = SimpleNamespace(
+        fields_by_name={
+            "egress_id": SimpleNamespace(has_presence=True),
+        }
+    )
+    egress_id = "EG_exact"
+    room_name = "room-owned"
+    status = int(api.EgressStatus.EGRESS_ACTIVE)
+
+    def __init__(self, *, failure_type: type[BaseException] = RuntimeError) -> None:
+        self.failure_type = failure_type
+
+    def HasField(self, _name: str) -> bool:
+        raise self.failure_type("protobuf presence unavailable")
+
+
 def twirp_error(*, code: str, status: int) -> api.TwirpError:
     return api.TwirpError(code, "provider detail must not escape", status=status)
 
@@ -774,6 +816,45 @@ async def test_list_room_egresses_rejects_int_subclass_status() -> None:
 
     assert exc_info.value.category == "provider_retryable"
     assert exc_info.value.error_class == "unknown"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "item",
+    [
+        _SdkRecordAccessFailure(),
+        _ProviderDescriptorAccessFailure(),
+        _ProviderPresenceProbeFailure(),
+    ],
+)
+async def test_list_room_egresses_contains_record_accessor_errors(
+    item: object,
+) -> None:
+    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+        await build_provider(FakeRoomListEgressClient([item])).list_room_egresses(
+            room_name="room-owned"
+        )
+
+    assert exc_info.value.category == "provider_retryable"
+    assert exc_info.value.error_class == "unknown"
+    assert str(exc_info.value) == "provider_retryable"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "item",
+    [
+        _SdkRecordAccessFailure(failure_type=_ProviderAbort),
+        _ProviderPresenceProbeFailure(failure_type=_ProviderAbort),
+    ],
+)
+async def test_list_room_egresses_does_not_catch_record_base_exception(
+    item: object,
+) -> None:
+    with pytest.raises(_ProviderAbort):
+        await build_provider(FakeRoomListEgressClient([item])).list_room_egresses(
+            room_name="room-owned"
+        )
 
 
 @pytest.mark.anyio

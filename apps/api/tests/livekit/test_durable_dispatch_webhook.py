@@ -9,6 +9,10 @@ from app.models.call import Call
 from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.webhook_event import WebhookEvent
 from app.providers.livekit_recording.base import RecordingEgressResult
+from app.providers.livekit_recording.livekit import (
+    livekit_alias_values_equivalent,
+    normalized_egress_object_key_evidence,
+)
 from app.repositories.webhook_event_repository import WebhookEventRepository
 from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.webhooks import livekit as livekit_webhook_module
@@ -109,6 +113,116 @@ class _MappingItemsFailure(Mapping[object, object]):
 
 class _AliasAbort(BaseException):
     pass
+
+
+class _EqualString(str):
+    pass
+
+
+class _OpaqueEqualityTrap:
+    def __eq__(self, _other: object) -> bool:
+        raise _AliasAbort("opaque equality must not be invoked")
+
+
+class _EmptyEquivalent:
+    def __eq__(self, other: object) -> bool:
+        return other == ""
+
+
+class _EmptyComparisonTrap:
+    def __eq__(self, _other: object) -> bool:
+        raise _AliasAbort("empty-string comparison must not be invoked")
+
+
+class _FieldAccessFailureMapping(Mapping[str, object]):
+    def __init__(
+        self,
+        values: dict[str, object],
+        *,
+        target: str,
+        phase: str,
+        failure_type: type[BaseException] = RuntimeError,
+    ) -> None:
+        self.values = values
+        self.target = target
+        self.phase = phase
+        self.failure_type = failure_type
+
+    def __getitem__(self, key: str) -> object:
+        if self.phase == "item" and key == self.target:
+            raise self.failure_type("mapping item unavailable")
+        return self.values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def __contains__(self, key: object) -> bool:
+        if self.phase == "membership" and key == self.target:
+            raise self.failure_type("mapping membership unavailable")
+        return key in self.values
+
+
+class _SdkAttributeFailure:
+    def __init__(
+        self,
+        values: dict[str, object],
+        *,
+        target: str,
+        failure_type: type[BaseException] = RuntimeError,
+    ) -> None:
+        self.values = values
+        self.target = target
+        self.failure_type = failure_type
+
+    def __getattr__(self, name: str) -> object:
+        if name == self.target:
+            raise self.failure_type("SDK attribute unavailable")
+        try:
+            return self.values[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+
+class _PresenceProbeRecord:
+    DESCRIPTOR = SimpleNamespace(
+        fields_by_name={
+            "room_composite": SimpleNamespace(has_presence=True),
+        }
+    )
+
+    def __init__(self, *, mode: str, object_key: str) -> None:
+        self.room_composite = SimpleNamespace(
+            file=SimpleNamespace(filepath=object_key)
+        )
+        if mode == "noncallable":
+            self.HasField = object()
+        elif mode == "nonbool":
+            self.HasField = lambda _name: 1
+        elif mode == "exception":
+            self.HasField = self._raise_presence_error
+        elif mode == "base_exception":
+            self.HasField = self._raise_presence_abort
+
+    @staticmethod
+    def _raise_presence_error(_name: str) -> bool:
+        raise RuntimeError("protobuf presence unavailable")
+
+    @staticmethod
+    def _raise_presence_abort(_name: str) -> bool:
+        raise _AliasAbort("protobuf presence aborted")
+
+
+class _DescriptorAccessFailure:
+    room_composite = SimpleNamespace(
+        file=SimpleNamespace(filepath="calls/user-id/call-id.ogg")
+    )
+
+    @property
+    def DESCRIPTOR(self) -> object:
+        raise RuntimeError("protobuf descriptor unavailable")
 
 
 def _convert_event_with_duplicate_alias_extension(extension: object):
@@ -634,6 +748,170 @@ def test_convert_top_level_aliases_require_exact_leaf_types(
     assert convert_livekit_event(event)["egress"] == converted.payload["egress"]
 
 
+@pytest.mark.parametrize(
+    ("exact_field", "loose_field"),
+    [
+        ({"status": 3}, {"status": 3.0}),
+        ({"room_name": "room-owned"}, {"room_name": _EqualString("room-owned")}),
+    ],
+)
+def test_convert_distinct_sdk_aliases_reject_loose_equal_internal_leaves(
+    exact_field: dict[str, object],
+    loose_field: dict[str, object],
+) -> None:
+    exact = {
+        "egress_id": "EG_exact",
+        "room_name": "room-owned",
+        "status": 3,
+        **exact_field,
+    }
+    loose = {
+        "egress_id": "EG_exact",
+        "room_name": "room-owned",
+        "status": 3,
+        **loose_field,
+    }
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        {
+            "id": "EV_opaque_alias",
+            "event": "egress_ended",
+            "egress_info": SimpleNamespace(**exact),
+            "egressInfo": SimpleNamespace(**loose),
+        },
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    _assert_invalid_egress_alias_result(converted)
+
+
+def test_convert_same_opaque_sdk_alias_object_is_accepted_by_identity() -> None:
+    egress = SimpleNamespace(
+        egress_id="EG_exact",
+        room_name="room-owned",
+        status=3,
+        file_results=[
+            SimpleNamespace(filename="calls/user-id/call-id.ogg"),
+        ],
+    )
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        {
+            "id": "EV_same_opaque_alias",
+            "event": "egress_ended",
+            "egress_info": egress,
+            "egressInfo": egress,
+        },
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert converted.path_state == "exact"
+    assert converted.payload["egress"] == {
+        "egress_id": "EG_exact",
+        "room_name": "room-owned",
+        "status": 3,
+        "object_key": "calls/user-id/call-id.ogg",
+    }
+
+
+def test_alias_equivalence_never_invokes_opaque_leaf_equality() -> None:
+    shared = _OpaqueEqualityTrap()
+
+    assert livekit_alias_values_equivalent(shared, shared) is True
+    assert (
+        livekit_alias_values_equivalent(
+            _OpaqueEqualityTrap(),
+            _OpaqueEqualityTrap(),
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize("phase", ["membership", "item"])
+def test_convert_mapping_field_access_boundaries(phase: str) -> None:
+    values: dict[str, object] = {
+        "id": "EV_mapping_access",
+        "event": "egress_updated",
+        "egress_info": SimpleNamespace(
+            egress_id="EG_exact",
+            room_name="room-owned",
+            status=1,
+        ),
+    }
+    event = _FieldAccessFailureMapping(
+        values,
+        target="egress_info",
+        phase=phase,
+    )
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        event,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    if phase == "membership":
+        assert converted.path_state == "absent"
+        assert converted.payload["egress"] == {
+            "egress_id": "EG_exact",
+            "room_name": "room-owned",
+            "status": 1,
+            "object_key": None,
+        }
+    else:
+        _assert_invalid_egress_alias_result(converted)
+
+
+def test_convert_mapping_field_access_does_not_catch_base_exception() -> None:
+    event = _FieldAccessFailureMapping(
+        {
+            "id": "EV_mapping_abort",
+            "event": "egress_updated",
+            "egress_info": object(),
+        },
+        target="egress_info",
+        phase="item",
+        failure_type=_AliasAbort,
+    )
+
+    with pytest.raises(_AliasAbort):
+        convert_livekit_event(event)
+
+
+def test_convert_sdk_attribute_access_error_fails_closed() -> None:
+    event = _SdkAttributeFailure(
+        {
+            "id": "EV_attribute_access",
+            "event": "egress_updated",
+        },
+        target="egress_info",
+    )
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        event,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    _assert_invalid_egress_alias_result(converted)
+
+
+def test_convert_sdk_attribute_access_does_not_catch_base_exception() -> None:
+    event = _SdkAttributeFailure(
+        {
+            "id": "EV_attribute_abort",
+            "event": "egress_updated",
+        },
+        target="egress_info",
+        failure_type=_AliasAbort,
+    )
+
+    with pytest.raises(_AliasAbort):
+        convert_livekit_event(event)
+
+
 @pytest.mark.parametrize("cycle_kind", ["mapping", "list"])
 def test_convert_cyclic_alias_graph_fails_closed(cycle_kind: str) -> None:
     if cycle_kind == "mapping":
@@ -856,6 +1134,151 @@ def test_convert_egress_event_sanitizes_malformed_path_containers(
     )
 
     assert converted["egress"]["object_key"] is None
+
+
+@pytest.mark.parametrize("phase", ["membership", "item"])
+def test_nested_file_result_mapping_access_boundaries(phase: str) -> None:
+    values = {"filename": "calls/user-id/call-id.ogg"}
+    file_result = _FieldAccessFailureMapping(
+        values,
+        target="filename",
+        phase=phase,
+    )
+    egress = {
+        "egressId": "EG_exact",
+        "roomName": "room-owned",
+        "status": 1,
+        "fileResults": [file_result],
+    }
+
+    evidence = normalized_egress_object_key_evidence(
+        egress,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+    converted = livekit_webhook_module._convert_livekit_event(
+        {
+            "id": "EV_nested_mapping_access",
+            "event": "egress_updated",
+            "egressInfo": egress,
+        },
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    if phase == "membership":
+        assert evidence.state == "exact"
+        assert evidence.object_key == "calls/user-id/call-id.ogg"
+        assert converted.path_state == "exact"
+        assert converted.payload["egress"]["object_key"] == (
+            "calls/user-id/call-id.ogg"
+        )
+    else:
+        assert evidence.state == "invalid"
+        assert evidence.object_key is None
+        assert converted.path_state == "invalid"
+        assert converted.payload["egress"]["object_key"] is None
+
+
+@pytest.mark.parametrize(
+    "unsafe_filename",
+    [_EqualString(""), _EmptyEquivalent()],
+)
+def test_present_non_builtin_empty_filename_cannot_fall_through_to_location(
+    unsafe_filename: object,
+) -> None:
+    evidence = normalized_egress_object_key_evidence(
+        {
+            "fileResults": [
+                {
+                    "filename": unsafe_filename,
+                    "location": "calls/user-id/call-id.ogg",
+                }
+            ]
+        },
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert evidence.state == "invalid"
+    assert evidence.object_key is None
+
+
+@pytest.mark.parametrize("field_name", ["filename", "location"])
+def test_rejected_path_values_never_invoke_empty_string_equality(
+    field_name: str,
+) -> None:
+    file_result: dict[str, object] = {field_name: _EmptyComparisonTrap()}
+    if field_name == "filename":
+        file_result["location"] = "calls/user-id/call-id.ogg"
+
+    evidence = normalized_egress_object_key_evidence(
+        {"fileResults": [file_result]},
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert evidence.state == "invalid"
+    assert evidence.object_key is None
+
+
+@pytest.mark.parametrize("filename", [None, ""])
+def test_missing_or_exact_empty_filename_can_use_exact_location(
+    filename: str | None,
+) -> None:
+    file_result = {"location": "calls/user-id/call-id.ogg"}
+    if filename is not None:
+        file_result["filename"] = filename
+
+    evidence = normalized_egress_object_key_evidence(
+        {"fileResults": [file_result]},
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert evidence.state == "exact"
+    assert evidence.object_key == "calls/user-id/call-id.ogg"
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["missing", "noncallable", "nonbool", "exception"],
+)
+def test_protobuf_presence_probe_failures_are_invalid(mode: str) -> None:
+    evidence = normalized_egress_object_key_evidence(
+        _PresenceProbeRecord(
+            mode=mode,
+            object_key="calls/user-id/call-id.ogg",
+        ),
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert evidence.state == "invalid"
+    assert evidence.object_key is None
+
+
+def test_protobuf_descriptor_access_failure_is_invalid() -> None:
+    evidence = normalized_egress_object_key_evidence(
+        _DescriptorAccessFailure(),
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert evidence.state == "invalid"
+    assert evidence.object_key is None
+
+
+def test_protobuf_presence_probe_does_not_catch_base_exception() -> None:
+    with pytest.raises(_AliasAbort):
+        normalized_egress_object_key_evidence(
+            _PresenceProbeRecord(
+                mode="base_exception",
+                object_key="calls/user-id/call-id.ogg",
+            ),
+            bucket_name="recordings",
+            endpoint_url="http://minio:9000",
+        )
 
 
 def test_convert_egress_event_rejects_conflicting_identity_aliases() -> None:
