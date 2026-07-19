@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -13,6 +15,7 @@ from app.providers.summaries.base import StructuredSummary
 from app.services.outbox_service import OutboxService, SUPPORTED_OUTBOX_TOPICS
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
 from app.workers.jobs import outbox_topics
+from app.workers.jobs.recording_reconciliation import ReconciliationResult
 
 
 async def _missing_handler(*_args, **_kwargs):
@@ -87,6 +90,16 @@ class FakeRecordingProvider:
         self.calls.append(egress_id)
         if self.fail:
             raise RuntimeError("livekit unavailable")
+
+
+class FakeRecordingReconciler:
+    def __init__(self, result: ReconciliationResult) -> None:
+        self.result = result
+        self.calls = []
+
+    async def reconcile(self, operation_id):
+        self.calls.append(operation_id)
+        return self.result
 
 
 def event(*, call_id, topic: str, aggregate_type: str) -> OutboxEvent:
@@ -562,6 +575,123 @@ async def test_post_call_handlers_validate_exact_aggregate_identity(
     assert exc_info.value.error_code == "invalid_payload"
 
 
+@pytest.mark.anyio
+async def test_recording_reconcile_validates_reference_before_building_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation_id = uuid4()
+    malformed = recording_event(operation_id)
+    malformed.payload = {"operation_id": str(uuid4())}
+    built = False
+
+    def build(_ctx):
+        nonlocal built
+        built = True
+        raise AssertionError("builder must not run for invalid input")
+
+    monkeypatch.setattr(outbox_topics, "build_recording_reconciler", build)
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_recording_reconcile({}, malformed)
+
+    assert exc_info.value.error_code == "invalid_payload"
+    assert exc_info.value.retryable is False
+    assert built is False
+
+
+@pytest.mark.anyio
+async def test_recording_reconcile_invokes_reconciler_with_operation_identity() -> None:
+    operation_id = uuid4()
+    reconciler = FakeRecordingReconciler(ReconciliationResult("complete"))
+
+    await deliver_recording_reconcile(
+        {"recording_reconciler": reconciler},
+        recording_event(operation_id),
+    )
+
+    assert reconciler.calls == [operation_id]
+
+
+@pytest.mark.anyio
+async def test_recording_reconcile_retry_is_bounded_and_non_exhausting() -> None:
+    operation_id = uuid4()
+    reconciler = FakeRecordingReconciler(
+        ReconciliationResult("retry", "recording_identity_mismatch")
+    )
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_recording_reconcile(
+            {"recording_reconciler": reconciler},
+            recording_event(operation_id),
+        )
+
+    assert exc_info.value.error_code == "recording_identity_mismatch"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.exhaustible is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure_site", ["builder", "reconciler"])
+async def test_recording_reconcile_unexpected_failures_are_non_exhausting(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_site: str,
+) -> None:
+    operation_id = uuid4()
+
+    class ExplodingReconciler:
+        async def reconcile(self, _operation_id):
+            raise RuntimeError("DATABASE_CREDENTIAL_SENTINEL")
+
+    if failure_site == "builder":
+        def explode(_ctx):
+            raise RuntimeError("BUILDER_CREDENTIAL_SENTINEL")
+
+        monkeypatch.setattr(outbox_topics, "build_recording_reconciler", explode)
+        ctx = {}
+    else:
+        ctx = {"recording_reconciler": ExplodingReconciler()}
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_recording_reconcile(ctx, recording_event(operation_id))
+
+    assert exc_info.value.error_code == "recording_unresolved"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.exhaustible is False
+    assert "SENTINEL" not in str(exc_info.value)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "malformed_result",
+    [
+        ReconciliationResult(
+            "retry",
+            cast(Any, "provider_retryable"),
+        ),
+        SimpleNamespace(
+            outcome="complete",
+            error_code="recording_unresolved",
+        ),
+        SimpleNamespace(outcome="unexpected", error_code=None),
+        SimpleNamespace(error_code=None),
+    ],
+)
+async def test_recording_reconcile_malformed_results_fail_closed_without_exhaustion(
+    malformed_result,
+) -> None:
+    operation_id = uuid4()
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_recording_reconcile(
+            {"recording_reconciler": FakeRecordingReconciler(malformed_result)},
+            recording_event(operation_id),
+        )
+
+    assert exc_info.value.error_code == "recording_unresolved"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.exhaustible is False
+
+
 def test_default_handlers_exactly_match_supported_topics_without_placeholders() -> None:
     assert set(outbox_topics.DEFAULT_OUTBOX_HANDLERS) == set(SUPPORTED_OUTBOX_TOPICS)
     assert "summary.generate" in outbox_topics.DEFAULT_OUTBOX_HANDLERS
@@ -593,6 +723,9 @@ async def test_recording_reconcile_holding_handler_remains_pending_after_exhaust
     result = await outbox_delivery_job(
         {
             "session_factory": factory,
+            "recording_reconciler": FakeRecordingReconciler(
+                ReconciliationResult("retry", "recording_unresolved")
+            ),
             "outbox_handlers": {
                 "recording.reconcile": deliver_recording_reconcile,
             },
@@ -609,6 +742,7 @@ async def test_recording_reconcile_holding_handler_remains_pending_after_exhaust
     assert stored.status == "pending"
     assert stored.attempt_count == 6
     assert stored.last_error_code == "recording_unresolved"
+    assert stored.next_attempt_at.replace(tzinfo=UTC) == now + timedelta(hours=2)
 
 
 @pytest.mark.anyio

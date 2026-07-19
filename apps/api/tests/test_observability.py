@@ -568,6 +568,55 @@ async def test_recording_not_running_provider_operation_is_allowlisted() -> None
     )
 
 
+def test_recording_reconcile_outbox_topic_is_allowlisted_without_identity_labels() -> None:
+    meter = _Meter()
+    telemetry = _observability(meter=meter)
+
+    telemetry.record_outbox_terminal_failure(
+        "recording.reconcile",
+        "conflict",
+    )
+
+    assert meter.instruments[
+        "presvo.outbox.terminal_failures"
+    ].measurements == [
+        (
+            1,
+            {"topic": "recording.reconcile", "error_class": "conflict"},
+        )
+    ]
+
+
+@pytest.mark.anyio
+async def test_recording_operation_uuid_is_never_bound_as_call_context() -> None:
+    from app.core.observability import bind_call_id
+    from app.models.outbox_event import OutboxEvent
+    from app.workers.jobs.outbox_delivery import _validated_event_call_id
+
+    operation_id = uuid4()
+    event = OutboxEvent(
+        topic="recording.reconcile",
+        aggregate_type="recording-egress-operation",
+        aggregate_id=operation_id,
+        idempotency_key=f"recording.reconcile:{operation_id}:start",
+        payload={"operation_id": str(operation_id)},
+        status="processing",
+        next_attempt_at=datetime.now(UTC),
+    )
+    tracer = _Tracer()
+    telemetry = _observability(tracer=tracer)
+
+    with bind_call_id(_validated_event_call_id(event)):
+        async with telemetry.provider_operation(
+            "livekit",
+            "ensure_recording_not_running",
+        ):
+            pass
+
+    assert "presvo.call.id" not in tracer.spans[0].attributes
+    assert str(operation_id) not in repr(tracer.spans[0].attributes)
+
+
 @pytest.mark.anyio
 async def test_provider_telemetry_prefers_allowlisted_structured_error_class() -> None:
     class StructuredProviderError(RuntimeError):

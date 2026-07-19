@@ -1256,13 +1256,57 @@ async def deliver_recording_stop(
         raise OutboxDeliveryError("provider_retryable", retryable=True) from None
 
 
+def build_recording_reconciler(ctx: dict[str, Any]):
+    reconciler = ctx.get("recording_reconciler")
+    if reconciler is not None:
+        return reconciler
+
+    from app.providers.storage.s3 import get_s3_storage
+    from app.workers.jobs.recording_reconciliation import RecordingReconciler
+
+    session_factory = ctx.get("session_factory") or get_session_factory()
+    provider = ctx.get("livekit_recording_provider") or LiveKitRecordingService()
+    storage = ctx.get("storage_provider") or get_s3_storage()
+    now_provider = ctx.get("recording_reconciliation_now") or (
+        lambda: datetime.now(UTC)
+    )
+    return RecordingReconciler(
+        session_factory,
+        provider,
+        storage,
+        now_provider=now_provider,
+    )
+
+
 async def deliver_recording_reconcile(
-    _ctx: dict[str, Any],
+    ctx: dict[str, Any],
     event: OutboxEvent,
 ) -> None:
-    _validated_recording_operation_reference(event)
+    operation_id = _validated_recording_operation_reference(event)
+    try:
+        from app.workers.jobs.recording_reconciliation import (
+            RECORDING_RECONCILIATION_ERROR_CODES,
+        )
+
+        reconciler = build_recording_reconciler(ctx)
+        result = await reconciler.reconcile(operation_id)
+        if result.outcome == "complete":
+            if result.error_code is not None:
+                raise ValueError("Completed reconciliation returned an error")
+            return
+        if result.outcome != "retry":
+            raise ValueError("Recording reconciliation outcome is invalid")
+        error_code = result.error_code or "recording_unresolved"
+        if error_code not in RECORDING_RECONCILIATION_ERROR_CODES:
+            raise ValueError("Recording reconciliation error is invalid")
+    except Exception:
+        raise OutboxDeliveryError(
+            "recording_unresolved",
+            retryable=True,
+            exhaustible=False,
+        ) from None
     raise OutboxDeliveryError(
-        "recording_unresolved",
+        error_code,
         retryable=True,
         exhaustible=False,
     )

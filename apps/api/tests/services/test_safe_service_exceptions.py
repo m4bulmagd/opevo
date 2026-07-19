@@ -15,7 +15,11 @@ from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.providers.telephony.base import TelephonyProviderError
 from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
+from app.workers.jobs.outbox_delivery import (
+    OutboxDeliveryError,
+    _outbox_error_class,
+    outbox_delivery_job,
+)
 from app.workers.jobs.outbox_topics import (
     deliver_phone_provision,
     deliver_phone_routing,
@@ -46,6 +50,31 @@ def _event(call_id, *, topic: str, aggregate_type: str) -> OutboxEvent:
         attempt_count=1,
         next_attempt_at=datetime.now(UTC),
     )
+
+
+@pytest.mark.parametrize(
+    ("error_code", "error_class"),
+    [
+        ("recording_unresolved", "unknown"),
+        ("recording_provider_unavailable", "unavailable"),
+        ("recording_storage_unavailable", "unavailable"),
+        ("recording_identity_mismatch", "validation"),
+        ("recording_identity_conflict", "conflict"),
+        ("recording_legacy_incomplete", "validation"),
+    ],
+)
+def test_recording_reconciliation_errors_are_bounded_and_safely_classified(
+    error_code: str,
+    error_class: str,
+) -> None:
+    error = OutboxDeliveryError(
+        error_code,
+        retryable=True,
+        exhaustible=False,
+    )
+
+    assert str(error) == error_code
+    assert _outbox_error_class(error_code) == error_class
 
 
 @pytest.mark.anyio
