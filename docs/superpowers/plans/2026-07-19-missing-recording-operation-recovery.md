@@ -5,11 +5,11 @@
 **Goal:** Preserve durable, retryable cleanup authority when an exact live
 recording egress is discovered after a reclaimed worker removed its operation.
 
-**Architecture:** Extend the singleton attachment seam so a missing operation
-is not interpreted as harmless completion after exact provider evidence. Under
-the existing call-first SQL lock, restore or merge one sticky conflict
-operation and one idempotent reconciliation event, commit, then stop the union
-of durable and observed identities outside SQL.
+**Architecture:** Extend the singleton attachment and multiple-match conflict
+seams so a missing operation is not interpreted as harmless completion after
+exact provider evidence. Under the existing call-first SQL lock, restore or
+merge one sticky conflict operation and one idempotent reconciliation event,
+commit, then stop the union of durable and observed identities outside SQL.
 
 **Tech Stack:** Python 3.12, FastAPI service layer, SQLAlchemy async ORM,
 pytest/AnyIO, Ruff, mypy, LiveKit provider boundary.
@@ -49,9 +49,10 @@ pytest/AnyIO, Ruff, mypy, LiveKit provider boundary.
   `RecordingReconciler._attach_exact_identity(...)` singleton seam.
 - Produces:
   `RecordingReconciler._restore_or_merge_missing_conflict(session, snapshot,
-  exact) -> tuple[_PersistenceStatus, _OperationSnapshot | None]`, a durable
-  sticky-conflict result usable by the existing `_stop_conflicting_identities`
-  path.
+  recovered_provider_id) -> tuple[_PersistenceStatus, _OperationSnapshot |
+  None]`, a durable sticky-conflict result usable by both exact-evidence paths
+  and the existing `_stop_conflicting_identities` path. A singleton supplies
+  its trusted ID; multiple matches supply `None` and remain uncertain.
 
 - [ ] **Step 1: Add a fake that runs the reclaimed cleanup worker during W1's listing**
 
@@ -248,7 +249,7 @@ async def _restore_or_merge_missing_conflict(
     self,
     session: AsyncSession,
     snapshot: _OperationSnapshot,
-    exact: RecordingEgressSnapshot,
+    recovered_provider_id: str | None,
 ) -> tuple[_PersistenceStatus, _OperationSnapshot | None]:
     calls = CallRepository(session)
     operations = RecordingEgressOperationRepository(session)
@@ -266,8 +267,12 @@ async def _restore_or_merge_missing_conflict(
                 room_name=snapshot.room_name,
                 legacy_incomplete=snapshot.legacy_incomplete,
                 expected_object_key=snapshot.expected_object_key,
-                provider_egress_id=exact.egress_id,
-                start_state="started",
+                provider_egress_id=recovered_provider_id,
+                start_state=(
+                    "started"
+                    if recovered_provider_id is not None
+                    else "uncertain"
+                ),
                 stop_requested_at=snapshot.stop_requested_at,
                 delete_requested_at=snapshot.delete_requested_at,
                 last_reconciled_at=_as_utc(self.now()),
@@ -305,11 +310,12 @@ async def _restore_or_merge_missing_conflict(
     return "conflict", refreshed
 ```
 
-Keep provider I/O in the existing caller: a `"conflict"` status with the
-refreshed snapshot goes to `_stop_conflicting_identities(refreshed,
-(exact.egress_id,))` only after the helper's session context exits. If the call
-or immutable operation identity is unsafe, return `"changed"` and perform no
-provider/storage I/O.
+Keep provider I/O in the existing callers: a singleton passes its exact ID as
+`recovered_provider_id`, while the multiple-match path passes `None`. A
+`"conflict"` status with the refreshed snapshot goes to
+`_stop_conflicting_identities(refreshed, exact_ids)` only after the helper's
+session context exits. If the call or immutable operation identity is unsafe,
+return `"changed"` and perform no provider/storage I/O.
 
 - [ ] **Step 5: Run the lease-reclaim test and verify GREEN**
 
@@ -321,7 +327,30 @@ starts.
 
 - [ ] **Step 6: Add stop-failure durability and idempotent restore tests**
 
-Add two focused tests:
+Add three focused tests. The first two are shown below. The third repeats the
+full removal-inside-listing schedule with `EG_A` and `EG_B`, and asserts the
+restored operation is `uncertain` with no provider ID, the recovery event and
+projection purge commit before provider I/O, and both distinct IDs are stopped
+even if the first stop fails:
+
+```python
+assert result == ReconciliationResult(
+    "retry",
+    "recording_identity_conflict",
+)
+assert provider.calls == [
+    ("list_room_egresses", "room-owned"),
+    ("ensure_not_running", "EG_A"),
+    ("ensure_not_running", "EG_B"),
+]
+assert stored.start_state == "uncertain"
+assert stored.provider_egress_id is None
+assert stored.last_error_code == "recording_identity_conflict"
+assert recovery_event.status == "pending"
+assert outer_storage.calls == []
+```
+
+Then add the stop-failure durability and two-restorer tests:
 
 ```python
 @pytest.mark.anyio
