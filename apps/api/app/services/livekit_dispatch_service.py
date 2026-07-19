@@ -24,6 +24,7 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.providers.telephony.telnyx import normalize_french_number
+from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.customer_readiness_service import (
     evaluate_customer_readiness,
@@ -31,6 +32,7 @@ from app.services.customer_readiness_service import (
 from app.services.inbound_verification_service import InboundVerificationService
 from app.services.livekit_recording_service import LiveKitRecordingService
 from app.services.outbox_service import OutboxService
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.services.realtime_service import RealtimeService
 
 
@@ -107,6 +109,7 @@ class LiveKitDispatchService:
         outbox_service: OutboxService | None = None,
         realtime_service: RealtimeService | None,
         recording_service: LiveKitRecordingService,
+        recording_lifecycle_service: RecordingLifecycleService | None = None,
         call_lifecycle_service: CallLifecycleService | None = None,
         arq_pool=None,
         now_provider=None,
@@ -141,9 +144,14 @@ class LiveKitDispatchService:
         self.outbox_service = outbox_service or OutboxService(session)
         self.realtime_service = realtime_service
         self.recording_service = recording_service
+        self.recording_lifecycle_service = (
+            recording_lifecycle_service
+            or RecordingLifecycleService(session, now_provider=self.now_provider)
+        )
         self.call_lifecycle_service = call_lifecycle_service or CallLifecycleService(
             session,
             call_repository=self.call_repository,
+            recording_lifecycle_service=self.recording_lifecycle_service,
         )
         self.arq_pool = arq_pool
 
@@ -180,6 +188,7 @@ class LiveKitDispatchService:
             ended_at=self.now_provider(),
         )
         await self.session.commit()
+        await self._best_effort_outbox_wakeup()
         if ended.status == "ending" and self.arq_pool is not None:
             try:
                 await self.arq_pool.enqueue_job(
@@ -378,72 +387,82 @@ class LiveKitDispatchService:
 
         call_id = connected_call.id
         user_id = connected_call.user_id
-        await self.session.commit()
+        try:
+            operation = await self.recording_lifecycle_service.prepare_start(
+                connected_call
+            )
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
+
+        try:
+            claim = await self.recording_lifecycle_service.begin_start(operation.id)
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
+        if claim is None:
+            await self._best_effort_outbox_wakeup()
+            return DispatchJoinResult("connected", str(call_id))
+
         try:
             recording = await self.recording_service.start_room_recording(
-                room_name=room_name,
-                user_id=user_id,
-                call_id=call_id,
+                room_name=claim.room_name,
+                object_key=claim.expected_object_key,
             )
-        except Exception as exc:
+        except LiveKitRecordingProviderError as exc:
+            try:
+                await self.recording_lifecycle_service.record_start_error(
+                    claim.operation_id,
+                    outcome=exc.start_outcome,
+                    error_code=exc.error_class,
+                )
+                await self.session.commit()
+            except Exception:
+                await self.session.rollback()
+                raise
             report_safe_exception(
                 logger,
                 event="livekit_recording_start_failed",
                 operation="start_room_recording",
-                error=exc,
+                error_type=exc.error_class,
+                call_id=call_id,
+                user_id=user_id,
+                status="failed",
+            )
+        except Exception:
+            try:
+                await self.recording_lifecycle_service.record_start_error(
+                    claim.operation_id,
+                    outcome="unknown",
+                    error_code="unknown",
+                )
+                await self.session.commit()
+            except Exception:
+                await self.session.rollback()
+                raise
+            report_safe_exception(
+                logger,
+                event="livekit_recording_start_failed",
+                operation="start_room_recording",
+                error_type="unknown",
                 call_id=call_id,
                 user_id=user_id,
                 status="failed",
             )
         else:
-            fresh_call = (
-                await self.call_repository.get_by_id_without_recording_for_update(
-                    call_id=call_id
+            try:
+                await self.recording_lifecycle_service.record_start_success(
+                    claim.operation_id,
+                    recording,
                 )
-            )
-            if fresh_call is not None:
-                await self.call_repository.set_recording_metadata(
-                    fresh_call,
-                    recording_object_key=recording.object_key,
-                    recording_egress_id=recording.egress_id,
-                    recording_url=recording.url,
-                )
-            await self.session.commit()
-            if fresh_call is None:
-                try:
-                    await self.recording_service.ensure_stopped(recording.egress_id)
-                except Exception as exc:
-                    cleanup_call = await self.call_repository.get_by_id_for_update(
-                        call_id
-                    )
-                    if cleanup_call is not None:
-                        await self.call_repository.set_recording_metadata(
-                            cleanup_call,
-                            recording_object_key=recording.object_key,
-                            recording_egress_id=recording.egress_id,
-                            recording_url=recording.url,
-                        )
-                        await self.outbox_service.add(
-                            topic="recording.stop",
-                            aggregate_type="call-recording",
-                            aggregate_id=call_id,
-                            idempotency_key=(
-                                f"recording.stop:{call_id}:egress:"
-                                f"{recording.egress_id}"
-                            ),
-                            payload={"call_id": str(call_id)},
-                        )
-                    await self.session.commit()
-                    report_safe_exception(
-                        logger,
-                        event="livekit_orphan_recording_stop_failed",
-                        operation="ensure_recording_stopped",
-                        error=exc,
-                        call_id=call_id,
-                        user_id=user_id,
-                        status="failed",
-                    )
+                await self.session.commit()
+            except Exception:
+                await self.session.rollback()
+                raise
 
+        await self._best_effort_outbox_wakeup()
         return DispatchJoinResult("connected", str(call_id))
 
     async def _best_effort_outbox_wakeup(self) -> None:

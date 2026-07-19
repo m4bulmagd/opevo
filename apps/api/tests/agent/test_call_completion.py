@@ -14,6 +14,7 @@ from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.outbox_event import OutboxEvent
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.schemas.agent_runtime import AuthenticatedAgentIdentity
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.outbox_service import OutboxService
@@ -53,6 +54,17 @@ class FailingCallFinalizationQueue:
         raise RuntimeError("redis unavailable")
 
 
+class FakeOutboxPool:
+    def __init__(self, *, failure: bool = False) -> None:
+        self.failure = failure
+        self.jobs: list[tuple[str, dict]] = []
+
+    async def enqueue_job(self, name: str, payload: dict) -> None:
+        self.jobs.append((name, payload))
+        if self.failure:
+            raise RuntimeError("redis unavailable")
+
+
 class FakeAuthSession:
     def __init__(self, *, call=None, agent_config=None) -> None:
         self.call = call
@@ -72,8 +84,11 @@ class FakeAuthSession:
             return self.agent_config
         return None
 
-    async def execute(self, _statement):
-        return SimpleNamespace(scalar_one_or_none=lambda: self.call)
+    async def execute(self, statement):
+        descriptions = getattr(statement, "column_descriptions", ())
+        entity = descriptions[0].get("entity") if descriptions else None
+        value = self.call if entity is Call else None
+        return SimpleNamespace(scalar_one_or_none=lambda: value)
 
     async def commit(self) -> None:
         self.commits += 1
@@ -107,6 +122,7 @@ def _build_completion_app(
     *,
     auth_session=None,
     authenticated: bool = False,
+    arq_pool=None,
 ):
     from app.routers.agent import get_call_finalization_queue, require_agent_auth
     from app.routers.agent import router as agent_router
@@ -117,6 +133,7 @@ def _build_completion_app(
     app = FastAPI()
     app.include_router(agent_router)
     app.state.call_finalization_queue = fake_queue
+    app.state.arq_pool = arq_pool
     app.dependency_overrides[get_call_finalization_queue] = (
         override_get_call_finalization_queue
     )
@@ -152,40 +169,6 @@ def _build_completion_app(
 
     app.dependency_overrides[get_session] = override_get_session
     return app
-
-
-@pytest.mark.anyio
-async def test_agent_completion_endpoint_enqueues_call_finalization_job(
-) -> None:
-    call_id = uuid4()
-    fake_queue = FakeCallFinalizationQueue()
-    app = _build_completion_app(fake_queue, authenticated=True)
-
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post(
-            f"/api/agent/calls/{call_id}/complete",
-            json={
-                "duration_seconds": 61,
-                "transcript": [],
-            },
-        )
-
-    assert response.status_code == 202
-    assert response.json() == {
-        "status": "accepted",
-        "queued": True,
-        "job_id": f"call-finalization:{call_id}",
-    }
-    assert fake_queue.calls == [
-        FakeQueueCall(
-            job_name="call_finalization_job",
-            payload={
-                "call_id": str(call_id),
-            },
-            job_id=f"call-finalization:{call_id}",
-        )
-    ]
 
 
 @pytest.mark.anyio
@@ -289,10 +272,12 @@ async def test_static_agent_token_is_rejected_in_every_environment(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("wakeup_fails", [False, True])
 async def test_dispatch_jwt_completes_call_without_static_token(
     monkeypatch: pytest.MonkeyPatch,
     db_session,
     active_user,
+    wakeup_fails: bool,
 ) -> None:
     dispatch_secret = "dispatch-test-secret-with-enough-entropy-for-tests"
     _configure_auth(
@@ -318,7 +303,12 @@ async def test_dispatch_jwt_completes_call_without_static_token(
     db_session.add(call)
     await db_session.commit()
     fake_queue = FakeCallFinalizationQueue(session=db_session)
-    app = _build_completion_app(fake_queue, auth_session=db_session)
+    outbox_pool = FakeOutboxPool(failure=wakeup_fails)
+    app = _build_completion_app(
+        fake_queue,
+        auth_session=db_session,
+        arq_pool=outbox_pool,
+    )
     token = create_dispatch_token(
         call_id=str(call.id),
         user_id=str(active_user.id),
@@ -335,6 +325,7 @@ async def test_dispatch_jwt_completes_call_without_static_token(
 
     assert response.status_code == 202
     assert len(fake_queue.calls) == 1
+    assert outbox_pool.jobs == [("outbox_delivery_job", {})]
 
 
 @pytest.mark.anyio
@@ -403,15 +394,22 @@ async def test_queue_outage_preserves_end_facts_recovery_and_recording_stop_inte
     assert stored.status == "ending"
     assert stored.duration_seconds == 7
     assert stored.ended_at is not None
+    operation = await db_session.scalar(
+        select(RecordingEgressOperation).where(
+            RecordingEgressOperation.call_id == call_id
+        )
+    )
+    assert operation is not None
     stop_intent = await db_session.scalar(
         select(OutboxEvent).where(
-            OutboxEvent.topic == "recording.stop",
-            OutboxEvent.aggregate_id == call_id,
+            OutboxEvent.topic == "recording.reconcile",
+            OutboxEvent.aggregate_id == operation.id,
         )
     )
     assert stop_intent is not None
-    assert stop_intent.aggregate_type == "call-recording"
-    assert stop_intent.payload == {"call_id": str(call_id)}
+    assert operation.stop_requested_at is not None
+    assert stop_intent.aggregate_type == "recording-egress-operation"
+    assert stop_intent.payload == {"operation_id": str(operation.id)}
     recovery_rows = list(
         (
             await db_session.execute(

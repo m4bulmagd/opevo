@@ -11,14 +11,11 @@ from app.schemas.calls import (
     CallHistoryListItem,
     CallTranscriptLineResponse,
 )
-from app.services.recording_service import RecordingDeleteRetryableError, RecordingService
+from app.services.recording_lifecycle_service import RecordingLifecycleService
+from app.services.recording_service import RecordingService
 
 
 class CallHistoryNotFoundError(Exception):
-    pass
-
-
-class CallDeleteRetryableError(Exception):
     pass
 
 
@@ -34,12 +31,16 @@ class CallHistoryService:
     def __init__(
         self,
         session: AsyncSession,
-        recording_service: RecordingService,
+        recording_service: RecordingService | None,
+        recording_lifecycle_service: RecordingLifecycleService | None = None,
     ) -> None:
         self.session = session
         self.call_repository = CallRepository(session)
         self.message_repository = MessageRepository(session)
         self.recording_service = recording_service
+        self.recording_lifecycle_service = (
+            recording_lifecycle_service or RecordingLifecycleService(session)
+        )
 
     async def list_calls(
         self, user_id: UUID, *, limit: int = 100, offset: int = 0
@@ -83,6 +84,8 @@ class CallHistoryService:
         call = await self.call_repository.get_visible_by_id(call_id, user_id=user_id)
         if call is None:
             raise CallHistoryNotFoundError
+        if self.recording_service is None:
+            raise RuntimeError("Recording playback capability is unavailable")
 
         messages = await self.message_repository.list_by_call_id(call.id)
         try:
@@ -123,26 +126,26 @@ class CallHistoryService:
         )
 
     async def delete_call(self, user_id: UUID, call_id: UUID) -> None:
-        call = await self.call_repository.get_by_id_for_user_including_deleted(
-            call_id,
-            user_id=user_id,
-        )
-        if call is None:
-            raise CallHistoryNotFoundError
-        if call.deleted_at is not None:
-            return
-        if call.status not in CALL_DELETE_TERMINAL_STATES:
-            raise CallDeleteActiveError
-
         try:
-            await self.recording_service.delete_recording(
-                call_id=call.id,
-                recording_object_key=call.recording_object_key,
-                recording_egress_id=call.recording_egress_id,
+            call = (
+                await self.call_repository.get_by_id_for_user_including_deleted_for_update(
+                    call_id,
+                    user_id=user_id,
+                )
             )
-        except RecordingDeleteRetryableError:
+            if call is None:
+                raise CallHistoryNotFoundError
+            if call.deleted_at is not None:
+                await self.recording_lifecycle_service.request_deletion(call)
+                await self.session.commit()
+                return
+            if call.status not in CALL_DELETE_TERMINAL_STATES:
+                raise CallDeleteActiveError
+
+            await self.recording_lifecycle_service.request_deletion(call)
+            await self.message_repository.delete_by_call_id(call.id)
+            await self.call_repository.purge_customer_content(call)
+            await self.session.commit()
+        except Exception:
             await self.session.rollback()
-            raise CallDeleteRetryableError from None
-        await self.message_repository.delete_by_call_id(call.id)
-        await self.call_repository.purge_customer_content(call)
-        await self.session.commit()
+            raise

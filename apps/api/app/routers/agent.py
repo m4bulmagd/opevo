@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -41,6 +42,20 @@ from app.workers.call_finalization_queue import CallFinalizationQueue
 
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+logger = logging.getLogger(__name__)
+
+
+async def _best_effort_outbox_wakeup(request: Request) -> None:
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if arq_pool is None:
+        return
+    try:
+        await arq_pool.enqueue_job("outbox_delivery_job", {})
+    except Exception:
+        logger.warning(
+            "outbox wakeup enqueue failed operation=complete_call "
+            "error_type=unknown"
+        )
 
 
 async def require_agent_auth(
@@ -292,6 +307,7 @@ async def complete_call(
             ),
         ) from None
 
+    await _best_effort_outbox_wakeup(request)
     queue = get_call_finalization_queue(request)
     try:
         job_id = await queue.enqueue({"call_id": str(call_id)})

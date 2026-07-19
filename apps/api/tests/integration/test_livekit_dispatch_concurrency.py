@@ -14,11 +14,15 @@ from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.repositories.call_repository import CallRepository
 from app.services.livekit_dispatch_service import LiveKitDispatchService
+from app.services.call_history_service import CallHistoryService
+from app.services.call_lifecycle_service import CallLifecycleService
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 
 
 @pytest.fixture(autouse=True)
@@ -91,6 +95,41 @@ class _PausingCallRepository(CallRepository):
         self.selected.set()
         await self.resume.wait()
         return call
+
+
+class _BlockingRecording:
+    def __init__(self, *, entered: asyncio.Event, resume: asyncio.Event) -> None:
+        self.entered = entered
+        self.resume = resume
+        self.starts: list[dict] = []
+
+    async def start_room_recording(self, *, room_name: str, object_key: str):
+        self.starts.append({"room_name": room_name, "object_key": object_key})
+        self.entered.set()
+        await self.resume.wait()
+        return SimpleNamespace(
+            object_key=object_key,
+            egress_id="egress-delete-race",
+            url=None,
+        )
+
+
+class _PausingBeginLifecycle(RecordingLifecycleService):
+    def __init__(
+        self,
+        session,
+        *,
+        entered: asyncio.Event,
+        resume: asyncio.Event,
+    ) -> None:
+        super().__init__(session)
+        self.entered = entered
+        self.resume = resume
+
+    async def begin_start(self, operation_id):
+        self.entered.set()
+        await self.resume.wait()
+        return await super().begin_start(operation_id)
 
 
 @pytest.mark.anyio
@@ -242,3 +281,181 @@ async def test_agent_join_cannot_resurrect_call_failed_after_stale_pending_read(
         assert stored.started_at is None
     assert result.status == "ignored"
     assert recording.starts == []
+
+
+@pytest.mark.anyio
+async def test_end_before_begin_claim_makes_start_ineligible_without_provider_io(
+    livekit_session_factory,
+) -> None:
+    async with livekit_session_factory() as session:
+        user = User(
+            clerk_user_id="end-before-claim-user",
+            email="end-before-claim@example.com",
+        )
+        session.add(user)
+        await session.flush()
+        call = Call(
+            user_id=user.id,
+            livekit_room_id="room-end-before-claim",
+            status="pending",
+        )
+        session.add(call)
+        await session.commit()
+        call_id = call.id
+
+    entered = asyncio.Event()
+    resume = asyncio.Event()
+    recording = _Recording()
+    async with livekit_session_factory() as dispatch_session:
+        task = asyncio.create_task(
+            LiveKitDispatchService(
+                dispatch_session,
+                realtime_service=None,
+                recording_service=recording,
+                recording_lifecycle_service=_PausingBeginLifecycle(
+                    dispatch_session,
+                    entered=entered,
+                    resume=resume,
+                ),
+            ).handle_participant_joined(
+                {
+                    "event": "participant_joined",
+                    "room": {"name": "room-end-before-claim"},
+                    "participant": {
+                        "identity": f"agent-call-{call_id}",
+                        "kind": "AGENT",
+                        "attributes": {},
+                    },
+                }
+            )
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1)
+
+        async with livekit_session_factory() as terminal_session:
+            await CallLifecycleService(terminal_session).end_from_agent(
+                call_id=call_id,
+                duration_seconds=1,
+            )
+            await terminal_session.commit()
+
+        resume.set()
+        result = await asyncio.wait_for(task, timeout=1)
+
+    async with livekit_session_factory() as session:
+        stored_call = await session.get(Call, call_id)
+        operation = await session.scalar(
+            select(RecordingEgressOperation).where(
+                RecordingEgressOperation.call_id == call_id
+            )
+        )
+    assert result.status == "connected"
+    assert recording.starts == []
+    assert stored_call is not None
+    assert stored_call.status == "ending"
+    assert operation is not None
+    assert operation.start_state == "prepared"
+    assert operation.stop_requested_at is not None
+
+
+@pytest.mark.anyio
+async def test_end_after_claim_then_delete_purges_call_and_late_success_only_updates_operation(
+    livekit_session_factory,
+) -> None:
+    now = datetime.now(UTC)
+    async with livekit_session_factory() as session:
+        user = User(
+            clerk_user_id="delete-start-race-user",
+            email="delete-start-race@example.com",
+        )
+        session.add(user)
+        await session.flush()
+        call = Call(
+            user_id=user.id,
+            livekit_room_id="room-delete-start-race",
+            caller_number="+33199000000",
+            summary_text="private summary",
+            status="pending",
+        )
+        session.add_all(
+            [
+                call,
+                UsageLedger(
+                    user_id=user.id,
+                    event_type="subscription_activated",
+                    source_id="in_delete_start_race",
+                    minutes_delta=1,
+                    balance_after=1,
+                ),
+            ]
+        )
+        await session.commit()
+        call_id = call.id
+        user_id = user.id
+
+    entered = asyncio.Event()
+    resume = asyncio.Event()
+    provider = _BlockingRecording(entered=entered, resume=resume)
+    async with livekit_session_factory() as dispatch_session:
+        dispatch_task = asyncio.create_task(
+            LiveKitDispatchService(
+                dispatch_session,
+                realtime_service=None,
+                recording_service=provider,
+            ).handle_participant_joined(
+                {
+                    "event": "participant_joined",
+                    "room": {"name": "room-delete-start-race"},
+                    "participant": {
+                        "identity": f"agent-call-{call_id}",
+                        "kind": "AGENT",
+                        "attributes": {},
+                    },
+                }
+            )
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1)
+
+        async with livekit_session_factory() as delete_session:
+            lifecycle = CallLifecycleService(delete_session)
+            await lifecycle.end_from_agent(
+                call_id=call_id,
+                duration_seconds=1,
+                ended_at=now + timedelta(seconds=1),
+            )
+            await delete_session.commit()
+            claim = await lifecycle.claim_finalization(call_id)
+            await lifecycle.complete_finalization(
+                call_id,
+                generation=claim.generation,
+            )
+            await CallHistoryService(
+                delete_session,
+                recording_service=None,
+                recording_lifecycle_service=RecordingLifecycleService(
+                    delete_session
+                ),
+            ).delete_call(user_id, call_id)
+
+        resume.set()
+        result = await asyncio.wait_for(dispatch_task, timeout=1)
+
+    async with livekit_session_factory() as session:
+        stored_call = await session.get(Call, call_id)
+        operation = await session.scalar(
+            select(RecordingEgressOperation).where(
+                RecordingEgressOperation.call_id == call_id
+            )
+        )
+    assert result.status == "connected"
+    assert len(provider.starts) == 1
+    assert stored_call is not None
+    assert stored_call.deleted_at is not None
+    assert stored_call.caller_number is None
+    assert stored_call.summary_text is None
+    assert stored_call.recording_object_key is None
+    assert stored_call.recording_egress_id is None
+    assert operation is not None
+    assert operation.start_state == "started"
+    assert operation.provider_egress_id == "egress-delete-race"
+    assert operation.stop_requested_at is not None
+    assert operation.delete_requested_at is not None

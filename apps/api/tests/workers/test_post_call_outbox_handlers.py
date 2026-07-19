@@ -12,7 +12,11 @@ from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.outbox_event import OutboxEvent
 from app.providers.summaries.base import StructuredSummary
-from app.services.outbox_service import OutboxService, SUPPORTED_OUTBOX_TOPICS
+from app.services.outbox_service import (
+    REFERENCE_PAYLOAD_FIELDS,
+    OutboxService,
+    SUPPORTED_OUTBOX_TOPICS,
+)
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
 from app.workers.jobs import outbox_topics
 from app.workers.jobs.recording_reconciliation import ReconciliationResult
@@ -22,11 +26,6 @@ async def _missing_handler(*_args, **_kwargs):
     pytest.fail("post-call outbox handler is not implemented")
 
 
-deliver_recording_stop = getattr(
-    outbox_topics,
-    "deliver_recording_stop",
-    _missing_handler,
-)
 deliver_recording_reconcile = getattr(
     outbox_topics,
     "deliver_recording_reconcile",
@@ -77,19 +76,6 @@ class FakeSummaryProvider:
             sentiment="neutral",
             follow_up_required=True,
         )
-
-
-class FakeRecordingProvider:
-    def __init__(self, factory: TrackingSessionFactory, *, fail=False) -> None:
-        self.factory = factory
-        self.fail = fail
-        self.calls: list[str] = []
-
-    async def ensure_stopped(self, egress_id: str) -> None:
-        assert self.factory.open_contexts == 0
-        self.calls.append(egress_id)
-        if self.fail:
-            raise RuntimeError("livekit unavailable")
 
 
 class FakeRecordingReconciler:
@@ -484,66 +470,10 @@ async def test_summary_handler_provider_failure_is_retryable(
 
 
 @pytest.mark.anyio
-async def test_recording_stop_handler_performs_no_io_with_session_open(
-    db_session,
-    active_user,
-) -> None:
-    call = Call(
-        user_id=active_user.id,
-        status="completed",
-        duration_seconds=1,
-        recording_egress_id="egress-1",
-    )
-    db_session.add(call)
-    await db_session.commit()
-    factory = TrackingSessionFactory(
-        async_sessionmaker(db_session.bind, expire_on_commit=False)
-    )
-    provider = FakeRecordingProvider(factory)
-
-    await deliver_recording_stop(
-        {"session_factory": factory, "livekit_recording_provider": provider},
-        event(call_id=call.id, topic="recording.stop", aggregate_type="call-recording"),
-    )
-
-    assert provider.calls == ["egress-1"]
-
-
-@pytest.mark.anyio
-async def test_recording_stop_uncertainty_is_retryable(
-    db_session,
-    active_user,
-) -> None:
-    call = Call(
-        user_id=active_user.id,
-        status="completed",
-        duration_seconds=1,
-        recording_egress_id="egress-1",
-    )
-    db_session.add(call)
-    await db_session.commit()
-    factory = TrackingSessionFactory(
-        async_sessionmaker(db_session.bind, expire_on_commit=False)
-    )
-
-    with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_recording_stop(
-            {
-                "session_factory": factory,
-                "livekit_recording_provider": FakeRecordingProvider(factory, fail=True),
-            },
-            event(call_id=call.id, topic="recording.stop", aggregate_type="call-recording"),
-        )
-
-    assert exc_info.value.retryable is True
-
-
-@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("handler", "topic", "aggregate_type"),
     [
         (deliver_summary_generate, "summary.generate", "call-summary"),
-        (deliver_recording_stop, "recording.stop", "call-recording"),
         (
             deliver_recording_reconcile,
             "recording.reconcile",
@@ -693,12 +623,19 @@ async def test_recording_reconcile_malformed_results_fail_closed_without_exhaust
 
 
 def test_default_handlers_exactly_match_supported_topics_without_placeholders() -> None:
-    assert set(outbox_topics.DEFAULT_OUTBOX_HANDLERS) == set(SUPPORTED_OUTBOX_TOPICS)
-    assert "summary.generate" in outbox_topics.DEFAULT_OUTBOX_HANDLERS
-    assert "recording.stop" in outbox_topics.DEFAULT_OUTBOX_HANDLERS
-    assert "recording.reconcile" in outbox_topics.DEFAULT_OUTBOX_HANDLERS
-    assert "recording.start" not in outbox_topics.DEFAULT_OUTBOX_HANDLERS
-    assert "notification.send" not in outbox_topics.DEFAULT_OUTBOX_HANDLERS
+    expected_topics = {
+        "phone.provision",
+        "phone.enable",
+        "phone.disable",
+        "livekit.dispatch",
+        "livekit.verification_dispatch",
+        "summary.generate",
+        "recording.reconcile",
+    }
+
+    assert set(SUPPORTED_OUTBOX_TOPICS) == expected_topics
+    assert set(REFERENCE_PAYLOAD_FIELDS) == expected_topics
+    assert set(outbox_topics.DEFAULT_OUTBOX_HANDLERS) == expected_topics
 
 
 @pytest.mark.anyio
@@ -746,7 +683,7 @@ async def test_recording_reconcile_holding_handler_remains_pending_after_exhaust
 
 
 @pytest.mark.anyio
-async def test_retrying_summary_does_not_block_recording_stop_aggregate(
+async def test_retrying_summary_does_not_block_recording_operation_aggregate(
     db_session,
     active_user,
 ) -> None:
@@ -762,11 +699,11 @@ async def test_retrying_summary_does_not_block_recording_stop_aggregate(
         payload={"call_id": str(call.id)},
     )
     await outbox.add(
-        topic="recording.stop",
-        aggregate_type="call-recording",
-        aggregate_id=call.id,
-        idempotency_key=f"recording.stop:{call.id}",
-        payload={"call_id": str(call.id)},
+        topic="recording.reconcile",
+        aggregate_type="recording-egress-operation",
+        aggregate_id=(operation_id := uuid4()),
+        idempotency_key=f"recording.reconcile:{operation_id}:start",
+        payload={"operation_id": str(operation_id)},
     )
     await db_session.commit()
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -776,18 +713,18 @@ async def test_retrying_summary_does_not_block_recording_stop_aggregate(
         raise OutboxDeliveryError("provider_retryable", retryable=True)
 
     async def successful_recording(_ctx, _event):
-        delivered.append("recording.stop")
+        delivered.append("recording.reconcile")
 
     result = await outbox_delivery_job(
         {
             "session_factory": factory,
             "outbox_handlers": {
                 "summary.generate": failing_summary,
-                "recording.stop": successful_recording,
+                "recording.reconcile": successful_recording,
             },
             "outbox_now": lambda: datetime.now(UTC),
         }
     )
 
     assert result == {"claimed": 2, "delivered": 1, "retried": 1, "failed": 0}
-    assert delivered == ["recording.stop"]
+    assert delivered == ["recording.reconcile"]

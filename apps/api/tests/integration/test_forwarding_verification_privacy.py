@@ -21,6 +21,7 @@ from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
+from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.usage_ledger import UsageLedger
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.services.forwarding_verification_service import ForwardingVerificationService
@@ -55,6 +56,7 @@ class _PrivacyCounts:
     usage_ledgers: int
     notifications: int
     summary_events: int
+    recording_operations: int
     recording_events: int
     activation_events: int
 
@@ -194,9 +196,10 @@ async def _privacy_counts(db_session) -> _PrivacyCounts:
             OutboxEvent,
             OutboxEvent.topic == "summary.generate",
         ),
+        recording_operations=await count(RecordingEgressOperation),
         recording_events=await count(
             OutboxEvent,
-            OutboxEvent.topic == "recording.stop",
+            OutboxEvent.topic == "recording.reconcile",
         ),
         activation_events=await count(ActivationEvent),
     )
@@ -352,6 +355,7 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
         usage_ledgers=before.usage_ledgers,
         notifications=before.notifications,
         summary_events=before.summary_events,
+        recording_operations=before.recording_operations,
         recording_events=before.recording_events,
         activation_events=before.activation_events + 3,
     )

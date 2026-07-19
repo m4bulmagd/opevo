@@ -19,6 +19,15 @@ async def call_reconciliation_job(ctx: dict) -> dict[str, int]:
         now,
         limit=100,
     )
+    arq_pool = ctx.get("arq_pool")
+    if result.scanned and arq_pool is not None:
+        try:
+            await arq_pool.enqueue_job("outbox_delivery_job", {})
+        except Exception:
+            logger.warning(
+                "outbox wakeup enqueue failed operation=call_reconciliation "
+                "error_type=unknown"
+            )
     logger.info(
         "call reconciliation completed scanned=%d recovered=%d failed=%d deferred=%d",
         result.scanned,

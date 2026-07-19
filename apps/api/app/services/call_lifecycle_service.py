@@ -8,6 +8,7 @@ from app.repositories.call_repository import CallRepository, CallTransitionError
 from app.repositories.message_repository import MessageRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.services.outbox_service import OutboxService
+from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.services.usage_accounting_service import UsageAccountingService
 
 
@@ -37,6 +38,7 @@ class CallLifecycleService:
         notification_repository: NotificationRepository | None = None,
         message_repository: MessageRepository | None = None,
         outbox_service: OutboxService | None = None,
+        recording_lifecycle_service: RecordingLifecycleService | None = None,
     ) -> None:
         self.session = session
         self.call_repository = call_repository or CallRepository(session)
@@ -44,6 +46,9 @@ class CallLifecycleService:
         self.notification_repository = notification_repository or NotificationRepository(session)
         self.message_repository = message_repository or MessageRepository(session)
         self.outbox_service = outbox_service or OutboxService(session)
+        self.recording_lifecycle_service = (
+            recording_lifecycle_service or RecordingLifecycleService(session)
+        )
 
     async def end_from_agent(
         self,
@@ -60,6 +65,7 @@ class CallLifecycleService:
         if call.status == "failed":
             raise CallTransitionError("Failed call cannot accept completion")
         if call.status in {"ending", "finalizing", "completed"}:
+            await self.recording_lifecycle_service.request_stop(call)
             return call
         if call.status not in {"pending", "connected"}:
             raise CallTransitionError("Call cannot be ended from its current state")
@@ -76,7 +82,7 @@ class CallLifecycleService:
         call.status = "ending"
         call.failure_code = None
         call.state_changed_at = datetime.now(UTC)
-        await self._add_recording_stop_intent(call)
+        await self.recording_lifecycle_service.request_stop(call)
         await self.session.flush()
         return call
 
@@ -98,10 +104,12 @@ class CallLifecycleService:
             )
             failed.ended_at = failed.ended_at or ended_at or datetime.now(UTC)
             failed.duration_seconds = failed.duration_seconds or 0
-            await self._add_recording_stop_intent(failed)
+            await self.recording_lifecycle_service.request_stop(failed)
             await self.session.flush()
             return failed
         if call.status != "connected":
+            if call.status in {"ending", "finalizing", "completed", "failed"}:
+                await self.recording_lifecycle_service.request_stop(call)
             return call
 
         frozen_end = ended_at or datetime.now(UTC)
@@ -195,14 +203,6 @@ class CallLifecycleService:
                 ),
                 payload={"call_id": str(call.id)},
             )
-            if call.recording_egress_id:
-                await self.outbox_service.add(
-                    topic="recording.stop",
-                    aggregate_type="call-recording",
-                    aggregate_id=call.id,
-                    idempotency_key=f"recording.stop:{call.id}",
-                    payload={"call_id": str(call.id)},
-                )
             if debit.balance_after == 0:
                 await self.outbox_service.add(
                     topic="phone.disable",
@@ -280,14 +280,3 @@ class CallLifecycleService:
                 int((ended_at - started_at).total_seconds()),
             )
         return call.duration_seconds
-
-    async def _add_recording_stop_intent(self, call) -> None:
-        if not call.recording_egress_id:
-            return
-        await self.outbox_service.add(
-            topic="recording.stop",
-            aggregate_type="call-recording",
-            aggregate_id=call.id,
-            idempotency_key=f"recording.stop:{call.id}",
-            payload={"call_id": str(call.id)},
-        )

@@ -204,18 +204,17 @@ class FakeRecordingService:
         self.start_calls: list[dict] = []
         self.stop_calls: list[str] = []
 
-    async def start_room_recording(self, *, room_name: str, user_id: UUID, call_id: UUID):
+    async def start_room_recording(self, *, room_name: str, object_key: str):
         self.start_calls.append(
             {
                 "room_name": room_name,
-                "user_id": user_id,
-                "call_id": call_id,
+                "object_key": object_key,
             }
         )
         return SimpleNamespace(
-            object_key=f"calls/{user_id}/{call_id}.ogg",
+            object_key=object_key,
             egress_id="egress_123",
-            url=f"http://minio:9000/recordings/calls/{user_id}/{call_id}.ogg",
+            url=f"http://minio:9000/recordings/{object_key}",
         )
 
     async def stop_room_recording(self, *, egress_id: str):
@@ -223,7 +222,7 @@ class FakeRecordingService:
 
 
 class FakeFailingRecordingService:
-    async def start_room_recording(self, *, room_name: str, user_id: UUID, call_id: UUID):
+    async def start_room_recording(self, *, room_name: str, object_key: str):
         raise RuntimeError(RECORDING_START_SENTINEL)
 
 
@@ -238,6 +237,49 @@ class FakeSession:
 
     async def commit(self) -> None:
         self.commits += 1
+
+    async def rollback(self) -> None:
+        return None
+
+
+class FakeRecordingLifecycleService:
+    def __init__(self, call_repository: FakeCallRepository) -> None:
+        self.call_repository = call_repository
+        self.operation = SimpleNamespace(id=uuid4())
+        self.error_calls: list[dict] = []
+
+    async def prepare_start(self, call):
+        self.operation.call_id = call.id
+        self.operation.room_name = call.livekit_room_id
+        self.operation.expected_object_key = f"calls/{call.user_id}/{call.id}.ogg"
+        return self.operation
+
+    async def begin_start(self, operation_id):
+        assert operation_id == self.operation.id
+        return SimpleNamespace(
+            operation_id=operation_id,
+            call_id=self.operation.call_id,
+            room_name=self.operation.room_name,
+            expected_object_key=self.operation.expected_object_key,
+        )
+
+    async def record_start_success(self, operation_id, result):
+        assert operation_id == self.operation.id
+        return await self.call_repository.set_recording_metadata(
+            self.call_repository.call,
+            recording_object_key=result.object_key,
+            recording_egress_id=result.egress_id,
+            recording_url=result.url,
+        )
+
+    async def record_start_error(self, operation_id, *, outcome, error_code):
+        self.error_calls.append(
+            {
+                "operation_id": operation_id,
+                "outcome": outcome,
+                "error_code": error_code,
+            }
+        )
 
 
 class FakeCallLifecycleService:
@@ -268,6 +310,7 @@ def build_dispatch_service(
     realtime_service=None,
     recording_service=None,
     call_lifecycle_service=None,
+    recording_lifecycle_service=None,
 ) -> LiveKitDispatchService:
     resolved_call_repository = call_repository or FakeCallRepository(call_id=uuid4())
     return LiveKitDispatchService(
@@ -280,6 +323,10 @@ def build_dispatch_service(
         usage_repository=usage_repository or FakeUsageRepository(),
         realtime_service=realtime_service or FakeRealtimeService(),
         recording_service=recording_service or FakeRecordingService(),
+        recording_lifecycle_service=(
+            recording_lifecycle_service
+            or FakeRecordingLifecycleService(resolved_call_repository)
+        ),
         call_lifecycle_service=(
             call_lifecycle_service
             or FakeCallLifecycleService(resolved_call_repository)
@@ -331,8 +378,7 @@ async def test_dispatch_service_persists_recording_metadata_when_egress_starts()
     assert recording_service.start_calls == [
         {
             "room_name": "room_123",
-            "user_id": user_id,
-            "call_id": call_repository.call.id,
+            "object_key": f"calls/{user_id}/{call_repository.call.id}.ogg",
         }
     ]
     assert call_repository.pending_by_room_calls == ["room_123"]
