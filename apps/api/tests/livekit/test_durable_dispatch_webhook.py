@@ -493,7 +493,7 @@ def test_convert_semantically_equivalent_top_level_aliases() -> None:
                 "room_name": "room-owned",
                 "status": 1,
                 "room_composite": {
-                    "file_outputs": [{"filepath": object_key}],
+                    "file_outputs": ({"filepath": object_key},),
                 },
             },
         },
@@ -512,6 +512,138 @@ def test_convert_semantically_equivalent_top_level_aliases() -> None:
             "object_key": object_key,
         },
     }
+
+
+@pytest.mark.parametrize("conflicting_status", [True, 1.0])
+def test_convert_top_level_aliases_require_exact_leaf_types(
+    conflicting_status: object,
+) -> None:
+    object_key = "calls/user-id/call-id.ogg"
+    event = {
+        "id": "EV_type_conflict",
+        "event": "egress_started",
+        "egressInfo": {
+            "egressId": "EG_exact",
+            "roomName": "room-owned",
+            "status": conflicting_status,
+            "roomComposite": {
+                "fileOutputs": [{"filepath": object_key}],
+            },
+        },
+        "egress_info": {
+            "egress_id": "EG_exact",
+            "room_name": "room-owned",
+            "status": 1,
+            "room_composite": {
+                "file_outputs": ({"filepath": object_key},),
+            },
+        },
+    }
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        event,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert converted.path_state == "invalid"
+    assert converted.payload["egress"] == {
+        "egress_id": None,
+        "room_name": None,
+        "status": None,
+        "object_key": None,
+    }
+    assert convert_livekit_event(event)["egress"] == converted.payload["egress"]
+
+
+@pytest.mark.parametrize("cycle_kind", ["mapping", "list"])
+def test_convert_cyclic_alias_graph_fails_closed(cycle_kind: str) -> None:
+    if cycle_kind == "mapping":
+        cyclic_value: object = {}
+        assert isinstance(cyclic_value, dict)
+        cyclic_value["self"] = cyclic_value
+    else:
+        cyclic_value = []
+        assert isinstance(cyclic_value, list)
+        cyclic_value.append(cyclic_value)
+
+    event = {
+        "id": "EV_cycle",
+        "event": "egress_updated",
+        "egressInfo": {
+            "egressId": "EG_exact",
+            "roomName": "room-owned",
+            "status": 1,
+            "extension": cyclic_value,
+        },
+        "egress_info": {
+            "egress_id": "EG_exact",
+            "room_name": "room-owned",
+            "status": 1,
+            "extension": cyclic_value,
+        },
+    }
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        event,
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert converted.path_state == "invalid"
+    assert converted.payload["egress"] == {
+        "egress_id": None,
+        "room_name": None,
+        "status": None,
+        "object_key": None,
+    }
+
+
+@pytest.mark.parametrize("limit_kind", ["depth", "nodes"])
+def test_convert_over_budget_alias_graph_fails_closed_without_provider_io(
+    limit_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_calls = _forbid_provider_and_storage_io(monkeypatch)
+    if limit_kind == "depth":
+        snake_extension: object = "leaf"
+        camel_extension: object = "leaf"
+        for _ in range(32):
+            snake_extension = {"nested": snake_extension}
+            camel_extension = {"nested": camel_extension}
+    else:
+        snake_extension = [{"value": index} for index in range(600)]
+        camel_extension = [{"value": index} for index in range(600)]
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        {
+            "id": "EV_budget",
+            "event": "egress_ended",
+            "egressInfo": {
+                "egressId": "EG_exact",
+                "roomName": "room-owned",
+                "status": 3,
+                "extension": camel_extension,
+            },
+            "egress_info": {
+                "egress_id": "EG_exact",
+                "room_name": "room-owned",
+                "status": 3,
+                "extension": snake_extension,
+            },
+        },
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+
+    assert converted.path_state == "invalid"
+    assert converted.payload["egress"] == {
+        "egress_id": None,
+        "room_name": None,
+        "status": None,
+        "object_key": None,
+    }
+    assert provider_calls == {"recording": 0, "storage": 0}
 
 
 @pytest.mark.parametrize(

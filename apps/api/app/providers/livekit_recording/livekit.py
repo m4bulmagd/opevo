@@ -30,6 +30,8 @@ class EgressObjectKeyEvidence:
 
 _MISSING = object()
 _ALIAS_CONFLICT = object()
+_ALIAS_MAX_DEPTH = 12
+_ALIAS_MAX_NODES = 256
 _LIVEKIT_ALIAS_NAMES = {
     "egressInfo": "egress_info",
     "egressId": "egress_id",
@@ -40,7 +42,36 @@ _LIVEKIT_ALIAS_NAMES = {
 }
 
 
+@dataclass(frozen=True)
+class _CanonicalLeaf:
+    value: object
+
+
+@dataclass(frozen=True)
+class _CanonicalSequence:
+    items: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class _CanonicalMapping:
+    items: tuple[tuple[object, object], ...]
+
+
+class _AliasTraversal:
+    def __init__(self) -> None:
+        self.remaining_nodes = _ALIAS_MAX_NODES
+        self.active_containers: set[int] = set()
+
+    def consume(self, *, depth: int) -> bool:
+        if depth > _ALIAS_MAX_DEPTH or self.remaining_nodes == 0:
+            return False
+        self.remaining_nodes -= 1
+        return True
+
+
 def _raw_values_agree(left: object, right: object) -> bool:
+    if type(left) is not type(right):
+        return False
     try:
         result = left == right
     except Exception:
@@ -48,35 +79,119 @@ def _raw_values_agree(left: object, right: object) -> bool:
     return type(result) is bool and result
 
 
-def _canonical_alias_value(value: object) -> object:
+def _canonical_values_equivalent(left: object, right: object) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, _CanonicalLeaf) and isinstance(right, _CanonicalLeaf):
+        return _raw_values_agree(left.value, right.value)
+    if isinstance(left, _CanonicalSequence) and isinstance(
+        right, _CanonicalSequence
+    ):
+        left_items = left.items
+        right_items = right.items
+        return len(left_items) == len(right_items) and all(
+            _canonical_values_equivalent(left_item, right_item)
+            for left_item, right_item in zip(left_items, right_items, strict=True)
+        )
+    if isinstance(left, _CanonicalMapping) and isinstance(right, _CanonicalMapping):
+        left_items = left.items
+        right_items = right.items
+        if len(left_items) != len(right_items):
+            return False
+        matched_right_indexes: set[int] = set()
+        for left_key, left_value in left_items:
+            for index, (right_key, right_value) in enumerate(right_items):
+                if index in matched_right_indexes or not _canonical_values_equivalent(
+                    left_key, right_key
+                ):
+                    continue
+                if not _canonical_values_equivalent(left_value, right_value):
+                    return False
+                matched_right_indexes.add(index)
+                break
+            else:
+                return False
+        return True
+    return False
+
+
+def _canonical_alias_value(
+    value: object,
+    *,
+    traversal: _AliasTraversal,
+    depth: int,
+) -> object:
+    if not traversal.consume(depth=depth):
+        return _ALIAS_CONFLICT
     if isinstance(value, Mapping):
-        normalized: dict[object, object] = {}
-        for key, item in value.items():
-            canonical_key = _LIVEKIT_ALIAS_NAMES.get(key, key)
-            canonical_item = _canonical_alias_value(item)
-            if canonical_item is _ALIAS_CONFLICT:
-                return _ALIAS_CONFLICT
-            if canonical_key in normalized and not _raw_values_agree(
-                normalized[canonical_key], canonical_item
-            ):
-                return _ALIAS_CONFLICT
-            normalized[canonical_key] = canonical_item
-        return normalized
+        container_id = id(value)
+        if container_id in traversal.active_containers:
+            return _ALIAS_CONFLICT
+        traversal.active_containers.add(container_id)
+        try:
+            normalized: list[tuple[object, object]] = []
+            for key, item in value.items():
+                canonical_key_value = (
+                    _LIVEKIT_ALIAS_NAMES.get(key, key) if type(key) is str else key
+                )
+                canonical_key = _canonical_alias_value(
+                    canonical_key_value,
+                    traversal=traversal,
+                    depth=depth + 1,
+                )
+                canonical_item = _canonical_alias_value(
+                    item,
+                    traversal=traversal,
+                    depth=depth + 1,
+                )
+                if (
+                    canonical_key is _ALIAS_CONFLICT
+                    or canonical_item is _ALIAS_CONFLICT
+                ):
+                    return _ALIAS_CONFLICT
+                for existing_key, existing_item in normalized:
+                    if not _canonical_values_equivalent(existing_key, canonical_key):
+                        continue
+                    if not _canonical_values_equivalent(
+                        existing_item, canonical_item
+                    ):
+                        return _ALIAS_CONFLICT
+                    break
+                else:
+                    normalized.append((canonical_key, canonical_item))
+            return _CanonicalMapping(tuple(normalized))
+        finally:
+            traversal.active_containers.remove(container_id)
     if isinstance(value, (list, tuple)):
-        normalized_items = tuple(_canonical_alias_value(item) for item in value)
+        container_id = id(value)
+        if container_id in traversal.active_containers:
+            return _ALIAS_CONFLICT
+        traversal.active_containers.add(container_id)
+        try:
+            normalized_items = tuple(
+                _canonical_alias_value(
+                    item,
+                    traversal=traversal,
+                    depth=depth + 1,
+                )
+                for item in value
+            )
+        finally:
+            traversal.active_containers.remove(container_id)
         if any(item is _ALIAS_CONFLICT for item in normalized_items):
             return _ALIAS_CONFLICT
-        return normalized_items
-    return value
+        return _CanonicalSequence(normalized_items)
+    return _CanonicalLeaf(value)
 
 
 def livekit_alias_values_equivalent(left: object, right: object) -> bool:
-    """Compare only the bounded camel/snake vocabulary Presvo consumes."""
-    canonical_left = _canonical_alias_value(left)
-    canonical_right = _canonical_alias_value(right)
+    """Compare Presvo's bounded camel/snake vocabulary structurally."""
+    traversal = _AliasTraversal()
+    canonical_left = _canonical_alias_value(left, traversal=traversal, depth=0)
+    canonical_right = _canonical_alias_value(right, traversal=traversal, depth=0)
     if canonical_left is _ALIAS_CONFLICT or canonical_right is _ALIAS_CONFLICT:
         return False
-    return _raw_values_agree(canonical_left, canonical_right)
+    return _canonical_values_equivalent(canonical_left, canonical_right)
 
 
 def livekit_field_is_present(value: object, name: str) -> bool:
