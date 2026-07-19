@@ -1,3 +1,4 @@
+from enum import Enum, auto
 from urllib.parse import urlsplit
 
 from livekit import api
@@ -17,6 +18,11 @@ from app.providers.livekit_recording.base import (
 
 class _LocalStartValidationError(ValueError):
     pass
+
+
+class _FileInfoPathState(Enum):
+    ABSENT = auto()
+    UNPROVABLE = auto()
 
 
 def _nonempty_string(value: object) -> str | None:
@@ -68,18 +74,21 @@ def _file_info_path(
     *,
     bucket_name: str,
     endpoint_url: str,
-) -> str | None:
+) -> str | _FileInfoPathState:
     filename = _nonempty_string(getattr(file_info, "filename", None))
     if filename is not None:
         return filename
     location = _nonempty_string(getattr(file_info, "location", None))
     if location is None:
-        return None
-    return _location_object_key(
+        return _FileInfoPathState.ABSENT
+    object_key = _location_object_key(
         location,
         bucket_name=bucket_name,
         endpoint_url=endpoint_url,
     )
+    if object_key is None:
+        return _FileInfoPathState.UNPROVABLE
+    return object_key
 
 
 def normalized_egress_object_key(
@@ -109,16 +118,20 @@ def normalized_egress_object_key(
         bucket_name=bucket_name,
         endpoint_url=endpoint_url,
     )
-    if legacy_path is not None:
+    if legacy_path is _FileInfoPathState.UNPROVABLE:
+        return None
+    if isinstance(legacy_path, str):
         paths.add(legacy_path)
     for file_result in getattr(egress, "file_results", ()):
-        path = _file_info_path(
+        file_result_path = _file_info_path(
             file_result,
             bucket_name=bucket_name,
             endpoint_url=endpoint_url,
         )
-        if path is not None:
-            paths.add(path)
+        if file_result_path is _FileInfoPathState.UNPROVABLE:
+            return None
+        if isinstance(file_result_path, str):
+            paths.add(file_result_path)
 
     if len(paths) != 1:
         return None

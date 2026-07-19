@@ -658,6 +658,98 @@ async def test_list_room_egresses_prefers_filename_over_storage_locator() -> Non
 
 
 @pytest.mark.anyio
+async def test_list_room_egresses_rejects_unprovable_location_with_composite_path(
+) -> None:
+    object_key = "calls/user-1/call-1.ogg"
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-ambiguous-composite",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_COMPLETE,
+                room_composite=api.RoomCompositeEgressRequest(
+                    file=api.EncodedFileOutput(filepath=object_key)
+                ),
+                file_results=[
+                    api.FileInfo(
+                        location=(
+                            "https://unrecognized.example/recordings/"
+                            "calls/user-1/different-call.ogg"
+                        )
+                    )
+                ],
+            )
+        ]
+    )
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots[0].object_key is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "unprovable_location",
+    [
+        "s3://different-bucket/calls/user-1/different-call.ogg",
+        (
+            "https://unrecognized.example/recordings/"
+            "calls/user-1/different-call.ogg"
+        ),
+    ],
+)
+async def test_list_room_egresses_rejects_unprovable_location_with_file_result(
+    unprovable_location: str,
+) -> None:
+    object_key = "calls/user-1/call-1.ogg"
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-ambiguous-results",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_COMPLETE,
+                file_results=[
+                    api.FileInfo(filename=object_key),
+                    api.FileInfo(location=unprovable_location),
+                ],
+            )
+        ]
+    )
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots[0].object_key is None
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_ignores_absent_file_info_path() -> None:
+    object_key = "calls/user-1/call-1.ogg"
+    client = FakeRoomListEgressClient(
+        [
+            api.EgressInfo(
+                egress_id="egress-absent-result-path",
+                room_name="room-owned",
+                status=api.EgressStatus.EGRESS_COMPLETE,
+                room_composite=api.RoomCompositeEgressRequest(
+                    file=api.EncodedFileOutput(filepath=object_key)
+                ),
+                file_results=[api.FileInfo()],
+            )
+        ]
+    )
+
+    snapshots = await build_provider(client).list_room_egresses(
+        room_name="room-owned"
+    )
+
+    assert snapshots[0].object_key == object_key
+
+
+@pytest.mark.anyio
 async def test_list_room_egresses_fails_closed_for_conflicting_paths() -> None:
     client = FakeRoomListEgressClient(
         [
