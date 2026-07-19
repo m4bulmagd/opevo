@@ -40,6 +40,25 @@ class _Meter:
     create_gauge = _create
 
 
+class _SpecificationMeter(_Meter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.specifications: dict[str, tuple[str, str | None]] = {}
+
+    def _create_typed(self, kind: str, name: str, **kwargs) -> _Instrument:
+        self.specifications[name] = (kind, kwargs.get("unit"))
+        return super()._create(name, **kwargs)
+
+    def create_counter(self, name: str, **kwargs) -> _Instrument:
+        return self._create_typed("counter", name, **kwargs)
+
+    def create_histogram(self, name: str, **kwargs) -> _Instrument:
+        return self._create_typed("histogram", name, **kwargs)
+
+    def create_gauge(self, name: str, **kwargs) -> _Instrument:
+        return self._create_typed("gauge", name, **kwargs)
+
+
 class _Span:
     def __init__(self, name: str, attributes: dict | None, *, kind=None) -> None:
         self.name = name
@@ -549,6 +568,211 @@ async def test_provider_metrics_count_once_and_normalize_unknown_without_content
         "recording.example",
     ):
         assert sentinel not in rendered
+
+
+def test_recording_instruments_have_exact_names_types_and_units() -> None:
+    meter = _SpecificationMeter()
+
+    _observability(meter=meter)
+
+    assert {
+        name: specification
+        for name, specification in meter.specifications.items()
+        if name.startswith("presvo.recording.")
+    } == {
+        "presvo.recording.operations": ("gauge", None),
+        "presvo.recording.oldest_unresolved.age": ("gauge", "s"),
+        "presvo.recording.pending_stop.operations": ("gauge", None),
+        "presvo.recording.pending_stop.oldest_age": ("gauge", "s"),
+        "presvo.recording.pending_deletion.operations": ("gauge", None),
+        "presvo.recording.pending_deletion.oldest_age": ("gauge", "s"),
+        "presvo.recording.reconciliation.results": ("counter", None),
+        "presvo.recording.webhook_mismatches": ("counter", None),
+        "presvo.recording.multiple_exact_match_conflicts": ("counter", None),
+    }
+
+
+def test_recording_metric_allowlists_are_exact() -> None:
+    from app.core.observability import (
+        _RECORDING_RECONCILIATION_RESULTS,
+        _RECORDING_START_STATES,
+        _RECORDING_WEBHOOK_MISMATCH_CATEGORIES,
+    )
+
+    assert _RECORDING_START_STATES == frozenset(
+        {"prepared", "starting", "started", "not_started", "uncertain"}
+    )
+    assert _RECORDING_RECONCILIATION_RESULTS == frozenset(
+        {
+            "complete",
+            "recording_unresolved",
+            "recording_provider_unavailable",
+            "recording_storage_unavailable",
+            "recording_identity_mismatch",
+            "recording_identity_conflict",
+            "recording_legacy_incomplete",
+        }
+    )
+    assert _RECORDING_WEBHOOK_MISMATCH_CATEGORIES == frozenset(
+        {"missing", "mismatch", "conflict"}
+    )
+
+
+def test_recording_operation_snapshot_emits_only_fixed_state_and_scalar_gauges() -> (
+    None
+):
+    meter = _Meter()
+    telemetry = _observability(meter=meter)
+    private_state_sentinel = "ROOM_PRIVATE_STATE_SENTINEL"
+    snapshot = SimpleNamespace(
+        counts={
+            "prepared": 1,
+            "starting": 2,
+            "started": 3,
+            "not_started": 4,
+            "uncertain": 5,
+            private_state_sentinel: 999,
+        },
+        oldest_unresolved_age_seconds=61.5,
+        pending_stop_count=6,
+        oldest_pending_stop_age_seconds=42.25,
+        pending_deletion_count=7,
+        oldest_pending_deletion_age_seconds=21.125,
+    )
+
+    telemetry.record_recording_operation_snapshot(snapshot)
+
+    assert meter.instruments["presvo.recording.operations"].measurements == [
+        (1, {"state": "prepared"}),
+        (2, {"state": "starting"}),
+        (3, {"state": "started"}),
+        (4, {"state": "not_started"}),
+        (5, {"state": "uncertain"}),
+    ]
+    assert meter.instruments[
+        "presvo.recording.oldest_unresolved.age"
+    ].measurements == [(61.5, {})]
+    assert meter.instruments[
+        "presvo.recording.pending_stop.operations"
+    ].measurements == [(6, {})]
+    assert meter.instruments[
+        "presvo.recording.pending_stop.oldest_age"
+    ].measurements == [(42.25, {})]
+    assert meter.instruments[
+        "presvo.recording.pending_deletion.operations"
+    ].measurements == [(7, {})]
+    assert meter.instruments[
+        "presvo.recording.pending_deletion.oldest_age"
+    ].measurements == [(21.125, {})]
+    assert private_state_sentinel not in repr(
+        {
+            name: instrument.measurements
+            for name, instrument in meter.instruments.items()
+            if name.startswith("presvo.recording.")
+        }
+    )
+
+
+def test_recording_result_and_mismatch_methods_bound_every_attribute() -> None:
+    meter = _Meter()
+    telemetry = _observability(meter=meter)
+    reconciliation_results = (
+        "complete",
+        "recording_unresolved",
+        "recording_provider_unavailable",
+        "recording_storage_unavailable",
+        "recording_identity_mismatch",
+        "recording_identity_conflict",
+        "recording_legacy_incomplete",
+    )
+    mismatch_categories = ("missing", "mismatch", "conflict")
+
+    for result in reconciliation_results:
+        telemetry.record_recording_reconciliation_result(result)
+    telemetry.record_recording_reconciliation_result("PRIVATE_RESULT_SENTINEL")
+    for category in mismatch_categories:
+        telemetry.record_recording_webhook_mismatch(category)
+    telemetry.record_recording_webhook_mismatch("PRIVATE_CATEGORY_SENTINEL")
+    telemetry.record_multiple_exact_match_conflict()
+
+    assert meter.instruments[
+        "presvo.recording.reconciliation.results"
+    ].measurements == [
+        (1, {"result": result}) for result in reconciliation_results
+    ] + [(1, {"result": "recording_unresolved"})]
+    assert meter.instruments[
+        "presvo.recording.webhook_mismatches"
+    ].measurements == [
+        (1, {"category": category}) for category in mismatch_categories
+    ]
+    assert meter.instruments[
+        "presvo.recording.multiple_exact_match_conflicts"
+    ].measurements == [(1, {})]
+    rendered = repr(
+        {
+            name: instrument.measurements
+            for name, instrument in meter.instruments.items()
+            if name.startswith("presvo.recording.")
+        }
+    )
+    assert "PRIVATE_RESULT_SENTINEL" not in rendered
+    assert "PRIVATE_CATEGORY_SENTINEL" not in rendered
+
+
+def test_recording_metric_exporter_failures_are_fail_open_and_redacted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_failure_sentinel = "PRIVATE_RECORDING_EXPORTER_FAILURE"
+    telemetry = _observability(
+        meter=_Meter(failure=RuntimeError(private_failure_sentinel))
+    )
+    snapshot = SimpleNamespace(
+        counts={"prepared": 1},
+        oldest_unresolved_age_seconds=1.0,
+        pending_stop_count=2,
+        oldest_pending_stop_age_seconds=3.0,
+        pending_deletion_count=4,
+        oldest_pending_deletion_age_seconds=5.0,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        telemetry.record_recording_operation_snapshot(snapshot)
+        telemetry.record_recording_reconciliation_result("complete")
+        telemetry.record_recording_webhook_mismatch("conflict")
+        telemetry.record_multiple_exact_match_conflict()
+
+    assert "event=observability_metric_record_failed" in caplog.text
+    assert private_failure_sentinel not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_recording_listing_provider_operation_is_allowlisted_and_private() -> None:
+    room_sentinel = "ROOM_PRIVATE_LISTING_SENTINEL"
+    meter = _Meter()
+    tracer = _Tracer()
+    telemetry = _observability(meter=meter, tracer=tracer)
+
+    async with telemetry.provider_operation("livekit", "list_recording_egresses"):
+        await asyncio.sleep(0)
+
+    assert meter.instruments["presvo.provider.request.duration"].measurements[
+        0
+    ][1] == {
+        "provider": "livekit",
+        "operation": "list_recording_egresses",
+        "outcome": "success",
+    }
+    assert tracer.spans[0].attributes == {
+        "presvo.provider.name": "livekit",
+        "presvo.provider.operation": "list_recording_egresses",
+        "presvo.outcome": "success",
+    }
+    assert room_sentinel not in repr(
+        (
+            meter.instruments["presvo.provider.request.duration"].measurements,
+            tracer.spans[0].attributes,
+        )
+    )
 
 
 @pytest.mark.anyio

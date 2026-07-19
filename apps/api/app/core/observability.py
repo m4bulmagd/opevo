@@ -61,6 +61,7 @@ _PROVIDER_OPERATIONS = {
             "stop_recording",
             "ensure_recording_not_running",
             "ensure_recording_stopped",
+            "list_recording_egresses",
         }
     ),
     "gemini": frozenset({"generate_summary"}),
@@ -80,6 +81,23 @@ _JOB_NAMES = frozenset(
 _OUTBOX_STATUSES = frozenset({"pending", "processing", "delivered", "failed"})
 _CALL_STATES = frozenset(
     {"pending", "connected", "ending", "finalizing", "completed", "failed"}
+)
+_RECORDING_START_STATES = frozenset(
+    {"prepared", "starting", "started", "not_started", "uncertain"}
+)
+_RECORDING_RECONCILIATION_RESULTS = frozenset(
+    {
+        "complete",
+        "recording_unresolved",
+        "recording_provider_unavailable",
+        "recording_storage_unavailable",
+        "recording_identity_mismatch",
+        "recording_identity_conflict",
+        "recording_legacy_incomplete",
+    }
+)
+_RECORDING_WEBHOOK_MISMATCH_CATEGORIES = frozenset(
+    {"missing", "mismatch", "conflict"}
 )
 _OUTBOX_TOPICS = frozenset(
     {
@@ -355,6 +373,36 @@ class Observability:
         self.calls_stale = meter.create_gauge("presvo.calls.stale")
         self.reconciliation_outcomes = meter.create_counter(
             "presvo.call_reconciliation.outcomes"
+        )
+        self.recording_operations = meter.create_gauge(
+            "presvo.recording.operations"
+        )
+        self.recording_oldest_unresolved_age = meter.create_gauge(
+            "presvo.recording.oldest_unresolved.age",
+            unit="s",
+        )
+        self.recording_pending_stop_operations = meter.create_gauge(
+            "presvo.recording.pending_stop.operations"
+        )
+        self.recording_pending_stop_oldest_age = meter.create_gauge(
+            "presvo.recording.pending_stop.oldest_age",
+            unit="s",
+        )
+        self.recording_pending_deletion_operations = meter.create_gauge(
+            "presvo.recording.pending_deletion.operations"
+        )
+        self.recording_pending_deletion_oldest_age = meter.create_gauge(
+            "presvo.recording.pending_deletion.oldest_age",
+            unit="s",
+        )
+        self.recording_reconciliation_results = meter.create_counter(
+            "presvo.recording.reconciliation.results"
+        )
+        self.recording_webhook_mismatches = meter.create_counter(
+            "presvo.recording.webhook_mismatches"
+        )
+        self.recording_multiple_exact_match_conflicts = meter.create_counter(
+            "presvo.recording.multiple_exact_match_conflicts"
         )
         self.provider_duration = meter.create_histogram(
             "presvo.provider.request.duration",
@@ -633,6 +681,85 @@ class Observability:
                     {"outcome": outcome},
                 ),
             )
+
+    def record_recording_operation_snapshot(self, snapshot) -> None:
+        for state, count in snapshot.counts.items():
+            if state not in _RECORDING_START_STATES:
+                continue
+            _safe_call(
+                "record_recording_operation_state",
+                partial(
+                    self.recording_operations.set,
+                    count,
+                    {"state": state},
+                ),
+            )
+        _safe_call(
+            "record_recording_oldest_unresolved_age",
+            lambda: self.recording_oldest_unresolved_age.set(
+                snapshot.oldest_unresolved_age_seconds,
+                {},
+            ),
+        )
+        _safe_call(
+            "record_recording_pending_stop_count",
+            lambda: self.recording_pending_stop_operations.set(
+                snapshot.pending_stop_count,
+                {},
+            ),
+        )
+        _safe_call(
+            "record_recording_pending_stop_oldest_age",
+            lambda: self.recording_pending_stop_oldest_age.set(
+                snapshot.oldest_pending_stop_age_seconds,
+                {},
+            ),
+        )
+        _safe_call(
+            "record_recording_pending_deletion_count",
+            lambda: self.recording_pending_deletion_operations.set(
+                snapshot.pending_deletion_count,
+                {},
+            ),
+        )
+        _safe_call(
+            "record_recording_pending_deletion_oldest_age",
+            lambda: self.recording_pending_deletion_oldest_age.set(
+                snapshot.oldest_pending_deletion_age_seconds,
+                {},
+            ),
+        )
+
+    def record_recording_reconciliation_result(self, result: str) -> None:
+        if type(result) is not str or result not in _RECORDING_RECONCILIATION_RESULTS:
+            result = "recording_unresolved"
+        _safe_call(
+            "record_recording_reconciliation_result",
+            lambda: self.recording_reconciliation_results.add(
+                1,
+                {"result": result},
+            ),
+        )
+
+    def record_recording_webhook_mismatch(self, category: str) -> None:
+        if (
+            type(category) is not str
+            or category not in _RECORDING_WEBHOOK_MISMATCH_CATEGORIES
+        ):
+            return
+        _safe_call(
+            "record_recording_webhook_mismatch",
+            lambda: self.recording_webhook_mismatches.add(
+                1,
+                {"category": category},
+            ),
+        )
+
+    def record_multiple_exact_match_conflict(self) -> None:
+        _safe_call(
+            "record_multiple_exact_match_conflict",
+            lambda: self.recording_multiple_exact_match_conflicts.add(1, {}),
+        )
 
     def record_worker_queue_delay(self, job: str, seconds: float) -> None:
         _safe_label(job, _JOB_NAMES)

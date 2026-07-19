@@ -18,9 +18,11 @@ class _Telemetry:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str]] = []
         self.error_classes: list[str] = []
+        self.operation_kwargs: list[dict[str, object]] = []
 
     @asynccontextmanager
-    async def provider_operation(self, provider: str, operation: str, **_kwargs):
+    async def provider_operation(self, provider: str, operation: str, **kwargs):
+        self.operation_kwargs.append(dict(kwargs))
         try:
             yield
         except Exception as error:
@@ -611,6 +613,28 @@ async def test_list_room_egresses_returns_sanitized_primitive_snapshots() -> Non
 
     with pytest.raises(FrozenInstanceError):
         snapshots[0].object_key = "provider-controlled-change"
+
+
+@pytest.mark.anyio
+async def test_list_room_egresses_is_instrumented_without_room_identity() -> None:
+    room_sentinel = "ROOM_PRIVATE_LIST_OPERATION_SENTINEL"
+    telemetry = _Telemetry()
+    client = FakeRoomListEgressClient([])
+
+    snapshots = await build_provider(
+        client,
+        observability=telemetry,
+    ).list_room_egresses(room_name=room_sentinel)
+
+    assert snapshots == ()
+    assert client.list_requests[0].room_name == room_sentinel
+    assert telemetry.calls == [
+        ("livekit", "list_recording_egresses", "success")
+    ]
+    assert telemetry.operation_kwargs == [{"call_id": None}]
+    assert room_sentinel not in repr(
+        (telemetry.calls, telemetry.operation_kwargs)
+    )
 
 
 @pytest.mark.anyio
