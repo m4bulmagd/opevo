@@ -13,17 +13,22 @@ cleanup authority has disappeared.
 
 ## Decision
 
-Exact room-and-object-key evidence observed after operation removal restores
-durable cleanup authority before any provider stop attempt.
+One or more exact room-and-object-key identities observed after operation
+removal restore durable cleanup authority before any provider stop attempt.
 
 The stale worker opens a new short transaction and locks the customer call by
 the snapshotted call ID. It then rechecks the operation by its original ID:
 
-- If the operation is still absent, recreate that same operation ID for the
-  same call, room, and expected object key. Record the exact provider ID as a
-  trusted `started` identity, copy the original stop and deletion intents, set
-  `recording_identity_conflict`, leave object and terminal proof unset, and
-  hide every customer-visible recording projection.
+- If the operation is still absent after a singleton exact observation,
+  recreate that same operation ID for the same call, room, and expected object
+  key. Record the exact provider ID as a trusted `started` identity, copy the
+  original stop and deletion intents, set `recording_identity_conflict`, leave
+  object and terminal proof unset, and hide every customer-visible recording
+  projection.
+- If the operation is still absent after multiple distinct exact observations,
+  recreate it with `start_state="uncertain"` and no provider ID because no
+  single identity is authoritative. Preserve the same intents and sticky
+  conflict, commit the retry event, then stop every distinct observed exact ID.
 - If another worker already restored the operation, revalidate its immutable
   call, room, legacy, and object-key identity. Preserve its known provider ID
   even when the newly observed exact ID differs, retain sticky conflict, and
@@ -53,9 +58,11 @@ inventing a new error code or auto-resolution rule.
 3. A reclaimed W2 may commit `not_started`, delete storage, remove the
    operation, and deliver its stale work.
 4. W1 receives one exact live egress and opens a fresh SQL transaction.
-5. W1 locks the call, rechecks the missing operation, restores sticky conflict
-   state plus a fresh reconciliation event, hides projection, and commits.
-6. With no SQL session open, W1 attempts to stop every distinct safe identity.
+5. W1 locks the call, rechecks the missing operation, restores singleton-known
+   or multiple-unknown sticky conflict state plus a fresh reconciliation event,
+   hides projection, and commits.
+6. With no SQL session open, W1 attempts to stop every distinct stored and
+   observed safe identity.
 7. Any subsequent delivery finds durable conflict authority and can retry the
    provider stop. Storage deletion and operation removal stay blocked.
 
@@ -92,6 +99,9 @@ error during one worker's provider listing:
 - GREEN proves W1 commits a restored sticky conflict and fresh reconcile event
   before the first stop call, hides all projection, performs no additional
   storage deletion, and attempts the exact stop outside SQL.
+- The same full W1/W2 removal schedule returning two distinct exact identities
+  proves an uncertain conflict is restored before both stop attempts, with no
+  arbitrarily selected provider ID.
 - A stop failure followed by a new reconciliation delivery proves durable retry
   authority remains and the operation cannot be removed.
 - Two stale workers racing to restore authority remain idempotent: one operation
