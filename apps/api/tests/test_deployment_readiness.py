@@ -5,6 +5,8 @@ import subprocess
 import sys
 import tomllib
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 import pytest
 
 from app.core.config import Settings
@@ -393,6 +395,15 @@ def test_api_startup_is_migration_free_but_release_image_keeps_alembic() -> None
     assert 'command: ["/app/.venv/bin/alembic", "-c", "/app/alembic.ini", "upgrade", "head"]' in migration_compose
 
 
+def test_recording_operation_migration_is_the_only_alembic_head() -> None:
+    config = Config(str(REPO_ROOT / "apps" / "api" / "alembic.ini"))
+    config.set_main_option("path_separator", "os")
+
+    assert ScriptDirectory.from_config(config).get_heads() == [
+        "0014_recording_egress_ops"
+    ]
+
+
 def test_migration_compose_requires_only_image_and_database_url() -> None:
     migration_compose = (REPO_ROOT / "compose.migrate.yaml").read_text()
     interpolated_variables = set(re.findall(r"\$\{([A-Z0-9_]+)", migration_compose))
@@ -490,6 +501,11 @@ def test_compose_separates_required_production_inputs_from_local_services() -> N
         "REDIS_URL",
         "CLERK_WEBHOOK_SECRET",
         "LIVEKIT_API_SECRET",
+        "STORAGE_BUCKET_NAME",
+        "S3_ENDPOINT_URL",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+        "S3_REGION",
         "AGENT_DISPATCH_JWT_SECRET",
         "CLERK_SECRET_KEY",
     ):
@@ -592,6 +608,74 @@ def test_production_worker_runtime_accepts_least_privilege_settings() -> None:
     )
 
     validate_worker_runtime(settings)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "environment_name"),
+    [
+        ("livekit_url", "LIVEKIT_URL"),
+        ("livekit_api_key", "LIVEKIT_API_KEY"),
+        ("livekit_api_secret", "LIVEKIT_API_SECRET"),
+        ("storage_bucket_name", "STORAGE_BUCKET_NAME"),
+        ("s3_endpoint_url", "S3_ENDPOINT_URL"),
+        ("s3_access_key", "S3_ACCESS_KEY"),
+        ("s3_secret_key", "S3_SECRET_KEY"),
+        ("s3_region", "S3_REGION"),
+    ],
+)
+def test_production_worker_requires_recording_provider_and_private_storage(
+    base_settings: Settings,
+    field_name: str,
+    environment_name: str,
+) -> None:
+    settings = base_settings.model_copy(update={field_name: ""})
+
+    with pytest.raises(RuntimeError, match=environment_name):
+        validate_worker_runtime(settings)
+
+
+def test_recording_runtime_does_not_require_an_agent_evaluation_model() -> None:
+    from app.core.runtime_validation import (
+        PRODUCTION_REQUIRED_SETTINGS,
+        WORKER_PRODUCTION_REQUIRED_SETTINGS,
+    )
+
+    assert "livekit_eval_model" not in Settings.model_fields
+    assert "livekit_eval_model" not in PRODUCTION_REQUIRED_SETTINGS
+    assert "livekit_eval_model" not in WORKER_PRODUCTION_REQUIRED_SETTINGS
+    assert "LIVEKIT_EVAL_MODEL" not in (REPO_ROOT / "compose.yaml").read_text()
+
+
+def test_recording_runtime_has_one_reference_only_outbox_contract() -> None:
+    from app.core.observability import _OUTBOX_TOPICS, _PROVIDER_OPERATIONS
+    from app.providers.livekit_recording.livekit import LiveKitRecordingProvider
+    from app.services.outbox_service import (
+        REFERENCE_PAYLOAD_FIELDS,
+        SUPPORTED_OUTBOX_TOPICS,
+    )
+    from app.workers.jobs.outbox_topics import (
+        DEFAULT_OUTBOX_HANDLERS,
+        deliver_recording_reconcile,
+    )
+
+    assert {
+        topic for topic in SUPPORTED_OUTBOX_TOPICS if topic.startswith("recording.")
+    } == {"recording.reconcile"}
+    assert {
+        topic for topic in DEFAULT_OUTBOX_HANDLERS if topic.startswith("recording.")
+    } == {"recording.reconcile"}
+    assert {
+        topic for topic in _OUTBOX_TOPICS if topic.startswith("recording.")
+    } == {"recording.reconcile"}
+    assert REFERENCE_PAYLOAD_FIELDS["recording.reconcile"] == frozenset(
+        {"operation_id"}
+    )
+    assert (
+        DEFAULT_OUTBOX_HANDLERS["recording.reconcile"]
+        is deliver_recording_reconcile
+    )
+    assert "list_recording_egresses" in _PROVIDER_OPERATIONS["livekit"]
+    assert callable(LiveKitRecordingProvider.list_room_egresses)
 
 
 def test_development_services_load_local_env_files_without_leaking_api_identity_to_worker() -> None:
