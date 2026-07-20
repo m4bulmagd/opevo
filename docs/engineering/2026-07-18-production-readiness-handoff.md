@@ -2,32 +2,30 @@
 
 ## Purpose
 
-This document is the durable continuation point for the local-first Presvo
-production-readiness program completed on 2026-07-18 and the recording-egress
-design checkpoint approved on 2026-07-19. It exists so a later coding session
-can continue without relying on ignored worktree notes or prior conversation
-history.
+This document is the durable continuation point for Presvo's local-first
+production-readiness work through the recording-egress implementation completed
+on 2026-07-20. It lets a later coding session continue without relying on
+ignored worktree notes or prior conversation history.
 
-At this checkpoint the implementation is production-oriented and locally
-verified, but it is not production-certified. No cloud deployment, live
-provider mutation, real credential use, or provider-account change was part of
-this program.
+Presvo is production-oriented and locally verified, but it is not
+production-certified. This work did not deploy anything, contact or mutate live
+providers, use real credentials, change provider accounts, push, or publish
+externally.
 
 ## Git checkpoint
 
-- The completed `feat/presvo-production-readiness` branch was fast-forwarded
-  into local `main` after the user's manual test passed, then deleted locally.
-- Base branch: `main`
-- Base commit: `c5a5994cb1162d7f3e600cf6fc25ab54cc01e430`
-- Last implementation commit before this handoff:
-  `64ceb309232a7777326dfdd5a3a1d7d4291c3d67`
-- Final implementation review: `SPEC PASS`, `QUALITY APPROVED`, ready to merge,
-  with no Critical, Important, or Minor findings.
-- User checkpoint: manual testing passed. The next recording-egress design is
-  approved and documented, but its implementation has not started.
+- Implementation branch before local integration:
+  `feat/durable-recording-reconciliation`, based on local `main`.
+- Approved recording plan/base: `8b2c0e6`.
+- Complete inclusive recording implementation range: `c6bf2bb^..e911143`.
+- Task 7 race, privacy, migration, and observability hardening range:
+  `a774dad..e911143`.
+- The final documentation/status commit follows `e911143` on that branch.
+- The earlier production-readiness branch was merged into local `main` after
+  the user's manual test passed.
 
-Use `git log -1` to obtain the current local `main` head. Nothing was pushed or
-deployed as part of the merge or design work.
+Use `git status --short --branch` and `git log -1` to confirm the current
+checkout. Nothing at this checkpoint was pushed or deployed.
 
 ## Product decisions that remain authoritative
 
@@ -50,9 +48,9 @@ deployed as part of the merge or design work.
   retention policy.
 - Per-terminal-call removal is implemented. Account-wide export/deletion is
   not.
-- Automatic 30-day retention remains future work and is deliberately not
-  enabled.
-- Appointment booking and configurable conversation flows remain later phases.
+- Automatic 30-day retention remains future work and is deliberately disabled.
+- Conversation flows come before appointment booking. The product reference is
+  Retell AI's structured flows, not Recall.ai.
 - Ireland is the preferred possible future hosting region, not a customer
   number country. No hosting decision was executed.
 - Customer support should remain minimal or unnecessary through self-service
@@ -60,94 +58,108 @@ deployed as part of the merge or design work.
 
 ## Completed program
 
-The following four implementation plans are complete:
+The activation work remains complete:
 
 1. `docs/superpowers/plans/2026-07-17-activation-domain-and-profile-api.md`
-   - persisted activation/profile domain;
-   - structured business hours and bounded profile contracts;
-   - carrier confirmation and runtime projection;
-   - canonical activation snapshot and audit events;
-   - authenticated, default-off API surface.
+   established the persisted activation/profile domain, bounded contracts,
+   carrier confirmation, activation snapshot, audit events, and authenticated
+   default-off API.
 2. `docs/superpowers/plans/2026-07-17-consent-provisioning-and-local-providers.md`
-   - payment separated from explicit provisioning consent;
-   - idempotent, durable French-number provisioning;
-   - fake local carrier, billing, and telephony providers;
-   - fail-closed production provider modes;
-   - complete provider-free local API journey.
+   separated payment from explicit provisioning consent and added durable
+   French-number provisioning, local providers, fail-closed real-provider
+   modes, and the provider-free local journey.
 3. `docs/superpowers/plans/2026-07-17-forwarding-verification-and-go-live.md`
-   - versioned conditional-forwarding guidance for Orange, SFR, Free,
-     Bouygues Telecom, and Other;
-   - exact ten-minute verification windows;
-   - fixed-message, no-record/no-transcript/no-summary/no-usage verification;
-   - scoped verification credentials and replay protection;
-   - explicit go-live with central readiness and durable provider projection;
-   - safe compensation for routing races.
+   added carrier-aware conditional-forwarding guidance, the bounded test-call
+   window, scoped verification, explicit go-live, and safe routing
+   compensation.
 4. `docs/superpowers/plans/2026-07-17-activation-web-journey-and-dashboard-handoff.md`
-   - server-authenticated Next.js boundary with local/Clerk modes;
-   - resumable five-milestone activation UI;
-   - robust profile autosave and carrier fallback;
-   - payment, provisioning consent, forwarding, verification, and launch UI;
-   - dashboard answering/paused state;
-   - structured call summary, outcome, action, follow-up, original-audio, and
-     terminal-call removal UI;
-   - disposable provider-free Playwright activation proof;
-   - full-service restart/resume proof with preserved volumes.
+   added the resumable five-milestone UI, active dashboard, structured call
+   review, owner removal, and disposable browser/restart proof.
+
+The durable recording work in
+`docs/superpowers/plans/2026-07-19-durable-recording-egress-synchronization.md`
+is also implemented:
+
+- one private database recording operation and reference-only start intent
+  commit before recording-start provider I/O;
+- every terminal transition requests reconciliation even without a known
+  provider egress ID;
+- `recording.reconcile` is the only active recording outbox topic, with
+  aggregate `recording-egress-operation` and payload containing only
+  `operation_id`;
+- signed egress webhooks persist sanitized facts and wake reconciliation only
+  after commit, with no provider or storage I/O in the webhook;
+- terminal owner removal atomically purges and hides customer content and
+  returns `204` without waiting for LiveKit or storage; when recording cleanup
+  metadata exists, it also records stop/delete intent and reference-only work;
+- asynchronous cleanup is idempotent and non-exhausting, including late,
+  uncertain, conflicting, restored, and legacy recording identities;
+- the resolved start/delete race, PostgreSQL concurrency behavior, migration
+  round trip, privacy bounds, readiness contracts, and low-cardinality signals
+  have focused test coverage.
 
 Current capability and limitation wording is maintained in
-`docs/PROJECT_STATUS.md`. The local operating contract is in
-`docs/architecture/local-self-service-activation.md`.
+`docs/PROJECT_STATUS.md`. The active recording contract is in
+`docs/superpowers/specs/2026-07-19-recording-egress-synchronization-design.md`.
 
-## Final verification evidence
+## Current verification evidence
 
-- API Ruff: passed.
-- API mypy: 141 source files passed.
-- API SQLite suite: 1,279 passed; 69 PostgreSQL-only tests skipped.
-- Complete isolated PostgreSQL 17/Redis 7 API suite: 1,348 passed, 0 skipped.
-- Agent Ruff and mypy: passed.
-- Agent deterministic tests: 250 passed.
-- Four credential-gated LiveKit behavioral evaluations skipped intentionally;
-  they require `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and an explicitly chosen
-  `LIVEKIT_EVAL_MODEL`. A skip is not provider certification.
-- Web Biome: 145 files passed.
-- Web TypeScript: passed.
-- Web Vitest: 228 passed.
-- Deployment/readiness regressions: 90 passed.
-- Next.js 16 production build: passed; 9/9 static pages generated.
-- Provider-free browser activation: 1/1 passed.
-- Full local service restart and active-dashboard resume: 1/1 passed.
-- Disposable Docker containers, volumes, and networks were removed and verified
-  absent after each acceptance run.
-- Shell syntax, Playwright discovery, safety scans, and `git diff --check`
-  passed.
+Fresh local evidence completed through this documentation refresh:
 
-The only recurring warning was the known upstream Starlette/httpx deprecation
-warning. Sandboxed Python/Next worker stalls were not counted; the exact commands
-were rerun outside the process sandbox and completed.
+- API Ruff: clean.
+- API mypy: clean.
+- Focused recording/readiness regression gate: 475 passed, 33 skipped, 1
+  upstream Starlette/httpx deprecation warning.
+- Authoritative Task 7 PostgreSQL/Redis infrastructure gate: 30 passed, 0
+  skipped.
+- Provider-free full API suite: 1,718 passed, 87 skipped, 1 upstream
+  Starlette/httpx deprecation warning.
+- Complete isolated PostgreSQL 17/Redis 7 API suite: 1,805 passed, 0 skipped, 1
+  upstream Starlette/httpx deprecation warning.
+- Agent lock, Ruff, and mypy checks: clean; deterministic tests: 250 passed, 4
+  credentialed LiveKit evaluations deselected.
+- Web checks used Node 22.23.1: Biome checked 145 files, TypeScript passed, and
+  Vitest passed 228 tests. The exact default `npm run build` Turbopack
+  production gate compiled, completed TypeScript, and generated 9/9 static
+  pages in the clean normal checkout after `git diff --exit-code main..HEAD --
+  apps/web` proved its tracked web source identical. The isolated worktree's
+  out-of-root `node_modules` symlink was not used as build evidence.
+- Disposable provider-free browser activation: 1 passed. Full-service restart
+  and persisted active-dashboard resume: 1 passed.
+- Shell syntax, Playwright discovery, stale-contract scans, and
+  `git diff --check`: clean. Both disposable Compose projects were removed and
+  their containers, networks, and volumes were verified absent.
+
+These local gates do not constitute cloud, legal, behavioral-model, carrier, or
+real-provider certification.
+
+Four agent behavioral evaluations require `LIVEKIT_API_KEY`,
+`LIVEKIT_API_SECRET`, and an explicit `LIVEKIT_EVAL_MODEL` selection.
+`LIVEKIT_EVAL_MODEL` chooses the model used only by those opt-in evaluation
+tests. It is required only when explicitly running those tests; it is not used
+by the API or worker runtime and is not required to run or deploy Presvo. A
+skipped or unrun credentialed evaluation is not provider certification.
 
 ## Remaining production blockers
 
-These are not implemented or not evidenced yet:
+These eight items are not implemented or not evidenced yet:
 
-1. Close the recording start/delete race. While an egress start is still in
-   provider I/O, no provider ID is durable. If deletion/tombstoning wins and a
-   late best-effort stop fails, Presvo cannot durably record a pending stop.
-   Persisted egress IDs are already proven non-running before content deletion.
-2. Account-wide export and deletion orchestration, recording-access audit, and
+1. Account-wide export and deletion orchestration, recording-access audit, and
    complete account/session controls.
-3. Qualified French/EU legal, privacy, recording-disclosure, retention,
-   subprocessor, and minimal-support approval/surfaces.
-4. Approved automatic retention behavior. The old local automatic expiration
+2. Qualified French/EU legal, privacy, recording-disclosure, retention,
+   subprocessor, and minimal-support approval and surfaces.
+3. Approved automatic retention behavior. The old local automatic expiration
    configuration was removed intentionally.
-5. Accessibility end-to-end tests, frontend performance budgets, load and
+4. Accessibility end-to-end tests, frontend performance budgets, load and
    concurrency definitions, provider-outage tests, recovery drills, and a
    demonstrated backup restore.
-6. Credentialed behavioral evaluation evidence against an approved
+5. Credentialed behavioral evaluation evidence against an approved
    production-equivalent model.
-7. Fresh multi-customer Clerk/Stripe/Telnyx/LiveKit staging certification and
+6. Fresh multi-customer Clerk/Stripe/Telnyx/LiveKit staging certification and
    real Orange/SFR/Free/Bouygues/Other forwarding evidence.
-8. Approved Ireland deployment, DNS/TLS, secret management, monitoring,
+7. Approved Ireland deployment, DNS/TLS, secret management, monitoring,
    rollback, restore, and controlled-beta operating evidence.
-9. The optional realtime observer remains unsupported and has a documented
+8. The optional realtime observer remains unsupported and has a documented
    identity-key mismatch. Private push delivery is also incomplete.
 
 Do not describe Presvo as production-ready until the applicable gates in
@@ -165,35 +177,39 @@ Do not describe Presvo as production-ready until the applicable gates in
 4. Advanced capabilities: live monitoring/intervention, human transfer, tools,
    outbound calls, mobile, multiple numbers/plans, and additional countries.
 
-## Approved next implementation unit
+## Recommended next implementation unit
 
-Implement the narrow recording-egress start/pending-stop synchronization fix
-described in
-`docs/superpowers/specs/2026-07-19-recording-egress-synchronization-design.md`.
-Keep it independent from account deletion and other compliance work so its
-state machine, retry behavior, and failure recovery remain reviewable and
-testable in isolation.
+Implement auditable account-wide export and deletion orchestration, including
+safe drainage of private recording cleanup before any hard-delete boundary.
+Keep legal approval, retention-policy activation, provider certification, and
+cloud deployment as separate workstreams so none is implied by the local data
+workflow.
 
-Do not start implementation from this handoff alone. Read the approved design,
-have the user review the committed specification, and create a detailed
-test-first implementation plan before editing product code.
+Before editing product code, write and review the account-level contract. It
+must define export scope, deletion states, failure recovery, audit evidence,
+active-call behavior, private cleanup drainage, and the boundary for backups or
+historical copies without claiming synchronous erasure.
 
 ## Resume procedure for a new coding session
 
-1. Check out local `main` and verify a clean worktree.
+1. Check out the latest local branch and verify a clean worktree.
 2. Read this handoff, `README.md`, `docs/PROJECT_STATUS.md`, and
-   `docs/architecture/local-self-service-activation.md` completely.
-3. Inspect recent commits from `64ceb30` through branch head.
+   `docs/architecture/integration-endpoints.md` completely.
+3. Inspect the recording implementation from `c6bf2bb` through `e911143` and
+   the documentation commit that follows it.
 4. Read
-   `docs/superpowers/specs/2026-07-19-recording-egress-synchronization-design.md`
+   `docs/superpowers/specs/2026-07-19-recording-egress-synchronization-design.md`,
+   `docs/superpowers/plans/2026-07-19-durable-recording-egress-synchronization.md`,
    and the root `CONTEXT.md`.
-5. Confirm the user has reviewed the written specification, then create a
-   focused test-first implementation plan before editing product code.
-6. If a defect is found, reproduce it and use the repository's test-first and
+5. Confirm the documentation commit and local merge preserve the fresh evidence
+   above; do not copy older counts into later completion claims.
+6. For the recommended next unit, create and review a focused design and
+   test-first implementation plan before editing product code.
+7. If a defect is found, reproduce it and use the repository's test-first and
    systematic-debugging workflows.
-7. Preserve the boundary: local development and test infrastructure are
+8. Preserve the boundary: local development and test infrastructure are
    authorized; provider accounts, cloud resources, deployments, real
-   credentials, and external publishing require separate approval.
+   credentials, external publishing, and pushes require separate approval.
 
 Useful local checks after checkout:
 
@@ -203,11 +219,11 @@ git log --oneline --decorate -10
 cd apps/web && npm run check && npm run typecheck && npm run test:ci
 ```
 
-The complete disposable acceptance journey is available when needed:
+The disposable local acceptance journey is available when needed:
 
 ```bash
 bash scripts/run-local-e2e.sh
 ```
 
-It uses only local identity and fake product providers, but it does require the
+It uses only local identity and fake product providers, but it requires the
 local Docker daemon and Chromium.

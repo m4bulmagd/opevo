@@ -2,8 +2,9 @@
 
 ## Supported versions
 
-Presvo is in active pre-production development. Security fixes are applied to
-the current `main` branch; there are no supported release branches yet.
+Presvo is in active development, production-oriented and locally verified, but
+not production-certified. Security fixes are applied to the current `main`
+branch; there are no supported release branches yet.
 
 ## Reporting a vulnerability
 

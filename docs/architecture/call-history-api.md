@@ -68,27 +68,38 @@ Behavior:
 
 - returns `404` when the call does not exist
 - returns `404` when the call belongs to another user
-- returns `404` when the call was soft-deleted
+- returns `404` when the call was removed
 - mints a fresh recording access URL at read time instead of reusing a long-lived stored URL
-- returns `recording_url = null` when the underlying recording object has expired from bucket lifecycle retention or can no longer be signed
+- returns `recording_url = null` when no private original audio is available or
+  the playback reference can no longer be signed
 
 ### `DELETE /api/calls/{call_id}`
 
-Soft-deletes the call for the authenticated user.
+Removes a terminal call and its customer-visible content for the authenticated
+owner.
 
 Response:
 
-- `204 No Content` on success
+- `204 No Content` on the first or repeated successful owner removal
+- `409 Conflict` with `call_delete_active` while the call is active
+- `404 Not Found` for an unknown or cross-tenant call
 
 Behavior:
 
-- later `GET /api/calls` will no longer include the deleted call
-- later `GET /api/calls/{call_id}` will return `404`
-- transcript rows and recording objects are not destroyed by this user-facing delete path
+- the successful local transaction deletes transcript rows, clears caller,
+  summary, and playback fields, records the tombstone, and immediately hides
+  the call from list, detail, transcript, and playback access
+- when a private recording operation or legacy recording metadata exists, the
+  same transaction records stop/deletion intent and reference-only
+  `recording.reconcile` work
+- no LiveKit or storage I/O occurs in the request; provider stop and exact-object
+  deletion continue asynchronously without retry exhaustion
+- repeated owner removal remains idempotent and does not duplicate cleanup work
 
 ## Notes
 
-- User-facing call delete is archival, not destructive.
-- Soft-deleted calls stay available in storage/database for admin or recovery workflows later.
 - Recording access is intentionally short-lived and generated on demand.
-- Recording retention is managed by the storage bucket lifecycle, not by an application cleanup job.
+- Original audio remains private and available for a visible call until owner
+  removal or a separately approved future retention policy.
+- Automatic 30-day retention is not enabled. Removal makes no claim that
+  provider cleanup, backups, or historical copies are erased synchronously.

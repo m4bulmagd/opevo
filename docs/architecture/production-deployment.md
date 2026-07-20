@@ -1,6 +1,7 @@
 # Production Deployment Decision Record
 
-Status: **provisional recommendation — pending explicit user approval**
+Status: **historical comparison — Paris recommendation superseded; no target
+approved**
 
 Decision owner: `<product/infrastructure owner>`
 
@@ -10,17 +11,16 @@ Last researched: `2026-07-14`
 
 ## Decision boundary
 
-This record compares hosting targets and recommends one beta target. It does
+This record preserves a 2026-07-14 comparison of three hosting targets. It does
 not authorize a cloud account, resource creation, DNS changes, production data
-movement or any vendor-specific infrastructure-as-code.
+movement, or vendor-specific infrastructure-as-code.
 
-The provisional choice is **AWS Europe (Paris), `eu-west-3`**, using ECS on
-Fargate for the application containers, RDS for PostgreSQL, ElastiCache for
-Valkey/Redis-compatible queues, S3 with KMS encryption, Secrets Manager, and a
-private VPC. This choice is **pending explicit user approval**. If approved, it
-must receive a separate implementation plan, cost check in the provider
-calculator, privacy review, and an exact provider-resource inventory before
-infrastructure work starts.
+The earlier provisional **AWS Europe (Paris), `eu-west-3`** recommendation is
+superseded. The current product preference is to evaluate Ireland as a possible
+future hosting region, but no provider, region, or deployment is approved. A
+fresh Ireland-capable comparison, cost check, privacy review, explicit user
+approval, and exact provider-resource inventory are required before any
+infrastructure plan or work starts.
 
 ## Required production shape
 
@@ -41,8 +41,9 @@ The target deployment must preserve these boundaries regardless of provider:
   Redis TLS and authentication, encrypted storage, automated backups, and a
   tested PostgreSQL point-in-time recovery path.
 - Keep recordings in a private S3-compatible bucket in the selected EU region.
-  Enable bucket versioning, customer-controlled KMS encryption, block public
-  access, and lifecycle expiry that matches the product retention policy.
+  Enable bucket versioning, customer-controlled KMS encryption, and block public
+  access. Do not activate automatic lifecycle expiry until a customer-facing
+  retention policy is approved; any later lifecycle must match that policy.
 - Inject secrets at runtime from a managed secret store. Never place secret
   values in images, Compose files, build arguments, deployment logs, tickets,
   or this document.
@@ -64,9 +65,9 @@ the old revision reports zero active jobs, and only then terminate it. The
 worker's drain timeout and container termination grace are fallback bounds, not
 a substitute for the active-job gate. The approved provider implementation must
 verify its maximum task-stop grace and implement a pre-stop/drain control that
-finishes before that platform deadline. This is especially important for the
-provisional ECS/Fargate target, where the infrastructure plan must not assume
-that orchestrator termination grace can cover a full-length call.
+finishes before that platform deadline. Any future target must enforce this; an
+ECS/Fargate candidate, if reconsidered, must not assume that orchestrator
+termination grace can cover a full-length call.
 
 ## Scoring method
 
@@ -87,7 +88,7 @@ EUR 126–180, `3` at EUR 181–300, `2` at EUR 301–500, and `1` above EUR 500
 quote-only. Cost is only one of ten equally weighted criteria; a low price
 cannot compensate for an unmet recovery or security control.
 
-## Comparison summary
+## Historical comparison summary (2026-07-14)
 
 | Criterion | AWS Paris (`eu-west-3`) | Scaleway Paris (`fr-par`) | Render Frankfurt — EU managed application platform |
 | --- | --- | --- | --- |
@@ -239,30 +240,28 @@ The current plan and component prices are on the official
 [Render pricing page](https://render.com/pricing). Memory must be load-tested,
 especially for the voice agent and its preloaded turn-detection assets.
 
-## Provisional recommendation and approval gate
+## Superseded recommendation and new approval gate
 
-Recommend **AWS Paris (`eu-west-3`) for the controlled beta**, because it is the
-only candidate here that meets all eight technical capability criteria natively
-without weakening the PostgreSQL recovery objective or adding a second storage
-provider. Its higher operational effort is real; the later infrastructure plan
-must minimize it through a small ECS/Fargate footprint, managed data services,
-least-privilege task roles, explicit alarms, and rehearsed release/rollback
-runbooks.
+The historical comparison favored **AWS Paris (`eu-west-3`)** because it met the
+listed technical capabilities without weakening PostgreSQL recovery or adding
+a second storage provider. That recommendation is no longer active and must not
+be treated as an approved deployment decision.
 
-This recommendation is **pending explicit user approval**. Before approval,
-record all of the following:
+Before any new recommendation or approval, compare Ireland-capable candidates
+against the current product, privacy, recovery, support, and cost requirements,
+then record all of the following:
 
-- `<user>` accepts or rejects AWS Paris as the beta target;
+- `<user>` explicitly accepts or rejects the proposed provider and Irish region;
 - `<privacy owner>` accepts the DPA, data-transfer, support-access, and
   subprocessor position;
 - `<infrastructure owner>` validates a provider-calculator estimate and monthly
   budget cap;
 - `<application owner>` confirms the minimum API, worker, agent, and web
   resources after load testing;
-- `<data owner>` confirms RDS retention, restore target, S3 lifecycle, and KMS
-  policy;
-- `<security owner>` confirms VPC, IAM, secret, egress, logging, and audit
-  controls.
+- `<data owner>` confirms database retention/restore targets, object-storage
+  retention behavior, and encryption policy;
+- `<security owner>` confirms private networking, identity/access, secret,
+  egress, logging, and audit controls.
 
 Only after that sign-off may a separate plan specify provider resources. No
 vendor-specific infrastructure-as-code belongs in this task.

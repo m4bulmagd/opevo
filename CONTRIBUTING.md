@@ -1,8 +1,9 @@
 # Contributing to Presvo
 
-Thanks for helping improve Presvo. The project is in active pre-production
-development, so focused fixes, tests, documentation corrections, and small
-product improvements are easier to review than broad rewrites.
+Thanks for helping improve Presvo. The project is in active development,
+production-oriented and locally verified, but not production-certified.
+Focused fixes, tests, documentation corrections, and small product improvements
+are easier to review than broad rewrites.
 
 ## Before you start
 

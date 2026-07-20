@@ -384,7 +384,7 @@ Expected:
 - transcript lines are present and ordered
 - `recording_url` is present when a recording exists
 
-Then verify soft delete:
+Then verify terminal-call removal:
 
 ```bash
 curl -i -X DELETE http://localhost:8000/api/calls/<CALL_ID> \
@@ -398,6 +398,9 @@ Expected:
 - delete returns `204 No Content`
 - subsequent detail returns `404 Not Found`
 - the call disappears from `GET /api/calls`
+- transcript, caller, summary, and playback content is inaccessible immediately
+- when recording cleanup metadata exists, provider stop and exact-object deletion
+  continue asynchronously and do not change the `204` response
 
 ## Step 8: Gemini STS Smoke
 

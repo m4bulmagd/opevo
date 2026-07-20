@@ -1,8 +1,12 @@
 # Backend Context
 
-This document captures implementation notes and staging verification for the backend foundation MVP.
+This document records historical backend implementation milestones and staging
+evidence. It is not the canonical current contract; use
+[`PROJECT_STATUS.md`](../PROJECT_STATUS.md),
+[`integration-endpoints.md`](integration-endpoints.md), and the focused API
+documents linked below for current behavior.
 
-## Current State
+## Recorded implementation state
 
 - Self-serve France MVP implementation is now in place locally: the launch contract is France-only, `starter`-only, `stt_llm_tts`-only, and onboarding-first.
 - Chunk 1 foundation implemented: app scaffold, config, schema, repositories, and Clerk auth sync.
@@ -18,10 +22,16 @@ This document captures implementation notes and staging verification for the bac
 - `PATCH /api/agent/config` now enforces self-serve readiness gates before enabling routing: active paid subscription, successful France provisioning, assigned number readiness, and complete agent setup.
 - Contract details and usage examples for that surface are documented in [agent-config-api.md](agent-config-api.md).
 - Call history API now exposes `GET /api/calls`, `GET /api/calls/{call_id}`, and `DELETE /api/calls/{call_id}` for authenticated users.
-- User-facing call delete is now a soft delete: deleted calls disappear from list/detail APIs, while transcript rows and recording objects remain available for admin/manual recovery later.
+- Terminal-call removal immediately purges customer content and hides the call;
+  active calls reject removal. Recording cleanup, when applicable, continues
+  asynchronously from private durable intent without blocking the `204`.
 - Live call recordings now use LiveKit room composite egress with `audio_only=true`, writing one mixed recording directly to the recordings bucket instead of relaying audio bytes through the agent completion API.
-- Recording timing is now tightened around the actual conversation window: SIP caller join creates and dispatches the call, agent join starts egress, and SIP caller leave attempts to stop egress early.
-- Recording retention is bucket-managed: when the recording object expires from storage lifecycle, call detail now degrades to `recording_url = null` while keeping the call and transcript.
+- Recording timing is coordinated by a private operation committed before
+  agent-join start I/O; SIP caller leave durably requests reconciliation even
+  when no provider egress ID is known.
+- Original audio remains available for a visible call until owner removal or a
+  separately approved future retention policy. Automatic 30-day retention is
+  not enabled.
 - Contract details and usage examples for call history are documented in [call-history-api.md](call-history-api.md).
 - Call summaries are now generated through a provider-agnostic summary layer, with Gemini configured as the default provider.
 - Completed calls now persist both `summary_text` and structured `summary_data` on the `calls` row.
@@ -34,8 +44,11 @@ This document captures implementation notes and staging verification for the bac
 
 ## Known Contract Drift
 
-- Product-facing docs may still describe a broader planned backend surface than what is currently implemented in `apps/api`. Treat this file and the focused docs under `docs/architecture/` as the current source for implemented backend contracts.
-- User-facing call delete is currently a soft delete, not a destructive delete. The current call-history contract is documented in [call-history-api.md](call-history-api.md).
+- Product-facing and historical documents may describe older backend surfaces.
+  Treat `docs/PROJECT_STATUS.md` and the focused active architecture/API docs as
+  authoritative, not this milestone log.
+- The current owner-removal contract is documented in
+  [call-history-api.md](call-history-api.md).
 - The optional realtime endpoint is `/ws` with first-message auth, but it exists only when `REALTIME_ENABLED=true`; the normal production default returns `404`. Older product docs may still describe it as always available or use a more specific path shape.
 - Realtime must not be enabled for customer use until its identity key is made consistent. Current API and agent publishers address Redis channels with the local internal user UUID, while WebSocket authentication subscribes the connection with the Clerk subject ID. Those keys do not match, so delivery is not reliable even though both sides work independently.
 
@@ -44,9 +57,13 @@ This document captures implementation notes and staging verification for the bac
 - API tests covering health, auth, billing, telephony, realtime, LiveKit dispatch, repository flow, and post-call lifecycle.
 - Realtime tests now cover disabled-by-default configuration, absence of the `/ws` route and Redis/fanout resources while disabled, the explicit authenticated enabled path, and durable call acceptance when realtime is absent or publishing fails.
 - Agent config API tests now cover bootstrapped first-run config reads, readiness-gated enables, successful telephony toggles, and rollback on telephony failure.
-- Call history API tests now cover visible-call listing, transcript detail, fresh recording URL minting, and soft-delete behavior.
-- LiveKit recording provider tests now cover audio-only room composite egress request shaping, explicit stop behavior, and provider-failure wrapping.
-- LiveKit dispatch service tests now cover recording metadata persistence, delayed start on agent join, early stop on SIP leave, and non-blocking recording start/stop failure behavior.
+- Call history API tests cover visible-call listing, transcript detail, fresh
+  recording URL minting, terminal-only immediate removal, idempotency, and
+  provider-free asynchronous cleanup intent.
+- LiveKit recording provider tests cover audio-only room-composite request
+  shaping, sanitized listing, ensure-not-running behavior, and failure wrapping.
+- LiveKit dispatch tests cover operation-before-start persistence, late and
+  ambiguous results, terminal stop intent, and non-blocking start failure.
 - Summary service tests now cover structured-summary success, malformed provider output, and non-blocking provider failure.
 - Billing query service tests now cover subscription lookup, usage snapshot assembly, and usage-ledger ordering.
 - Billing session service tests now cover hosted Stripe checkout price mapping, starter-only enforcement, and portal precondition validation.

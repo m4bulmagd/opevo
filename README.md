@@ -3,11 +3,12 @@
 > An open-source, France-first AI voice assistant platform for handling inbound
 > business calls.
 
-**Status:** Active development.
+**Status:** Active development; production-oriented and locally verified, not
+production-certified.
 
-Presvo is a working pre-production MVP with a production-oriented architecture.
-The complete guided activation journey is implemented and browser-tested with
-local providers. Cloud deployment, compliance approval, recovery testing, and
+Presvo is a working MVP with a production-oriented architecture. The complete
+guided activation journey and durable recording lifecycle are implemented and
+locally verified. Cloud deployment, compliance approval, recovery testing, and
 real-provider certification are still required before a controlled beta.
 
 ![Presvo landing page](docs/landing_page.webp)
@@ -50,11 +51,15 @@ for unanswered, busy, and unreachable calls. Real-provider staging
 certification, French legal/localization work, recovery drills, and
 controlled-beta evidence remain in progress.
 
-An authenticated owner can use **Remove call** on a terminal call. Presvo first
-stops any persisted recording egress, deletes the original-audio object from
-active storage, then purges and hides the transcript, summary, caller data, and
-remaining call content. Active calls reject removal, and Presvo makes no claim
-that per-call removal erases historical backup copies. Account-wide export and
+An authenticated owner can use **Remove call** on a terminal call. One local
+transaction purges customer call content, hides the call, and returns `204`
+without waiting for LiveKit or storage. When a private recording operation or
+legacy recording metadata exists, that transaction also records stop/deletion
+intent and reference-only reconciliation work. Non-exhausting asynchronous
+cleanup then makes any provider recording non-running and removes the original
+audio from active storage. Repeated removal is idempotent, active calls reject
+removal, and Presvo makes no claim that provider cleanup, backup erasure, or
+historical-copy erasure completes synchronously. Account-wide export and
 deletion orchestration, appointment booking, configurable conversation flows,
 and automatic 30-day retention are planned rather than implemented.
 
@@ -95,10 +100,11 @@ flowchart LR
    recording disclosure, and handles the call.
 6. Transcript segments are persisted incrementally with call-scoped JWT
    authorization.
-7. Call completion atomically records the usage debit and pending notification
-   row, then enqueues `summary.generate`, `recording.stop`, and any required
-   `phone.disable` transactional-outbox work.
-8. The dashboard reads the durable call, transcript, summary, recording, and
+7. Call completion durably requests operation reconciliation even when no
+   provider egress ID is known.
+8. Finalization atomically commits the usage debit, pending notification row,
+   `summary.generate`, and any required `phone.disable` outbox work.
+9. The dashboard reads the durable call, transcript, summary, recording, and
    billing state from the API.
 
 ## Engineering highlights
@@ -108,8 +114,9 @@ flowchart LR
 - **Durable calls:** transcripts are appended during the call, finalization is
   retryable, and stale calls are reconciled through an explicit state machine.
 - **Safe provider effects:** `phone.provision`, `phone.enable`, `phone.disable`,
-  `livekit.dispatch`, `summary.generate`, and `recording.stop` use
-  transactional-outbox delivery.
+  `livekit.dispatch`, `summary.generate`, and `recording.reconcile` use
+  transactional-outbox delivery. The recording operation is durable before
+  recording-start provider I/O.
 - **Atomic finalization:** usage debit and the pending notification row are
   direct writes in the same call-finalization transaction.
 - **Scoped agent access:** every call receives a short-lived dispatch JWT bound
