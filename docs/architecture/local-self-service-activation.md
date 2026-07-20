@@ -116,11 +116,18 @@ browser pass as provider certification.
 ## Data lifecycle and deferred gates
 
 Per-terminal-call removal is implemented. An authenticated owner can use
-**Remove call** on a terminal call; active calls reject removal.
-Presvo first synchronously stops any persisted recording egress, deletes the
-original-audio object from active storage, then purges and hides the transcript,
-summary, caller data, and remaining call content. No claim is made that this
-operation synchronously erases historical backup copies.
+**Remove call** on a terminal call; active calls reject removal. One local
+transaction purges customer call content, hides the call, and returns `204`
+without LiveKit or storage I/O. When a private recording operation or legacy
+recording metadata exists, that transaction also records stop/delete intent
+plus a reference-only `recording.reconcile` event. Repeated owner removal is
+idempotent.
+
+Non-exhausting asynchronous cleanup then makes any provider recording
+non-running before removing the original-audio object from active storage.
+Provider or storage outages do not keep the call visible or require another
+customer removal. No claim is made that provider cleanup, backup erasure, or
+historical-copy erasure completes synchronously.
 
 Account-wide export and deletion orchestration remain planned. The intended
 account-deletion contract removes active call records, transcripts, summaries,
@@ -141,12 +148,12 @@ The following remain planned or require approval/evidence:
   evaluations; and
 - monitored controlled-beta evidence.
 
-One narrow recording-specific race is explicitly unresolved. While an egress
-start is still in provider I/O, its provider ID has not yet been persisted. If
-deletion or tombstoning wins that race and the late best-effort stop fails, the
-deleted or tombstoned call cannot durably record a pending stop. This does not
-apply to persisted egress IDs: **Remove call** synchronously proves those
-egresses are not running before deleting active storage or database content.
+The earlier recording start/delete race is resolved for normal customer calls.
+Presvo commits a private recording operation and reference-only reconciliation
+intent before recording-start provider I/O. Completion and owner removal record
+stop intent even without a provider egress ID, so a late or ambiguous start
+remains durably reconcilable after the call is hidden. This behavior is locally
+verified; it is not real-provider or production certification.
 
 ## CI boundary
 

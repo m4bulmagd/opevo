@@ -140,7 +140,8 @@ Behavior:
 - idempotently commits the sequence-bearing recovery tail and the first durable end facts before touching Redis
 - freezes the first accepted `ended_at` and `duration_seconds`; duplicate completion cannot overwrite them
 - transitions an accepted call to `ending`, then enqueues only `{ "call_id": "..." }`
-- returns `503` when the queue is unavailable, after recovery rows, end facts, and any recording-stop intent are durable
+- returns `503` when the queue is unavailable, after recovery rows, end facts,
+  and recording reconciliation intent are durable
 - rejects raw recording fields and agent-supplied accounting or ownership fields
 - requires the same call-scoped JWT ownership checks as transcript append
 - rejects static shared tokens in every environment
@@ -167,7 +168,10 @@ The second transaction performs no Gemini, LiveKit, Firebase, Telnyx, storage, o
 Post-call provider work is delivered from reference-only outbox events:
 
 - `summary.generate` uses aggregate type `call-summary`, snapshots the ordered PostgreSQL transcript and maximum sequence, and persists structured summary data plus its coverage watermark only after revalidating that maximum under a fresh lock; terminal recovery stores a new versioned intent when it adds a sequence
-- `recording.stop` uses aggregate type `call-recording` and reconciles LiveKit egress through `ensure_stopped(egress_id)`
+- `recording.reconcile` uses aggregate type `recording-egress-operation`, an
+  aggregate ID equal to the private operation UUID, and a payload containing
+  only `{ "operation_id": "..." }`; the worker snapshots durable intent, then
+  inspects and reconciles LiveKit and storage outside database transactions
 - `phone.disable` re-derives current routing eligibility before changing provider state
 
 The worker runs call reconciliation every minute. It recovers stale pending, connected, ending, and finalizing calls in bounded batches with PostgreSQL locking, shared LiveKit dispatch advisory locks for pending timeouts, and committed attempt-generation leases. Charged calls are repaired to `completed`; they are never failed solely because retry attempts were exhausted.
@@ -216,15 +220,34 @@ Behavior:
 
 - verifies the LiveKit webhook authorization
 - on SIP `participant_joined`, atomically records the matched call and a durable LiveKit dispatch outbox intent after subscription, balance, phone, configuration, and exact-trunk eligibility checks
-- on agent `participant_joined`, attempts to start one mixed room recording through LiveKit room composite egress with `audio_only=true`
-- on SIP `participant_left`, commits the durable end transition and recording-stop intent before a best-effort finalization wakeup
-- recording start failure remains non-blocking; if start succeeds after the call already became terminal, the new egress is immediately reconciled through `ensure_stopped`; an uncertain cleanup durably attaches only provider references and a retry intent without changing terminal state, end facts, or accounting
+- on agent `participant_joined`, commits the normal call's private recording
+  operation and delayed `recording.reconcile` start intent before attempting one
+  mixed LiveKit room-composite egress with `audio_only=true`; provider I/O runs
+  only after that database commit
+- on SIP `participant_left`, commits the durable end transition and requests
+  recording reconciliation even when no provider egress ID is known, before a
+  best-effort finalization wakeup
+- on signed egress lifecycle events, stores only sanitized identity, room,
+  status, and output-location facts, then wakes reconciliation after commit;
+  webhook handling performs no LiveKit or storage I/O
+- recording start failure remains non-blocking; a late success is persisted on
+  the private operation, projected only to a still-visible call, and reconciled
+  against any stop or deletion intent without changing terminal state, end
+  facts, or accounting
 - returns `202 Accepted`
 
 ## Notes
 
 - These endpoints are operational/integration surfaces, not frontend product APIs.
-- Live call recordings are started through LiveKit egress and written directly to the recordings bucket. Raw audio blobs are rejected by the completion schema, are never placed in Redis, and have no legacy recording-upload worker.
+- Live call recordings are started through LiveKit egress and written directly
+  to the recordings bucket. Raw audio blobs are rejected by the completion
+  schema, are never placed in Redis, and have no legacy recording-upload worker.
+- Owner removal of a terminal call atomically purges and hides local customer
+  content and returns `204` without provider or storage I/O. When a private
+  recording operation or legacy recording metadata exists, the transaction
+  also records stop/delete intent plus reference-only reconciliation work.
+  Provider and original-audio cleanup continues asynchronously without retry
+  exhaustion; repeated owner removal is idempotent and active calls reject it.
 - Firebase push delivery is intentionally absent from the launch post-call path. The authenticated dashboard reads the opaque local notification; private device-token delivery belongs to a later workstream.
 - User-facing API docs live separately in:
   - [agent-config-api.md](agent-config-api.md)

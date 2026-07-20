@@ -2,17 +2,17 @@
 
 **Date:** 2026-07-19
 
-**Status:** Product and architecture design approved. Implementation has not
-started.
+**Status:** Implemented and locally verified through `e911143`; not
+production-certified.
 
 ## Decision summary
 
-Add one private, durable recording egress operation per normal customer call.
-Create that operation before LiveKit recording-start I/O, and keep it separate
-from the customer-facing recording playback projection on `calls`.
+Presvo now creates one private, durable recording egress operation per normal
+customer call before LiveKit recording-start I/O and keeps it separate from the
+customer-facing recording playback projection on `calls`.
 
-When an owner removes a terminal call, Presvo must immediately purge customer
-call content and hide the call. Provider stop and object deletion continue
+When an owner removes a terminal call, Presvo immediately purges customer call
+content and hides the call. Provider stop and object deletion continue
 asynchronously from the private operation and a reference-only transactional
 outbox event. A provider or storage outage does not keep the call visible and
 does not require a customer retry.
@@ -26,11 +26,11 @@ publishing.
 
 ## Why this design exists
 
-The current runtime correctly commits `pending -> connected` before provider
-I/O. It then starts LiveKit Room Composite Egress and persists the returned
-egress ID on the call.
+Before this implementation, the runtime committed `pending -> connected` before
+provider I/O, then started LiveKit Room Composite Egress and persisted only the
+returned egress ID on the call.
 
-One race remains:
+That left this race:
 
 1. Agent join commits the connected call.
 2. Recording start enters provider I/O before an egress ID is durable.
@@ -43,10 +43,10 @@ One race remains:
 7. The fallback call lookup excludes tombstones, so Presvo cannot persist the
    provider ID or a pending stop.
 
-The provider recording can then outlive the customer-visible call without a
-durable retry identity. Attaching more state to `calls` does not solve the
-boundary cleanly because removal intentionally clears customer recording
-references and blocks delayed call writers.
+The provider recording could then outlive the customer-visible call without a
+durable retry identity. The implemented private operation closes that race
+without attaching cleanup authority to `calls`, whose recording fields are
+intentionally cleared on removal and protected from delayed writers.
 
 LiveKit exposes egress lifecycle events and supports listing egresses by room,
 but current API documentation only promises active egress discovery. Those are
@@ -105,8 +105,8 @@ The successful local transaction:
 
 1. locks the owner-scoped call, including an existing tombstone;
 2. creates or locks its recording egress operation when cleanup metadata exists;
-3. sets both stop and deletion intent on that operation;
-4. adds an idempotent `recording.reconcile` outbox event;
+3. when an operation exists, sets both stop and deletion intent on it;
+4. when an operation exists, adds its idempotent `recording.reconcile` event;
 5. deletes transcript messages;
 6. clears caller number, summary fields, and the recording playback projection;
 7. sets `deleted_at` and commits.
@@ -131,9 +131,10 @@ The central distinction is:
 
 ### `RecordingLifecycleService`
 
-Introduce one deep service boundary that owns recording coordination. Dispatch,
-call lifecycle, call history, webhooks, and workers express intent through this
-service instead of manipulating egress metadata or stop events independently.
+`RecordingLifecycleService` owns durable SQL intent and the visible-call
+playback projection. Dispatch, call lifecycle, call history, and webhooks use it
+instead of manipulating operation state or reconciliation events independently.
+It performs no LiveKit or storage inspection.
 
 Its conceptual commands are:
 
@@ -144,27 +145,37 @@ Its conceptual commands are:
 - `request_stop(call_id)`
 - `request_deletion(call)`
 - `accept_egress_event(event)`
-- `reconcile(operation_id)`
 
 These names describe the interface, not a required one-method-per-command file
-layout. Repository mechanics, outbox identity, provider matching, and cleanup
-ordering remain hidden behind the service.
+layout. Repository mechanics, outbox identity, and projection guards remain
+hidden behind the service.
+
+### `RecordingReconciler`
+
+`RecordingReconciler` owns provider and storage inspection for one operation.
+It loads a short durable snapshot, closes the database transaction, performs
+LiveKit or storage I/O, then opens a new transaction to revalidate and persist
+the result. Unknown and conflicting identities remain observable and retryable
+without issuing a second recording start.
 
 ### Existing consumers
 
-- `LiveKitDispatchService` connects the call, prepares the operation, and then
-  starts recording through the lifecycle service.
+- `LiveKitDispatchService` connects the call, prepares and commits the operation,
+  then performs recording-start provider I/O and records its result through the
+  lifecycle service.
 - `CallLifecycleService` requests stop for every terminal transition, even when
   no provider egress ID is known.
 - `CallHistoryService` atomically requests deletion and purges customer content;
   it no longer performs provider I/O.
 - The LiveKit webhook boundary passes sanitized egress lifecycle facts to the
   lifecycle service.
-- The outbox worker asks the lifecycle service to reconcile one operation.
+- The outbox worker asks `RecordingReconciler` to inspect and reconcile one
+  operation.
 
-## Data model
+## Database operation model
 
-Add `recording_egress_operations` in Alembic revision `0014`.
+Alembic revision `0014` creates `recording_egress_operations`. Here, “model”
+means the private database/SQLAlchemy operation record, not an AI model.
 
 | Field | Contract |
 | --- | --- |
@@ -466,7 +477,7 @@ constraints. PostgreSQL remains authoritative for concurrency acceptance.
 
 ## Observability and security
 
-Add low-cardinality measurements for:
+The implementation exposes low-cardinality measurements for:
 
 - operation counts by start state;
 - oldest unresolved operation age;
@@ -545,12 +556,12 @@ not configure a cloud alerting destination.
 - Generic webhook persistence still stores no raw payload.
 - Outbox payload scans prove operation ID is the only value.
 - Log and metric tests prove forbidden provider/customer values are absent.
-- Deployment-readiness tests include the new topic, model, provider capability,
-  and fail-closed configuration.
+- Deployment-readiness tests include the new topic, database operation model,
+  provider capability, and fail-closed configuration.
 
 ### Regression gates
 
-Before implementation is complete, run:
+The recording implementation is checked with:
 
 - API Ruff and mypy;
 - complete SQLite API tests;
@@ -560,12 +571,13 @@ Before implementation is complete, run:
 - provider-free browser activation and full-service restart/resume acceptance;
 - migration, shell-syntax, safety-scan, and `git diff --check` gates.
 
-Credentialed LiveKit behavior evaluations and real provider certification remain
-separate explicit evidence and are not silently substituted by local tests.
+Credentialed LiveKit behavior evaluations and real-provider certification
+remain separate explicit evidence and are not silently substituted by local
+tests.
 
 ## Acceptance criteria
 
-This Phase 0 unit is complete only when:
+This Phase 0 unit was accepted against these criteria:
 
 1. every attempted recording has durable identity before provider start I/O;
 2. terminal-call removal never waits on LiveKit or storage;
@@ -579,6 +591,34 @@ This Phase 0 unit is complete only when:
 9. PostgreSQL race tests and all regression gates pass;
 10. documentation continues to state that Presvo is production-oriented but not
     production-certified.
+
+## Completion evidence
+
+The inclusive implementation range is `c6bf2bb^..e911143`; its final race,
+privacy, migration, and observability hardening spans `a774dad..e911143`.
+Fresh local evidence is:
+
+- API Ruff and mypy clean;
+- focused recording/readiness gate: 475 passed, 33 skipped, 1 known upstream
+  warning;
+- authoritative Task 7 PostgreSQL/Redis infrastructure gate: 30 passed, 0
+  skipped;
+- provider-free full API suite: 1,718 passed, 87 skipped, 1 known upstream
+  warning;
+- complete isolated PostgreSQL/Redis API suite: 1,805 passed, 0 skipped, 1
+  known upstream warning;
+- agent Ruff and mypy clean; 250 deterministic tests passed with 4 credentialed
+  evaluations deselected;
+- web Biome (145 files), TypeScript, and 228 Vitest tests passed; the exact
+  default Turbopack production build generated 9/9 static pages from an
+  identical tracked web tree in the clean normal checkout;
+- provider-free browser activation and full-service restart/resume each passed;
+- shell syntax, Playwright discovery, stale-contract scans, cleanup checks, and
+  `git diff --check` passed.
+
+This implementation evidence does not certify cloud deployment, provider
+behavior, legal readiness, retention policy, monitoring, or production
+operation.
 
 ## Relationship to earlier designs
 

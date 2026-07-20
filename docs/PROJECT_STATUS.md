@@ -7,12 +7,13 @@ longer match the current implementation.
 
 ## Current status
 
-**Active development.**
+**Active development; production-oriented and locally verified, not
+production-certified.**
 
-Presvo is a working pre-production MVP with a production-oriented architecture.
-The local five-milestone self-service journey is implemented and covered by a
-disposable browser test. Compliance, recovery evidence, cloud deployment, and
-real-provider certification remain controlled-beta gates.
+Presvo is a working MVP with a production-oriented architecture. The local
+five-milestone self-service journey and durable recording lifecycle are
+implemented and locally verified. Compliance, recovery evidence, cloud
+deployment, and real-provider certification remain controlled-beta gates.
 
 ## Current product boundary
 
@@ -49,14 +50,14 @@ real-provider certification remain controlled-beta gates.
 | Native-audio STS runtime | **Partial** | Gemini native-audio support exists in the worker and tests but is intentionally hidden from the customer-facing France launch. |
 | Durable call lifecycle | **Implemented** | Incremental transcript persistence, call-scoped agent JWTs, a state machine, reconciliation, duration limits, and idempotent finalization are present. |
 | Call review | **Implemented** | Call list/detail, transcript, summary, recording availability, signed recording URLs, and usage charge are present. |
-| Terminal-call removal | **Implemented** | An authenticated owner can use **Remove call** on a terminal call. Presvo synchronously stops persisted recording egress, deletes the original-audio object from active storage, then purges and hides transcript, summary, caller data, and call content. Active calls reject removal, and no backup-erasure claim is made. |
+| Terminal-call removal | **Implemented** | An authenticated owner can use **Remove call** on a terminal call. One local transaction purges customer content, hides the call, and returns `204` without LiveKit or storage I/O. When a private recording operation or legacy recording metadata exists, it also records stop/delete intent and reference-only reconciliation work; non-exhausting asynchronous cleanup follows. Repeated removal is idempotent, active calls reject removal, and no synchronous provider, backup, or historical-copy erasure claim is made. |
 | Rich call-review workflow | **Partial** | Pagination contracts, inline original-audio playback, and structured next-action presentation are implemented, but the web UI lacks pagination controls, search, tags, and notes. |
-| Recording lifecycle | **Implemented** | LiveKit room-composite egress, private object storage, signed access, and manual terminal-call removal are implemented; no automatic bucket lifecycle is configured. |
-| Transactional outbox | **Implemented** | Handlers cover `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, and `recording.stop`. |
+| Recording lifecycle | **Implemented** | A private recording operation and reference-only reconciliation intent commit before recording-start provider I/O. Completion requests stop reconciliation even without a provider ID; signed egress webhooks store sanitized facts and wake reconciliation after commit. Private object storage, signed playback, and asynchronous owner-removal cleanup are implemented; no automatic bucket lifecycle is configured. |
+| Transactional outbox | **Implemented** | Handlers cover `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, and `recording.reconcile`. Recording events use aggregate `recording-egress-operation` and carry only `operation_id`. |
 | Call finalization effects | **Implemented** | Usage debit and the pending notification row are direct writes in the same call-finalization transaction. |
 | Live dashboard and intervention | **Partial** | An optional backend WebSocket observer exists but is disabled by default, has a documented identity-key mismatch, and has no live-call web interface. |
 | Push notifications | **Partial** | Notification records and provider boundaries exist, but private device-token delivery is not part of the launch path. |
-| Production observability and CI | **Implemented** | Readiness checks, safe logging, OpenTelemetry, metrics, pinned CI actions, dependency audits, secret scanning, and container scanning are configured. |
+| Production observability and CI | **Partial** | Readiness checks, safe logging, bounded recording metrics, OpenTelemetry, pinned CI actions, dependency audits, secret scanning, and container scanning are configured and locally verified. Cloud monitoring, alert routing, and operating evidence are absent. |
 | Production deployment | **Partial** | Hardened images, release migrations, deployment and rollback runbooks, and a provider comparison exist; a production platform and operating evidence are not yet approved. |
 | French localization and legal surfaces | **Planned** | The launch UI is still English and approved privacy, terms, legal notice, support, retention, and subprocessor surfaces are absent. |
 | Account export and deletion | **Planned** | Per-terminal-call **Remove call** is implemented, but account-wide export, deletion orchestration, and recording-access audit records are absent. The intended account-deletion contract removes active call content and active object storage but makes no claim that historical backup copies are erased. |
@@ -75,11 +76,6 @@ real-provider certification remain controlled-beta gates.
 - The current self-serve flow has not completed fresh multi-customer staging
   certification against all real providers.
 - The optional realtime observer is not a supported customer feature.
-- One narrow recording-egress race remains: an egress start still in provider
-  I/O has no persisted provider ID. If deletion or tombstoning wins that race
-  and late best-effort cleanup fails, Presvo cannot durably record a pending
-  stop. Persisted egress IDs are already synchronously stopped before active
-  storage or database content is deleted.
 - The application lacks French localization, approved legal pages,
   account-wide export/deletion orchestration, and a complete account menu.
 - The repository contains four credential-gated LiveKit behavioral voice
