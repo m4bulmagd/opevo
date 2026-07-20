@@ -18,9 +18,9 @@ movement, or vendor-specific infrastructure-as-code.
 The earlier provisional **AWS Europe (Paris), `eu-west-3`** recommendation is
 superseded. The current product preference is to evaluate Ireland as a possible
 future hosting region, but no provider, region, or deployment is approved. A
-fresh Ireland-capable comparison, cost check, privacy review, explicit user
-approval, and exact provider-resource inventory are required before any
-infrastructure plan or work starts.
+fresh Ireland-capable recommendation remains pending explicit user approval and
+requires a cost check, privacy review, and exact provider-resource inventory
+before any infrastructure plan or work starts.
 
 ## Required production shape
 
