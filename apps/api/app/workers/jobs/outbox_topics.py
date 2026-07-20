@@ -1261,6 +1261,11 @@ async def deliver_recording_reconcile(
         conflict_category = result.conflict_category
         if conflict_category not in {None, "multiple_exact_match"}:
             raise ValueError("Recording reconciliation conflict is invalid")
+        if conflict_category == "multiple_exact_match" and (
+            result.outcome != "retry"
+            or result.error_code != "recording_identity_conflict"
+        ):
+            raise ValueError("Recording reconciliation conflict shape is invalid")
         if result.outcome == "complete":
             if result.error_code is not None:
                 raise ValueError("Completed reconciliation returned an error")
