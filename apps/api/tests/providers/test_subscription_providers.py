@@ -30,6 +30,23 @@ class FakeStripeClient:
         self.Subscription = FakeSubscriptionAPI(response=response, error=error)
 
 
+class StripeErrorResponseHTTPClient(stripe.HTTPClient):
+    name = "provider-free-stripe-test"
+    _timeout = (5, 30)
+
+    def request(self, method, url, headers, post_data=None, *, _usage=None):
+        return (
+            (
+                '{"error":{"type":"invalid_request_error",'
+                '"code":"invalid_subscription",'
+                '"message":"RAW_STRIPE_ERROR_SENTINEL",'
+                '"param":"id"}}'
+            ),
+            400,
+            {},
+        )
+
+
 @pytest.mark.anyio
 async def test_fake_provider_validates_subscription_identity_without_provider_io() -> None:
     provider = FakeSubscriptionProvider()
@@ -177,6 +194,29 @@ async def test_stripe_errors_map_to_safe_contract_without_raw_messages(
     assert str(exc_info.value) == error_class
     assert "secret" not in str(exc_info.value)
     assert "secret" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_stripe_sdk_error_parsing_cannot_log_raw_provider_message(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(stripe, "default_http_client", StripeErrorResponseHTTPClient())
+    monkeypatch.setattr(stripe, "log", "debug")
+    provider = StripeSubscriptionProvider(secret_key="sk_test_value")
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(SubscriptionProviderError):
+        logging.getLogger("app.unrelated").info(
+            "unrelated application log remains visible"
+        )
+        await provider.cancel_immediately("sub_current")
+
+    captured = capsys.readouterr()
+    assert "RAW_STRIPE_ERROR_SENTINEL" not in caplog.text
+    assert "RAW_STRIPE_ERROR_SENTINEL" not in captured.err
+    assert "unrelated application log remains visible" in caplog.text
+    assert "Request to Stripe api" in caplog.text
 
 
 @pytest.mark.anyio

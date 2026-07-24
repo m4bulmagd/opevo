@@ -121,6 +121,14 @@ def validate_api_runtime(settings: Settings) -> None:
 
 def validate_worker_runtime(settings: Settings) -> None:
     environment = settings.app_env.strip().lower()
+    if settings.billing_mode == "stripe":
+        missing_billing_settings = _require(settings, ("stripe_secret_key",))
+        if missing_billing_settings:
+            raise RuntimeError(
+                "Missing or invalid required runtime settings: "
+                f"{', '.join(missing_billing_settings)}"
+            )
+
     if environment == "development":
         return
 
@@ -140,8 +148,6 @@ def validate_worker_runtime(settings: Settings) -> None:
         return
 
     missing = _require(settings, WORKER_PRODUCTION_REQUIRED_SETTINGS)
-    if settings.billing_mode == "stripe":
-        missing.extend(_require(settings, ("stripe_secret_key",)))
     if not settings.telnyx_ordering_enabled:
         missing.append("TELNYX_ORDERING_ENABLED")
 

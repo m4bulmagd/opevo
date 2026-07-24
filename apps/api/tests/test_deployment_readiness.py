@@ -400,7 +400,7 @@ def test_api_startup_is_migration_free_but_release_image_keeps_alembic() -> None
     assert 'command: ["/app/.venv/bin/alembic", "-c", "/app/alembic.ini", "upgrade", "head"]' in migration_compose
 
 
-def test_recording_operation_migration_is_the_only_alembic_head() -> None:
+def test_account_deactivation_migration_is_the_only_alembic_head() -> None:
     config = Config(str(REPO_ROOT / "apps" / "api" / "alembic.ini"))
     config.set_main_option("path_separator", "os")
 
@@ -648,6 +648,25 @@ def test_worker_rejects_stripe_mode_without_stripe_secret_key(
     base_settings: Settings,
 ) -> None:
     settings = base_settings.model_copy(update={"stripe_secret_key": ""})
+
+    with pytest.raises(RuntimeError, match="STRIPE_SECRET_KEY"):
+        validate_worker_runtime(settings)
+
+
+@pytest.mark.parametrize("app_env", ["development", "test", "staging"])
+def test_non_production_worker_rejects_stripe_mode_without_stripe_secret_key(
+    app_env: str,
+) -> None:
+    settings = Settings(
+        app_env=app_env,
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+        billing_mode="stripe",
+        stripe_secret_key="",
+        agent_dispatch_jwt_secret=(
+            "worker-dispatch-jwt-secret-with-at-least-32-bytes"
+        ),
+    )
 
     with pytest.raises(RuntimeError, match="STRIPE_SECRET_KEY"):
         validate_worker_runtime(settings)
