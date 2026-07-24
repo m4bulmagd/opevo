@@ -39,11 +39,16 @@ async def seed_call_history(
     *,
     clerk_user_id: str,
     email: str,
+    user_status: str = "active",
 ) -> dict[str, UUID]:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id=clerk_user_id, email=email)
+        user = User(
+            clerk_user_id=clerk_user_id,
+            email=email,
+            status=user_status,
+        )
         session.add(user)
         await session.flush()
 
@@ -106,11 +111,16 @@ async def seed_call_with_transcript(
     email: str,
     deleted: bool = False,
     status: str = "completed",
+    user_status: str = "active",
 ) -> UUID:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id=clerk_user_id, email=email)
+        user = User(
+            clerk_user_id=clerk_user_id,
+            email=email,
+            status=user_status,
+        )
         session.add(user)
         await session.flush()
 
@@ -163,11 +173,16 @@ async def seed_call_with_recording(
     recording_url: str,
     recording_object_key: str | None = None,
     recording_egress_id: str | None = None,
+    user_status: str = "active",
 ) -> UUID:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id=clerk_user_id, email=email)
+        user = User(
+            clerk_user_id=clerk_user_id,
+            email=email,
+            status=user_status,
+        )
         session.add(user)
         await session.flush()
 
@@ -278,6 +293,55 @@ async def test_list_calls_returns_visible_calls_newest_first(
         ids["newest_id"],
         ids["older_id"],
     ]
+
+
+@pytest.mark.anyio
+async def test_inactive_owner_can_list_get_and_play_back_historical_call(
+    async_client,
+    client_database_url: str,
+    rs256_clerk_token_for,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk_user_id = "inactive_call_history_owner"
+    call_id = await seed_call_with_recording(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+        email="inactive-call-history@example.invalid",
+        recording_url="https://stored.example.invalid/old",
+        recording_object_key="calls/inactive-owner/call.mp3",
+        user_status="inactive",
+    )
+
+    async def fake_get_access_url(
+        self,
+        *,
+        call_id,
+        user_id,
+        recording_object_key,
+    ):
+        assert recording_object_key == "calls/inactive-owner/call.mp3"
+        return "https://signed.example.invalid/playback"
+
+    monkeypatch.setattr(
+        RecordingService,
+        "get_access_url",
+        fake_get_access_url,
+    )
+    headers = {
+        "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+    }
+
+    listed = await async_client.get("/api/calls", headers=headers)
+    detail = await async_client.get(f"/api/calls/{call_id}", headers=headers)
+
+    assert listed.status_code == 200
+    assert [UUID(item["id"]) for item in listed.json()["calls"]] == [call_id]
+    assert detail.status_code == 200
+    assert UUID(detail.json()["id"]) == call_id
+    assert (
+        detail.json()["recording_url"]
+        == "https://signed.example.invalid/playback"
+    )
 
 
 @pytest.mark.anyio

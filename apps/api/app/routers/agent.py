@@ -26,6 +26,7 @@ from app.services.agent_config_service import (
     AgentConfigService,
     AgentConfigTelephonySyncError,
 )
+from app.services.account_access_policy import AccountStateBlockedError
 from app.repositories.call_repository import CallTransitionError
 from app.repositories.message_repository import MessageRepository
 from app.services.call_lifecycle_service import CallLifecycleService
@@ -154,6 +155,11 @@ async def patch_agent_config(
             payload.model_dump(exclude_none=True),
             requested_fields=payload.model_fields_set,
         )
+    except AccountStateBlockedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": error.code},
+        ) from None
     except AgentConfigContentManagedError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

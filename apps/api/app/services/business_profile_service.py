@@ -12,6 +12,7 @@ from app.repositories.customer_activation_repository import (
 )
 from app.repositories.user_repository import UserRepository
 from app.schemas.business_profile import BusinessProfileDraft
+from app.services.account_access_policy import require_active_account
 from app.services.receptionist_projection_service import (
     ReceptionistProjectionService,
 )
@@ -59,6 +60,7 @@ class BusinessProfileService:
             user = await self.user_repository.get_by_id_for_update(user_id)
             if user is None:
                 raise BusinessProfileNotFoundError
+            require_active_account(user)
             profile = await self.profile_repository.get_or_create_for_update(user_id)
             activation = await self.activation_repository.get_or_create_for_update(
                 user_id
@@ -109,6 +111,7 @@ class BusinessProfileService:
         user = await self.user_repository.get_by_id_for_update(user_id)
         if user is None:
             raise BusinessProfileNotFoundError
+        require_active_account(user)
         profile = await self.profile_repository.get_or_create_for_update(user_id)
         activation = await self.activation_repository.get_or_create_for_update(user_id)
         missing = tuple(

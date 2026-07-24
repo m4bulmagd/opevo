@@ -24,6 +24,7 @@ from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.activation import ActivationSnapshotResponse
 from app.services.activation_snapshot_service import ActivationSnapshotService
+from app.services.account_access_policy import require_active_account
 from app.services.customer_readiness_policy import ReadinessBlocker
 from app.services.customer_readiness_service import evaluate_customer_readiness
 from app.services.forwarding_verification_service import as_utc
@@ -117,6 +118,9 @@ class ActivationGoLiveService:
         should_wake = False
         try:
             user = await self.user_repository.get_by_id_for_update(user_id)
+            if user is None:
+                raise ActivationGoLiveBlockedError(("business_profile_incomplete",))
+            require_active_account(user)
             activation = await self.activation_repository.get_by_user_id_for_update(
                 user_id
             )

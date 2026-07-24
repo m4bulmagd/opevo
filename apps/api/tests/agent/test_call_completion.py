@@ -273,7 +273,7 @@ async def test_static_agent_token_is_rejected_in_every_environment(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("wakeup_fails", [False, True])
-async def test_dispatch_jwt_completes_call_without_static_token(
+async def test_deactivating_account_call_finalizes_with_dispatch_jwt(
     monkeypatch: pytest.MonkeyPatch,
     db_session,
     active_user,
@@ -301,6 +301,7 @@ async def test_dispatch_jwt_completes_call_without_static_token(
         status="connected",
     )
     db_session.add(call)
+    active_user.status = "deactivating"
     await db_session.commit()
     fake_queue = FakeCallFinalizationQueue(session=db_session)
     outbox_pool = FakeOutboxPool(failure=wakeup_fails)

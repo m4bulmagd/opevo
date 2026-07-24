@@ -15,6 +15,7 @@ from app.services.forwarding_verification_service import (
     ForwardingVerificationService,
     as_utc,
 )
+from app.services.account_access_policy import AccountStateBlockedError
 from app.services.routing_fingerprint import routing_fingerprint
 
 
@@ -118,7 +119,7 @@ async def test_window_is_exactly_ten_minutes_and_records_one_safe_event(
 @pytest.mark.parametrize(
     ("case", "expected_code"),
     [
-        ("user_inactive", "user_inactive"),
+        ("user_inactive", "account_inactive"),
         ("profile_unconfirmed", "profile_not_confirmed"),
         ("profile_missing_carrier", "profile_incomplete"),
         ("phone_not_ready", "phone_not_ready"),
@@ -137,7 +138,7 @@ async def test_open_requires_current_provider_ready_provisioned_state(
         db_session, active_user
     )
     if case == "user_inactive":
-        active_user.status = "disabled"
+        active_user.status = "inactive"
     elif case == "profile_unconfirmed":
         activation.profile_confirmed_at = None
     elif case == "profile_missing_carrier":
@@ -152,7 +153,9 @@ async def test_open_requires_current_provider_ready_provisioned_state(
         provisioning.phone_number_id = None
     await db_session.commit()
 
-    with pytest.raises(ForwardingVerificationConflictError) as exc_info:
+    with pytest.raises(
+        (ForwardingVerificationConflictError, AccountStateBlockedError)
+    ) as exc_info:
         await _service(db_session).open_window(active_user.id)
 
     assert exc_info.value.code == expected_code

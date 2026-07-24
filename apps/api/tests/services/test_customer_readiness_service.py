@@ -206,7 +206,7 @@ async def test_missing_user_returns_fail_closed_readiness_result() -> None:
     context = await service.evaluate(uuid4(), now=NOW)
 
     assert context.user is None
-    assert ReadinessBlocker.USER_INACTIVE in context.result.blockers
+    assert ReadinessBlocker.ACCOUNT_INACTIVE in context.result.blockers
     assert context.result.can_activate is False
     assert context.result.can_route is False
 

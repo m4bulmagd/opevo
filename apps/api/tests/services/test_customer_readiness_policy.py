@@ -70,13 +70,17 @@ def test_live_snapshot_can_activate_route_and_dispatch() -> None:
     assert result.blockers == ()
     assert result.warnings == ()
     assert result.evaluated_at == NOW
-    assert result.policy_version == "runtime-v3"
+    assert result.policy_version == "runtime-v4"
 
 
 @pytest.mark.parametrize(
     ("overrides", "runtime_blocker"),
     [
-        ({"user_status": "disabled"}, ReadinessBlocker.USER_INACTIVE),
+        (
+            {"user_status": "deactivating"},
+            ReadinessBlocker.ACCOUNT_DEACTIVATING,
+        ),
+        ({"user_status": "inactive"}, ReadinessBlocker.ACCOUNT_INACTIVE),
         ({"balance": 0}, ReadinessBlocker.MINUTES_EXHAUSTED),
     ],
 )
@@ -191,7 +195,7 @@ def test_naive_subscription_period_is_treated_as_utc() -> None:
 @pytest.mark.parametrize(
     ("overrides", "expected_blocker"),
     [
-        ({"user_status": None}, ReadinessBlocker.USER_INACTIVE),
+        ({"user_status": None}, ReadinessBlocker.ACCOUNT_INACTIVE),
         (
             {"subscription_status": None},
             ReadinessBlocker.SUBSCRIPTION_MISSING,

@@ -117,11 +117,13 @@ async def _post(
 
 
 @pytest.mark.anyio
-async def test_append_normalizes_and_exact_replay_is_duplicate(
+async def test_deactivating_account_call_can_append_and_replay_transcript(
     db_session,
     active_user,
 ) -> None:
     call, _, token = await _runtime_call(db_session, active_user)
+    active_user.status = "deactivating"
+    await db_session.commit()
     call_id = call.id
     app = _runtime_app(db_session)
     path = f"/api/agent/calls/{call_id}/transcript"

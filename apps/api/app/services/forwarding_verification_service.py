@@ -23,6 +23,7 @@ from app.repositories.phone_number_provisioning_repository import (
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.user_repository import UserRepository
 from app.services.business_profile_service import REQUIRED_PROFILE_FIELDS
+from app.services.account_access_policy import require_active_account
 from app.services.routing_fingerprint import routing_fingerprint
 
 
@@ -116,8 +117,7 @@ class ForwardingVerificationService:
             user = await self.user_repository.get_by_id_for_update(user_id)
             if user is None:
                 raise ForwardingVerificationConflictError("profile_unavailable")
-            if user.status != "active":
-                raise ForwardingVerificationConflictError("user_inactive")
+            require_active_account(user)
 
             activation = await self.activation_repository.get_by_user_id_for_update(
                 user_id
