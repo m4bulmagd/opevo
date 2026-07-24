@@ -1092,7 +1092,7 @@ async def test_stale_enable_after_cancellation_converges_to_disabled_current_sta
         outbox_session_factory,
         topic="phone.enable",
         aggregate_id=user_id,
-        payload={"user_id": str(user_id)},
+        payload={"user_id": str(user_id), "lifecycle_generation": 1},
     )
     provider = _CapturingRoutingProvider()
 
@@ -1302,7 +1302,7 @@ async def test_provisioning_provider_runs_without_provisioning_row_lock(
             "session_factory": outbox_session_factory,
             "telephony_provider": LockProbingProvider(),
         },
-        {"user_id": str(user_id)},
+        {"user_id": str(user_id), "lifecycle_generation": 1},
         provider_operation_key="provision:lock-boundary",
     )
 
@@ -1363,7 +1363,7 @@ async def test_same_provisioning_key_serializes_provider_execution_past_lease_ov
         "session_factory": outbox_session_factory,
         "telephony_provider": BlockingProvider(),
     }
-    payload = {"user_id": str(user_id)}
+    payload = {"user_id": str(user_id), "lifecycle_generation": 1}
     operation_key = "outbox:phone-provision:lease-overlap"
     first = asyncio.create_task(
         phone_provisioning_job(
@@ -1424,7 +1424,7 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
         topic="phone.provision",
         aggregate_id=user_id,
         idempotency_key="outbox:phone-provision:stable",
-        payload={"user_id": str(user_id)},
+        payload={"user_id": str(user_id), "lifecycle_generation": 1},
     )
     calls: list[tuple[dict, str | None]] = []
 
@@ -1440,7 +1440,7 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
     assert calls == [
         (
-            {"user_id": str(user_id)},
+            {"user_id": str(user_id), "lifecycle_generation": 1},
             "activation:phone.provision:stable-provider-operation",
         )
     ]
@@ -1483,7 +1483,7 @@ async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_rout
         topic="phone.provision",
         aggregate_id=user_id,
         idempotency_key=operation_key,
-        payload={"user_id": str(user_id)},
+        payload={"user_id": str(user_id), "lifecycle_generation": 1},
     )
     current_time = event.next_attempt_at + timedelta(seconds=1)
 
@@ -1581,7 +1581,7 @@ async def test_pending_order_retries_outbox_without_customer_retry(
         topic="phone.provision",
         aggregate_id=user_id,
         idempotency_key=operation_key,
-        payload={"user_id": str(user_id)},
+        payload={"user_id": str(user_id), "lifecycle_generation": 1},
     )
 
     class PendingProvider:
@@ -1650,7 +1650,7 @@ async def test_existing_order_conflict_is_terminal_and_disables_customer_retry(
         topic="phone.provision",
         aggregate_id=user_id,
         idempotency_key=operation_key,
-        payload={"user_id": str(user_id)},
+        payload={"user_id": str(user_id), "lifecycle_generation": 1},
     )
 
     class ConflictProvider:

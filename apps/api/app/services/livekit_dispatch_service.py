@@ -325,7 +325,10 @@ class LiveKitDispatchService:
                     aggregate_type="call",
                     aggregate_id=call.id,
                     idempotency_key=f"livekit.dispatch:{call.id}",
-                    payload={"call_id": str(call.id)},
+                    payload={
+                        "call_id": str(call.id),
+                        "lifecycle_generation": user.lifecycle_generation,
+                    },
                 )
         except IntegrityError as error:
             constraint = _constraint_name(error)

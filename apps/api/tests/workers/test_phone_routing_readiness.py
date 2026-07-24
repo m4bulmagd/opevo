@@ -1,11 +1,13 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.agent_config import AgentConfig
+from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
@@ -162,7 +164,10 @@ async def test_routing_uses_local_factory_without_injected_provider(
         aggregate_type="user",
         aggregate_id=user_id,
         idempotency_key=f"test:phone.enable:{user_id}",
-        payload={"user_id": str(user_id)},
+        payload={
+            "user_id": str(user_id),
+            "lifecycle_generation": active_user.lifecycle_generation,
+        },
     )
     await db_session.commit()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -225,11 +230,67 @@ async def test_claimed_phone_provision_rechecks_account_before_provider_io(
                 "session_factory": session_factory,
                 "telephony_provider": Provider(),
             },
-            {"user_id": str(user_id)},
+            {
+                "user_id": str(user_id),
+                "lifecycle_generation": active_user.lifecycle_generation,
+            },
             provider_operation_key=operation_key,
         )
 
     assert raised.value.code == "account_deactivating"
+    assert provider_calls == []
+
+
+@pytest.mark.anyio
+async def test_stale_account_generation_never_provisions_phone(
+    db_session,
+    active_user,
+) -> None:
+    from app.workers.jobs import outbox_topics
+
+    user_id = active_user.id
+    active_user.lifecycle_generation = 2
+    operation_key = f"phone-provision-stale:{user_id}"
+    db_session.add(
+        PhoneNumberProvisioning(
+            user_id=user_id,
+            target_country_code="FR",
+            status="queued",
+            provider_operation_key=operation_key,
+        )
+    )
+    await db_session.commit()
+    provider_calls: list[str] = []
+
+    class Provider:
+        async def provision_number(self, **_kwargs):
+            provider_calls.append("provision")
+            raise AssertionError("stale work must not call provider")
+
+    event = OutboxEvent(
+        id=uuid4(),
+        idempotency_key=operation_key,
+        topic="phone.provision",
+        aggregate_type="user",
+        aggregate_id=user_id,
+        payload={
+            "user_id": str(user_id),
+            "lifecycle_generation": 1,
+        },
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await outbox_topics.deliver_phone_provision(
+            {
+                "session_factory": session_factory,
+                "telephony_provider": Provider(),
+            },
+            event,
+        )
+
+    assert exc_info.value.error_code == "dispatch_ineligible"
+    assert exc_info.value.retryable is False
     assert provider_calls == []
 
 
@@ -287,7 +348,10 @@ async def test_claimed_phone_enable_rechecks_account_before_provider_io(
         aggregate_type="user",
         aggregate_id=user_id,
         idempotency_key=f"routing-race:{user_id}",
-        payload={"user_id": str(user_id)},
+        payload={
+            "user_id": str(user_id),
+            "lifecycle_generation": active_user.lifecycle_generation,
+        },
     )
     event.status = "processing"
     event.attempt_count = 1
@@ -329,4 +393,97 @@ async def test_claimed_phone_enable_rechecks_account_before_provider_io(
 
     assert raised.value.error_code == "dispatch_ineligible"
     assert raised.value.retryable is False
+    assert provider_calls == []
+
+
+@pytest.mark.anyio
+async def test_stale_account_generation_never_enables_phone(
+    db_session,
+    active_user,
+) -> None:
+    from app.workers.jobs import outbox_topics
+
+    user_id = active_user.id
+    active_user.lifecycle_generation = 2
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            Subscription(
+                user_id=user_id,
+                stripe_customer_id="stale-routing-customer",
+                stripe_subscription_id="stale-routing-subscription",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                current_period_start=now - timedelta(days=1),
+                current_period_end=now + timedelta(days=1),
+            ),
+            UsageLedger(
+                user_id=user_id,
+                event_type="subscription_activated",
+                source_id="stale-routing-ledger",
+                minutes_delta=60,
+                balance_after=60,
+            ),
+            AgentConfig(
+                user_id=user_id,
+                agent_name="Presvo Front Desk",
+                owner_context="Dental office reception",
+                system_prompt="Handle inbound calls professionally.",
+                knowledge_base="Open weekdays.",
+                pipeline_mode="stt_llm_tts",
+                is_enabled=True,
+            ),
+            PhoneNumber(
+                user_id=user_id,
+                e164="+33912340001",
+                country_code="FR",
+                provider="telnyx",
+                provider_number_id="stale-routing-number",
+                provider_connection_name="app-disabled",
+                is_active=False,
+            ),
+        ]
+    )
+    event = await OutboxService(db_session).add(
+        topic="phone.enable",
+        aggregate_type="user",
+        aggregate_id=user_id,
+        idempotency_key=f"stale-routing:{user_id}",
+        payload={
+            "user_id": str(user_id),
+            "lifecycle_generation": active_user.lifecycle_generation,
+        },
+    )
+    event.payload = {
+        "user_id": str(user_id),
+        "lifecycle_generation": 1,
+    }
+    event.status = "processing"
+    event.attempt_count = 1
+    await db_session.commit()
+    provider_calls: list[str] = []
+
+    class Provider:
+        async def enable_number(self, *, provider_number_id: str) -> str:
+            provider_calls.append(f"enable:{provider_number_id}")
+            return "app-active"
+
+        async def disable_number(self, *, provider_number_id: str) -> str:
+            provider_calls.append(f"disable:{provider_number_id}")
+            return "app-disabled"
+
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await outbox_topics.deliver_phone_routing(
+            {
+                "session_factory": session_factory,
+                "telephony_provider": Provider(),
+            },
+            event,
+        )
+
+    assert exc_info.value.error_code == "dispatch_ineligible"
+    assert exc_info.value.retryable is False
     assert provider_calls == []

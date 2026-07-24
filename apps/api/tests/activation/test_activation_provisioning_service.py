@@ -138,7 +138,10 @@ async def test_confirm_records_one_consent_and_one_outbox_across_duplicate_calls
     assert outbox is not None
     assert event is not None
     assert outbox.idempotency_key == operation_key
-    assert outbox.payload == {"user_id": str(active_user.id)}
+    assert outbox.payload == {
+        "user_id": str(active_user.id),
+        "lifecycle_generation": active_user.lifecycle_generation,
+    }
     assert event.idempotency_key == f"activation-event:{operation_key}"
     assert event.event_metadata == {"country_code": "FR"}
 
@@ -485,7 +488,12 @@ async def test_confirm_acquires_command_locks_in_required_order() -> None:
         async def get_by_id_for_update(self, requested_user_id):
             assert requested_user_id == user_id
             events.append("user")
-            return SimpleNamespace(id=user_id, status="active", country_code="FR")
+            return SimpleNamespace(
+                id=user_id,
+                status="active",
+                country_code="FR",
+                lifecycle_generation=1,
+            )
 
     class Activations:
         async def get_by_user_id_for_update(self, requested_user_id):

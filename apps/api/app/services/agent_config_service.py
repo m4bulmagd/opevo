@@ -116,7 +116,14 @@ class AgentConfigService:
                     aggregate_type="user",
                     aggregate_id=user_id,
                     idempotency_key=(f"agent-config:{config.id}:routing:{uuid4().hex}"),
-                    payload={"user_id": str(user_id)},
+                    payload=(
+                        {
+                            "user_id": str(user_id),
+                            "lifecycle_generation": user.lifecycle_generation,
+                        }
+                        if bool(requested_enabled)
+                        else {"user_id": str(user_id)}
+                    ),
                 )
             await self.session.commit()
         except ValueError as exc:

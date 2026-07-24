@@ -720,7 +720,10 @@ async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes
     assert event.topic == "phone.enable"
     assert event.aggregate_type == "user"
     assert event.aggregate_id == config.user_id
-    assert event.payload == {"user_id": str(config.user_id)}
+    assert event.payload == {
+        "user_id": str(config.user_id),
+        "lifecycle_generation": 1,
+    }
 
 
 @pytest.mark.anyio

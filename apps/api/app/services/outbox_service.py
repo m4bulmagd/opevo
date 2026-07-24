@@ -22,12 +22,12 @@ SUPPORTED_OUTBOX_TOPICS = frozenset(
 )
 
 REFERENCE_PAYLOAD_FIELDS = {
-    "phone.provision": frozenset({"user_id"}),
-    "phone.enable": frozenset({"user_id"}),
+    "phone.provision": frozenset({"user_id", "lifecycle_generation"}),
+    "phone.enable": frozenset({"user_id", "lifecycle_generation"}),
     "phone.disable": frozenset({"user_id"}),
-    "livekit.dispatch": frozenset({"call_id"}),
+    "livekit.dispatch": frozenset({"call_id", "lifecycle_generation"}),
     "livekit.verification_dispatch": frozenset(
-        {"activation_id", "session_id", "room_name"}
+        {"activation_id", "session_id", "room_name", "lifecycle_generation"}
     ),
     "summary.generate": frozenset({"call_id"}),
     "recording.reconcile": frozenset({"operation_id"}),
@@ -51,6 +51,10 @@ def validate_outbox_payload(topic: str, payload: dict) -> None:
         raise OutboxPayloadError("Outbox payload must contain references only")
     for field in required_fields:
         value = payload.get(field)
+        if field == "lifecycle_generation":
+            if type(value) is not int or value < 1:
+                raise OutboxPayloadError("Outbox lifecycle generation is invalid")
+            continue
         if not isinstance(value, str) or not value:
             raise OutboxPayloadError("Outbox reference is invalid")
         if field == "room_name":

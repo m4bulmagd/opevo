@@ -533,7 +533,10 @@ async def test_sip_join_commits_call_and_dispatch_intent_without_provider_io(db_
     assert events[0].topic == "livekit.dispatch"
     assert events[0].aggregate_type == "call"
     assert events[0].aggregate_id == calls[0].id
-    assert events[0].payload == {"call_id": str(calls[0].id)}
+    assert events[0].payload == {
+        "call_id": str(calls[0].id),
+        "lifecycle_generation": user.lifecycle_generation,
+    }
     assert direct.calls == 0
     assert pool.jobs == [("outbox_delivery_job", {}, {})]
     assert realtime.events == [

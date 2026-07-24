@@ -12,6 +12,10 @@ class AccountStateBlockedError(RuntimeError):
         self.code = code
 
 
+class AccountLifecycleGenerationMismatchError(RuntimeError):
+    pass
+
+
 def require_active_account(user: User) -> None:
     if user.status == "deactivating":
         raise AccountStateBlockedError("account_deactivating")
@@ -19,3 +23,13 @@ def require_active_account(user: User) -> None:
         raise AccountStateBlockedError("account_inactive")
     if user.status != "active":
         raise AccountStateBlockedError("account_inactive")
+
+
+def require_current_account_lifecycle(
+    user: User,
+    *,
+    lifecycle_generation: int,
+) -> None:
+    require_active_account(user)
+    if user.lifecycle_generation != lifecycle_generation:
+        raise AccountLifecycleGenerationMismatchError

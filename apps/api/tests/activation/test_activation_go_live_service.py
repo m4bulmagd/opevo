@@ -314,7 +314,10 @@ async def test_go_live_records_one_pending_attempt_and_returns_activating(
     assert config.is_enabled is True
     assert len(outbox) == 1
     assert outbox[0].topic == "phone.enable"
-    assert outbox[0].payload == {"user_id": str(active_user.id)}
+    assert outbox[0].payload == {
+        "user_id": str(active_user.id),
+        "lifecycle_generation": active_user.lifecycle_generation,
+    }
     assert str(active_user.id) not in outbox[0].idempotency_key
     assert [event.event_type for event in events] == ["go_live_requested"]
     assert pool.jobs == [("outbox_delivery_job", {})]

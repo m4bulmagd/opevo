@@ -54,6 +54,7 @@ class InboundVerificationService:
                     "activation_id": str(claim.activation_id),
                     "session_id": claim.session_id,
                     "room_name": claim.room_name,
+                    "lifecycle_generation": claim.lifecycle_generation,
                 },
             )
             await self.session.commit()

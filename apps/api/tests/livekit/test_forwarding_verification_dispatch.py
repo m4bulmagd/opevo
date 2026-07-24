@@ -200,6 +200,7 @@ async def test_open_window_is_claimed_before_normal_call_admission(
         "activation_id": str(activation.id),
         "session_id": activation.verification_session_id,
         "room_name": "verification-room-1",
+        "lifecycle_generation": active_user.lifecycle_generation,
     }
     assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
     assert await db_session.scalar(select(func.count()).select_from(CallMessage)) == 0
@@ -332,7 +333,10 @@ async def test_no_window_continues_unchanged_normal_dispatch(
     assert outbox.topic == "livekit.dispatch"
     assert outbox.aggregate_type == "call"
     assert outbox.aggregate_id == call.id
-    assert outbox.payload == {"call_id": str(call.id)}
+    assert outbox.payload == {
+        "call_id": str(call.id),
+        "lifecycle_generation": active_user.lifecycle_generation,
+    }
     assert len(realtime.events) == 1
 
 

@@ -599,10 +599,21 @@ async def test_phone_provision_outbox_missing_provider_identity_is_terminal_befo
         nonlocal job_called
         job_called = True
 
+    async def allow_current_account(*_args, **_kwargs) -> None:
+        return None
+
     monkeypatch.setattr(outbox_topics, "PhoneNumberProvisioningRepository", Provisionings)
     monkeypatch.setattr(outbox_topics, "phone_provisioning_job", capture)
+    monkeypatch.setattr(
+        outbox_topics,
+        "_require_current_worker_account",
+        allow_current_account,
+    )
     event = SimpleNamespace(
-        payload={"user_id": str(user_id)},
+        payload={
+            "user_id": str(user_id),
+            "lifecycle_generation": 1,
+        },
         idempotency_key=f"activation:phone.provision:{uuid4()}",
     )
 
@@ -663,11 +674,22 @@ async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key
     async def capture(_ctx, payload, *, provider_operation_key):
         captured.append((payload, provider_operation_key))
 
+    async def allow_current_account(*_args, **_kwargs) -> None:
+        return None
+
     monkeypatch.setattr(outbox_topics, "PhoneNumberProvisioningRepository", Provisionings)
     monkeypatch.setattr(outbox_topics, "PhoneNumberRepository", Phones)
     monkeypatch.setattr(outbox_topics, "phone_provisioning_job", capture)
+    monkeypatch.setattr(
+        outbox_topics,
+        "_require_current_worker_account",
+        allow_current_account,
+    )
     event = SimpleNamespace(
-        payload={"user_id": str(user_id)},
+        payload={
+            "user_id": str(user_id),
+            "lifecycle_generation": 1,
+        },
         idempotency_key=delivery_key,
     )
 
@@ -679,7 +701,13 @@ async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key
 
     assert exc_info.value.error_code == "provider_terminal"
     assert captured == [
-        ({"user_id": str(user_id)}, provider_operation_key)
+        (
+            {
+                "user_id": str(user_id),
+                "lifecycle_generation": 1,
+            },
+            provider_operation_key,
+        )
     ]
 
 
@@ -715,6 +743,7 @@ def install_phone_provisioning_job_fakes(
                 id=user_id,
                 country_code="FR",
                 status="active",
+                lifecycle_generation=1,
             )
 
         async def get_by_id_for_update(self, user_id: UUID):
@@ -761,7 +790,10 @@ async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_de
             "telephony_provider": provider,
             "session_factory": session_factory,
         },
-        {"user_id": str(active_user.id)},
+        {
+            "user_id": str(active_user.id),
+            "lifecycle_generation": active_user.lifecycle_generation,
+        },
         provider_operation_key="activation:phone.provision:evt_123",
     )
 
@@ -804,7 +836,10 @@ async def test_phone_provisioning_job_defaults_to_local_factory_without_credenti
 
     await phone_provisioning_job(
         {"session_factory": session_factory},
-        {"user_id": str(user_id)},
+        {
+            "user_id": str(user_id),
+            "lifecycle_generation": active_user.lifecycle_generation,
+        },
         provider_operation_key=operation_key,
     )
 
@@ -867,7 +902,10 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
             "telephony_provider": provider,
             "session_factory": session_factory,
         },
-        {"user_id": str(active_user.id)},
+        {
+            "user_id": str(active_user.id),
+            "lifecycle_generation": active_user.lifecycle_generation,
+        },
         provider_operation_key="activation:phone.provision:stable",
     )
     await phone_provisioning_job(
@@ -875,7 +913,10 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
             "telephony_provider": provider,
             "session_factory": session_factory,
         },
-        {"user_id": str(active_user.id)},
+        {
+            "user_id": str(active_user.id),
+            "lifecycle_generation": active_user.lifecycle_generation,
+        },
         provider_operation_key="activation:phone.provision:stable",
     )
 
@@ -969,7 +1010,10 @@ async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
                 "telephony_provider": provider,
                 "session_factory": session_factory,
             },
-            {"user_id": str(active_user.id)},
+            {
+                "user_id": str(active_user.id),
+                "lifecycle_generation": active_user.lifecycle_generation,
+            },
             provider_operation_key="activation:phone.provision:pending",
         )
 
@@ -1002,7 +1046,10 @@ async def test_phone_provisioning_job_persists_retryable_failure_state(
             "telephony_provider": ReviewRequiredProvisioningProvider(),
             "session_factory": session_factory,
         },
-        {"user_id": str(active_user.id)},
+        {
+            "user_id": str(active_user.id),
+            "lifecycle_generation": active_user.lifecycle_generation,
+        },
     )
 
     provisionings = (
@@ -1048,7 +1095,10 @@ async def test_phone_provisioning_review_failure_does_not_log_exception_message(
     with caplog.at_level(logging.WARNING):
         await phone_provisioning_job(
             {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
-            {"user_id": "00000000-0000-0000-0000-000000000123"},
+            {
+                "user_id": "00000000-0000-0000-0000-000000000123",
+                "lifecycle_generation": 1,
+            },
         )
 
     assert "AUTHORIZATION_SENTINEL_FROM_REVIEW_EXCEPTION" not in caplog.text
@@ -1082,7 +1132,10 @@ async def test_phone_provisioning_unexpected_failure_does_not_log_or_persist_exc
         with pytest.raises(RuntimeError) as exc_info:
             await phone_provisioning_job(
                 {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
-                {"user_id": "00000000-0000-0000-0000-000000000123"},
+                {
+                    "user_id": "00000000-0000-0000-0000-000000000123",
+                    "lifecycle_generation": 1,
+                },
             )
 
     assert error_message not in str(exc_info.value)
@@ -1124,7 +1177,10 @@ async def test_phone_provisioning_preserves_safe_provider_category(
     with pytest.raises(TelephonyProviderError) as exc_info:
         await phone_provisioning_job(
             {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
-            {"user_id": "00000000-0000-0000-0000-000000000123"},
+            {
+                "user_id": "00000000-0000-0000-0000-000000000123",
+                "lifecycle_generation": 1,
+            },
         )
 
     assert exc_info.value.category == category
@@ -1155,7 +1211,10 @@ async def test_phone_provisioning_sanitizes_sensitive_exception_class_name(
         with pytest.raises(RuntimeError) as exc_info:
             await phone_provisioning_job(
                 {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
-                {"user_id": "00000000-0000-0000-0000-000000000123"},
+                {
+                    "user_id": "00000000-0000-0000-0000-000000000123",
+                    "lifecycle_generation": 1,
+                },
             )
 
     assert sensitive_type_sentinel not in str(exc_info.value)
@@ -1205,7 +1264,10 @@ async def test_phone_provisioning_mark_failed_error_does_not_chain_provider_secr
         with pytest.raises(RuntimeError) as exc_info:
             await phone_provisioning_job(
                 {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
-                {"user_id": "00000000-0000-0000-0000-000000000123"},
+                {
+                    "user_id": "00000000-0000-0000-0000-000000000123",
+                    "lifecycle_generation": 1,
+                },
             )
 
     assert_exception_state_is_sanitized(
@@ -1242,7 +1304,10 @@ async def test_phone_provisioning_commit_error_does_not_chain_provider_secrets(
         with pytest.raises(RuntimeError) as exc_info:
             await phone_provisioning_job(
                 {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
-                {"user_id": "00000000-0000-0000-0000-000000000123"},
+                {
+                    "user_id": "00000000-0000-0000-0000-000000000123",
+                    "lifecycle_generation": 1,
+                },
             )
 
     assert_exception_state_is_sanitized(
