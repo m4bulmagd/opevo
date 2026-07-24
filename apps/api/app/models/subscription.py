@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, false, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.schema import conv
 
@@ -42,4 +42,17 @@ class Subscription(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_stripe_event_created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    lifecycle_generation: Mapped[int] = mapped_column(
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
+    cancel_at_period_end: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
+    cancellation_effective_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )

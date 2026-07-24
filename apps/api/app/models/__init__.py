@@ -42,6 +42,9 @@ class UUIDPrimaryKeyMixin:
 
 from app.models.agent_config import AgentConfig  # noqa: E402,F401
 from app.models.activation_event import ActivationEvent  # noqa: E402,F401
+from app.models.account_deactivation_operation import (  # noqa: E402,F401
+    AccountDeactivationOperation,
+)
 from app.models.business_profile import BusinessProfile  # noqa: E402,F401
 from app.models.call import Call  # noqa: E402,F401
 from app.models.call_message import CallMessage  # noqa: E402,F401

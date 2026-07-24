@@ -145,6 +145,7 @@ def test_offline_upgrade_generates_full_chain_through_recording_egress_head() ->
     assert "0011_call_state_machine -> 0012_customer_activation" in output
     assert "0012_customer_activation -> 0013_outbox_routing_target" in output
     assert "0013_outbox_routing_target -> 0014_recording_egress_ops" in output
+    assert "0014_recording_egress_ops -> 0015_account_deactivation" in output
     assert "gen_random_uuid()" in output
     assert "json_build_object('operation_id'" in output
     assert "NULLIF(calls.recording_object_key, '')" in output
