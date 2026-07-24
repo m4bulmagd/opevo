@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Any
 
 from app.core.config import get_settings
@@ -8,6 +9,44 @@ from app.providers.subscriptions.base import (
     SubscriptionProvider,
     SubscriptionProviderError,
 )
+
+
+_UNSAFE_STRIPE_SDK_LOG_MARKERS = (
+    "message='Stripe v1 API error received'",
+    "message='Stripe v2 API error received'",
+    "message='API response body'",
+)
+
+
+class _SafeStripeSdkLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (
+            record.name == "stripe"
+            and isinstance(record.msg, str)
+            and any(marker in record.msg for marker in _UNSAFE_STRIPE_SDK_LOG_MARKERS)
+        ):
+            record.msg = "message='Stripe API provider details suppressed'"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+        return True
+
+
+_SAFE_STRIPE_SDK_LOG_FILTER = _SafeStripeSdkLogFilter()
+
+
+def _install_safe_stripe_sdk_logging() -> None:
+    import stripe
+    from stripe import _util as stripe_util
+
+    # Stripe's console mode prints before logging filters run. Keep SDK
+    # diagnostics in the standard logger, where provider details are filtered.
+    stripe.log = None
+    stripe_util.STRIPE_LOG = None
+    stripe_logger = logging.getLogger("stripe")
+    if _SAFE_STRIPE_SDK_LOG_FILTER not in stripe_logger.filters:
+        stripe_logger.addFilter(_SAFE_STRIPE_SDK_LOG_FILTER)
 
 
 class StripeSubscriptionProvider(SubscriptionProvider):
@@ -55,6 +94,7 @@ class StripeSubscriptionProvider(SubscriptionProvider):
             )
 
     def _get_client(self) -> Any:
+        _install_safe_stripe_sdk_logging()
         if self._stripe_client is not None:
             return self._stripe_client
         if not self.secret_key:
