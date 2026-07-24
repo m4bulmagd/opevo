@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.models import Base
 from app.models.activation_event import ActivationEvent
+from app.models.account_deactivation_operation import AccountDeactivationOperation
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
 from app.models.call import Call

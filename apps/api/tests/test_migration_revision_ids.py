@@ -20,3 +20,4 @@ def test_alembic_revision_ids_fit_version_table() -> None:
     assert "0007_production_integrity" in revision_ids
     assert "0012_customer_activation" in revision_ids
     assert "0014_recording_egress_ops" in revision_ids
+    assert "0015_account_deactivation" in revision_ids

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models import Base
 from app.models.call import Call
 from app.models.call_message import CallMessage
+from app.models.account_deactivation_operation import AccountDeactivationOperation
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
@@ -41,6 +42,11 @@ def test_models_expose_exact_integrity_constraint_names() -> None:
     assert "ck_subscriptions_allocated_minutes_nonnegative" in _constraint_names(Subscription)
     assert "ck_subscriptions_status_allowed" in _constraint_names(Subscription)
     assert "ck_subscriptions_plan_tier_allowed" in _constraint_names(Subscription)
+    assert "ck_users_status_allowed" in _constraint_names(User)
+    assert (
+        "uq_account_deactivation_operations_user_generation"
+        in _constraint_names(AccountDeactivationOperation)
+    )
     assert "ck_calls_duration_seconds_nonnegative" in _constraint_names(Call)
     assert "ck_calls_minutes_charged_nonnegative" in _constraint_names(Call)
     assert "ck_calls_status_allowed" in _constraint_names(Call)
