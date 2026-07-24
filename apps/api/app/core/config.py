@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     stripe_checkout_success_url: str | None = None
     stripe_checkout_cancel_url: str | None = None
     stripe_billing_portal_return_url: str | None = None
+    stripe_billing_portal_configuration_id: str | None = None
     telnyx_api_key: str | None = None
     telnyx_active_connection_id: str | None = None
     telnyx_disabled_connection_id: str | None = None
