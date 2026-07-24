@@ -52,6 +52,7 @@ class BillingSessionService:
         checkout_success_url: str | None = None,
         checkout_cancel_url: str | None = None,
         billing_portal_return_url: str | None = None,
+        billing_portal_configuration_id: str | None = None,
         observability=None,
     ) -> None:
         settings = get_settings()
@@ -62,6 +63,10 @@ class BillingSessionService:
         self.checkout_cancel_url = checkout_cancel_url or settings.stripe_checkout_cancel_url
         self.billing_portal_return_url = (
             billing_portal_return_url or settings.stripe_billing_portal_return_url
+        )
+        self.billing_portal_configuration_id = (
+            billing_portal_configuration_id
+            or settings.stripe_billing_portal_configuration_id
         )
         self.observability = observability or get_observability()
 
@@ -145,6 +150,10 @@ class BillingSessionService:
                 stripe.billing_portal.Session.create,
                 customer=customer_id,
                 return_url=configured_return_url,
+                configuration=self._require_config(
+                    self.billing_portal_configuration_id,
+                    "Stripe billing portal configuration ID is required",
+                ),
             )
         except Exception as exc:
             category, error_class = self._stripe_error_details(exc)

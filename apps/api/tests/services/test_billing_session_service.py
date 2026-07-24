@@ -92,6 +92,7 @@ async def test_create_checkout_session_uses_price_mapping() -> None:
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
         billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
         observability=telemetry,
     )
 
@@ -121,6 +122,7 @@ async def test_create_checkout_session_rejects_standard_plan() -> None:
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
         billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
     )
 
     with pytest.raises(ValueError, match="Unsupported plan tier: standard"):
@@ -143,6 +145,7 @@ async def test_create_portal_session_requires_customer_id() -> None:
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
         billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
     )
 
     with pytest.raises(ValueError, match="Stripe customer ID is required"):
@@ -161,6 +164,7 @@ async def test_create_portal_session_always_uses_server_owned_return_url() -> No
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
         billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
     )
 
     result = await service.create_portal_session(
@@ -173,6 +177,7 @@ async def test_create_portal_session_always_uses_server_owned_return_url() -> No
         {
             "customer": "cus_123",
             "return_url": "https://app.example.com/dashboard/billing",
+            "configuration": "bpc_period_end_cancel",
         }
     ]
 
@@ -185,6 +190,7 @@ async def test_create_portal_session_accepts_omitted_caller_return_url() -> None
     service = BillingSessionService(
         stripe_client=client,
         billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
     )
 
     await service.create_portal_session(customer_id="cus_123", return_url=None)
@@ -220,6 +226,7 @@ async def test_create_portal_session_rejects_unsafe_caller_return_url(
     service = BillingSessionService(
         stripe_client=FakeStripeClient(),
         billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
     )
 
     with pytest.raises(BillingPortalReturnUrlError):

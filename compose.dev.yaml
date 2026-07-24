@@ -137,6 +137,7 @@ services:
       APP_ENV: development
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call
       REDIS_URL: redis://redis:6379/0
+      BILLING_MODE: fake
       TELEPHONY_MODE: fake
       ACTIVATION_FLOW_ENABLED: "true"
       STORAGE_BUCKET_NAME: recordings

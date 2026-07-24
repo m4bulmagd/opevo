@@ -45,6 +45,7 @@ def base_settings() -> Settings:
         stripe_checkout_success_url="https://app.example.com/billing/success",
         stripe_checkout_cancel_url="https://app.example.com/billing/cancel",
         stripe_billing_portal_return_url="https://app.example.com/dashboard/billing",
+        stripe_billing_portal_configuration_id="bpc_period_end_cancel",
         livekit_url="wss://livekit.example.com",
         livekit_api_key="livekit-api-key",
         livekit_api_secret="livekit-api-secret",
@@ -81,6 +82,10 @@ def base_settings() -> Settings:
         ("stripe_checkout_success_url", "STRIPE_CHECKOUT_SUCCESS_URL"),
         ("stripe_checkout_cancel_url", "STRIPE_CHECKOUT_CANCEL_URL"),
         ("stripe_billing_portal_return_url", "STRIPE_BILLING_PORTAL_RETURN_URL"),
+        (
+            "stripe_billing_portal_configuration_id",
+            "STRIPE_BILLING_PORTAL_CONFIGURATION_ID",
+        ),
         ("livekit_url", "LIVEKIT_URL"),
         ("livekit_api_key", "LIVEKIT_API_KEY"),
         ("livekit_api_secret", "LIVEKIT_API_SECRET"),
@@ -400,7 +405,7 @@ def test_recording_operation_migration_is_the_only_alembic_head() -> None:
     config.set_main_option("path_separator", "os")
 
     assert ScriptDirectory.from_config(config).get_heads() == [
-        "0014_recording_egress_ops"
+        "0015_account_deactivation"
     ]
 
 
@@ -561,7 +566,10 @@ def test_production_compose_scopes_modes_and_passes_runtime_validation(
         assert match is not None
         assert match.group(1) == expected_value
         resolved_modes[field_name] = match.group(1)
-        assert environment_name not in worker_environment
+        if environment_name == "BILLING_MODE":
+            assert environment_name in worker_environment
+        else:
+            assert environment_name not in worker_environment
 
     telephony_match = re.search(
         r"^  TELEPHONY_MODE: ([a-z]+)$",
@@ -605,6 +613,8 @@ def test_production_worker_runtime_accepts_least_privilege_settings() -> None:
         summary_provider="gemini",
         summary_model="gemini-2.5-flash",
         gemini_api_key="gemini-api-key",
+        billing_mode="stripe",
+        stripe_secret_key="stripe-secret-key",
     )
 
     validate_worker_runtime(settings)
@@ -632,6 +642,26 @@ def test_production_worker_requires_recording_provider_and_private_storage(
 
     with pytest.raises(RuntimeError, match=environment_name):
         validate_worker_runtime(settings)
+
+
+def test_worker_rejects_stripe_mode_without_stripe_secret_key(
+    base_settings: Settings,
+) -> None:
+    settings = base_settings.model_copy(update={"stripe_secret_key": ""})
+
+    with pytest.raises(RuntimeError, match="STRIPE_SECRET_KEY"):
+        validate_worker_runtime(settings)
+
+
+def test_development_worker_accepts_fake_billing_without_stripe_secret_key() -> None:
+    settings = Settings(
+        app_env="development",
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+        billing_mode="fake",
+    )
+
+    validate_worker_runtime(settings)
 
 
 def test_recording_runtime_does_not_require_an_agent_evaluation_model() -> None:
@@ -737,11 +767,11 @@ def test_development_compose_scopes_local_identity_and_provider_modes() -> None:
     assert 'ACTIVATION_FLOW_ENABLED: "true"' in worker_service
     for forbidden_setting in (
         "AUTH_MODE:",
-        "BILLING_MODE:",
         "CARRIER_LOOKUP_MODE:",
         "LOCAL_AUTH_TOKEN:",
     ):
         assert forbidden_setting not in worker_service
+    assert "BILLING_MODE: fake" in worker_service
     for setting in (
         "AUTH_MODE: local",
         "BILLING_MODE: fake",
@@ -917,13 +947,13 @@ def test_worker_secrets_are_least_privilege_and_agent_shutdown_can_drain() -> No
 
     for forbidden_secret in (
         "CLERK_WEBHOOK_SECRET",
-        "STRIPE_SECRET_KEY",
         "STRIPE_WEBHOOK_SECRET",
     ):
         assert forbidden_secret not in worker_environment
     for required_worker_setting in (
         "DATABASE_URL",
         "REDIS_URL",
+        "STRIPE_SECRET_KEY",
         "LIVEKIT_API_SECRET",
         "TELNYX_API_KEY",
         "S3_SECRET_KEY",

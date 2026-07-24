@@ -16,6 +16,7 @@ PRODUCTION_REQUIRED_SETTINGS = (
     "stripe_checkout_success_url",
     "stripe_checkout_cancel_url",
     "stripe_billing_portal_return_url",
+    "stripe_billing_portal_configuration_id",
     "livekit_url",
     "livekit_api_key",
     "livekit_api_secret",
@@ -139,6 +140,8 @@ def validate_worker_runtime(settings: Settings) -> None:
         return
 
     missing = _require(settings, WORKER_PRODUCTION_REQUIRED_SETTINGS)
+    if settings.billing_mode == "stripe":
+        missing.extend(_require(settings, ("stripe_secret_key",)))
     if not settings.telnyx_ordering_enabled:
         missing.append("TELNYX_ORDERING_ENABLED")
 
