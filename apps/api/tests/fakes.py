@@ -1,4 +1,14 @@
+from types import SimpleNamespace
+
 from app.providers.telephony.base import TelephonyProvisioningReviewRequired
+
+
+class FakeCustomerReadinessService:
+    def __init__(self, *, serving: bool) -> None:
+        self.serving = serving
+
+    async def evaluate(self, _user_id) -> SimpleNamespace:
+        return SimpleNamespace(result=SimpleNamespace(can_route=self.serving))
 
 
 class FakeTelephonyProvider:

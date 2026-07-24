@@ -69,6 +69,28 @@ def test_recording_reconcile_payload_accepts_exact_operation_reference() -> None
     )
 
 
+def test_account_deactivation_payload_accepts_exact_operation_reference() -> None:
+    validate_outbox_payload(
+        "account.deactivate",
+        {"operation_id": str(uuid4())},
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"operation_id": "not-a-uuid"},
+        {"operation_id": str(uuid4()), "phone_provider_id": "private"},
+    ],
+)
+def test_account_deactivation_payload_rejects_private_or_invalid_references(
+    payload: dict,
+) -> None:
+    with pytest.raises(OutboxPayloadError):
+        validate_outbox_payload("account.deactivate", payload)
+
+
 @pytest.mark.parametrize(
     "payload",
     [

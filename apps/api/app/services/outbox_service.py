@@ -17,6 +17,7 @@ SUPPORTED_OUTBOX_TOPICS = frozenset(
         "livekit.verification_dispatch",
         "summary.generate",
         "recording.reconcile",
+        "account.deactivate",
     }
 )
 
@@ -30,6 +31,7 @@ REFERENCE_PAYLOAD_FIELDS = {
     ),
     "summary.generate": frozenset({"call_id"}),
     "recording.reconcile": frozenset({"operation_id"}),
+    "account.deactivate": frozenset({"operation_id"}),
 }
 
 

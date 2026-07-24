@@ -62,3 +62,8 @@ class AgentConfigRepository:
             setattr(config, field, value)
         await self.session.flush()
         return config
+
+    async def disable_for_deactivation(self, config: AgentConfig) -> AgentConfig:
+        config.is_enabled = False
+        await self.session.flush()
+        return config

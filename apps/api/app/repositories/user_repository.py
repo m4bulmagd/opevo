@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,10 +10,10 @@ class UserRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def get_by_id(self, user_id) -> User | None:
+    async def get_by_id(self, user_id: UUID) -> User | None:
         return await self.session.get(User, user_id)
 
-    async def get_by_id_for_update(self, user_id) -> User | None:
+    async def get_by_id_for_update(self, user_id: UUID) -> User | None:
         result = await self.session.execute(
             select(User)
             .where(User.id == user_id)
@@ -19,6 +21,12 @@ class UserRepository:
             .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
+
+    async def start_deactivation(self, user: User) -> User:
+        user.status = "deactivating"
+        user.lifecycle_generation += 1
+        await self.session.flush()
+        return user
 
     async def create(self, clerk_user_id: str, email: str) -> User:
         user = User(clerk_user_id=clerk_user_id, email=email)
