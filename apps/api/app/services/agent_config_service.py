@@ -7,6 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models.agent_config import AgentConfig
 from app.repositories.agent_config_repository import AgentConfigRepository
+from app.repositories.user_repository import UserRepository
+from app.services.account_access_policy import (
+    AccountStateBlockedError,
+    require_active_account,
+)
 from app.services.customer_readiness_policy import ReadinessBlocker
 from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.outbox_service import OutboxService
@@ -54,6 +59,7 @@ class AgentConfigService:
     ) -> None:
         self.session = session
         self.agent_config_repository = agent_config_repository
+        self.user_repository = UserRepository(session)
         self.readiness_service = readiness_service
         self.outbox_service = OutboxService(session)
         self.arq_pool = arq_pool
@@ -68,6 +74,15 @@ class AgentConfigService:
         *,
         requested_fields: set[str] | None = None,
     ) -> AgentConfig:
+        user = await self.user_repository.get_by_id_for_update(user_id)
+        if user is None:
+            await self.session.rollback()
+            raise AgentConfigNotFoundError
+        try:
+            require_active_account(user)
+        except AccountStateBlockedError:
+            await self.session.rollback()
+            raise
         if (
             get_settings().activation_flow_enabled
             and "is_enabled"

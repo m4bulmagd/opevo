@@ -131,6 +131,30 @@ async def test_shared_user_bootstrap_flushes_without_committing(db_session) -> N
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("status", ["deactivating", "inactive"])
+async def test_clerk_resynchronization_preserves_existing_account_status(
+    db_session,
+    status: str,
+) -> None:
+    service = UserBootstrapService(db_session)
+    user = await service.ensure_user(
+        external_user_id=f"resync_{status}",
+        email=f"resync-{status}@example.invalid",
+    )
+    user.status = status
+    await db_session.commit()
+
+    resynchronized = await service.ensure_user(
+        external_user_id=user.clerk_user_id,
+        email=user.email,
+    )
+    await db_session.commit()
+
+    assert resynchronized.id == user.id
+    assert resynchronized.status == status
+
+
+@pytest.mark.anyio
 async def test_clerk_sync_delegates_once_and_keeps_one_final_commit_per_event(
     db_session,
     clerk_user_created_payload,

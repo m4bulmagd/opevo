@@ -476,6 +476,47 @@ async def test_stale_verification_state_never_calls_provider(
 
 
 @pytest.mark.anyio
+async def test_claimed_verification_dispatch_rechecks_account_before_provider_io(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user, _activation, event = await _seed_verification_dispatch(db_session)
+    provider = _Provider()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    real_snapshot = outbox_topics._verification_dispatch_snapshot
+
+    async def snapshot_then_deactivate(*args, **kwargs):
+        snapshot = await real_snapshot(*args, **kwargs)
+        async with session_factory() as session:
+            current_user = await session.get(User, user.id)
+            assert current_user is not None
+            current_user.status = "deactivating"
+            await session.commit()
+        return snapshot
+
+    monkeypatch.setattr(
+        outbox_topics,
+        "_verification_dispatch_snapshot",
+        snapshot_then_deactivate,
+    )
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await _handler()(
+            {
+                "session_factory": session_factory,
+                "livekit_dispatch_provider": provider,
+                "verification_now": lambda: FIXED_NOW,
+            },
+            event,
+        )
+
+    assert exc_info.value.error_code == "dispatch_ineligible"
+    assert exc_info.value.retryable is False
+    assert provider.list_calls == []
+    assert provider.create_calls == []
+
+
+@pytest.mark.anyio
 async def test_verification_topic_is_registered_but_never_classified_as_call(
     db_session,
 ) -> None:

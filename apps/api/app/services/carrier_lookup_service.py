@@ -14,6 +14,7 @@ from app.providers.carrier_lookup.factory import build_carrier_lookup_provider
 from app.providers.telephony.telnyx import normalize_french_number
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.user_repository import UserRepository
+from app.services.account_access_policy import require_active_account
 
 
 class CarrierLookupUnavailableError(Exception):
@@ -75,9 +76,11 @@ class CarrierLookupService:
         try:
             user = await user_repository.get_by_id_for_update(user_id)
             profile = await profile_repository.get_by_user_id_for_update(user_id)
+            if user is None:
+                raise CarrierLookupUnavailableError
+            require_active_account(user)
             if (
-                user is None
-                or profile is None
+                profile is None
                 or profile.existing_phone_e164 is None
             ):
                 raise CarrierLookupUnavailableError
@@ -95,9 +98,11 @@ class CarrierLookupService:
         try:
             user = await user_repository.get_by_id_for_update(user_id)
             profile = await profile_repository.get_by_user_id_for_update(user_id)
+            if user is None:
+                raise CarrierLookupUnavailableError
+            require_active_account(user)
             if (
-                user is None
-                or profile is None
+                profile is None
                 or profile.existing_phone_e164 != expected_number
             ):
                 raise CarrierLookupUnavailableError
@@ -118,9 +123,12 @@ class CarrierLookupService:
         try:
             user = await user_repository.get_by_id_for_update(user_id)
             profile = await profile_repository.get_by_user_id_for_update(user_id)
+            if user is None:
+                await session.rollback()
+                return
+            require_active_account(user)
             if (
-                user is None
-                or profile is None
+                profile is None
                 or profile.existing_phone_e164 != expected_number
             ):
                 await session.rollback()

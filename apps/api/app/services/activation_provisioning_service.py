@@ -25,6 +25,7 @@ from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.activation import ActivationSnapshotResponse
 from app.services.activation_snapshot_service import ActivationSnapshotService
+from app.services.account_access_policy import require_active_account
 from app.services.business_profile_service import REQUIRED_PROFILE_FIELDS
 from app.services.customer_readiness_policy import CustomerReadinessPolicy
 from app.services.outbox_service import OutboxService
@@ -91,8 +92,7 @@ class ActivationProvisioningService:
             user = await self.user_repository.get_by_id_for_update(user_id)
             if user is None:
                 raise ActivationProvisioningBlockedError("profile_unavailable")
-            if user.status != "active":
-                raise ActivationProvisioningBlockedError("user_inactive")
+            require_active_account(user)
             activation = await self.activation_repository.get_by_user_id_for_update(
                 user_id
             )
@@ -182,8 +182,7 @@ class ActivationProvisioningService:
             user = await self.user_repository.get_by_id_for_update(user_id)
             if user is None:
                 raise ActivationProvisioningBlockedError("profile_unavailable")
-            if user.status != "active":
-                raise ActivationProvisioningBlockedError("user_inactive")
+            require_active_account(user)
             activation = await self.activation_repository.get_by_user_id_for_update(
                 user_id
             )

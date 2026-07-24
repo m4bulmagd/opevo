@@ -19,6 +19,7 @@ from app.services.activation_snapshot_service import (
     ActivationSnapshotService,
     ActivationSnapshotUnavailableError,
 )
+from app.services.account_access_policy import AccountStateBlockedError
 from app.services.activation_go_live_service import (
     ActivationGoLiveBlockedError,
     ActivationGoLiveService,
@@ -100,6 +101,8 @@ async def put_business_profile(
 ) -> BusinessProfileResponse:
     try:
         profile = await service.save_draft(identity.internal_user_id, payload)
+    except AccountStateBlockedError as error:
+        raise _account_state_blocked_error(error) from None
     except BusinessProfileNotFoundError:
         raise _profile_unavailable_error() from None
     except ReceptionistProjectionTooLargeError:
@@ -120,6 +123,8 @@ async def lookup_carrier(
 ) -> CarrierLookupResponse:
     try:
         result = await service.lookup_for_user(identity.internal_user_id)
+    except AccountStateBlockedError as error:
+        raise _account_state_blocked_error(error) from None
     except CarrierLookupUnavailableError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -144,6 +149,8 @@ async def confirm_profile(
 ) -> ActivationSnapshotResponse:
     try:
         await command_service.confirm_profile(identity.internal_user_id)
+    except AccountStateBlockedError as error:
+        raise _account_state_blocked_error(error) from None
     except BusinessProfileIncompleteError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -171,6 +178,8 @@ async def confirm_provisioning(
             identity.internal_user_id,
             arq_pool=getattr(request.app.state, "arq_pool", None),
         )
+    except AccountStateBlockedError as error:
+        raise _account_state_blocked_error(error) from None
     except ActivationProvisioningBlockedError as error:
         raise _provisioning_blocked_error(error.code) from None
 
@@ -192,6 +201,8 @@ async def retry_provisioning(
             identity.internal_user_id,
             arq_pool=getattr(request.app.state, "arq_pool", None),
         )
+    except AccountStateBlockedError as error:
+        raise _account_state_blocked_error(error) from None
     except ActivationProvisioningBlockedError as error:
         raise _provisioning_blocked_error(error.code) from None
 
@@ -211,6 +222,8 @@ async def open_verification_window(
 ) -> ActivationSnapshotResponse:
     try:
         await service.open_window(identity.internal_user_id)
+    except AccountStateBlockedError as error:
+        raise _account_state_blocked_error(error) from None
     except ForwardingVerificationConflictError as error:
         raise _verification_conflict_error(error.code) from None
     return await _get_activation_snapshot(
@@ -234,6 +247,8 @@ async def go_live(
             identity.internal_user_id,
             arq_pool=getattr(request.app.state, "arq_pool", None),
         )
+    except AccountStateBlockedError as error:
+        raise _account_state_blocked_error(error) from None
     except ActivationGoLiveBlockedError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -296,6 +311,13 @@ def _profile_unavailable_error() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={"code": "profile_unavailable"},
+    )
+
+
+def _account_state_blocked_error(error: AccountStateBlockedError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"code": error.code},
     )
 
 

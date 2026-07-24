@@ -529,9 +529,13 @@ class ReviewRequiredProvisioningProvider:
 class FakePhoneProvisioningSession:
     def __init__(self) -> None:
         self.commits = 0
+        self.rollbacks = 0
 
     async def commit(self) -> None:
         self.commits += 1
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
 
 
 class FakePhoneProvisioningSessionContext:
@@ -707,7 +711,14 @@ def install_phone_provisioning_job_fakes(
             pass
 
         async def get_by_id(self, user_id: UUID):
-            return SimpleNamespace(id=user_id, country_code="FR")
+            return SimpleNamespace(
+                id=user_id,
+                country_code="FR",
+                status="active",
+            )
+
+        async def get_by_id_for_update(self, user_id: UUID):
+            return await self.get_by_id(user_id)
 
     class FailingTelephonyService:
         def __init__(self, _session, *, provider=None) -> None:

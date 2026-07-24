@@ -20,6 +20,7 @@ from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
 )
 from app.repositories.user_repository import UserRepository
+from app.services.account_access_policy import require_active_account
 from app.services.telephony_service import TelephonyService
 
 
@@ -216,6 +217,7 @@ async def phone_provisioning_job(
         if not user:
             logger.error(f"phone_provisioning_job: user {user_id} not found")
             return
+        require_active_account(user)
 
         country_code = (user.country_code or "FR").upper()
         if country_code != "FR":
@@ -269,9 +271,15 @@ async def phone_provisioning_job(
             session_factory,
             provider_operation_key,
         ):
+            current_user = await user_repo.get_by_id_for_update(user_id)
+            if current_user is None:
+                await session.rollback()
+                return
+            require_active_account(current_user)
+            await session.rollback()
             await _run_provider_attempt(
                 session=session,
-                user_id=user.id,
+                user_id=user_id,
                 country_code=country_code,
                 provider_operation_key=provider_operation_key,
                 telephony_service=telephony_service,

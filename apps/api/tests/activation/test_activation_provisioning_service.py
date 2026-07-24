@@ -18,6 +18,7 @@ from app.services.activation_provisioning_service import (
     ActivationProvisioningBlockedError,
     ActivationProvisioningService,
 )
+from app.services.account_access_policy import AccountStateBlockedError
 
 
 PROVISIONING_NOW = datetime(2026, 7, 18, 9, 0, tzinfo=UTC)
@@ -224,7 +225,7 @@ async def test_confirm_redis_wakeup_failure_keeps_committed_canonical_snapshot(
         ("profile_unconfirmed", "profile_not_confirmed"),
         ("profile_stale", "profile_confirmation_stale"),
         ("profile_incomplete", "profile_incomplete"),
-        ("user_inactive", "user_inactive"),
+        ("user_inactive", "account_inactive"),
         ("non_fr", "unsupported_country"),
         ("subscription_missing", "subscription_missing"),
         ("subscription_inactive", "subscription_status_ineligible"),
@@ -261,7 +262,7 @@ async def test_confirm_rejects_ineligible_state_with_stable_blocker_code(
     elif case == "profile_incomplete":
         profile.business_name = None
     elif case == "user_inactive":
-        active_user.status = "disabled"
+        active_user.status = "inactive"
     elif case == "non_fr":
         active_user.country_code = "IE"
     elif case == "subscription_missing":
@@ -291,7 +292,9 @@ async def test_confirm_rejects_ineligible_state_with_stable_blocker_code(
         )
     await db_session.commit()
 
-    with pytest.raises(ActivationProvisioningBlockedError) as exc_info:
+    with pytest.raises(
+        (ActivationProvisioningBlockedError, AccountStateBlockedError)
+    ) as exc_info:
         await _provisioning_service(db_session).confirm(
             active_user.id,
             arq_pool=None,

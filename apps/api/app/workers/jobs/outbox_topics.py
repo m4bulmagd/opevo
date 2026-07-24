@@ -44,6 +44,10 @@ from app.services.activation_go_live_service import (
     mark_current_go_live_succeeded,
 )
 from app.services.customer_readiness_policy import CustomerReadinessResult
+from app.services.account_access_policy import (
+    AccountStateBlockedError,
+    require_active_account,
+)
 from app.services.customer_readiness_service import (
     evaluate_customer_readiness,
 )
@@ -123,6 +127,11 @@ async def deliver_phone_provision(
             dict(event.payload),
             provider_operation_key=provider_operation_key,
         )
+    except AccountStateBlockedError:
+        raise OutboxDeliveryError(
+            "dispatch_ineligible",
+            retryable=False,
+        ) from None
     except TelephonyProviderError as exc:
         raise OutboxDeliveryError(
             exc.category,
@@ -235,6 +244,7 @@ async def deliver_phone_routing(
         try:
             if snapshot.should_enable:
                 assert routing_target == snapshot.provider_number_id
+                await _require_active_worker_account(session_factory, user_id)
                 provider_connection_name = await provider.enable_number(
                     provider_number_id=routing_target
                 )
@@ -576,6 +586,7 @@ async def deliver_livekit_dispatch(
         provider = ctx.get("livekit_dispatch_provider")
         if provider is None:
             provider = LiveKitDispatchAPIProvider()
+        await _require_active_worker_account(session_factory, snapshot.user_id)
 
         try:
             dispatches = await provider.list_dispatches(room_name=snapshot.room_name)
@@ -890,6 +901,7 @@ async def deliver_livekit_verification_dispatch(
         provider = ctx.get("livekit_dispatch_provider")
         if provider is None:
             provider = LiveKitDispatchAPIProvider()
+        await _require_active_worker_account(session_factory, snapshot.user_id)
 
         try:
             dispatches = await provider.list_dispatches(
@@ -1065,6 +1077,26 @@ async def _verification_dispatch_snapshot(
         )
         await session.commit()
         return snapshot
+
+
+async def _require_active_worker_account(session_factory, user_id: UUID) -> None:
+    async with session_factory() as session:
+        user = await UserRepository(session).get_by_id_for_update(user_id)
+        if user is None:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_ineligible",
+                retryable=False,
+            )
+        try:
+            require_active_account(user)
+        except AccountStateBlockedError:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_ineligible",
+                retryable=False,
+            ) from None
+        await session.commit()
 
 
 def _reconcile_verification_dispatches(

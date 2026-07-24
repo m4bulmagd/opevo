@@ -11,7 +11,8 @@ from app.schemas.agent_content import (
 
 
 class ReadinessBlocker(StrEnum):
-    USER_INACTIVE = "user_inactive"
+    ACCOUNT_DEACTIVATING = "account_deactivating"
+    ACCOUNT_INACTIVE = "account_inactive"
     SUBSCRIPTION_MISSING = "subscription_missing"
     PLAN_UNSUPPORTED = "plan_unsupported"
     SUBSCRIPTION_STATUS_INELIGIBLE = "subscription_status_ineligible"
@@ -89,7 +90,7 @@ class CustomerReadinessResult:
 
 
 class CustomerReadinessPolicy:
-    POLICY_VERSION = "runtime-v3"
+    POLICY_VERSION = "runtime-v4"
     ELIGIBLE_SUBSCRIPTION_STATUSES = frozenset({"active", "trialing"})
     SUPPORTED_PLAN = "starter"
 
@@ -104,7 +105,8 @@ class CustomerReadinessPolicy:
     )
     _ACCESS_BLOCKERS = _SUBSCRIPTION_BLOCKERS | frozenset(
         {
-            ReadinessBlocker.USER_INACTIVE,
+            ReadinessBlocker.ACCOUNT_DEACTIVATING,
+            ReadinessBlocker.ACCOUNT_INACTIVE,
             ReadinessBlocker.MINUTES_EXHAUSTED,
         }
     )
@@ -139,8 +141,10 @@ class CustomerReadinessPolicy:
         evaluated_at = cls._as_utc(now or datetime.now(UTC))
         found: set[ReadinessBlocker] = set()
 
-        if snapshot.user_status != "active":
-            found.add(ReadinessBlocker.USER_INACTIVE)
+        if snapshot.user_status == "deactivating":
+            found.add(ReadinessBlocker.ACCOUNT_DEACTIVATING)
+        elif snapshot.user_status != "active":
+            found.add(ReadinessBlocker.ACCOUNT_INACTIVE)
 
         cls._evaluate_subscription(snapshot, evaluated_at, found)
         if snapshot.balance <= 0:

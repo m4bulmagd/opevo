@@ -337,6 +337,29 @@ async def test_no_window_continues_unchanged_normal_dispatch(
 
 
 @pytest.mark.anyio
+async def test_deactivation_commit_prevents_later_customer_call_admission(
+    db_session,
+    active_user,
+    activation_flow_disabled,
+) -> None:
+    await _seed_normal_dispatch_state(db_session, active_user)
+    active_user.status = "deactivating"
+    await db_session.commit()
+    service = LiveKitDispatchService(
+        db_session,
+        realtime_service=_Realtime(),
+        recording_service=_Recording(),
+        now_provider=lambda: FIXED_NOW,
+    )
+
+    result = await service.handle_participant_joined(_sip_join())
+
+    assert result.status == "denied"
+    assert await db_session.scalar(select(func.count(Call.id))) == 0
+    assert await db_session.scalar(select(func.count(OutboxEvent.id))) == 0
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "called_number",
     ["not-a-number", ALTERNATE_PRESVO_NUMBER],
