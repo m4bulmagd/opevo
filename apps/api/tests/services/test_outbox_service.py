@@ -77,6 +77,53 @@ def test_account_deactivation_payload_accepts_exact_operation_reference() -> Non
 
 
 @pytest.mark.parametrize(
+    ("topic", "payload"),
+    [
+        (
+            "phone.provision",
+            {"user_id": str(uuid4()), "lifecycle_generation": 1},
+        ),
+        (
+            "phone.enable",
+            {"user_id": str(uuid4()), "lifecycle_generation": 2},
+        ),
+        (
+            "livekit.dispatch",
+            {"call_id": str(uuid4()), "lifecycle_generation": 3},
+        ),
+        (
+            "livekit.verification_dispatch",
+            {
+                "activation_id": str(uuid4()),
+                "session_id": str(uuid4()),
+                "room_name": "safe-room-reference",
+                "lifecycle_generation": 4,
+            },
+        ),
+    ],
+)
+def test_serving_work_payload_requires_safe_lifecycle_fence(
+    topic: str,
+    payload: dict,
+) -> None:
+    validate_outbox_payload(topic, payload)
+
+
+@pytest.mark.parametrize("lifecycle_generation", [None, True, 0, -1, "1"])
+def test_serving_work_payload_rejects_invalid_lifecycle_fence(
+    lifecycle_generation: object,
+) -> None:
+    with pytest.raises(OutboxPayloadError):
+        validate_outbox_payload(
+            "phone.enable",
+            {
+                "user_id": str(uuid4()),
+                "lifecycle_generation": lifecycle_generation,
+            },
+        )
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         {},
@@ -278,7 +325,10 @@ async def test_duplicate_identity_with_different_content_is_controlled_conflict(
             aggregate_type="subscription",
             aggregate_id=aggregate_id,
             idempotency_key="same-key-different-content",
-            payload={"user_id": str(uuid4())},
+            payload={
+                "user_id": str(uuid4()),
+                "lifecycle_generation": 1,
+            },
         )
 
 

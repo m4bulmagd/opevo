@@ -45,8 +45,9 @@ from app.services.activation_go_live_service import (
 )
 from app.services.customer_readiness_policy import CustomerReadinessResult
 from app.services.account_access_policy import (
+    AccountLifecycleGenerationMismatchError,
     AccountStateBlockedError,
-    require_active_account,
+    require_current_account_lifecycle,
 )
 from app.services.customer_readiness_service import (
     evaluate_customer_readiness,
@@ -108,7 +109,13 @@ async def deliver_phone_provision(
     event: OutboxEvent,
 ) -> None:
     user_id = UUID(event.payload["user_id"])
+    lifecycle_generation = _validated_lifecycle_generation(event)
     session_factory = ctx.get("session_factory") or get_session_factory()
+    await _require_current_worker_account(
+        session_factory,
+        user_id,
+        lifecycle_generation=lifecycle_generation,
+    )
     async with session_factory() as session:
         provisioning = await PhoneNumberProvisioningRepository(
             session
@@ -127,7 +134,7 @@ async def deliver_phone_provision(
             dict(event.payload),
             provider_operation_key=provider_operation_key,
         )
-    except AccountStateBlockedError:
+    except (AccountStateBlockedError, AccountLifecycleGenerationMismatchError):
         raise OutboxDeliveryError(
             "dispatch_ineligible",
             retryable=False,
@@ -163,7 +170,18 @@ async def deliver_phone_routing(
     event: OutboxEvent,
 ) -> None:
     user_id = UUID(event.payload["user_id"])
+    lifecycle_generation = (
+        _validated_lifecycle_generation(event)
+        if event.topic in {"phone.provision", "phone.enable"}
+        else None
+    )
     session_factory = ctx.get("session_factory") or get_session_factory()
+    if lifecycle_generation is not None:
+        await _require_current_worker_account(
+            session_factory,
+            user_id,
+            lifecycle_generation=lifecycle_generation,
+        )
     provider = ctx.get("telephony_provider")
     if provider is None:
         provider = create_telephony_provider(get_settings())
@@ -244,7 +262,12 @@ async def deliver_phone_routing(
         try:
             if snapshot.should_enable:
                 assert routing_target == snapshot.provider_number_id
-                await _require_active_worker_account(session_factory, user_id)
+                if lifecycle_generation is not None:
+                    await _require_current_worker_account(
+                        session_factory,
+                        user_id,
+                        lifecycle_generation=lifecycle_generation,
+                    )
                 provider_connection_name = await provider.enable_number(
                     provider_number_id=routing_target
                 )
@@ -578,7 +601,7 @@ async def deliver_livekit_dispatch(
     ctx: dict[str, Any],
     event: OutboxEvent,
 ) -> None:
-    call_id = _validated_dispatch_call_id(event)
+    call_id, lifecycle_generation = _validated_dispatch_reference(event)
     session_factory = ctx.get("session_factory") or get_session_factory()
 
     async with livekit_dispatch_lock(session_factory, call_id):
@@ -586,7 +609,11 @@ async def deliver_livekit_dispatch(
         provider = ctx.get("livekit_dispatch_provider")
         if provider is None:
             provider = LiveKitDispatchAPIProvider()
-        await _require_active_worker_account(session_factory, snapshot.user_id)
+        await _require_current_worker_account(
+            session_factory,
+            snapshot.user_id,
+            lifecycle_generation=lifecycle_generation,
+        )
 
         try:
             dispatches = await provider.list_dispatches(room_name=snapshot.room_name)
@@ -600,6 +627,11 @@ async def deliver_livekit_dispatch(
                 "provider_retryable",
                 retryable=True,
             ) from None
+        await _require_current_worker_account(
+            session_factory,
+            snapshot.user_id,
+            lifecycle_generation=lifecycle_generation,
+        )
 
         dispatch = _reconcile_dispatches(snapshot, dispatches)
         if dispatch is None:
@@ -608,6 +640,11 @@ async def deliver_livekit_dispatch(
                     "dispatch_conflict",
                     retryable=False,
                 )
+            await _require_current_worker_account(
+                session_factory,
+                snapshot.user_id,
+                lifecycle_generation=lifecycle_generation,
+            )
             try:
                 created_dispatch = await provider.create_dispatch(
                     agent_name=snapshot.worker_name,
@@ -629,6 +666,11 @@ async def deliver_livekit_dispatch(
                         "provider_retryable",
                         retryable=True,
                     ) from None
+                await _require_current_worker_account(
+                    session_factory,
+                    snapshot.user_id,
+                    lifecycle_generation=lifecycle_generation,
+                )
                 dispatch = _reconcile_dispatches(snapshot, dispatches)
                 if dispatch is None:
                     raise OutboxDeliveryError(
@@ -653,9 +695,14 @@ async def deliver_livekit_dispatch(
         )
 
 
-def _validated_dispatch_call_id(event: OutboxEvent) -> UUID:
+def _validated_dispatch_reference(event: OutboxEvent) -> tuple[UUID, int]:
     try:
+        if set(event.payload) != {"call_id", "lifecycle_generation"}:
+            raise ValueError
         call_id = UUID(event.payload["call_id"])
+        lifecycle_generation = event.payload["lifecycle_generation"]
+        if type(lifecycle_generation) is not int or lifecycle_generation < 1:
+            raise ValueError
     except (KeyError, TypeError, ValueError):
         raise OutboxDeliveryError(
             "dispatch_configuration",
@@ -666,7 +713,7 @@ def _validated_dispatch_call_id(event: OutboxEvent) -> UUID:
             "dispatch_configuration",
             retryable=False,
         )
-    return call_id
+    return call_id, lifecycle_generation
 
 
 async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapshot:
@@ -884,7 +931,7 @@ async def deliver_livekit_verification_dispatch(
     ctx: dict[str, Any],
     event: OutboxEvent,
 ) -> None:
-    activation_id, session_id, room_name = (
+    activation_id, session_id, room_name, lifecycle_generation = (
         _validated_verification_dispatch_reference(event)
     )
     session_factory = ctx.get("session_factory") or get_session_factory()
@@ -901,7 +948,11 @@ async def deliver_livekit_verification_dispatch(
         provider = ctx.get("livekit_dispatch_provider")
         if provider is None:
             provider = LiveKitDispatchAPIProvider()
-        await _require_active_worker_account(session_factory, snapshot.user_id)
+        await _require_current_worker_account(
+            session_factory,
+            snapshot.user_id,
+            lifecycle_generation=lifecycle_generation,
+        )
 
         try:
             dispatches = await provider.list_dispatches(
@@ -917,6 +968,11 @@ async def deliver_livekit_verification_dispatch(
                 "provider_retryable",
                 retryable=True,
             ) from None
+        await _require_current_worker_account(
+            session_factory,
+            snapshot.user_id,
+            lifecycle_generation=lifecycle_generation,
+        )
 
         dispatch = _reconcile_verification_dispatches(snapshot, dispatches)
         if dispatch is None:
@@ -925,6 +981,11 @@ async def deliver_livekit_verification_dispatch(
                     "dispatch_conflict",
                     retryable=False,
                 )
+            await _require_current_worker_account(
+                session_factory,
+                snapshot.user_id,
+                lifecycle_generation=lifecycle_generation,
+            )
             try:
                 created_dispatch = await provider.create_dispatch(
                     agent_name=snapshot.worker_name,
@@ -946,6 +1007,11 @@ async def deliver_livekit_verification_dispatch(
                         "provider_retryable",
                         retryable=True,
                     ) from None
+                await _require_current_worker_account(
+                    session_factory,
+                    snapshot.user_id,
+                    lifecycle_generation=lifecycle_generation,
+                )
                 dispatch = _reconcile_verification_dispatches(
                     snapshot,
                     dispatches,
@@ -976,14 +1042,22 @@ async def deliver_livekit_verification_dispatch(
 
 def _validated_verification_dispatch_reference(
     event: OutboxEvent,
-) -> tuple[UUID, str, str]:
+) -> tuple[UUID, str, str, int]:
     try:
-        if set(event.payload) != {"activation_id", "session_id", "room_name"}:
+        if set(event.payload) != {
+            "activation_id",
+            "session_id",
+            "room_name",
+            "lifecycle_generation",
+        }:
             raise ValueError
         activation_id = UUID(event.payload["activation_id"])
         session_id = str(UUID(event.payload["session_id"]))
         room_name = event.payload["room_name"]
+        lifecycle_generation = event.payload["lifecycle_generation"]
         if not isinstance(room_name, str) or not room_name:
+            raise ValueError
+        if type(lifecycle_generation) is not int or lifecycle_generation < 1:
             raise ValueError
     except (KeyError, TypeError, ValueError, AttributeError):
         raise OutboxDeliveryError(
@@ -1000,7 +1074,7 @@ def _validated_verification_dispatch_reference(
             "dispatch_configuration",
             retryable=False,
         )
-    return activation_id, session_id, room_name
+    return activation_id, session_id, room_name, lifecycle_generation
 
 
 async def _verification_dispatch_snapshot(
@@ -1079,7 +1153,22 @@ async def _verification_dispatch_snapshot(
         return snapshot
 
 
-async def _require_active_worker_account(session_factory, user_id: UUID) -> None:
+def _validated_lifecycle_generation(event: OutboxEvent) -> int:
+    lifecycle_generation = event.payload.get("lifecycle_generation")
+    if type(lifecycle_generation) is not int or lifecycle_generation < 1:
+        raise OutboxDeliveryError(
+            "dispatch_configuration",
+            retryable=False,
+        )
+    return lifecycle_generation
+
+
+async def _require_current_worker_account(
+    session_factory,
+    user_id: UUID,
+    *,
+    lifecycle_generation: int,
+) -> None:
     async with session_factory() as session:
         user = await UserRepository(session).get_by_id_for_update(user_id)
         if user is None:
@@ -1089,8 +1178,11 @@ async def _require_active_worker_account(session_factory, user_id: UUID) -> None
                 retryable=False,
             )
         try:
-            require_active_account(user)
-        except AccountStateBlockedError:
+            require_current_account_lifecycle(
+                user,
+                lifecycle_generation=lifecycle_generation,
+            )
+        except (AccountStateBlockedError, AccountLifecycleGenerationMismatchError):
             await session.rollback()
             raise OutboxDeliveryError(
                 "dispatch_ineligible",

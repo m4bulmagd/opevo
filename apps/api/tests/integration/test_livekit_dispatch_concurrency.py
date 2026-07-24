@@ -19,6 +19,8 @@ from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.repositories.call_repository import CallRepository
+from app.repositories.user_repository import UserRepository
+from app.services.account_lifecycle_service import AccountLifecycleService
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 from app.services.call_history_service import CallHistoryService
 from app.services.call_lifecycle_service import CallLifecycleService
@@ -95,6 +97,16 @@ class _PausingCallRepository(CallRepository):
         self.selected.set()
         await self.resume.wait()
         return call
+
+
+class _SignalingUserRepository(UserRepository):
+    def __init__(self, session, *, entered: asyncio.Event) -> None:
+        super().__init__(session)
+        self.entered = entered
+
+    async def get_by_id_for_update(self, user_id):
+        self.entered.set()
+        return await super().get_by_id_for_update(user_id)
 
 
 class _BlockingRecording:
@@ -210,6 +222,159 @@ async def test_concurrent_distinct_joins_create_one_call_and_one_intent(
     async with livekit_session_factory() as session:
         assert await session.scalar(select(func.count()).select_from(Call)) == 1
         assert await session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("first_commit", ["admission", "deactivation"])
+async def test_account_lock_orders_admission_against_deactivation_commit(
+    livekit_session_factory,
+    first_commit: str,
+) -> None:
+    now = datetime.now(UTC)
+    async with livekit_session_factory() as session:
+        user = User(
+            clerk_user_id=f"account-admission-{first_commit}",
+            email=f"account-admission-{first_commit}@example.com",
+        )
+        session.add(user)
+        await session.flush()
+        session.add_all(
+            [
+                PhoneNumber(
+                    user_id=user.id,
+                    e164="+33999888778",
+                    country_code="FR",
+                    provider="telnyx",
+                    provider_number_id=f"number-account-{first_commit}",
+                    provider_connection_name="app-active",
+                    is_active=True,
+                ),
+                AgentConfig(
+                    user_id=user.id,
+                    agent_name="Ava",
+                    owner_context="Sam at Bakery",
+                    system_prompt="Be helpful",
+                    knowledge_base="Hours 9-5",
+                    pipeline_mode="stt_llm_tts",
+                    is_enabled=True,
+                ),
+                Subscription(
+                    user_id=user.id,
+                    stripe_customer_id=f"cus-account-{first_commit}",
+                    stripe_subscription_id=f"sub-account-{first_commit}",
+                    plan_tier="starter",
+                    status="active",
+                    allocated_minutes=60,
+                    current_period_start=now - timedelta(days=1),
+                    current_period_end=now + timedelta(days=1),
+                ),
+                UsageLedger(
+                    user_id=user.id,
+                    event_type="invoice_paid_reset",
+                    source_id=f"invoice-account-{first_commit}",
+                    minutes_delta=60,
+                    balance_after=60,
+                ),
+            ]
+        )
+        await session.commit()
+        user_id = user.id
+
+    sip_join = {
+        "event": "participant_joined",
+        "room": {"name": f"room-account-{first_commit}"},
+        "participant": {
+            "identity": f"caller-account-{first_commit}",
+            "kind": "SIP",
+            "attributes": {
+                "sip.phoneNumber": "+33123456789",
+                "sip.trunkPhoneNumber": "+33999888778",
+            },
+        },
+    }
+    competing_entered = asyncio.Event()
+
+    if first_commit == "admission":
+        async with livekit_session_factory() as admission_session:
+            locked = await UserRepository(admission_session).get_by_id_for_update(
+                user_id
+            )
+            assert locked is not None
+
+            async def deactivate():
+                async with livekit_session_factory() as deactivation_session:
+                    service = AccountLifecycleService(
+                        deactivation_session,
+                        user_repository=_SignalingUserRepository(
+                            deactivation_session,
+                            entered=competing_entered,
+                        ),
+                    )
+                    await service.request_in_transaction(
+                        user_id,
+                        trigger="owner_request",
+                    )
+                    await deactivation_session.commit()
+
+            deactivation_task = asyncio.create_task(deactivate())
+            await asyncio.wait_for(competing_entered.wait(), timeout=1)
+            admission = await LiveKitDispatchService(
+                admission_session,
+                realtime_service=_Realtime(),
+                recording_service=_Recording(),
+            ).handle_participant_joined(sip_join)
+            await asyncio.wait_for(deactivation_task, timeout=1)
+    else:
+        async with livekit_session_factory() as deactivation_session:
+            locked = await UserRepository(deactivation_session).get_by_id_for_update(
+                user_id
+            )
+            assert locked is not None
+
+            async def admit():
+                async with livekit_session_factory() as admission_session:
+                    return await LiveKitDispatchService(
+                        admission_session,
+                        user_repository=_SignalingUserRepository(
+                            admission_session,
+                            entered=competing_entered,
+                        ),
+                        realtime_service=_Realtime(),
+                        recording_service=_Recording(),
+                    ).handle_participant_joined(sip_join)
+
+            admission_task = asyncio.create_task(admit())
+            await asyncio.wait_for(competing_entered.wait(), timeout=1)
+            await AccountLifecycleService(
+                deactivation_session
+            ).request_in_transaction(
+                user_id,
+                trigger="owner_request",
+            )
+            await deactivation_session.commit()
+            admission = await asyncio.wait_for(admission_task, timeout=1)
+
+    async with livekit_session_factory() as session:
+        stored_user = await session.get(User, user_id)
+        calls = list((await session.scalars(select(Call))).all())
+        events = list((await session.scalars(select(OutboxEvent))).all())
+
+    assert stored_user is not None
+    assert stored_user.status == "deactivating"
+    assert stored_user.lifecycle_generation == 2
+    if first_commit == "admission":
+        assert admission.status == "accepted"
+        assert len(calls) == 1
+        dispatch_events = [event for event in events if event.topic == "livekit.dispatch"]
+        assert len(dispatch_events) == 1
+        assert dispatch_events[0].payload == {
+            "call_id": str(calls[0].id),
+            "lifecycle_generation": 1,
+        }
+    else:
+        assert admission.status == "denied"
+        assert calls == []
+        assert all(event.topic != "livekit.dispatch" for event in events)
 
 
 @pytest.mark.anyio

@@ -140,6 +140,7 @@ async def _seed_verification_dispatch(db_session):
             "activation_id": str(activation.id),
             "session_id": session_id,
             "room_name": "verification-dispatch-room",
+            "lifecycle_generation": user.lifecycle_generation,
         },
     )
     await db_session.commit()
@@ -513,6 +514,72 @@ async def test_claimed_verification_dispatch_rechecks_account_before_provider_io
     assert exc_info.value.error_code == "dispatch_ineligible"
     assert exc_info.value.retryable is False
     assert provider.list_calls == []
+    assert provider.create_calls == []
+
+
+@pytest.mark.anyio
+async def test_stale_account_generation_never_dispatches_verification(
+    db_session,
+) -> None:
+    user, _activation, event = await _seed_verification_dispatch(db_session)
+    user.lifecycle_generation = 2
+    event.payload = event.payload | {"lifecycle_generation": 1}
+    await db_session.commit()
+    provider = _Provider()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await _handler()(
+            {
+                "session_factory": session_factory,
+                "livekit_dispatch_provider": provider,
+                "verification_now": lambda: FIXED_NOW,
+            },
+            event,
+        )
+
+    assert exc_info.value.error_code == "dispatch_ineligible"
+    assert exc_info.value.retryable is False
+    assert provider.list_calls == []
+    assert provider.create_calls == []
+
+
+@pytest.mark.anyio
+async def test_deactivation_during_verification_reconciliation_prevents_create(
+    db_session,
+) -> None:
+    user, _activation, event = await _seed_verification_dispatch(db_session)
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    class _DeactivatingListProvider(_Provider):
+        async def list_dispatches(
+            self,
+            *,
+            room_name: str,
+        ) -> list[LiveKitDispatch]:
+            async with session_factory() as session:
+                current_user = await session.get(User, user.id)
+                assert current_user is not None
+                current_user.status = "deactivating"
+                current_user.lifecycle_generation += 1
+                await session.commit()
+            return await super().list_dispatches(room_name=room_name)
+
+    provider = _DeactivatingListProvider()
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await _handler()(
+            {
+                "session_factory": session_factory,
+                "livekit_dispatch_provider": provider,
+                "verification_now": lambda: FIXED_NOW,
+            },
+            event,
+        )
+
+    assert exc_info.value.error_code == "dispatch_ineligible"
+    assert exc_info.value.retryable is False
+    assert provider.list_calls == ["verification-dispatch-room"]
     assert provider.create_calls == []
 
 

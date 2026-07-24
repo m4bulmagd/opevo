@@ -12,6 +12,7 @@ from app.models.phone_number import PhoneNumber
 from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
+from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.schemas.agent_content import AGENT_NAME_MAX_LENGTH
 from app.services.outbox_service import OutboxService
@@ -152,7 +153,10 @@ async def _seed_dispatch(
         aggregate_type="call",
         aggregate_id=call.id,
         idempotency_key=f"livekit.dispatch:{call.id}",
-        payload={"call_id": str(call.id)},
+        payload={
+            "call_id": str(call.id),
+            "lifecycle_generation": user.lifecycle_generation,
+        },
     )
     await db_session.commit()
     return call, event, subscription
@@ -436,6 +440,79 @@ async def test_create_then_timeout_reconciles_to_one_effective_dispatch(
     assert len(provider.dispatches) == 1
     assert len(provider.create_calls) == 1
     assert provider.list_calls == ["room-outbox", "room-outbox"]
+
+
+@pytest.mark.anyio
+async def test_stale_account_generation_never_dispatches_customer_call(
+    db_session,
+    monkeypatch,
+) -> None:
+    call, event, _subscription = await _seed_dispatch(db_session)
+    user = await db_session.get(User, call.user_id)
+    assert user is not None
+    user.lifecycle_generation = 2
+    event.payload = {
+        "call_id": str(call.id),
+        "lifecycle_generation": 1,
+    }
+    await db_session.commit()
+    provider = _Provider()
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_livekit_dispatch(
+            {"session_factory": session_factory, "livekit_dispatch_provider": provider},
+            event,
+        )
+
+    assert exc_info.value.error_code == "dispatch_ineligible"
+    assert exc_info.value.retryable is False
+    assert provider.list_calls == []
+    assert provider.create_calls == []
+
+
+@pytest.mark.anyio
+async def test_deactivation_during_customer_dispatch_reconciliation_prevents_create(
+    db_session,
+    monkeypatch,
+) -> None:
+    call, event, _subscription = await _seed_dispatch(db_session)
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    class _DeactivatingListProvider(_Provider):
+        async def list_dispatches(
+            self,
+            *,
+            room_name: str,
+        ) -> list[LiveKitDispatch]:
+            async with session_factory() as session:
+                user = await session.get(User, call.user_id)
+                assert user is not None
+                user.status = "deactivating"
+                user.lifecycle_generation += 1
+                await session.commit()
+            return await super().list_dispatches(room_name=room_name)
+
+    provider = _DeactivatingListProvider()
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_livekit_dispatch(
+            {"session_factory": session_factory, "livekit_dispatch_provider": provider},
+            event,
+        )
+
+    assert exc_info.value.error_code == "dispatch_ineligible"
+    assert exc_info.value.retryable is False
+    assert provider.list_calls == ["room-outbox"]
+    assert provider.create_calls == []
 
 
 @pytest.mark.anyio

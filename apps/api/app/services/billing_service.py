@@ -259,6 +259,7 @@ class BillingService:
                 topic="phone.enable",
                 user_id=subscription.user_id,
                 idempotency_key=f"stripe:invoice:{invoice_id}:phone.enable",
+                lifecycle_generation=locked_user.lifecycle_generation,
             )
 
     async def _handle_invoice_payment_failed(
@@ -372,13 +373,17 @@ class BillingService:
         topic: str,
         user_id,
         idempotency_key: str,
+        lifecycle_generation: int | None = None,
     ) -> None:
+        payload: dict[str, object] = {"user_id": str(user_id)}
+        if lifecycle_generation is not None:
+            payload["lifecycle_generation"] = lifecycle_generation
         await self.outbox_service.add(
             topic=topic,
             aggregate_type="user",
             aggregate_id=user_id,
             idempotency_key=idempotency_key,
-            payload={"user_id": str(user_id)},
+            payload=payload,
         )
         self._outbox_wakeup_needed = True
 

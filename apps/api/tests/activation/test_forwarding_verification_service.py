@@ -662,7 +662,11 @@ async def test_claim_preserves_user_activation_profile_phone_lock_order() -> Non
         async def get_by_id_for_update(self, requested_user_id):
             assert requested_user_id == user_id
             events.append("user")
-            return SimpleNamespace(id=user_id, status="active")
+            return SimpleNamespace(
+                id=user_id,
+                status="active",
+                lifecycle_generation=1,
+            )
 
     class Activations:
         async def get_by_user_id_for_update(self, requested_user_id):
@@ -757,7 +761,11 @@ async def test_transaction_owned_claim_seam_flushes_without_committing() -> None
     class Users:
         async def get_by_id_for_update(self, _user_id):
             events.append("user")
-            return SimpleNamespace(id=user_id, status="active")
+            return SimpleNamespace(
+                id=user_id,
+                status="active",
+                lifecycle_generation=1,
+            )
 
     class Activations:
         async def get_by_user_id_for_update(self, _user_id):

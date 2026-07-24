@@ -150,7 +150,10 @@ class ActivationProvisioningService:
                 aggregate_type="user",
                 aggregate_id=user_id,
                 idempotency_key=operation_key,
-                payload={"user_id": str(user_id)},
+                payload={
+                    "user_id": str(user_id),
+                    "lifecycle_generation": user.lifecycle_generation,
+                },
             )
             await self.activation_event_repository.append(
                 user_id=user_id,
@@ -233,7 +236,10 @@ class ActivationProvisioningService:
                 aggregate_type="user",
                 aggregate_id=user_id,
                 idempotency_key=outbox_key,
-                payload={"user_id": str(user_id)},
+                payload={
+                    "user_id": str(user_id),
+                    "lifecycle_generation": user.lifecycle_generation,
+                },
             )
             await self.session.commit()
         except ProvisioningStateConflictError:

@@ -48,6 +48,7 @@ class ForwardingVerificationConflictError(Exception):
 class ForwardingVerificationClaim:
     activation_id: UUID
     user_id: UUID
+    lifecycle_generation: int
     session_id: str
     room_name: str
 
@@ -269,6 +270,7 @@ class ForwardingVerificationService:
                 return ForwardingVerificationClaim(
                     activation_id=activation.id,
                     user_id=user_id,
+                    lifecycle_generation=user.lifecycle_generation,
                     session_id=existing_session_id,
                     room_name=room_name,
                 )
@@ -338,6 +340,7 @@ class ForwardingVerificationService:
         return ForwardingVerificationClaim(
             activation_id=activation.id,
             user_id=user_id,
+            lifecycle_generation=user.lifecycle_generation,
             session_id=session_id,
             room_name=room_name,
         )

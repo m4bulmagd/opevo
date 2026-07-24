@@ -20,7 +20,7 @@ from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
 )
 from app.repositories.user_repository import UserRepository
-from app.services.account_access_policy import require_active_account
+from app.services.account_access_policy import require_current_account_lifecycle
 from app.services.telephony_service import TelephonyService
 
 
@@ -207,6 +207,9 @@ async def phone_provisioning_job(
         return
 
     user_id = UUID(user_id_str)
+    lifecycle_generation = payload.get("lifecycle_generation")
+    if type(lifecycle_generation) is not int or lifecycle_generation < 1:
+        raise ValueError("Invalid lifecycle generation")
 
     session_factory = ctx.get("session_factory") or get_session_factory()
 
@@ -217,7 +220,10 @@ async def phone_provisioning_job(
         if not user:
             logger.error(f"phone_provisioning_job: user {user_id} not found")
             return
-        require_active_account(user)
+        require_current_account_lifecycle(
+            user,
+            lifecycle_generation=lifecycle_generation,
+        )
 
         country_code = (user.country_code or "FR").upper()
         if country_code != "FR":
@@ -275,7 +281,10 @@ async def phone_provisioning_job(
             if current_user is None:
                 await session.rollback()
                 return
-            require_active_account(current_user)
+            require_current_account_lifecycle(
+                current_user,
+                lifecycle_generation=lifecycle_generation,
+            )
             await session.rollback()
             await _run_provider_attempt(
                 session=session,
