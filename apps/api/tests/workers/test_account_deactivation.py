@@ -412,11 +412,14 @@ async def test_owner_request_runs_strict_provider_order_and_preserves_history(
         assert agent.is_enabled is False
         assert profile.business_name == PRIVATE_CONTENT
         assert profile.special_instructions == PRIVATE_CONTENT
-        assert profile.detected_carrier is None
-        assert profile.detected_number_type is None
-        assert profile.carrier_lookup_status is None
-        assert profile.carrier_looked_up_at is None
-        assert profile.confirmed_carrier is None
+        assert profile.detected_carrier == "orange"
+        assert profile.detected_number_type == "mobile"
+        assert profile.carrier_lookup_status == "confirmed"
+        assert profile.carrier_looked_up_at is not None
+        assert profile.carrier_looked_up_at.replace(tzinfo=UTC) == (
+            NOW - timedelta(days=4)
+        )
+        assert profile.confirmed_carrier == "orange"
         assert activation.profile_confirmed_revision == 7
         assert activation.profile_confirmed_at is not None
         assert activation.verification_status == "not_started"

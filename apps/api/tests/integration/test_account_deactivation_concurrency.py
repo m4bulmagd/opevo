@@ -1592,7 +1592,13 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
             profile.carrier_lookup_status,
             profile.carrier_looked_up_at,
             profile.confirmed_carrier,
-        ) == (None, None, None, None, None)
+        ) == (
+            "orange",
+            "mobile",
+            "confirmed",
+            NOW - timedelta(days=4),
+            "orange",
+        )
         assert activation.id == retained_ids["activation"]
         assert activation.profile_confirmed_revision == 7
         assert activation.profile_confirmed_at is not None
