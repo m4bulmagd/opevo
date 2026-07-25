@@ -30,7 +30,7 @@ export function MobileMoreSheet({ items, pathname }: MobileMoreSheetProps) {
   const [open, setOpen] = useState(false);
 
   return (
-    <Drawer onOpenChange={setOpen} open={open}>
+    <Drawer handleOnly onOpenChange={setOpen} open={open}>
       <DrawerTrigger asChild>
         <Button
           aria-label="More"
@@ -43,7 +43,7 @@ export function MobileMoreSheet({ items, pathname }: MobileMoreSheetProps) {
       </DrawerTrigger>
       {open ? (
         <DrawerContent
-          className="border-border bg-surface-elevated p-0 shadow-overlay"
+          className="!animate-none !transform-none !transition-none border-border bg-surface-elevated p-0 shadow-overlay"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             firstDestinationRef.current?.focus();
