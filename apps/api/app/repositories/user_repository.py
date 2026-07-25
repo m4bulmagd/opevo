@@ -28,6 +28,21 @@ class UserRepository:
         await self.session.flush()
         return user
 
+    async def reactivate(
+        self,
+        user: User,
+        *,
+        lifecycle_generation: int,
+    ) -> bool:
+        if (
+            user.status != "inactive"
+            or user.lifecycle_generation != lifecycle_generation
+        ):
+            return False
+        user.status = "active"
+        await self.session.flush()
+        return True
+
     async def create(self, clerk_user_id: str, email: str) -> User:
         user = User(clerk_user_id=clerk_user_id, email=email)
         self.session.add(user)
@@ -38,11 +53,7 @@ class UserRepository:
         if self.session.get_bind().dialect.name != "postgresql":
             return
         await self.session.execute(
-            text(
-                "SELECT pg_advisory_xact_lock("
-                "hashtextextended(:lock_key, 0)"
-                ")"
-            ),
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
             {"lock_key": f"user.bootstrap:{external_user_id}"},
         )
 

@@ -25,13 +25,14 @@ from app.services.billing_session_service import (
     BillingSessionService,
     BillingSessionStateError,
 )
-from app.services.subscription_access_policy import SubscriptionAccessPolicy
 
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
 
-def get_billing_query_service(session: AsyncSession = Depends(get_session)) -> BillingQueryService:
+def get_billing_query_service(
+    session: AsyncSession = Depends(get_session),
+) -> BillingQueryService:
     return BillingQueryService(session)
 
 
@@ -45,7 +46,9 @@ async def get_current_user(
 ):
     user = await UserRepository(session).get_by_clerk_user_id(identity.clerk_user_id)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not synced")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="User not synced"
+        )
     return user
 
 
@@ -84,11 +87,10 @@ async def create_checkout_session(
     query_service: BillingQueryService = Depends(get_billing_query_service),
     user=Depends(get_current_user),
 ) -> HostedSessionResponse:
-    existing_subscription = await query_service.get_subscription(identity.internal_user_id)
-    subscription_status = (
-        existing_subscription.status if existing_subscription is not None else None
+    eligibility = await query_service.get_checkout_eligibility(
+        identity.internal_user_id
     )
-    if not SubscriptionAccessPolicy.can_start_checkout(subscription_status):
+    if not eligibility.allowed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Subscription is not eligible for checkout",
@@ -102,6 +104,7 @@ async def create_checkout_session(
             customer_email=customer_email,
             clerk_user_id=identity.clerk_user_id,
             plan_tier=payload.plan_tier,
+            lifecycle_generation=eligibility.lifecycle_generation,
         )
     except BillingSessionStateError as exc:
         raise HTTPException(

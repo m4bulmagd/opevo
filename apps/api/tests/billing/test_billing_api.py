@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -11,6 +12,10 @@ from app.schemas.billing_api import (
     UsageLedgerListResponse,
     UsageSnapshotResponse,
 )
+
+
+def _as_any(value: object) -> Any:
+    return cast(Any, value)
 
 
 def _fake_request():
@@ -25,15 +30,42 @@ def _fake_request():
 
 
 class FakeBillingQueryService:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        account_status: str = "active",
+        lifecycle_generation: int = 1,
+        has_incomplete_deactivation: bool = False,
+        has_phone: bool = False,
+    ) -> None:
         self.usage_limits: list[int] = []
         self.business_transaction_active = True
+        self.account_status = account_status
+        self.lifecycle_generation = lifecycle_generation
+        self.has_incomplete_deactivation = has_incomplete_deactivation
+        self.has_phone = has_phone
 
     async def end_business_transaction(self) -> None:
         self.business_transaction_active = False
 
     async def get_subscription(self, user_id):
         return None
+
+    async def get_checkout_eligibility(self, user_id):
+        from app.services.billing_query_service import CheckoutEligibility
+        from app.services.subscription_access_policy import SubscriptionAccessPolicy
+
+        subscription = await self.get_subscription(user_id)
+        subscription_status = subscription.status if subscription is not None else None
+        return CheckoutEligibility(
+            allowed=SubscriptionAccessPolicy.can_start_checkout(
+                account_status=self.account_status,
+                subscription_status=subscription_status,
+                has_incomplete_deactivation=self.has_incomplete_deactivation,
+                has_phone=self.has_phone,
+            ),
+            lifecycle_generation=self.lifecycle_generation,
+        )
 
     async def get_usage_snapshot(self, user_id):
         return UsageSnapshotResponse(
@@ -74,8 +106,13 @@ async def test_get_subscription_returns_null_for_new_user() -> None:
     from app.routers.billing import get_subscription
 
     response = await get_subscription(
-        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
-        service=FakeBillingQueryService(),
+        identity=_as_any(
+            UserIdentity(
+                clerk_user_id="user_123",
+                internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            )
+        ),
+        service=_as_any(FakeBillingQueryService()),
     )
 
     assert response is None
@@ -86,8 +123,13 @@ async def test_get_usage_returns_zeroed_snapshot_without_subscription() -> None:
     from app.routers.billing import get_usage
 
     response = await get_usage(
-        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
-        service=FakeBillingQueryService(),
+        identity=_as_any(
+            UserIdentity(
+                clerk_user_id="user_123",
+                internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            )
+        ),
+        service=_as_any(FakeBillingQueryService()),
     )
 
     assert response.minutes_remaining == 0
@@ -101,9 +143,14 @@ async def test_get_usage_ledger_returns_recent_entries() -> None:
 
     service = FakeBillingQueryService()
     response = await get_usage_ledger(
-        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
+        identity=_as_any(
+            UserIdentity(
+                clerk_user_id="user_123",
+                internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            )
+        ),
         limit=2,
-        service=service,
+        service=_as_any(service),
     )
 
     assert [entry.id for entry in response.entries] == ["ledger_2", "ledger_1"]
@@ -121,15 +168,25 @@ class FakeBillingSessionService:
         self.checkout_url = checkout_url
         self.portal_url = portal_url
         self.query_service = query_service
+        self.checkout_generations: list[int] = []
 
     def _assert_transaction_ended(self) -> None:
         if self.query_service is not None:
             assert self.query_service.business_transaction_active is False
 
-    async def create_checkout_session(self, *, user_id, customer_email, clerk_user_id, plan_tier):
+    async def create_checkout_session(
+        self,
+        *,
+        user_id,
+        customer_email,
+        clerk_user_id,
+        plan_tier,
+        lifecycle_generation,
+    ):
         self._assert_transaction_ended()
         if plan_tier != "starter":
             raise ValueError(f"Unsupported plan tier: {plan_tier}")
+        self.checkout_generations.append(lifecycle_generation)
         return type("HostedSession", (), {"url": self.checkout_url})()
 
     async def create_portal_session(self, *, customer_id, return_url):
@@ -162,11 +219,14 @@ class FakeActiveSubscriptionQueryService(FakeBillingQueryService):
             stripe_customer_id="cus_123",
             stripe_subscription_id="sub_123",
             can_start_checkout=False,
+            cancel_at_period_end=False,
+            cancellation_effective_at=None,
         )
 
 
 class FakeStatusSubscriptionQueryService(FakeActiveSubscriptionQueryService):
     def __init__(self, subscription_status: str) -> None:
+        super().__init__()
         self.subscription_status = subscription_status
 
     async def get_subscription(self, user_id):
@@ -182,7 +242,10 @@ async def test_create_checkout_session_returns_url() -> None:
     response = await create_checkout_session(
         request=_fake_request(),
         payload=CheckoutSessionRequest(plan_tier="starter"),
-        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
+        identity=UserIdentity(
+            clerk_user_id="user_123",
+            internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+        ),
         service=FakeBillingSessionService(),
         query_service=FakeEmptySubscriptionQueryService(),
         user=type("User", (), {"email": "billing@example.com"})(),
@@ -197,6 +260,7 @@ async def test_checkout_ends_business_transaction_before_stripe() -> None:
     from app.schemas.billing_api import CheckoutSessionRequest
 
     query_service = FakeEmptySubscriptionQueryService()
+    service = FakeBillingSessionService(query_service=query_service)
     response = await create_checkout_session(
         request=_fake_request(),
         payload=CheckoutSessionRequest(plan_tier="starter"),
@@ -204,12 +268,40 @@ async def test_checkout_ends_business_transaction_before_stripe() -> None:
             clerk_user_id="user_123",
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
-        service=FakeBillingSessionService(query_service=query_service),
+        service=service,
         query_service=query_service,
         user=type("User", (), {"email": "billing@example.com"})(),
     )
 
     assert response.url == "https://checkout.stripe.test/session"
+    assert service.checkout_generations == [1]
+
+
+@pytest.mark.anyio
+async def test_checkout_uses_generation_captured_by_locked_eligibility() -> None:
+    from app.routers.billing import create_checkout_session
+    from app.schemas.billing_api import CheckoutSessionRequest
+
+    query_service = FakeBillingQueryService(
+        account_status="inactive",
+        lifecycle_generation=4,
+    )
+    service = FakeBillingSessionService(query_service=query_service)
+
+    await create_checkout_session(
+        request=_fake_request(),
+        payload=CheckoutSessionRequest(plan_tier="starter"),
+        identity=UserIdentity(
+            clerk_user_id="user_123",
+            internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+        ),
+        service=service,
+        query_service=query_service,
+        user=type("User", (), {"email": "billing@example.com"})(),
+    )
+
+    assert query_service.business_transaction_active is False
+    assert service.checkout_generations == [4]
 
 
 def test_checkout_request_rejects_standard_plan() -> None:
@@ -230,7 +322,10 @@ async def test_create_checkout_session_rejects_active_subscription() -> None:
         await create_checkout_session(
             request=_fake_request(),
             payload=CheckoutSessionRequest(plan_tier="starter"),
-            identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
+            identity=UserIdentity(
+                clerk_user_id="user_123",
+                internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            ),
             service=FakeBillingSessionService(),
             query_service=FakeActiveSubscriptionQueryService(),
             user=type("User", (), {"email": "billing@example.com"})(),
@@ -281,6 +376,55 @@ async def test_checkout_uses_central_subscription_eligibility(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    (
+        "account_status",
+        "has_incomplete_deactivation",
+        "has_phone",
+        "allowed",
+    ),
+    [
+        ("deactivating", False, False, False),
+        ("deactivating", True, True, False),
+        ("inactive", True, False, False),
+        ("inactive", False, True, False),
+        ("inactive", False, False, True),
+    ],
+)
+async def test_checkout_enforces_account_reactivation_preconditions(
+    account_status: str,
+    has_incomplete_deactivation: bool,
+    has_phone: bool,
+    allowed: bool,
+) -> None:
+    from app.routers.billing import create_checkout_session
+    from app.schemas.billing_api import CheckoutSessionRequest
+
+    query_service = FakeStatusSubscriptionQueryService("canceled")
+    query_service.account_status = account_status
+    query_service.has_incomplete_deactivation = has_incomplete_deactivation
+    query_service.has_phone = has_phone
+    call = create_checkout_session(
+        request=_fake_request(),
+        payload=CheckoutSessionRequest(plan_tier="starter"),
+        identity=UserIdentity(
+            clerk_user_id="user_123",
+            internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+        ),
+        service=FakeBillingSessionService(),
+        query_service=query_service,
+        user=type("User", (), {"email": "billing@example.com"})(),
+    )
+
+    if allowed:
+        assert (await call).url == "https://checkout.stripe.test/session"
+    else:
+        with pytest.raises(HTTPException) as exc_info:
+            await call
+        assert exc_info.value.status_code == 409
+
+
+@pytest.mark.anyio
 async def test_create_portal_session_returns_url() -> None:
     from app.routers.billing import create_portal_session
     from app.schemas.billing_api import PortalSessionRequest
@@ -288,7 +432,10 @@ async def test_create_portal_session_returns_url() -> None:
     response = await create_portal_session(
         request=_fake_request(),
         payload=PortalSessionRequest(return_url="https://app.example.com/settings"),
-        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
+        identity=UserIdentity(
+            clerk_user_id="user_123",
+            internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+        ),
         service=FakeBillingSessionService(),
         query_service=FakeActiveSubscriptionQueryService(),
     )
@@ -333,6 +480,38 @@ async def test_billing_query_service_rolls_back_autobegun_transaction(
 
 
 @pytest.mark.anyio
+async def test_subscription_query_exposes_scheduled_cancellation(
+    db_session,
+    active_user,
+) -> None:
+    from app.models.subscription import Subscription
+    from app.services.billing_query_service import BillingQueryService
+
+    effective_at = datetime(2026, 4, 1, tzinfo=UTC)
+    db_session.add(
+        Subscription(
+            user_id=active_user.id,
+            stripe_customer_id="cus_scheduled_query",
+            stripe_subscription_id="sub_scheduled_query",
+            plan_tier="starter",
+            status="active",
+            allocated_minutes=60,
+            lifecycle_generation=1,
+            cancel_at_period_end=True,
+            cancellation_effective_at=effective_at,
+        )
+    )
+    await db_session.flush()
+
+    response = await BillingQueryService(db_session).get_subscription(active_user.id)
+
+    assert response is not None
+    assert response.cancel_at_period_end is True
+    assert response.cancellation_effective_at is not None
+    assert response.cancellation_effective_at.replace(tzinfo=UTC) == effective_at
+
+
+@pytest.mark.anyio
 async def test_create_portal_session_accepts_omitted_return_url() -> None:
     from app.routers.billing import create_portal_session
     from app.schemas.billing_api import PortalSessionRequest
@@ -340,7 +519,10 @@ async def test_create_portal_session_accepts_omitted_return_url() -> None:
     response = await create_portal_session(
         request=_fake_request(),
         payload=PortalSessionRequest(),
-        identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
+        identity=UserIdentity(
+            clerk_user_id="user_123",
+            internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+        ),
         service=FakeBillingSessionService(),
         query_service=FakeActiveSubscriptionQueryService(),
     )
@@ -356,8 +538,13 @@ async def test_create_portal_session_maps_unsafe_return_url_to_bad_request() -> 
     with pytest.raises(HTTPException) as exc_info:
         await create_portal_session(
             request=_fake_request(),
-            payload=PortalSessionRequest(return_url="https://evil.example.com/settings"),
-            identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
+            payload=PortalSessionRequest(
+                return_url="https://evil.example.com/settings"
+            ),
+            identity=UserIdentity(
+                clerk_user_id="user_123",
+                internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            ),
             service=FakeUnsafePortalSessionService(),
             query_service=FakeActiveSubscriptionQueryService(),
         )
@@ -375,7 +562,10 @@ async def test_create_portal_session_rejects_missing_customer() -> None:
         await create_portal_session(
             request=_fake_request(),
             payload=PortalSessionRequest(return_url="https://app.example.com/settings"),
-            identity=UserIdentity(clerk_user_id="user_123", internal_user_id=UUID("00000000-0000-0000-0000-000000000000")),
+            identity=UserIdentity(
+                clerk_user_id="user_123",
+                internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            ),
             service=FakeBillingSessionService(),
             query_service=FakeEmptySubscriptionQueryService(),
         )

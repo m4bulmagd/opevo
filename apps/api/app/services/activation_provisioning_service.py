@@ -72,8 +72,8 @@ class ActivationProvisioningService:
         self.provisioning_repository = (
             provisioning_repository or PhoneNumberProvisioningRepository(session)
         )
-        self.phone_number_repository = (
-            phone_number_repository or PhoneNumberRepository(session)
+        self.phone_number_repository = phone_number_repository or PhoneNumberRepository(
+            session
         )
         self.outbox_service = outbox_service or OutboxService(session)
         self.activation_event_repository = (
@@ -106,8 +106,8 @@ class ActivationProvisioningService:
             if user.country_code != "FR":
                 raise ActivationProvisioningBlockedError("unsupported_country")
 
-            subscription = (
-                await self.subscription_repository.get_by_user_id_for_update(user_id)
+            subscription = await self.subscription_repository.get_by_user_id_for_update(
+                user_id
             )
             balance = await self.usage_repository.get_current_balance(user_id=user_id)
             self._require_eligible_access(
@@ -117,9 +117,8 @@ class ActivationProvisioningService:
             )
 
             assert activation is not None
-            operation_key = (
-                activation.provisioning_idempotency_key
-                or f"activation:phone.provision:{activation.id}"
+            operation_key = activation.provisioning_idempotency_key or (
+                f"activation:provision:{activation.id}:g{user.lifecycle_generation}"
             )
             already_consented = activation.provisioning_consented_at is not None
             provisioning = await self.provisioning_repository.queue_initial(
@@ -139,9 +138,7 @@ class ActivationProvisioningService:
             if activation.provisioning_idempotency_key is None:
                 activation.provisioning_idempotency_key = operation_key
             elif activation.provisioning_idempotency_key != operation_key:
-                raise ActivationProvisioningBlockedError(
-                    "provisioning_state_conflict"
-                )
+                raise ActivationProvisioningBlockedError("provisioning_state_conflict")
             if activation.provisioning_consented_at is None:
                 activation.provisioning_consented_at = self.now()
 
@@ -199,8 +196,8 @@ class ActivationProvisioningService:
             if user.country_code != "FR":
                 raise ActivationProvisioningBlockedError("unsupported_country")
 
-            subscription = (
-                await self.subscription_repository.get_by_user_id_for_update(user_id)
+            subscription = await self.subscription_repository.get_by_user_id_for_update(
+                user_id
             )
             balance = await self.usage_repository.get_current_balance(user_id=user_id)
             self._require_eligible_access(
@@ -229,7 +226,7 @@ class ActivationProvisioningService:
 
             next_attempt = provisioning.attempt_count + 1
             outbox_key = (
-                f"activation:phone.provision:{activation.id}:attempt:{next_attempt}"
+                f"{activation.provisioning_idempotency_key}:attempt:{next_attempt}"
             )
             await self.outbox_service.add(
                 topic="phone.provision",
@@ -291,25 +288,19 @@ class ActivationProvisioningService:
             subscription.status
             not in CustomerReadinessPolicy.ELIGIBLE_SUBSCRIPTION_STATUSES
         ):
-            raise ActivationProvisioningBlockedError(
-                "subscription_status_ineligible"
-            )
+            raise ActivationProvisioningBlockedError("subscription_status_ineligible")
         if (
             subscription.current_period_start is None
             or subscription.current_period_end is None
         ):
-            raise ActivationProvisioningBlockedError(
-                "subscription_period_missing"
-            )
+            raise ActivationProvisioningBlockedError("subscription_period_missing")
         evaluated_at = CustomerReadinessPolicy._as_utc(now)
         period_start = CustomerReadinessPolicy._as_utc(
             subscription.current_period_start
         )
         period_end = CustomerReadinessPolicy._as_utc(subscription.current_period_end)
         if not period_start <= evaluated_at < period_end:
-            raise ActivationProvisioningBlockedError(
-                "subscription_period_inactive"
-            )
+            raise ActivationProvisioningBlockedError("subscription_period_inactive")
         if balance <= 0:
             raise ActivationProvisioningBlockedError("minutes_exhausted")
 

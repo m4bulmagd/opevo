@@ -27,7 +27,9 @@ class FakeCheckoutSessionAPI:
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return type("CheckoutSession", (), {"url": "https://checkout.stripe.test/session"})()
+        return type(
+            "CheckoutSession", (), {"url": "https://checkout.stripe.test/session"}
+        )()
 
 
 class FakePortalSessionAPI:
@@ -36,13 +38,19 @@ class FakePortalSessionAPI:
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return type("PortalSession", (), {"url": "https://billing.stripe.test/session"})()
+        return type(
+            "PortalSession", (), {"url": "https://billing.stripe.test/session"}
+        )()
 
 
 class FakeStripeClient:
     def __init__(self) -> None:
-        self.checkout = type("CheckoutNamespace", (), {"Session": FakeCheckoutSessionAPI()})()
-        self.billing_portal = type("BillingPortalNamespace", (), {"Session": FakePortalSessionAPI()})()
+        self.checkout = type(
+            "CheckoutNamespace", (), {"Session": FakeCheckoutSessionAPI()}
+        )()
+        self.billing_portal = type(
+            "BillingPortalNamespace", (), {"Session": FakePortalSessionAPI()}
+        )()
 
 
 class BlockingCheckoutSessionAPI(FakeCheckoutSessionAPI):
@@ -101,13 +109,25 @@ async def test_create_checkout_session_uses_price_mapping() -> None:
         customer_email="billing@example.com",
         clerk_user_id="clerk_123",
         plan_tier="starter",
+        lifecycle_generation=7,
     )
 
     assert result.url == "https://checkout.stripe.test/session"
-    assert client.checkout.Session.calls[0]["line_items"][0]["price"] == "price_starter_123"
-    assert client.checkout.Session.calls[0]["metadata"]["plan_tier"] == "starter"
-    assert client.checkout.Session.calls[0]["metadata"]["clerk_user_id"] == "clerk_123"
-    assert client.checkout.Session.calls[0]["subscription_data"]["metadata"]["plan_tier"] == "starter"
+    assert (
+        client.checkout.Session.calls[0]["line_items"][0]["price"]
+        == "price_starter_123"
+    )
+    expected_metadata = {
+        "clerk_user_id": "clerk_123",
+        "user_id": "user_123",
+        "plan_tier": "starter",
+        "lifecycle_generation": "7",
+    }
+    assert client.checkout.Session.calls[0]["metadata"] == expected_metadata
+    assert (
+        client.checkout.Session.calls[0]["subscription_data"]["metadata"]
+        == expected_metadata
+    )
     assert telemetry.calls == [("stripe", "create_checkout_session", "success")]
 
 
@@ -131,6 +151,7 @@ async def test_create_checkout_session_rejects_standard_plan() -> None:
             customer_email="billing@example.com",
             clerk_user_id="clerk_123",
             plan_tier="standard",
+            lifecycle_generation=7,
         )
 
 
@@ -149,7 +170,9 @@ async def test_create_portal_session_requires_customer_id() -> None:
     )
 
     with pytest.raises(ValueError, match="Stripe customer ID is required"):
-        await service.create_portal_session(customer_id=None, return_url="https://app.example.com/settings")
+        await service.create_portal_session(
+            customer_id=None, return_url="https://app.example.com/settings"
+        )
 
 
 @pytest.mark.anyio
@@ -254,13 +277,16 @@ async def test_stripe_call_does_not_block_the_event_loop() -> None:
         customer_email="billing@example.com",
         clerk_user_id="clerk_123",
         plan_tier="starter",
+        lifecycle_generation=7,
     )
 
     assert heartbeat.done()
     await heartbeat
 
 
-def test_stripe_sdk_uses_bounded_network_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stripe_sdk_uses_bounded_network_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from app.services.billing_session_service import BillingSessionService
 
     monkeypatch.setattr(stripe, "default_http_client", None)
@@ -340,6 +366,7 @@ async def test_stripe_errors_use_safe_fixed_categories(
             customer_email="billing@example.com",
             clerk_user_id="clerk_123",
             plan_tier="starter",
+            lifecycle_generation=7,
         )
 
     assert exc_info.value.category == expected_category

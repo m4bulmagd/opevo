@@ -50,25 +50,45 @@ def test_should_grant_invoice_requires_paid_status(
 
 
 @pytest.mark.parametrize(
-    ("status", "allowed"),
+    (
+        "account_status",
+        "subscription_status",
+        "has_incomplete_deactivation",
+        "has_phone",
+        "allowed",
+    ),
     [
-        (None, True),
-        ("canceled", True),
-        ("incomplete_expired", True),
-        ("trialing", False),
-        ("active", False),
-        ("past_due", False),
-        ("unpaid", False),
-        ("incomplete", False),
-        ("paused", False),
-        ("unknown", False),
+        ("active", None, False, False, True),
+        ("active", "canceled", False, False, True),
+        ("active", "incomplete_expired", False, False, True),
+        ("active", "active", False, False, False),
+        ("deactivating", "canceled", False, False, False),
+        ("deactivating", "canceled", True, True, False),
+        ("inactive", "canceled", False, False, True),
+        ("inactive", "incomplete_expired", False, False, True),
+        ("inactive", None, False, False, True),
+        ("inactive", "active", False, False, False),
+        ("inactive", "canceled", True, False, False),
+        ("inactive", "canceled", False, True, False),
+        ("unknown", "canceled", False, False, False),
     ],
 )
-def test_can_start_checkout_only_without_subscription_or_after_terminal_status(
-    status: str | None,
+def test_checkout_requires_safe_account_and_subscription_state(
+    account_status: str,
+    subscription_status: str | None,
+    has_incomplete_deactivation: bool,
+    has_phone: bool,
     allowed: bool,
 ) -> None:
-    assert SubscriptionAccessPolicy.can_start_checkout(status) is allowed
+    assert (
+        SubscriptionAccessPolicy.can_start_checkout(
+            account_status=account_status,
+            subscription_status=subscription_status,
+            has_incomplete_deactivation=has_incomplete_deactivation,
+            has_phone=has_phone,
+        )
+        is allowed
+    )
 
 
 @pytest.mark.parametrize(

@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.models.account_deactivation_operation import AccountDeactivationOperation
 from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
@@ -13,16 +14,71 @@ from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.usage_ledger import UsageLedger
 from app.models.webhook_event import WebhookEvent
+from app.providers.subscriptions.fake import FakeSubscriptionProvider
+from app.providers.telephony.fake import FakeTelephonyProvider
+from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
 from tests.fakes import MockArqPool
 
 
-async def _post_stripe_event(async_client, signed_stripe_headers_factory, payload: dict):
+async def _post_stripe_event(
+    async_client, signed_stripe_headers_factory, payload: dict
+):
     return await async_client.post(
         "/webhooks/stripe",
         content=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
         headers=signed_stripe_headers_factory(payload),
     )
+
+
+async def _seed_completed_generation_one_deactivation(
+    client_database_url: str,
+    *,
+    email: str,
+) -> None:
+    completed_at = datetime(2026, 3, 1, tzinfo=UTC)
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(
+            clerk_user_id="user_123",
+            email=email,
+            status="inactive",
+            lifecycle_generation=2,
+        )
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_123",
+                stripe_subscription_id="sub_generation_1",
+                plan_tier="starter",
+                status="canceled",
+                allocated_minutes=60,
+                lifecycle_generation=1,
+                stripe_subscription_created_at=datetime.fromtimestamp(10, UTC),
+                last_stripe_event_created_at=datetime.fromtimestamp(20, UTC),
+            )
+        )
+        session.add(
+            AccountDeactivationOperation(
+                user_id=user.id,
+                lifecycle_generation=2,
+                trigger="owner_request",
+                status="completed",
+                stripe_subscription_id="sub_generation_1",
+                requested_at=completed_at,
+                routing_disabled_at=completed_at,
+                subscription_canceled_at=completed_at,
+                active_call_drained_at=completed_at,
+                number_released_at=completed_at,
+                activation_reset_at=completed_at,
+                completed_at=completed_at,
+            )
+        )
+        await session.commit()
+    await engine.dispose()
 
 
 @pytest.mark.anyio
@@ -32,7 +88,9 @@ async def test_invalid_signature_is_rejected(
 ) -> None:
     response = await async_client.post(
         "/webhooks/stripe",
-        content=json.dumps(stripe_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
+        content=json.dumps(
+            stripe_subscription_created_payload, separators=(",", ":")
+        ).encode("utf-8"),
         headers={"Stripe-Signature": "t=123,v1=invalid"},
     )
     assert response.status_code == 400
@@ -57,9 +115,7 @@ async def test_unknown_event_type_returns_200_no_op(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         webhook_count = await session.scalar(
-            select(WebhookEvent).where(
-                WebhookEvent.external_event_id == payload["id"]
-            )
+            select(WebhookEvent).where(WebhookEvent.external_event_id == payload["id"])
         )
         subscriptions = list((await session.execute(select(Subscription))).scalars())
         outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
@@ -68,6 +124,7 @@ async def test_unknown_event_type_returns_200_no_op(
     assert webhook_count is not None
     assert subscriptions == []
     assert outbox_events == []
+
 
 @pytest.mark.anyio
 async def test_subscription_activation_provisions_usage_ledger(
@@ -84,13 +141,15 @@ async def test_subscription_activation_provisions_usage_ledger(
             await session.commit()
         await engine.dispose()
 
-
-
-    async def fetch_state() -> tuple[list[Subscription], list[UsageLedger], list[PhoneNumber]]:
+    async def fetch_state() -> tuple[
+        list[Subscription], list[UsageLedger], list[PhoneNumber]
+    ]:
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            subscriptions = list((await session.execute(select(Subscription))).scalars())
+            subscriptions = list(
+                (await session.execute(select(Subscription))).scalars()
+            )
             ledgers = list((await session.execute(select(UsageLedger))).scalars())
             phone_numbers = list((await session.execute(select(PhoneNumber))).scalars())
         await engine.dispose()
@@ -105,7 +164,9 @@ async def test_subscription_activation_provisions_usage_ledger(
 
     response = await async_client.post(
         "/webhooks/stripe",
-        content=json.dumps(stripe_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
+        content=json.dumps(
+            stripe_subscription_created_payload, separators=(",", ":")
+        ).encode("utf-8"),
         headers=signed_stripe_headers_factory(stripe_subscription_created_payload),
     )
 
@@ -138,7 +199,9 @@ async def test_subscription_activation_accepts_stripe_style_signature(
 
     response = await async_client.post(
         "/webhooks/stripe",
-        content=json.dumps(stripe_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
+        content=json.dumps(
+            stripe_subscription_created_payload, separators=(",", ":")
+        ).encode("utf-8"),
         headers=signed_stripe_headers_factory(stripe_subscription_created_payload),
     )
     assert response.status_code == 202
@@ -163,10 +226,843 @@ async def test_subscription_activation_accepts_current_stripe_subscription_shape
 
     response = await async_client.post(
         "/webhooks/stripe",
-        content=json.dumps(stripe_current_subscription_created_payload, separators=(",", ":")).encode("utf-8"),
-        headers=signed_stripe_headers_factory(stripe_current_subscription_created_payload),
+        content=json.dumps(
+            stripe_current_subscription_created_payload, separators=(",", ":")
+        ).encode("utf-8"),
+        headers=signed_stripe_headers_factory(
+            stripe_current_subscription_created_payload
+        ),
     )
     assert response.status_code == 202
+
+
+@pytest.mark.anyio
+async def test_period_end_cancellation_is_only_a_serving_schedule_projection(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    period_end = datetime.fromtimestamp(1712592000, UTC)
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(clerk_user_id="user_123", email="scheduled@example.com")
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_123",
+                stripe_subscription_id="sub_123",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                lifecycle_generation=1,
+                stripe_subscription_created_at=datetime.fromtimestamp(
+                    1709990000,
+                    UTC,
+                ),
+                last_stripe_event_created_at=datetime.fromtimestamp(
+                    1710000000,
+                    UTC,
+                ),
+            )
+        )
+        session.add(
+            PhoneNumber(
+                user_id=user.id,
+                e164="+35315550170",
+                country_code="IE",
+                provider="telnyx",
+                provider_number_id="pn_scheduled_cancel",
+                provider_connection_name="app-active",
+                is_active=True,
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(
+        id="evt_period_end_scheduled",
+        created=1710000200,
+        type="customer.subscription.updated",
+    )
+    payload["data"]["object"]["metadata"]["lifecycle_generation"] = "1"
+    payload["data"]["object"]["cancel_at_period_end"] = True
+    payload["data"]["object"]["cancel_at"] = int(period_end.timestamp())
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        fetched_user = await session.scalar(select(User))
+        phone = await session.scalar(select(PhoneNumber))
+        operation = await session.scalar(select(AccountDeactivationOperation))
+        outbox = await session.scalar(select(OutboxEvent))
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.cancel_at_period_end is True
+    assert subscription.cancellation_effective_at is not None
+    assert subscription.cancellation_effective_at.replace(tzinfo=UTC) == period_end
+    assert fetched_user is not None and fetched_user.status == "active"
+    assert phone is not None and phone.is_active is True
+    assert operation is None
+    assert outbox is None
+
+
+@pytest.mark.anyio
+async def test_period_end_cancellation_reversal_clears_only_schedule_projection(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(clerk_user_id="user_123", email="reversal@example.com")
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_123",
+                stripe_subscription_id="sub_123",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                lifecycle_generation=1,
+                cancel_at_period_end=True,
+                cancellation_effective_at=datetime(2026, 4, 1, tzinfo=UTC),
+                stripe_subscription_created_at=datetime.fromtimestamp(
+                    1709990000,
+                    UTC,
+                ),
+                last_stripe_event_created_at=datetime.fromtimestamp(
+                    1710000000,
+                    UTC,
+                ),
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(
+        id="evt_period_end_reversed",
+        created=1710000200,
+        type="customer.subscription.updated",
+    )
+    payload["data"]["object"]["metadata"]["lifecycle_generation"] = "1"
+    payload["data"]["object"]["cancel_at_period_end"] = False
+    payload["data"]["object"].pop("cancel_at", None)
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        fetched_user = await session.scalar(select(User))
+        operation = await session.scalar(select(AccountDeactivationOperation))
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.cancel_at_period_end is False
+    assert subscription.cancellation_effective_at is None
+    assert fetched_user is not None and fetched_user.status == "active"
+    assert operation is None
+
+
+@pytest.mark.anyio
+async def test_current_generation_final_cancellation_starts_one_deactivation_operation(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(clerk_user_id="user_123", email="final-cancel@example.com")
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_123",
+                stripe_subscription_id="sub_123",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                lifecycle_generation=1,
+                stripe_subscription_created_at=datetime.fromtimestamp(
+                    1709990000,
+                    UTC,
+                ),
+                last_stripe_event_created_at=datetime.fromtimestamp(
+                    1710000000,
+                    UTC,
+                ),
+            )
+        )
+        session.add(
+            PhoneNumber(
+                user_id=user.id,
+                e164="+35315550171",
+                country_code="IE",
+                provider="telnyx",
+                provider_number_id="fake-0123456789abcdef",
+                provider_connection_name="app-active",
+                is_active=True,
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(
+        id="evt_final_cancel",
+        created=1710000200,
+        type="customer.subscription.deleted",
+    )
+    payload["data"]["object"]["status"] = "canceled"
+    payload["data"]["object"]["metadata"]["lifecycle_generation"] = "1"
+
+    first = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+    replay = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert first.status_code == replay.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        fetched_user = await session.scalar(select(User))
+        phone = await session.scalar(select(PhoneNumber))
+        operation = await session.scalar(select(AccountDeactivationOperation))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None and subscription.status == "canceled"
+    assert fetched_user is not None
+    assert fetched_user.status == "deactivating"
+    assert fetched_user.lifecycle_generation == 2
+    assert phone is not None and phone.is_active is False
+    assert operation is not None
+    assert operation.trigger == "subscription_ended"
+    assert operation.stripe_subscription_id == "sub_123"
+    assert operation.routing_disabled_at is None
+    assert operation.subscription_canceled_at is None
+    assert len(outbox_events) == 1
+    assert outbox_events[0].topic == "account.deactivate"
+    assert outbox_events[0].payload == {"operation_id": str(operation.id)}
+
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    delivery = await outbox_delivery_job(
+        {
+            "session_factory": session_factory,
+            "subscription_provider": FakeSubscriptionProvider(),
+            "telephony_provider": FakeTelephonyProvider(),
+        }
+    )
+    async with session_factory() as session:
+        reconciled = await session.get(AccountDeactivationOperation, operation.id)
+    await engine.dispose()
+
+    assert delivery == {
+        "claimed": 1,
+        "delivered": 1,
+        "retried": 0,
+        "failed": 0,
+    }
+    assert reconciled is not None
+    assert reconciled.routing_disabled_at is not None
+    assert reconciled.subscription_canceled_at is not None
+    assert reconciled.completed_at is not None
+
+
+@pytest.mark.anyio
+async def test_terminal_subscription_update_converges_without_phone_disable(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(clerk_user_id="user_123", email="terminal-update@example.com")
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_123",
+                stripe_subscription_id="sub_123",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                lifecycle_generation=1,
+                stripe_subscription_created_at=datetime.fromtimestamp(
+                    1709990000,
+                    UTC,
+                ),
+                last_stripe_event_created_at=datetime.fromtimestamp(
+                    1710000000,
+                    UTC,
+                ),
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(
+        id="evt_terminal_subscription_update",
+        created=1710000200,
+        type="customer.subscription.updated",
+    )
+    payload["data"]["object"]["status"] = "canceled"
+    payload["data"]["object"]["metadata"]["lifecycle_generation"] = "1"
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        operation = await session.scalar(select(AccountDeactivationOperation))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert operation is not None
+    assert operation.trigger == "subscription_ended"
+    assert len(outbox_events) == 1
+    assert outbox_events[0].topic == "account.deactivate"
+    assert outbox_events[0].payload == {"operation_id": str(operation.id)}
+
+
+@pytest.mark.anyio
+async def test_matching_generation_replacement_reactivates_without_enabling_service(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    await _seed_completed_generation_one_deactivation(
+        client_database_url,
+        email="matching-reactivation@example.com",
+    )
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(id="evt_generation_2_created", created=1710000300)
+    payload["data"]["object"].update(
+        id="sub_generation_2",
+        created=1710000200,
+        status="trialing",
+    )
+    payload["data"]["object"]["metadata"]["lifecycle_generation"] = "2"
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        user = await session.scalar(select(User))
+        phones = list((await session.execute(select(PhoneNumber))).scalars())
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+        ledgers = list((await session.execute(select(UsageLedger))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.stripe_subscription_id == "sub_generation_2"
+    assert subscription.lifecycle_generation == 2
+    assert subscription.status == "trialing"
+    assert user is not None and user.status == "active"
+    assert phones == []
+    assert outbox_events == []
+    assert ledgers == []
+
+
+@pytest.mark.anyio
+async def test_matching_replacement_can_progress_from_incomplete_to_active(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    await _seed_completed_generation_one_deactivation(
+        client_database_url,
+        email="staged-reactivation@example.com",
+    )
+    incomplete = deepcopy(stripe_subscription_created_payload)
+    incomplete.update(id="evt_generation_2_incomplete", created=1710000300)
+    incomplete["data"]["object"].update(
+        id="sub_generation_2_staged",
+        created=1710000200,
+        status="incomplete",
+    )
+    incomplete["data"]["object"]["metadata"]["lifecycle_generation"] = "2"
+    active = deepcopy(incomplete)
+    active.update(
+        id="evt_generation_2_active",
+        created=1710000400,
+        type="customer.subscription.updated",
+    )
+    active["data"]["object"]["status"] = "active"
+
+    first = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        incomplete,
+    )
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        staged_subscription = await session.scalar(select(Subscription))
+        staged_user = await session.scalar(select(User))
+    await engine.dispose()
+
+    assert first.status_code == 202
+    assert staged_subscription is not None
+    assert staged_subscription.status == "incomplete"
+    assert staged_subscription.lifecycle_generation == 2
+    assert staged_user is not None and staged_user.status == "inactive"
+
+    second = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        active,
+    )
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        current_subscription = await session.scalar(select(Subscription))
+        current_user = await session.scalar(select(User))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert second.status_code == 202
+    assert current_subscription is not None
+    assert current_subscription.status == "active"
+    assert current_user is not None and current_user.status == "active"
+    assert outbox_events == []
+
+
+@pytest.mark.anyio
+async def test_matching_generation_reactivates_inactive_account_without_old_subscription(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    completed_at = datetime(2026, 3, 1, tzinfo=UTC)
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(
+            clerk_user_id="user_123",
+            email="reactivation-without-old-subscription@example.com",
+            status="inactive",
+            lifecycle_generation=2,
+        )
+        session.add(user)
+        await session.flush()
+        session.add(
+            AccountDeactivationOperation(
+                user_id=user.id,
+                lifecycle_generation=2,
+                trigger="owner_request",
+                status="completed",
+                requested_at=completed_at,
+                routing_disabled_at=completed_at,
+                subscription_canceled_at=completed_at,
+                active_call_drained_at=completed_at,
+                number_released_at=completed_at,
+                activation_reset_at=completed_at,
+                completed_at=completed_at,
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(id="evt_generation_2_without_old_subscription", created=1710000300)
+    payload["data"]["object"].update(
+        id="sub_generation_2_without_old_subscription",
+        created=1710000200,
+        status="active",
+    )
+    payload["data"]["object"]["metadata"]["lifecycle_generation"] = "2"
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        reactivated_user = await session.scalar(select(User))
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.lifecycle_generation == 2
+    assert reactivated_user is not None
+    assert reactivated_user.status == "active"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("invalid_generation", ["invalid", "0", "-1"])
+async def test_invalid_generation_metadata_is_not_treated_as_legacy_generation_one(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+    invalid_generation: str,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(
+            User(
+                clerk_user_id="user_123",
+                email=f"invalid-generation-{invalid_generation}@example.com",
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(id=f"evt_invalid_generation_{invalid_generation}")
+    payload["data"]["object"]["metadata"]["lifecycle_generation"] = invalid_generation
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+    await engine.dispose()
+
+    assert subscription is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("metadata_generation", [None, "1"])
+async def test_missing_or_old_generation_replacement_cannot_reactivate(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+    metadata_generation: str | None,
+) -> None:
+    await _seed_completed_generation_one_deactivation(
+        client_database_url,
+        email=f"stale-reactivation-{metadata_generation}@example.com",
+    )
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(
+        id=f"evt_stale_replacement_{metadata_generation}",
+        created=1710000300,
+    )
+    payload["data"]["object"].update(
+        id=f"sub_stale_replacement_{metadata_generation}",
+        created=1710000200,
+        status="active",
+    )
+    if metadata_generation is None:
+        payload["data"]["object"]["metadata"].pop(
+            "lifecycle_generation",
+            None,
+        )
+    else:
+        payload["data"]["object"]["metadata"]["lifecycle_generation"] = (
+            metadata_generation
+        )
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        user = await session.scalar(select(User))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+        ledgers = list((await session.execute(select(UsageLedger))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.stripe_subscription_id == "sub_generation_1"
+    assert subscription.lifecycle_generation == 1
+    assert subscription.status == "canceled"
+    assert user is not None and user.status == "inactive"
+    assert outbox_events == []
+    assert ledgers == []
+
+
+@pytest.mark.anyio
+async def test_canceled_generation_event_cannot_restore_inactive_account(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    await _seed_completed_generation_one_deactivation(
+        client_database_url,
+        email="canceled-id-stale@example.com",
+    )
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(
+        id="evt_canceled_id_late_active",
+        created=1710000300,
+        type="customer.subscription.updated",
+    )
+    payload["data"]["object"].update(
+        id="sub_generation_1",
+        created=10,
+        status="active",
+    )
+    payload["data"]["object"]["metadata"]["lifecycle_generation"] = "1"
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        user = await session.scalar(select(User))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None and subscription.status == "canceled"
+    assert user is not None and user.status == "inactive"
+    assert outbox_events == []
+
+
+@pytest.mark.anyio
+async def test_owner_cancellation_terminal_event_converges_on_exact_incomplete_operation(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    requested_at = datetime(2026, 3, 1, tzinfo=UTC)
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(
+            clerk_user_id="user_123",
+            email="owner-convergence@example.com",
+            status="deactivating",
+            lifecycle_generation=2,
+        )
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_123",
+                stripe_subscription_id="sub_123",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                lifecycle_generation=1,
+                stripe_subscription_created_at=datetime.fromtimestamp(
+                    1709990000,
+                    UTC,
+                ),
+                last_stripe_event_created_at=datetime.fromtimestamp(
+                    1710000000,
+                    UTC,
+                ),
+            )
+        )
+        operation = AccountDeactivationOperation(
+            user_id=user.id,
+            lifecycle_generation=2,
+            trigger="owner_request",
+            stripe_subscription_id="sub_123",
+            requested_at=requested_at,
+        )
+        session.add(operation)
+        await session.flush()
+        session.add(
+            OutboxEvent(
+                topic="account.deactivate",
+                aggregate_type="account-deactivation-operation",
+                aggregate_id=operation.id,
+                idempotency_key=f"account.deactivate:{operation.id}",
+                payload={"operation_id": str(operation.id)},
+            )
+        )
+        await session.commit()
+        operation_id = operation.id
+    await engine.dispose()
+
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(
+        id="evt_owner_terminal_convergence",
+        created=1710000200,
+        type="customer.subscription.deleted",
+    )
+    payload["data"]["object"]["status"] = "canceled"
+    payload["data"]["object"]["metadata"].pop("lifecycle_generation", None)
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        operations = list(
+            (await session.execute(select(AccountDeactivationOperation))).scalars()
+        )
+        subscription = await session.scalar(select(Subscription))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert [operation.id for operation in operations] == [operation_id]
+    assert operations[0].trigger == "owner_request"
+    assert operations[0].routing_disabled_at is None
+    assert operations[0].subscription_canceled_at is None
+    assert subscription is not None and subscription.status == "canceled"
+    assert len(outbox_events) == 1
+    assert outbox_events[0].payload == {"operation_id": str(operation_id)}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("metadata_generation", [None, "1"])
+async def test_missing_or_old_generation_invoice_cannot_grant_or_enable(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_invoice_paid_payload,
+    metadata_generation: str | None,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(
+            clerk_user_id="user_123",
+            email=f"stale-invoice-{metadata_generation}@example.com",
+            lifecycle_generation=2,
+        )
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_123",
+                stripe_subscription_id="sub_123",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                lifecycle_generation=2,
+                stripe_subscription_created_at=datetime.fromtimestamp(10, UTC),
+                last_stripe_event_created_at=datetime.fromtimestamp(20, UTC),
+            )
+        )
+        session.add(
+            PhoneNumber(
+                user_id=user.id,
+                e164="+35315550172",
+                country_code="IE",
+                provider="telnyx",
+                provider_number_id="pn_stale_invoice",
+                provider_connection_name="app-disabled",
+                is_active=False,
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    payload = deepcopy(stripe_invoice_paid_payload)
+    payload.update(
+        id=f"evt_stale_invoice_{metadata_generation}",
+        created=1710000300,
+    )
+    metadata = payload["data"]["object"]["parent"]["subscription_details"].setdefault(
+        "metadata",
+        {},
+    )
+    metadata.update(clerk_user_id="user_123", plan_tier="starter")
+    if metadata_generation is not None:
+        metadata["lifecycle_generation"] = metadata_generation
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        ledgers = list((await session.execute(select(UsageLedger))).scalars())
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+        phone = await session.scalar(select(PhoneNumber))
+    await engine.dispose()
+
+    assert ledgers == []
+    assert outbox_events == []
+    assert phone is not None and phone.is_active is False
 
 
 @pytest.mark.anyio
@@ -197,9 +1093,7 @@ async def test_stripe_webhook_has_no_telnyx_provider_dependency(
                 stripe_subscription_created_payload,
                 separators=(",", ":"),
             ).encode("utf-8"),
-            headers=signed_stripe_headers_factory(
-                stripe_subscription_created_payload
-            ),
+            headers=signed_stripe_headers_factory(stripe_subscription_created_payload),
         )
     finally:
         app.dependency_overrides.pop(get_telephony_provider, None)
@@ -222,8 +1116,6 @@ async def test_first_paid_invoice_grants_minutes_without_ordering_number(
             await session.commit()
         await engine.dispose()
 
-
-
     async def fetch_state() -> tuple[
         list[Subscription],
         list[Notification],
@@ -234,8 +1126,12 @@ async def test_first_paid_invoice_grants_minutes_without_ordering_number(
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            subscriptions = list((await session.execute(select(Subscription))).scalars())
-            notifications = list((await session.execute(select(Notification))).scalars())
+            subscriptions = list(
+                (await session.execute(select(Subscription))).scalars()
+            )
+            notifications = list(
+                (await session.execute(select(Notification))).scalars()
+            )
             ledgers = list((await session.execute(select(UsageLedger))).scalars())
             phone_numbers = list((await session.execute(select(PhoneNumber))).scalars())
             outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
@@ -245,7 +1141,9 @@ async def test_first_paid_invoice_grants_minutes_without_ordering_number(
     await seed_user()
 
     invoice_payload = json.loads(json.dumps(stripe_invoice_paid_payload))
-    invoice_payload["data"]["object"]["lines"]["data"][0]["price"] = {"lookup_key": "starter"}
+    invoice_payload["data"]["object"]["lines"]["data"][0]["price"] = {
+        "lookup_key": "starter"
+    }
     invoice_payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
         "clerk_user_id": "user_123",
         "plan_tier": "starter",
@@ -261,14 +1159,18 @@ async def test_first_paid_invoice_grants_minutes_without_ordering_number(
         content=json.dumps(invoice_payload, separators=(",", ":")).encode("utf-8"),
         headers=signed_stripe_headers_factory(invoice_payload),
     )
-    
+
     assert response.status_code == 202
-    
+
     assert pool.enqueued_jobs == []
 
-    subscriptions, notifications, ledgers, phone_numbers, outbox_events = (
-        await fetch_state()
-    )
+    (
+        subscriptions,
+        notifications,
+        ledgers,
+        phone_numbers,
+        outbox_events,
+    ) = await fetch_state()
 
     assert response.status_code == 202
     assert subscriptions[0].plan_tier == "starter"
@@ -336,30 +1238,38 @@ async def test_invoice_paid_resets_minutes(
             await session.commit()
         await engine.dispose()
 
-    async def fetch_state() -> tuple[list[UsageLedger], list[OutboxEvent]]:
+    async def fetch_state() -> tuple[
+        list[UsageLedger],
+        list[OutboxEvent],
+        PhoneNumber,
+    ]:
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            result = await session.execute(select(UsageLedger).order_by(UsageLedger.created_at.asc()))
+            result = await session.execute(
+                select(UsageLedger).order_by(UsageLedger.created_at.asc())
+            )
             rows = list(result.scalars())
             outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+            phone = (await session.execute(select(PhoneNumber))).scalar_one()
         await engine.dispose()
-        return rows, outbox_events
+        return rows, outbox_events, phone
 
     await seed_subscription()
 
     response = await async_client.post(
         "/webhooks/stripe",
-        content=json.dumps(stripe_invoice_paid_payload, separators=(",", ":")).encode("utf-8"),
+        content=json.dumps(stripe_invoice_paid_payload, separators=(",", ":")).encode(
+            "utf-8"
+        ),
         headers=signed_stripe_headers_factory(stripe_invoice_paid_payload),
     )
 
     assert response.status_code == 202
-    ledgers, outbox_events = await fetch_state()
+    ledgers, outbox_events, phone = await fetch_state()
     assert ledgers[-1].event_type == "invoice_paid_reset"
-    assert len(outbox_events) == 1
-    assert outbox_events[0].topic == "phone.enable"
-    assert outbox_events[0].idempotency_key == "stripe:invoice:in_123:phone.enable"
+    assert outbox_events == []
+    assert phone.is_active is False
 
 
 @pytest.mark.anyio
@@ -385,7 +1295,9 @@ async def test_invoice_paid_bootstraps_subscription_without_ordering_number(
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            subscriptions = list((await session.execute(select(Subscription))).scalars())
+            subscriptions = list(
+                (await session.execute(select(Subscription))).scalars()
+            )
             ledgers = list((await session.execute(select(UsageLedger))).scalars())
             outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
         await engine.dispose()
@@ -395,7 +1307,9 @@ async def test_invoice_paid_bootstraps_subscription_without_ordering_number(
 
     invoice_payload = json.loads(json.dumps(stripe_invoice_paid_payload))
     invoice_payload["data"]["object"].pop("paid")
-    invoice_payload["data"]["object"]["lines"]["data"][0]["price"] = {"lookup_key": "starter"}
+    invoice_payload["data"]["object"]["lines"]["data"][0]["price"] = {
+        "lookup_key": "starter"
+    }
     invoice_payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
         "clerk_user_id": "user_123",
         "plan_tier": "starter",
@@ -444,9 +1358,7 @@ async def test_distinct_webhook_events_grant_one_invoice_without_ordering_number
     first_payload["data"]["object"]["lines"]["data"][0]["price"] = {
         "lookup_key": "starter"
     }
-    first_payload["data"]["object"]["parent"]["subscription_details"][
-        "metadata"
-    ] = {
+    first_payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
         "clerk_user_id": "user_123",
         "plan_tier": "starter",
     }
@@ -588,13 +1500,17 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe_without_pro
 
     assert first.status_code == 202
     assert replay.status_code == 202
-    expected_jobs = [("outbox_delivery_job", {})] if expected_outbox else []
+    expected_jobs: list[tuple[str, dict[str, object]]] = (
+        [("outbox_delivery_job", {})] if expected_outbox else []
+    )
     assert pool.enqueued_jobs == expected_jobs
 
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         subscription = (await session.execute(select(Subscription))).scalar_one()
+        user = (await session.execute(select(User))).scalar_one()
+        operation = await session.scalar(select(AccountDeactivationOperation))
         webhook_events = list(
             (
                 await session.execute(
@@ -615,14 +1531,22 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe_without_pro
     assert all(intent.topic != "phone.provision" for intent in outbox_events)
     if outbox_events:
         intent = outbox_events[0]
-        assert intent.topic == "phone.disable"
-        assert intent.aggregate_type == "user"
-        assert intent.aggregate_id == subscription.user_id
-        assert intent.idempotency_key == f"stripe:{event_type}:{event_id}"
+        if event_type == "customer.subscription.deleted":
+            assert operation is not None
+            assert user.status == "deactivating"
+            assert intent.topic == "account.deactivate"
+            assert intent.aggregate_type == "account-deactivation-operation"
+            assert intent.aggregate_id == operation.id
+            assert intent.payload == {"operation_id": str(operation.id)}
+        else:
+            assert intent.topic == "phone.disable"
+            assert intent.aggregate_type == "user"
+            assert intent.aggregate_id == subscription.user_id
+            assert intent.idempotency_key == f"stripe:{event_type}:{event_id}"
 
 
 @pytest.mark.anyio
-async def test_invoice_enable_outbox_commit_survives_redis_wakeup_failure(
+async def test_invoice_payment_does_not_enable_phone_or_require_redis_wakeup(
     async_client,
     client_database_url,
     signed_stripe_headers_factory,
@@ -653,9 +1577,7 @@ async def test_invoice_enable_outbox_commit_survives_redis_wakeup_failure(
     await engine.dispose()
 
     payload = deepcopy(stripe_invoice_paid_payload)
-    payload["data"]["object"]["lines"]["data"][0]["price"] = {
-        "lookup_key": "starter"
-    }
+    payload["data"]["object"]["lines"]["data"][0]["price"] = {"lookup_key": "starter"}
     payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
         "clerk_user_id": "user_123",
         "plan_tier": "starter",
@@ -674,9 +1596,10 @@ async def test_invoice_enable_outbox_commit_survives_redis_wakeup_failure(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         event = await session.scalar(select(OutboxEvent))
-        assert event is not None
-        assert event.topic == "phone.enable"
-        assert event.status == "pending"
+        phone = await session.scalar(select(PhoneNumber))
+        assert event is None
+        assert phone is not None
+        assert phone.is_active is False
     await engine.dispose()
 
 
@@ -832,14 +1755,20 @@ async def test_reverse_order_same_subscription_update_does_not_regress_status(
     await engine.dispose()
 
     newer = deepcopy(stripe_subscription_created_payload)
-    newer.update(id="evt_update_newer", created=300, type="customer.subscription.updated")
+    newer.update(
+        id="evt_update_newer", created=300, type="customer.subscription.updated"
+    )
     newer["data"]["object"].update(created=10, status="past_due")
     older = deepcopy(newer)
     older.update(id="evt_update_older", created=200)
     older["data"]["object"]["status"] = "active"
 
-    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, newer)).status_code == 202
-    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, older)).status_code == 202
+    assert (
+        await _post_stripe_event(async_client, signed_stripe_headers_factory, newer)
+    ).status_code == 202
+    assert (
+        await _post_stripe_event(async_client, signed_stripe_headers_factory, older)
+    ).status_code == 202
 
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -851,7 +1780,9 @@ async def test_reverse_order_same_subscription_update_does_not_regress_status(
     assert subscription is not None
     assert subscription.status == "past_due"
     assert subscription.last_stripe_event_created_at is not None
-    assert subscription.last_stripe_event_created_at.replace(tzinfo=UTC) == datetime.fromtimestamp(300, UTC)
+    assert subscription.last_stripe_event_created_at.replace(
+        tzinfo=UTC
+    ) == datetime.fromtimestamp(300, UTC)
     assert len(outbox_events) == 1
 
 
@@ -874,14 +1805,22 @@ async def test_deleted_subscription_ignores_older_paid_invoice(
     created.update(id="evt_created_before_delete", created=100)
     created["data"]["object"]["created"] = 10
     deleted = deepcopy(created)
-    deleted.update(id="evt_delete_newer", created=300, type="customer.subscription.deleted")
+    deleted.update(
+        id="evt_delete_newer", created=300, type="customer.subscription.deleted"
+    )
     deleted["data"]["object"]["status"] = "canceled"
     invoice = deepcopy(stripe_invoice_paid_payload)
     invoice.update(id="evt_invoice_older_than_delete", created=200)
 
-    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, created)).status_code == 202
-    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, deleted)).status_code == 202
-    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, invoice)).status_code == 202
+    assert (
+        await _post_stripe_event(async_client, signed_stripe_headers_factory, created)
+    ).status_code == 202
+    assert (
+        await _post_stripe_event(async_client, signed_stripe_headers_factory, deleted)
+    ).status_code == 202
+    assert (
+        await _post_stripe_event(async_client, signed_stripe_headers_factory, invoice)
+    ).status_code == 202
 
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -898,7 +1837,7 @@ async def test_deleted_subscription_ignores_older_paid_invoice(
 
 
 @pytest.mark.anyio
-async def test_old_subscription_event_cannot_replace_new_resubscription(
+async def test_deactivating_account_rejects_new_and_old_subscription_events(
     async_client,
     client_database_url,
     signed_stripe_headers_factory,
@@ -907,7 +1846,9 @@ async def test_old_subscription_event_cannot_replace_new_resubscription(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_123", email="resubscribe-order@example.com"))
+        session.add(
+            User(clerk_user_id="user_123", email="resubscribe-order@example.com")
+        )
         await session.commit()
     await engine.dispose()
 
@@ -915,31 +1856,46 @@ async def test_old_subscription_event_cannot_replace_new_resubscription(
     old_created.update(id="evt_old_created", created=100)
     old_created["data"]["object"].update(id="sub_old", created=10)
     old_deleted = deepcopy(old_created)
-    old_deleted.update(id="evt_old_deleted", created=150, type="customer.subscription.deleted")
+    old_deleted.update(
+        id="evt_old_deleted", created=150, type="customer.subscription.deleted"
+    )
     old_deleted["data"]["object"]["status"] = "canceled"
     new_created = deepcopy(stripe_subscription_created_payload)
     new_created.update(id="evt_new_created", created=200)
     new_created["data"]["object"].update(id="sub_new", created=20)
     old_late = deepcopy(old_created)
-    old_late.update(id="evt_old_late", created=300, type="customer.subscription.updated")
+    old_late.update(
+        id="evt_old_late", created=300, type="customer.subscription.updated"
+    )
     old_late["data"]["object"]["status"] = "past_due"
 
     for payload in (old_created, old_deleted, new_created, old_late):
-        assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, payload)).status_code == 202
+        assert (
+            await _post_stripe_event(
+                async_client, signed_stripe_headers_factory, payload
+            )
+        ).status_code == 202
 
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         subscription = await session.scalar(select(Subscription))
+        user = await session.scalar(select(User))
+        operation = await session.scalar(select(AccountDeactivationOperation))
         outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
     await engine.dispose()
 
     assert subscription is not None
-    assert subscription.stripe_subscription_id == "sub_new"
-    assert subscription.status == "active"
+    assert subscription.stripe_subscription_id == "sub_old"
+    assert subscription.status == "canceled"
     assert subscription.stripe_subscription_created_at is not None
-    assert subscription.stripe_subscription_created_at.replace(tzinfo=UTC) == datetime.fromtimestamp(20, UTC)
+    assert subscription.stripe_subscription_created_at.replace(
+        tzinfo=UTC
+    ) == datetime.fromtimestamp(10, UTC)
+    assert user is not None and user.status == "deactivating"
+    assert operation is not None and operation.trigger == "subscription_ended"
     assert len(outbox_events) == 1
+    assert outbox_events[0].topic == "account.deactivate"
 
 
 @pytest.mark.anyio
@@ -960,13 +1916,21 @@ async def test_equal_second_routing_update_cannot_override_nonrouting_status(
     created.update(id="evt_equal_created", created=100)
     created["data"]["object"]["created"] = 10
     deleted = deepcopy(created)
-    deleted.update(id="evt_equal_deleted", created=200, type="customer.subscription.deleted")
+    deleted.update(
+        id="evt_equal_deleted", created=200, type="customer.subscription.deleted"
+    )
     deleted["data"]["object"]["status"] = "canceled"
     routing_update = deepcopy(created)
-    routing_update.update(id="evt_equal_routing", created=200, type="customer.subscription.updated")
+    routing_update.update(
+        id="evt_equal_routing", created=200, type="customer.subscription.updated"
+    )
 
     for payload in (created, deleted, routing_update):
-        assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, payload)).status_code == 202
+        assert (
+            await _post_stripe_event(
+                async_client, signed_stripe_headers_factory, payload
+            )
+        ).status_code == 202
 
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -989,14 +1953,18 @@ async def test_newer_mismatched_invoice_is_retryable_and_rolls_back(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_123", email="invoice-conflict@example.com"))
+        session.add(
+            User(clerk_user_id="user_123", email="invoice-conflict@example.com")
+        )
         await session.commit()
     await engine.dispose()
 
     current = deepcopy(stripe_subscription_created_payload)
     current.update(id="evt_current_subscription", created=300)
     current["data"]["object"].update(id="sub_new", created=250)
-    assert (await _post_stripe_event(async_client, signed_stripe_headers_factory, current)).status_code == 202
+    assert (
+        await _post_stripe_event(async_client, signed_stripe_headers_factory, current)
+    ).status_code == 202
 
     conflicting_invoice = deepcopy(stripe_invoice_paid_payload)
     conflicting_invoice.update(id="evt_newer_mismatched_invoice", created=400)
@@ -1004,9 +1972,9 @@ async def test_newer_mismatched_invoice_is_retryable_and_rolls_back(
         subscription="sub_unknown",
         metadata={"clerk_user_id": "user_123", "plan_tier": "starter"},
     )
-    conflicting_invoice["data"]["object"]["lines"]["data"][0]["parent"]["subscription_item_details"][
-        "subscription"
-    ] = "sub_unknown"
+    conflicting_invoice["data"]["object"]["lines"]["data"][0]["parent"][
+        "subscription_item_details"
+    ]["subscription"] = "sub_unknown"
 
     response = await _post_stripe_event(
         async_client,
@@ -1034,7 +2002,7 @@ async def test_newer_mismatched_invoice_is_retryable_and_rolls_back(
 
 
 @pytest.mark.anyio
-async def test_equal_generation_distinct_subscription_is_retryable_and_rolls_back(
+async def test_deactivating_account_ignores_ambiguous_replacement(
     async_client,
     client_database_url,
     signed_stripe_headers_factory,
@@ -1043,7 +2011,9 @@ async def test_equal_generation_distinct_subscription_is_retryable_and_rolls_bac
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_123", email="equal-generation@example.com"))
+        session.add(
+            User(clerk_user_id="user_123", email="equal-generation@example.com")
+        )
         await session.commit()
     await engine.dispose()
 
@@ -1079,12 +2049,12 @@ async def test_equal_generation_distinct_subscription_is_retryable_and_rolls_bac
         ambiguous,
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 202
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         subscription = await session.scalar(select(Subscription))
-        conflict_event = await session.scalar(
+        recorded_event = await session.scalar(
             select(WebhookEvent).where(
                 WebhookEvent.external_event_id == "evt_equal_generation_ambiguous"
             )
@@ -1094,7 +2064,7 @@ async def test_equal_generation_distinct_subscription_is_retryable_and_rolls_bac
     assert subscription is not None
     assert subscription.stripe_subscription_id == "sub_equal_current"
     assert subscription.status == "canceled"
-    assert conflict_event is None
+    assert recorded_event is not None
 
 
 @pytest.mark.anyio
@@ -1234,7 +2204,9 @@ async def test_delayed_invoice_failure_revokes_legacy_active_subscription(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id="user_123", email="legacy-invoice-failure@example.com")
+        user = User(
+            clerk_user_id="user_123", email="legacy-invoice-failure@example.com"
+        )
         session.add(user)
         await session.flush()
         session.add(

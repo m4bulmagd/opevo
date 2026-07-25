@@ -13,6 +13,8 @@ class SubscriptionResponse(BaseModel):
     stripe_customer_id: str | None
     stripe_subscription_id: str | None
     can_start_checkout: bool
+    cancel_at_period_end: bool
+    cancellation_effective_at: datetime | None
 
 
 class UsageSnapshotResponse(BaseModel):

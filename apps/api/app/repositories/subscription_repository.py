@@ -26,7 +26,9 @@ class SubscriptionRepository:
         self.session = session
 
     async def get_by_user_id(self, user_id) -> Subscription | None:
-        result = await self.session.execute(select(Subscription).where(Subscription.user_id == user_id))
+        result = await self.session.execute(
+            select(Subscription).where(Subscription.user_id == user_id)
+        )
         return result.scalar_one_or_none()
 
     async def get_by_user_id_for_update(self, user_id) -> Subscription | None:
@@ -51,21 +53,27 @@ class SubscriptionRepository:
     async def upsert_by_stripe_subscription_id(
         self,
         *,
-        user_id,
+        user_id: UUID,
         stripe_customer_id: str | None,
         stripe_subscription_id: str,
         plan_tier: str | None,
         status: str,
         allocated_minutes: int | None,
-        current_period_start,
-        current_period_end,
+        current_period_start: datetime | None,
+        current_period_end: datetime | None,
         stripe_subscription_created_at: datetime | None = None,
         last_stripe_event_created_at: datetime | None = None,
+        lifecycle_generation: int,
+        cancel_at_period_end: bool = False,
+        cancellation_effective_at: datetime | None = None,
     ) -> Subscription | None:
-        locked_user_id = await self.session.scalar(
-            self._user_lock_statement(user_id)
+        locked_user = await self.session.scalar(
+            select(User)
+            .where(User.id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
-        if locked_user_id is None:
+        if locked_user is None:
             raise ValueError("Subscription user does not exist")
 
         current_result = await self.session.execute(
@@ -90,6 +98,14 @@ class SubscriptionRepository:
             subscription is not None
             and subscription.stripe_subscription_id == stripe_subscription_id
         )
+        if subscription is None:
+            if lifecycle_generation != locked_user.lifecycle_generation:
+                return None
+        elif is_same_subscription:
+            if lifecycle_generation != subscription.lifecycle_generation:
+                return None
+        elif lifecycle_generation != locked_user.lifecycle_generation:
+            return None
         preserve_unknown_event_watermark = bool(
             is_same_subscription
             and subscription is not None
@@ -142,9 +158,7 @@ class SubscriptionRepository:
         resolved_plan_tier: str | None
         resolved_allocated_minutes: int | None
         if is_same_subscription:
-            resolved_customer_id = (
-                stripe_customer_id or subscription.stripe_customer_id
-            )
+            resolved_customer_id = stripe_customer_id or subscription.stripe_customer_id
             resolved_plan_tier = plan_tier or subscription.plan_tier
             resolved_allocated_minutes = (
                 allocated_minutes
@@ -170,6 +184,10 @@ class SubscriptionRepository:
         subscription.plan_tier = resolved_plan_tier
         subscription.status = status
         subscription.allocated_minutes = resolved_allocated_minutes
+        subscription.cancel_at_period_end = cancel_at_period_end
+        subscription.cancellation_effective_at = cancellation_effective_at
+        if not is_same_subscription:
+            subscription.lifecycle_generation = lifecycle_generation
         if not is_same_subscription or current_period_start is not None:
             subscription.current_period_start = current_period_start
         if not is_same_subscription or current_period_end is not None:
@@ -239,9 +257,13 @@ class SubscriptionRepository:
     def _user_lock_statement(user_id):
         return select(User.id).where(User.id == user_id).with_for_update()
 
-    async def get_by_stripe_subscription_id(self, stripe_subscription_id: str) -> Subscription | None:
+    async def get_by_stripe_subscription_id(
+        self, stripe_subscription_id: str
+    ) -> Subscription | None:
         result = await self.session.execute(
-            select(Subscription).where(Subscription.stripe_subscription_id == stripe_subscription_id)
+            select(Subscription).where(
+                Subscription.stripe_subscription_id == stripe_subscription_id
+            )
         )
         return result.scalar_one_or_none()
 
@@ -286,9 +308,7 @@ class SubscriptionRepository:
         if incoming_generation is None:
             return False
         current_generation = cls._effective_subscription_generation(subscription)
-        return bool(
-            cls._as_utc(incoming_generation) < cls._as_utc(current_generation)
-        )
+        return bool(cls._as_utc(incoming_generation) < cls._as_utc(current_generation))
 
     @classmethod
     def _different_subscription_generation_is_ambiguous(

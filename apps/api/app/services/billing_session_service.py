@@ -59,8 +59,12 @@ class BillingSessionService:
         self._stripe_client = stripe_client
         self.secret_key = secret_key or settings.stripe_secret_key
         self.price_starter = price_starter or settings.stripe_price_starter
-        self.checkout_success_url = checkout_success_url or settings.stripe_checkout_success_url
-        self.checkout_cancel_url = checkout_cancel_url or settings.stripe_checkout_cancel_url
+        self.checkout_success_url = (
+            checkout_success_url or settings.stripe_checkout_success_url
+        )
+        self.checkout_cancel_url = (
+            checkout_cancel_url or settings.stripe_checkout_cancel_url
+        )
         self.billing_portal_return_url = (
             billing_portal_return_url or settings.stripe_billing_portal_return_url
         )
@@ -78,29 +82,30 @@ class BillingSessionService:
         customer_email: str,
         clerk_user_id: str,
         plan_tier: str,
+        lifecycle_generation: int,
     ) -> HostedSession:
         price_id = self._resolve_price_id(plan_tier)
+        metadata = {
+            "clerk_user_id": clerk_user_id,
+            "user_id": user_id,
+            "plan_tier": plan_tier,
+            "lifecycle_generation": str(lifecycle_generation),
+        }
         stripe = await asyncio.to_thread(self._get_client)
         try:
             session = await asyncio.to_thread(
                 stripe.checkout.Session.create,
                 mode="subscription",
                 customer_email=customer_email,
-                success_url=self._require_config(self.checkout_success_url, "Stripe checkout success URL is required"),
-                cancel_url=self._require_config(self.checkout_cancel_url, "Stripe checkout cancel URL is required"),
+                success_url=self._require_config(
+                    self.checkout_success_url, "Stripe checkout success URL is required"
+                ),
+                cancel_url=self._require_config(
+                    self.checkout_cancel_url, "Stripe checkout cancel URL is required"
+                ),
                 line_items=[{"price": price_id, "quantity": 1}],
-                metadata={
-                    "user_id": user_id,
-                    "clerk_user_id": clerk_user_id,
-                    "plan_tier": plan_tier,
-                },
-                subscription_data={
-                    "metadata": {
-                        "user_id": user_id,
-                        "clerk_user_id": clerk_user_id,
-                        "plan_tier": plan_tier,
-                    },
-                },
+                metadata=metadata,
+                subscription_data={"metadata": metadata.copy()},
             )
         except Exception as exc:
             category, error_class = self._stripe_error_details(exc)
@@ -140,9 +145,7 @@ class BillingSessionService:
                     "Invalid billing portal return URL"
                 ) from None
             if caller_origin != configured_origin:
-                raise BillingPortalReturnUrlError(
-                    "Invalid billing portal return URL"
-                )
+                raise BillingPortalReturnUrlError("Invalid billing portal return URL")
 
         stripe = await asyncio.to_thread(self._get_client)
         try:
@@ -166,7 +169,9 @@ class BillingSessionService:
 
     def _resolve_price_id(self, plan_tier: str) -> str:
         if plan_tier == "starter":
-            return self._require_config(self.price_starter, "Stripe starter price is required")
+            return self._require_config(
+                self.price_starter, "Stripe starter price is required"
+            )
         raise BillingSessionStateError(f"Unsupported plan tier: {plan_tier}")
 
     def _get_client(self):
