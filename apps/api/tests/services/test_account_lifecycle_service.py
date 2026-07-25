@@ -241,8 +241,29 @@ async def test_inactive_response_allows_reactivation_only_after_cleanup_finishes
         "serving": False,
         "deactivation": None,
         "reactivation_allowed": True,
-        "blocker": "account_inactive",
+        "blocker": None,
     }
+
+
+@pytest.mark.anyio
+async def test_inactive_cleanup_blocker_is_bounded_reactivation_not_ready(
+    db_session: AsyncSession,
+    active_user: User,
+) -> None:
+    active_user.status = "inactive"
+    operation = AccountDeactivationOperation(
+        user_id=active_user.id,
+        lifecycle_generation=active_user.lifecycle_generation,
+        trigger="owner_request",
+        requested_at=datetime.now(UTC),
+    )
+    db_session.add(operation)
+    await db_session.flush()
+
+    response = await AccountLifecycleService(db_session).get_account(active_user.id)
+
+    assert response.reactivation_allowed is False
+    assert response.blocker == "reactivation_not_ready"
 
 
 @pytest.mark.anyio

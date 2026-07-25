@@ -96,15 +96,18 @@ class AccountLifecycleService:
 
         phone_number = await self.phone_number_repository.get_by_user_id(user_id)
         incomplete = operation is not None and operation.completed_at is None
+        reactivation_allowed = not incomplete and phone_number is None
         return AccountStatusResponse(
             status="inactive",
             serving=False,
             deactivation=progress if incomplete else None,
-            reactivation_allowed=not incomplete and phone_number is None,
+            reactivation_allowed=reactivation_allowed,
             blocker=(
                 "deactivation_attention_required"
                 if progress is not None and progress.state == "attention_required"
-                else "account_inactive"
+                else "reactivation_not_ready"
+                if not reactivation_allowed
+                else None
             ),
         )
 

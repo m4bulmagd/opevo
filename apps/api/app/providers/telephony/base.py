@@ -46,6 +46,16 @@ class TelephonyProvider(ABC):
     ) -> dict:
         raise NotImplementedError
 
+    async def recover_provisioned_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str,
+    ) -> dict | None:
+        """Look up a previously accepted provisioning operation without ordering."""
+        del country_code, operation_key
+        return None
+
     @abstractmethod
     async def enable_number(self, *, provider_number_id: str) -> str:
         raise NotImplementedError

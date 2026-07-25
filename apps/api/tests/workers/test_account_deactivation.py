@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
 import pytest_asyncio
+import telnyx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -30,6 +32,7 @@ from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.providers.subscriptions.base import SubscriptionProviderError
 from app.providers.telephony.base import TelephonyProviderError
+from app.providers.telephony.telnyx import TelephonyTelnyx
 from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
 )
@@ -457,6 +460,73 @@ async def test_owner_request_runs_strict_provider_order_and_preserves_history(
             )
             == 1
         )
+
+
+@pytest.mark.anyio
+async def test_exact_telnyx_disable_404_continues_release_and_reset(
+    deactivation_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seeded = await _seed_operation(deactivation_session_factory)
+    phone_number = MagicMock()
+    phone_number.delete.return_value = {
+        "data": {
+            "id": PRIVATE_PHONE_PROVIDER_ID,
+            "status": "deleted",
+        }
+    }
+    phone_number_resource = MagicMock()
+    phone_number_resource.modify.side_effect = (
+        telnyx.error.ResourceNotFoundError(
+            [{"title": "private provider response"}],
+            http_status=404,
+        )
+    )
+    phone_number_resource.return_value = phone_number
+    telephony_provider = TelephonyTelnyx(
+        api_key="KEY",
+        disabled_connection_id="disabled",
+        phone_number_resource=phone_number_resource,
+    )
+    tracking_factory = TrackingSessionFactory(deactivation_session_factory)
+    subscription_calls: list[tuple[str, str]] = []
+    ctx = {
+        "session_factory": tracking_factory,
+        "telephony_provider": telephony_provider,
+        "subscription_provider": RecordingSubscriptionProvider(
+            subscription_calls,
+            tracking_factory.assert_no_active_transaction,
+        ),
+        "observability": RecordingObservability(),
+        "account_deactivation_now": lambda: NOW,
+    }
+
+    await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+
+    phone_number_resource.modify.assert_called_once_with(
+        PRIVATE_PHONE_PROVIDER_ID,
+        api_key="KEY",
+        connection_id="disabled",
+    )
+    phone_number_resource.assert_called_once_with(
+        PRIVATE_PHONE_PROVIDER_ID,
+        api_key="KEY",
+    )
+    phone_number.delete.assert_called_once_with()
+    assert subscription_calls == [
+        ("subscription.cancel", PRIVATE_SUBSCRIPTION_ID),
+    ]
+    async with deactivation_session_factory() as session:
+        operation = await session.get(
+            AccountDeactivationOperation,
+            seeded.operation_id,
+        )
+        user = await session.get(User, seeded.user_id)
+        assert operation is not None and operation.status == "completed"
+        assert operation.routing_disabled_at is not None
+        assert operation.number_released_at is not None
+        assert operation.activation_reset_at is not None
+        assert user is not None and user.status == "inactive"
+        assert await session.get(PhoneNumber, seeded.phone_number_id) is None
 
 
 @pytest.mark.anyio

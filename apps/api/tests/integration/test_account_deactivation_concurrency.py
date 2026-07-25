@@ -24,6 +24,7 @@ from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
+from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
@@ -62,6 +63,8 @@ from app.services.local_billing_service import (
 )
 from app.workers.jobs import account_deactivation as account_deactivation_module
 from app.workers.jobs.account_deactivation import deliver_account_deactivation
+from app.workers.jobs.phone_provisioning import phone_provisioning_job
+from app.workers.jobs.provider_cleanup import deliver_provider_cleanup
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
 from app.workers.jobs.outbox_topics import (
     deliver_livekit_verification_dispatch,
@@ -180,6 +183,31 @@ class _BarrierSubscriptionProvider(_WorkerSubscriptionProvider):
         await self.resume.wait()
         self.calls.append(subscription_id)
         self.returned.set()
+
+
+class _BarrierProvisioningProvider(_WorkerTelephonyProvider):
+    def __init__(self, *, entered: asyncio.Event, resume: asyncio.Event) -> None:
+        super().__init__()
+        self.entered = entered
+        self.resume = resume
+        self.provision_calls = 0
+
+    async def provision_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str | None = None,
+    ) -> dict:
+        assert country_code == "FR"
+        assert operation_key == "activation:phone.provision:pg-late"
+        self.provision_calls += 1
+        self.entered.set()
+        await self.resume.wait()
+        return {
+            "e164": "+33123456789",
+            "provider_number_id": "pn-pg-late",
+            "provider_connection_name": "app-disabled",
+        }
 
 
 class _ForbiddenDispatchProvider:
@@ -372,6 +400,126 @@ async def test_two_owner_requests_converge_on_one_generation_operation_and_inten
     assert len(events) == 1
     assert events[0].aggregate_id == operation_ids[0]
     assert events[0].payload == {"operation_id": str(operation_ids[0])}
+
+
+@pytest.mark.anyio
+async def test_late_provider_acquisition_after_deactivation_is_durably_released_once(
+    account_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with account_session_factory() as session:
+        user = User(
+            clerk_user_id=f"late-provision-{uuid4().hex}",
+            email=f"late-provision-{uuid4().hex}@example.invalid",
+            country_code="FR",
+        )
+        session.add(user)
+        await session.flush()
+        session.add_all(
+            [
+                AgentConfig(user_id=user.id, is_enabled=True),
+                Subscription(
+                    user_id=user.id,
+                    stripe_customer_id=f"cus-{uuid4().hex}",
+                    stripe_subscription_id=f"sub-{uuid4().hex}",
+                    plan_tier="starter",
+                    status="active",
+                    allocated_minutes=60,
+                    lifecycle_generation=1,
+                ),
+            ]
+        )
+        await session.commit()
+        user_id = user.id
+
+    entered = asyncio.Event()
+    resume = asyncio.Event()
+    provider = _BarrierProvisioningProvider(entered=entered, resume=resume)
+    provisioning_task = asyncio.create_task(
+        phone_provisioning_job(
+            {
+                "session_factory": account_session_factory,
+                "telephony_provider": provider,
+            },
+            {"user_id": str(user_id), "lifecycle_generation": 1},
+            provider_operation_key="activation:phone.provision:pg-late",
+        )
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5)
+
+    async with account_session_factory() as session:
+        operation = await AccountLifecycleService(session).request_in_transaction(
+            user_id,
+            trigger="owner_request",
+        )
+        assert operation is not None
+        await session.commit()
+        event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.topic == "account.deactivate",
+                OutboxEvent.aggregate_id == operation.id,
+            )
+        )
+        assert event is not None
+    await deliver_account_deactivation(
+        {
+            "session_factory": account_session_factory,
+            "telephony_provider": provider,
+            "subscription_provider": _WorkerSubscriptionProvider(),
+            "account_deactivation_now": lambda: NOW,
+        },
+        event,
+    )
+
+    resume.set()
+    with pytest.raises(AccountStateBlockedError):
+        await provisioning_task
+
+    async with account_session_factory() as session:
+        user = await session.get(User, user_id)
+        phone_count = await session.scalar(
+            select(func.count())
+            .select_from(PhoneNumber)
+            .where(PhoneNumber.user_id == user_id)
+        )
+        cleanup = await session.scalar(
+            select(ProviderCleanupOperation).where(
+                ProviderCleanupOperation.user_id == user_id
+            )
+        )
+        assert user is not None
+        assert user.status == "inactive"
+        assert phone_count == 0
+        assert cleanup is not None
+        cleanup_event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.topic == "provider.cleanup",
+                OutboxEvent.aggregate_id == cleanup.id,
+            )
+        )
+        assert cleanup_event is not None
+
+    await deliver_provider_cleanup(
+        {
+            "session_factory": account_session_factory,
+            "telephony_provider": provider,
+            "provider_cleanup_now": lambda: NOW,
+        },
+        cleanup_event,
+    )
+    await deliver_provider_cleanup(
+        {
+            "session_factory": account_session_factory,
+            "telephony_provider": provider,
+            "provider_cleanup_now": lambda: NOW,
+        },
+        cleanup_event,
+    )
+
+    assert provider.provision_calls == 1
+    assert provider.calls == [
+        ("disable", "pn-pg-late"),
+        ("release", "pn-pg-late"),
+    ]
 
 
 @pytest.mark.anyio

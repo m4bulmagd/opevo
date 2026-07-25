@@ -46,6 +46,7 @@ from app.models.account_deactivation_operation import (  # noqa: E402,F401
     AccountDeactivationOperation,
 )
 from app.models.business_profile import BusinessProfile  # noqa: E402,F401
+from app.models.billing_checkout_attempt import BillingCheckoutAttempt  # noqa: E402,F401
 from app.models.call import Call  # noqa: E402,F401
 from app.models.call_message import CallMessage  # noqa: E402,F401
 from app.models.customer_activation import CustomerActivation  # noqa: E402,F401
@@ -53,8 +54,10 @@ from app.models.notification import Notification  # noqa: E402,F401
 from app.models.outbox_event import OutboxEvent  # noqa: E402,F401
 from app.models.phone_number import PhoneNumber  # noqa: E402,F401
 from app.models.phone_number_provisioning import PhoneNumberProvisioning  # noqa: E402,F401
+from app.models.provider_cleanup_operation import ProviderCleanupOperation  # noqa: E402,F401
 from app.models.recording_egress_operation import RecordingEgressOperation  # noqa: E402,F401
 from app.models.subscription import Subscription  # noqa: E402,F401
+from app.models.subscription_cycle_history import SubscriptionCycleHistory  # noqa: E402,F401
 from app.models.usage_ledger import UsageLedger  # noqa: E402,F401
 from app.models.user import User  # noqa: E402,F401
 from app.models.webhook_event import WebhookEvent  # noqa: E402,F401

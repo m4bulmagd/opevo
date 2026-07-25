@@ -1,5 +1,6 @@
 """PostgreSQL coverage for services that share one real async session."""
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.models import Base
+from app.models.billing_checkout_attempt import BillingCheckoutAttempt
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
@@ -186,3 +188,80 @@ async def test_stale_identity_map_cannot_regress_locked_subscription(
     assert persisted.stripe_customer_id == "cus_after_concurrent_update"
     assert persisted.current_period_end == newer_period_end
     assert persisted.last_stripe_event_created_at == newer_watermark
+
+
+@pytest.mark.anyio
+async def test_concurrent_reactivation_checkout_requests_share_provider_identity(
+    task5_service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with task5_service_session_factory() as seed_session:
+        user = User(
+            clerk_user_id=f"user_checkout_{uuid4().hex}",
+            email=f"checkout_{uuid4().hex}@example.com",
+            status="inactive",
+            lifecycle_generation=2,
+        )
+        seed_session.add(user)
+        await seed_session.flush()
+        seed_session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_retained_across_cycles",
+                stripe_subscription_id="sub_canceled_generation_one",
+                plan_tier="starter",
+                status="canceled",
+                allocated_minutes=60,
+                lifecycle_generation=1,
+            )
+        )
+        await seed_session.commit()
+        user_id = user.id
+
+    start = asyncio.Event()
+    provider_sessions: dict[str, str] = {}
+
+    async def checkout_request() -> tuple[str, str, str | None]:
+        await start.wait()
+        async with task5_service_session_factory() as session:
+            service = BillingQueryService(session)
+            preparation = await service.prepare_checkout_attempt(user_id)
+            assert preparation.allowed
+            assert preparation.attempt_id is not None
+            assert preparation.idempotency_key is not None
+            provider_session_id = provider_sessions.setdefault(
+                preparation.idempotency_key,
+                "cs_shared_by_stripe_idempotency",
+            )
+            await service.complete_checkout_attempt(
+                attempt_id=preparation.attempt_id,
+                stripe_checkout_session_id=provider_session_id,
+            )
+            return (
+                preparation.idempotency_key,
+                provider_session_id,
+                preparation.stripe_customer_id,
+            )
+
+    requests = [
+        asyncio.create_task(checkout_request()),
+        asyncio.create_task(checkout_request()),
+    ]
+    start.set()
+    first, second = await asyncio.gather(*requests)
+
+    async with task5_service_session_factory() as verify_session:
+        attempts = list(
+            (await verify_session.execute(select(BillingCheckoutAttempt))).scalars()
+        )
+
+    assert first == second
+    assert first[1] == "cs_shared_by_stripe_idempotency"
+    assert first[2] == "cus_retained_across_cycles"
+    assert len(provider_sessions) == 1
+    assert len(attempts) == 1
+    assert attempts[0].lifecycle_generation == 2
+    assert attempts[0].status == "completed"
+    assert (
+        attempts[0].stripe_checkout_session_id
+        == "cs_shared_by_stripe_idempotency"
+    )

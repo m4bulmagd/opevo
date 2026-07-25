@@ -223,6 +223,45 @@ class TelephonyTelnyx(TelephonyProvider):
             raise TelephonyProvisioningPending(reason="existing_order_pending")
         return await self._activate_ordered_number(ordered_number)
 
+    @instrument_provider("telnyx", "recover_provisioned_number")
+    async def recover_provisioned_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str,
+    ) -> dict | None:
+        customer_reference = self._require_operation_key(
+            operation_key,
+            country_code=country_code,
+        )
+        ordered_number = await self._reconcile_existing_order(
+            customer_reference=customer_reference,
+            country_code=country_code,
+        )
+        if ordered_number is None:
+            return None
+        phone_numbers = await self._run_resource_call(
+            self.phone_number_resource.list,
+            api_key=self.api_key,
+            **{"filter[phone_number]": ordered_number},
+        )
+        provider_numbers = list(getattr(phone_numbers, "data", None) or [])
+        if not provider_numbers:
+            raise TelephonyProvisioningPending(reason="existing_order_pending")
+        if len(provider_numbers) != 1:
+            raise TelephonyProviderError(
+                "provider_terminal",
+                error_class="conflict",
+            ) from None
+        provider_number_id = self._read_field(provider_numbers[0], "id")
+        if not isinstance(provider_number_id, str) or not provider_number_id:
+            raise TelephonyProviderError("provider_terminal") from None
+        return {
+            "e164": ordered_number,
+            "provider_number_id": provider_number_id,
+            "provider_connection_name": "app-disabled",
+        }
+
     async def _reconcile_existing_order(
         self,
         *,
@@ -383,7 +422,10 @@ class TelephonyTelnyx(TelephonyProvider):
             provider_number_id,
             api_key=self.api_key,
             connection_id=self.disabled_connection_id,
+            _allow_missing=True,
         )
+        if response is _TELNYX_RESOURCE_NOT_FOUND:
+            return "app-disabled"
         self._confirm_connection(response, self.disabled_connection_id)
         return "app-disabled"
 

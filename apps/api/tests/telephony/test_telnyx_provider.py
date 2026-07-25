@@ -77,6 +77,30 @@ async def test_telnyx_provider_operation_is_observed_once() -> None:
 
 
 @pytest.mark.anyio
+async def test_telnyx_disable_treats_exact_missing_number_as_satisfied() -> None:
+    phone_number_resource = MagicMock()
+    phone_number_resource.modify.side_effect = telnyx.error.ResourceNotFoundError(
+        [{"title": "private provider response"}],
+        http_status=404,
+    )
+    provider = TelephonyTelnyx(
+        api_key="KEY",
+        disabled_connection_id="disabled",
+        phone_number_resource=phone_number_resource,
+    )
+
+    assert (
+        await provider.disable_number(provider_number_id="123456789")
+        == "app-disabled"
+    )
+    phone_number_resource.modify.assert_called_once_with(
+        "123456789",
+        api_key="KEY",
+        connection_id="disabled",
+    )
+
+
+@pytest.mark.anyio
 async def test_telnyx_release_uses_pinned_sdk_instance_delete_without_get(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -737,6 +761,58 @@ async def test_telnyx_provider_reconciles_same_operation_before_buying_again() -
     assert replay == first
     assert len(FakePhoneNumberOrderResource.calls) == 1
     assert len(FakeAvailablePhoneNumberResource.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_telnyx_recovery_is_lookup_only_and_returns_exact_provider_identity() -> None:
+    operation_key = "outbox:phone-provision:crash-recovery"
+    FakeAvailablePhoneNumberResource.calls = []
+    FakePhoneNumberOrderResource.calls = []
+    FakePhoneNumberOrderResource.list_calls = []
+    FakePhoneNumberOrderResource.orders = [
+        SimpleNamespace(
+            id="order_recovered",
+            customer_reference=operation_key,
+            requirements_met=True,
+            phone_numbers=[
+                SimpleNamespace(
+                    phone_number="+33123456789",
+                    status="success",
+                )
+            ],
+        )
+    ]
+    FakePhoneNumberResource.list_calls = []
+    FakePhoneNumberResource.modify_calls = []
+    provider = TelephonyTelnyx(
+        api_key="key_123",
+        active_connection_id="conn_active",
+        disabled_connection_id="conn_disabled",
+        ordering_enabled=True,
+        available_phone_number_resource=FakeAvailablePhoneNumberResource,
+        phone_number_order_resource=FakePhoneNumberOrderResource,
+        phone_number_resource=FakePhoneNumberResource,
+    )
+
+    recovered = await provider.recover_provisioned_number(
+        country_code="FR",
+        operation_key=operation_key,
+    )
+
+    assert recovered == {
+        "e164": "+33123456789",
+        "provider_number_id": "pn_123",
+        "provider_connection_name": "app-disabled",
+    }
+    assert FakePhoneNumberOrderResource.list_calls == [
+        {"filter[customer_reference]": operation_key}
+    ]
+    assert FakePhoneNumberResource.list_calls == [
+        {"filter[phone_number]": "+33123456789"}
+    ]
+    assert FakePhoneNumberOrderResource.calls == []
+    assert FakeAvailablePhoneNumberResource.calls == []
+    assert FakePhoneNumberResource.modify_calls == []
 
 
 @pytest.mark.anyio

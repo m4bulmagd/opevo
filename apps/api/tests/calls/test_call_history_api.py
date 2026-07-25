@@ -964,6 +964,49 @@ async def test_delete_call_rejects_active_call_without_mutating_customer_content
     assert refreshed_call.summary_text == "Caller request: Opening hours."
 
 
+@pytest.mark.parametrize(
+    ("user_status", "expected_code"),
+    [
+        ("deactivating", "account_deactivating"),
+        ("inactive", "account_inactive"),
+    ],
+)
+@pytest.mark.anyio
+async def test_delete_call_rejects_non_active_owner_without_destructive_side_effects(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    user_status: str,
+    expected_code: str,
+) -> None:
+    call_id = await seed_call_with_recording(
+        client_database_url,
+        clerk_user_id=f"{user_status}-delete-owner",
+        email=f"{user_status}-delete-owner@example.com",
+        recording_url="https://stored.example.com/private",
+        recording_object_key=f"calls/{user_status}/retained.ogg",
+        recording_egress_id=f"egress-{user_status}",
+        user_status=user_status,
+    )
+
+    response = await async_client.delete(
+        f"/api/calls/{call_id}",
+        headers={
+            "authorization": (
+                f"Bearer {rs256_clerk_token_for(f'{user_status}-delete-owner')}"
+            )
+        },
+    )
+    stored = await fetch_call(client_database_url, call_id=call_id)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": expected_code}}
+    assert stored.deleted_at is None
+    assert stored.recording_object_key == f"calls/{user_status}/retained.ogg"
+    assert stored.recording_egress_id == f"egress-{user_status}"
+    assert stored.summary_text == "Caller request: Opening hours."
+
+
 @pytest.mark.anyio
 async def test_delete_call_returns_404_for_other_users_call(
     async_client, client_database_url, rs256_clerk_token_for

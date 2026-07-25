@@ -1,8 +1,9 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listCallsMock = vi.fn();
 const getCallDetailMock = vi.fn();
+const getAccountMock = vi.fn();
 const deleteCallMock = vi.fn();
 const revalidatePathMock = vi.fn();
 const notFoundMock = vi.fn();
@@ -25,7 +26,21 @@ vi.mock("@/lib/api/calls", () => ({
   deleteCall: deleteCallMock,
 }));
 
+vi.mock("@/lib/api/account", () => ({
+  getAccount: getAccountMock,
+}));
+
 describe("calls pages", () => {
+  beforeEach(() => {
+    getAccountMock.mockReset().mockResolvedValue({
+      status: "active",
+      serving: true,
+      deactivation: null,
+      reactivation_allowed: false,
+      blocker: null,
+    });
+  });
+
   it("renders empty and populated call states", async () => {
     listCallsMock.mockResolvedValueOnce([]);
 
@@ -123,6 +138,47 @@ describe("calls pages", () => {
     expect(availability).toBeInTheDocument();
     expect(availability.closest('[role="alert"]')).not.toBeNull();
     expect(screen.queryByRole("button", { name: /Remove call/i })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    "deactivating",
+    "inactive",
+  ] as const)("keeps %s call history read-only by hiding removal", async (status) => {
+    getAccountMock.mockResolvedValueOnce({
+      status,
+      serving: false,
+      deactivation: null,
+      reactivation_allowed: status === "inactive",
+      blocker: status === "inactive" ? null : "account_deactivating",
+    });
+    getCallDetailMock.mockResolvedValueOnce({
+      id: "call-retained",
+      status: "completed",
+      caller_number: "+33123456789",
+      started_at: "2026-03-28T10:00:00Z",
+      ended_at: "2026-03-28T10:01:00Z",
+      duration_seconds: 60,
+      minutes_charged: 1,
+      summary_text: "Retained history.",
+      summary_status: "ready",
+      caller_intent: null,
+      action_items: null,
+      sentiment: null,
+      follow_up_required: null,
+      recording_url: null,
+      transcript: [],
+    });
+
+    const { default: DetailPage } = await import("@/app/(app)/dashboard/calls/[callId]/page");
+    render(
+      await DetailPage({
+        params: Promise.resolve({ callId: "call-retained" }),
+      }),
+    );
+
+    expect(screen.getByText("Retained history.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove call/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Call history is read-only while your account/i)).toBeInTheDocument();
   });
 
   it("deletes a call, revalidates call routes, and redirects after success", async () => {

@@ -756,7 +756,19 @@ def install_phone_provisioning_job_fakes(
         async def provision_number(self, user_id: UUID, *, country_code: str):
             raise error
 
+    class NoPhoneNumberRepository:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def get_by_user_id_for_update(self, _user_id: UUID):
+            return None
+
     monkeypatch.setattr(phone_provisioning_module, "UserRepository", FakeUserRepository)
+    monkeypatch.setattr(
+        phone_provisioning_module,
+        "PhoneNumberRepository",
+        NoPhoneNumberRepository,
+    )
     monkeypatch.setattr(
         phone_provisioning_module,
         "PhoneNumberProvisioningRepository",

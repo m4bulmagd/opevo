@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.subscription import Subscription
+from app.models.subscription_cycle_history import SubscriptionCycleHistory
 from app.models.user import User
 from app.repositories.subscription_repository import (
     StripeSubscriptionConflictError,
@@ -54,7 +55,7 @@ def _upsert_arguments(
 
 
 @pytest.mark.anyio
-async def test_resubscription_updates_the_existing_user_row(
+async def test_resubscription_preserves_immutable_prior_cycle_history(
     db_session: AsyncSession,
 ) -> None:
     user = await _user(db_session, "resubscribe")
@@ -85,6 +86,13 @@ async def test_resubscription_updates_the_existing_user_row(
     assert replacement.id == original.id
     assert replacement.stripe_subscription_id == "sub_new"
     assert await db_session.scalar(select(func.count()).select_from(Subscription)) == 1
+    history = await db_session.scalar(select(SubscriptionCycleHistory))
+    assert history is not None
+    assert history.user_id == user.id
+    assert history.stripe_customer_id == "cus_resubscribe"
+    assert history.stripe_subscription_id == "sub_old"
+    assert history.status == "canceled"
+    assert history.lifecycle_generation == 1
 
 
 @pytest.mark.anyio

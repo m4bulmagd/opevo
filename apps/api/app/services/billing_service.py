@@ -11,6 +11,7 @@ from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
 )
 from app.repositories.phone_number_repository import PhoneNumberRepository
+from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.repositories.subscription_repository import (
     StripeSubscriptionConflictError,
     StripeSubscriptionDataError,
@@ -72,6 +73,7 @@ class BillingService:
         self.account_deactivation_repository = AccountDeactivationRepository(session)
         self.subscription_repository = SubscriptionRepository(session)
         self.phone_number_repository = PhoneNumberRepository(session)
+        self.provider_cleanup_repository = ProviderCleanupRepository(session)
         self.usage_accounting_service = UsageAccountingService(session)
         self.webhook_event_repository = WebhookEventRepository(session)
         self.outbox_service = OutboxService(session)
@@ -220,6 +222,14 @@ class BillingService:
             lifecycle_generation = current_subscription.lifecycle_generation
         elif lifecycle_generation is None:
             if user.lifecycle_generation != 1:
+                await self._adopt_stale_subscription_cleanup(
+                    user=user,
+                    lifecycle_generation=user.lifecycle_generation,
+                    stripe_subscription_id=stripe_subscription_id,
+                    subscription_status=subscription_status,
+                    current_subscription=current_subscription,
+                    incomplete_operation=incomplete_operation,
+                )
                 return
             lifecycle_generation = 1
         if (
@@ -227,13 +237,43 @@ class BillingService:
             and not exact_incomplete_terminal
             and metadata_generation is not None
         ):
+            await self._adopt_stale_subscription_cleanup(
+                user=user,
+                lifecycle_generation=(
+                    metadata_generation
+                    if metadata_generation > 0
+                    else user.lifecycle_generation
+                ),
+                stripe_subscription_id=stripe_subscription_id,
+                subscription_status=subscription_status,
+                current_subscription=current_subscription,
+                incomplete_operation=incomplete_operation,
+                metadata_is_valid=metadata_generation > 0,
+            )
             return
         if (
             not exact_incomplete_terminal
             and lifecycle_generation != user.lifecycle_generation
         ):
+            await self._adopt_stale_subscription_cleanup(
+                user=user,
+                lifecycle_generation=lifecycle_generation,
+                stripe_subscription_id=stripe_subscription_id,
+                subscription_status=subscription_status,
+                current_subscription=current_subscription,
+                incomplete_operation=incomplete_operation,
+                metadata_is_valid=lifecycle_generation > 0,
+            )
             return
         if user.status == "deactivating" and not exact_incomplete_terminal:
+            await self._adopt_stale_subscription_cleanup(
+                user=user,
+                lifecycle_generation=lifecycle_generation,
+                stripe_subscription_id=stripe_subscription_id,
+                subscription_status=subscription_status,
+                current_subscription=current_subscription,
+                incomplete_operation=incomplete_operation,
+            )
             return
         if (
             is_final_cancellation
@@ -245,6 +285,22 @@ class BillingService:
             current_subscription is None
             or current_subscription.stripe_subscription_id != stripe_subscription_id
         )
+        if (
+            is_replacement
+            and current_subscription is not None
+            and not SubscriptionAccessPolicy.can_replace_subscription(
+                current_subscription.status
+            )
+        ):
+            await self._adopt_stale_subscription_cleanup(
+                user=user,
+                lifecycle_generation=lifecycle_generation,
+                stripe_subscription_id=stripe_subscription_id,
+                subscription_status=subscription_status,
+                current_subscription=current_subscription,
+                incomplete_operation=incomplete_operation,
+            )
+            return
         is_authorized_progression = bool(
             current_subscription is not None
             and current_subscription.stripe_subscription_id == stripe_subscription_id
@@ -275,6 +331,14 @@ class BillingService:
                     )
                 )
             if not safe_reactivation_boundary:
+                await self._adopt_stale_subscription_cleanup(
+                    user=user,
+                    lifecycle_generation=lifecycle_generation,
+                    stripe_subscription_id=stripe_subscription_id,
+                    subscription_status=subscription_status,
+                    current_subscription=current_subscription,
+                    incomplete_operation=incomplete_operation,
+                )
                 return
 
         stripe_customer_id = event_object.get("customer")
@@ -300,6 +364,14 @@ class BillingService:
             raise UnsupportedStripeLifecycleError from exc
 
         if subscription is None:
+            await self._adopt_stale_subscription_cleanup(
+                user=user,
+                lifecycle_generation=lifecycle_generation,
+                stripe_subscription_id=stripe_subscription_id,
+                subscription_status=subscription_status,
+                current_subscription=current_subscription,
+                incomplete_operation=incomplete_operation,
+            )
             return
 
         if (
@@ -330,6 +402,49 @@ class BillingService:
             event_id=event_id,
             event_type=event_type,
         )
+
+    async def _adopt_stale_subscription_cleanup(
+        self,
+        *,
+        user,
+        lifecycle_generation: int,
+        stripe_subscription_id: str,
+        subscription_status: str,
+        current_subscription,
+        incomplete_operation,
+        metadata_is_valid: bool = True,
+    ) -> None:
+        if (
+            not metadata_is_valid
+            or SubscriptionAccessPolicy.can_replace_subscription(
+                subscription_status
+            )
+            or (
+                current_subscription is not None
+                and current_subscription.stripe_subscription_id
+                == stripe_subscription_id
+            )
+            or (
+                incomplete_operation is not None
+                and incomplete_operation.stripe_subscription_id
+                == stripe_subscription_id
+            )
+        ):
+            return
+        cleanup = await self.provider_cleanup_repository.adopt(
+            user_id=user.id,
+            lifecycle_generation=lifecycle_generation,
+            resource_type="stripe_subscription",
+            provider_resource_id=stripe_subscription_id,
+        )
+        await self.outbox_service.add(
+            topic="provider.cleanup",
+            aggregate_type="provider-cleanup-operation",
+            aggregate_id=cleanup.id,
+            idempotency_key=f"provider.cleanup:{cleanup.id}",
+            payload={"cleanup_operation_id": str(cleanup.id)},
+        )
+        self._outbox_wakeup_needed = True
 
     async def _handle_invoice_paid(
         self,

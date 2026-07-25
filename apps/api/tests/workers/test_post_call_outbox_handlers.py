@@ -626,6 +626,7 @@ def test_default_handlers_exactly_match_supported_topics_without_placeholders() 
     expected_topics = {
         "account.deactivate",
         "phone.provision",
+        "provider.cleanup",
         "phone.enable",
         "phone.disable",
         "livekit.dispatch",

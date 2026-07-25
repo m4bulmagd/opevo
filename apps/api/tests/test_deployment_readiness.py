@@ -405,7 +405,7 @@ def test_account_deactivation_migration_is_the_only_alembic_head() -> None:
     config.set_main_option("path_separator", "os")
 
     assert ScriptDirectory.from_config(config).get_heads() == [
-        "0015_account_deactivation"
+        "0016_lifecycle_cleanup"
     ]
 
 
