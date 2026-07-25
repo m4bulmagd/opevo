@@ -1,10 +1,12 @@
 import asyncio
 import logging
+import threading
 from decimal import Decimal, InvalidOperation
 from typing import NoReturn
 
 import phonenumbers
 import telnyx
+import telnyx.util as telnyx_util  # type: ignore[import-untyped]
 from telnyx.http_client import new_default_http_client
 
 from app.core.config import get_settings
@@ -27,8 +29,50 @@ ALLOWED_NUMBER_TYPES = ("national", "local")
 
 logger = logging.getLogger(__name__)
 
+_UNSAFE_TELNYX_SDK_LOG_MARKERS = (
+    "message='Request to Telnyx api'",
+    "message='Post details'",
+    "message='Telnyx API response'",
+    "message='API response body'",
+    "message='Telnyx API error received'",
+)
+
+
+class _SafeTelnyxSdkLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (
+            record.name == "telnyx"
+            and isinstance(record.msg, str)
+            and any(
+                marker in record.msg for marker in _UNSAFE_TELNYX_SDK_LOG_MARKERS
+            )
+        ):
+            record.msg = "message='Telnyx API provider details suppressed'"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+        return True
+
+
+_SAFE_TELNYX_SDK_LOG_FILTER = _SafeTelnyxSdkLogFilter()
+_TELNYX_SDK_LOG_LOCK = threading.Lock()
+_TELNYX_RESOURCE_NOT_FOUND = object()
+
+
+def _install_safe_telnyx_sdk_logging() -> None:
+    with _TELNYX_SDK_LOG_LOCK:
+        # Telnyx console mode writes before logger filters run. Retain SDK
+        # diagnostics on its logger, where unsafe provider fields are filtered.
+        telnyx.log = None
+        telnyx_util.TELNYX_LOG = None
+        telnyx_logger = logging.getLogger("telnyx")
+        if _SAFE_TELNYX_SDK_LOG_FILTER not in telnyx_logger.filters:
+            telnyx_logger.addFilter(_SAFE_TELNYX_SDK_LOG_FILTER)
+
 
 def _configure_telnyx_network_policy() -> None:
+    _install_safe_telnyx_sdk_logging()
     # Telnyx 2.1.6 retries every HTTP method, including NumberOrder.create
     # POSTs. Durable outbox retry plus customer_reference reconciliation owns
     # replay safety, so the SDK must never retry an order POST internally.
@@ -350,18 +394,23 @@ class TelephonyTelnyx(TelephonyProvider):
                 "provider_terminal",
                 error_class="validation",
             )
-        response = await self._run_resource_call(
-            self.phone_number_resource.delete,
+        phone_number = self.phone_number_resource(
             provider_number_id,
             api_key=self.api_key,
+        )
+        response = await self._run_resource_call(
+            phone_number.delete,
             _allow_missing=True,
         )
-        if response is None:
+        if response is _TELNYX_RESOURCE_NOT_FOUND:
             return
 
-        data = self._read_field(response, "data")
-        released_number_id = self._read_field(data, "id")
-        status = self._read_field(data, "status")
+        released_number_id = self._read_field(response, "id")
+        status = self._read_field(response, "status")
+        if released_number_id is None and status is None:
+            data = self._read_field(response, "data")
+            released_number_id = self._read_field(data, "id")
+            status = self._read_field(data, "status")
         if not isinstance(released_number_id, str) or not isinstance(status, str):
             raise TelephonyProviderError("provider_terminal")
         if released_number_id != provider_number_id:
@@ -411,7 +460,7 @@ class TelephonyTelnyx(TelephonyProvider):
             ) from None
         except telnyx.error.ResourceNotFoundError as exc:
             if allow_missing and exc.http_status == 404:
-                return None
+                return _TELNYX_RESOURCE_NOT_FOUND
             raise TelephonyProviderError(
                 "provider_terminal",
                 error_class="validation",
