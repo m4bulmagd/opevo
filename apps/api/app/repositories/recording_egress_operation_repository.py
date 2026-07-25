@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.call import Call
 from app.models.recording_egress_operation import RecordingEgressOperation
 
 
@@ -72,6 +73,23 @@ class RecordingEgressOperationRepository:
             .where(RecordingEgressOperation.call_id == call_id)
             .with_for_update()
             .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_call_id_for_user(
+        self,
+        *,
+        call_id: UUID,
+        user_id: UUID,
+    ) -> RecordingEgressOperation | None:
+        result = await self.session.execute(
+            select(RecordingEgressOperation)
+            .join(Call, Call.id == RecordingEgressOperation.call_id)
+            .where(
+                RecordingEgressOperation.call_id == call_id,
+                Call.user_id == user_id,
+                Call.deleted_at.is_(None),
+            )
         )
         return result.scalar_one_or_none()
 

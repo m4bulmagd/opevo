@@ -63,9 +63,9 @@ async def test_get_subscription_returns_none_when_missing() -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("status", "can_start_checkout"),
-    [("active", False), ("canceled", True)],
+    [("active", False), ("canceled", False)],
 )
-async def test_get_subscription_exposes_checkout_eligibility(
+async def test_get_subscription_without_account_repositories_fails_checkout_closed(
     status: str,
     can_start_checkout: bool,
 ) -> None:
@@ -79,6 +79,8 @@ async def test_get_subscription_exposes_checkout_eligibility(
         current_period_end=None,
         stripe_customer_id="cus_policy",
         stripe_subscription_id="sub_policy",
+        cancel_at_period_end=False,
+        cancellation_effective_at=None,
     )
     service = BillingQueryService(
         subscription_repository=FakeSubscriptionRepository(subscription),
