@@ -35,6 +35,33 @@ PostgreSQL. The proof intentionally has no database-reset endpoint. The local
 identity represents one fixed account, so the browser suite is one serial test
 with one worker.
 
+## Account lifecycle and reactivation
+
+The same provider-free journey proves the three account states:
+
+```text
+active -> deactivating -> inactive -> active
+```
+
+Exact `DEACTIVATE` confirmation commits `deactivating` before provider work.
+New calls and configuration, provisioning, verification, routing, and go-live
+mutations are blocked immediately. The local worker disables the fake number,
+cancels fake billing without automatic proration or refund, waits for an
+already-connected call to finish, releases the fake number, resets
+number-specific activation state, and only then commits `inactive`.
+
+The inactive owner keeps authenticated read-only access to historical calls,
+recordings, usage, notifications, and billing. Confirmed business,
+receptionist, and existing-line carrier data are retained. A new
+generation-matched local subscription changes the account back to `active` and
+resumes directly at fresh number-provisioning consent. It assigns a different
+fake number and still requires forwarding verification and explicit go-live.
+
+Production subscription-only cancellation differs: it is a Stripe Billing
+Portal action scheduled for the paid-period end, so the account remains active
+until a final Stripe cancellation event starts deactivation. Owner-requested
+account deactivation is immediate and has no automatic prorated refund.
+
 ## Why payment and provisioning consent are separate
 
 Billing eligibility proves that the account may use the selected plan. It does
@@ -50,7 +77,7 @@ it performs no external purchase.
 | Service | Explicit local values | Deliberately absent |
 |---|---|---|
 | API | `AUTH_MODE=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `CARRIER_LOOKUP_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Cloud credentials are unnecessary |
-| Worker | `TELEPHONY_MODE=fake`, activation enabled | Auth mode, local token, billing mode, and carrier lookup |
+| Worker | `BILLING_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Local token and carrier lookup |
 | Web server | `AUTH_MODE=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `TELEPHONY_MODE=fake` | Carrier credentials and public local token |
 
 The local token is never a `NEXT_PUBLIC_*` value or a Docker build argument.
@@ -60,6 +87,20 @@ modes are explicit opt-ins; production settings reject them.
 The LiveKit agent is excluded from this journey. The local simulator calls the
 same forwarding-verification application service that a verified system call
 would reach, without opening a room or contacting a speech/model provider.
+
+The call-drain acceptance uses two API fixtures:
+
+- `POST /api/development/call-drain-fixture/start` creates and connects one
+  owner-scoped call through the real repository without LiveKit or Telnyx work
+  and returns only `call_id`.
+- `POST /api/development/call-drain-fixture/finish` accepts that `call_id`,
+  exercises the real end/finalization path, and returns only `call_id`.
+
+The router exists only for `APP_ENV=development`. Both routes also require
+`AUTH_MODE=local`, `TELEPHONY_MODE=fake`, and the authenticated local identity.
+Clerk-authenticated development deployments and non-fake telephony receive the
+same bounded conflict. These fixtures are not available in staging or
+production.
 
 ## Start and exercise the local journey
 
@@ -90,11 +131,19 @@ The runner:
 - builds migrate, API, worker, and web images;
 - waits for datastore and application health plus both one-shot exits;
 - starts no LiveKit agent;
-- runs `npm --prefix apps/web run test:e2e`; and
+- activates and assigns a first fake number;
+- starts an owner-scoped connected call, requests deactivation, and proves the
+  account is immediately non-serving while progress remains `draining_call`;
+- restarts only API and worker while retaining PostgreSQL, Redis, MinIO, web,
+  named volumes, and a private `0600` state file;
+- finishes the same call, proves cleanup reaches `inactive`, and proves the
+  historical call remains;
+- reactivates directly at fresh consent with the retained confirmed
+  profile/carrier and assigns a different fake number; and
 - always executes `docker compose down --volumes --remove-orphans` through its
-  exit trap.
+  exit trap and removes the private temporary state directory.
 
-The browser assertion covers profile persistence across reloads, the separate
+The browser assertions also cover profile persistence across reloads, separate
 plan and provisioning approvals, asynchronous worker provisioning, all three
 conditional-forwarding conditions, verification-window persistence, local
 simulation, explicit go-live, and the active dashboard handoff.
@@ -106,6 +155,14 @@ billing, Telnyx carrier lookup/telephony, and requires
 `ACTIVATION_FLOW_ENABLED`. It contains no local token. Required credentials use
 fail-fast Compose interpolation, and application configuration rejects local or
 fake modes in production.
+
+Production requires `BILLING_MODE=stripe`. `STRIPE_SECRET_KEY` is required by
+the API and by any Stripe-mode worker.
+`STRIPE_BILLING_PORTAL_CONFIGURATION_ID` is a required production API setting
+and is sent when creating Portal sessions. Operators must verify that the
+referenced Stripe configuration allows cancellation only at period end and has
+proration disabled. Local fake behavior and repository tests do not certify
+that external Stripe artifact.
 
 A real call additionally requires a deployed API/web/worker/agent topology,
 LiveKit SIP and agent dispatch, private object storage, model and speech
@@ -129,18 +186,19 @@ Provider or storage outages do not keep the call visible or require another
 customer removal. No claim is made that provider cleanup, backup erasure, or
 historical-copy erasure completes synchronously.
 
-Account-wide export and deletion orchestration remain planned. The intended
-account-deletion contract removes active call records, transcripts, summaries,
-recording references, and active objects owned by the account, without claiming
-that historical backup copies are synchronously erased.
+Reversible account deactivation is implemented, but account-wide export and
+permanent deletion orchestration remain planned. No implemented path claims
+automatic retention, account/identity deletion, or backup/historical-copy
+erasure.
 
 The following remain planned or require approval/evidence:
 
 - cloud deployment and rollback/restore proof;
-- three clean real-provider certification journeys;
+- three clean real-provider certification journeys, including Stripe
+  immediate/period-end cancellation and Telnyx disable/release;
 - French localization plus approved legal, privacy, recording, retention,
   subprocessor, and support surfaces;
-- user-facing export and deletion orchestration;
+- user-facing export and permanent deletion orchestration;
 - appointment booking and calendar integration;
 - typed conversation flows, transitions, simulation, and authoring;
 - an approved automatic 30-day retention policy and operating proof;
@@ -159,8 +217,7 @@ verified; it is not real-provider or production certification.
 
 The `e2e` CI job runs only after API, agent, and web verification. It installs
 the locked web dependencies and Chromium, then calls the same disposable
-runner. The runner completes activation, restarts PostgreSQL, Redis, MinIO, API,
-worker, and web without removing their volumes, and proves the persisted active
-dashboard resumes before cleanup. It publishes no image, deploys no service,
-contacts no product provider, and is included in the aggregate required-status
-job.
+runner. The runner completes activation, deactivation with active-call drainage,
+an API/worker restart, historical-read proof, and reactivation before cleanup.
+It publishes no image, deploys no service, contacts no product provider, and is
+included in the aggregate required-status job.

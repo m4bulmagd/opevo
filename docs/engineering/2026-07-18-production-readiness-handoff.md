@@ -3,227 +3,206 @@
 ## Purpose
 
 This document is the durable continuation point for Presvo's local-first
-production-readiness work through the recording-egress implementation completed
-on 2026-07-20. It lets a later coding session continue without relying on
-ignored worktree notes or prior conversation history.
+production-readiness work through the account-deactivation lifecycle completed
+in July 2026. It complements the canonical capability matrix in
+`docs/PROJECT_STATUS.md`.
 
 Presvo is production-oriented and locally verified, but it is not
-production-certified. This work did not deploy anything, contact or mutate live
-providers, use real credentials, change provider accounts, push, or publish
-externally.
+production-certified. This implementation did not deploy anything, contact or
+mutate live providers, use real credentials, change provider accounts, push, or
+publish externally.
 
-## Git checkpoint
+## Current lifecycle contract
 
-- Implementation branch before local integration:
-  `feat/durable-recording-reconciliation`, based on local `main`.
-- Approved recording plan/base: `8b2c0e6`.
-- Complete inclusive recording implementation range: `c6bf2bb^..e911143`.
-- Task 7 race, privacy, migration, and observability hardening range:
-  `a774dad..e911143`.
-- The final documentation/status commit follows `e911143` on that branch.
-- The earlier production-readiness branch was merged into local `main` after
-  the user's manual test passed.
+The customer account state machine is:
 
-Use `git status --short --branch` and `git log -1` to confirm the current
-checkout. Nothing at this checkpoint was pushed or deployed.
+```text
+active -> deactivating -> inactive -> active
+```
 
-## Product decisions that remain authoritative
+- `active -> deactivating` begins through an authenticated owner request or a
+  final Stripe subscription cancellation. The committed state immediately
+  blocks new calls and all profile, receptionist, provisioning, verification,
+  routing, and go-live mutations.
+- `deactivating -> inactive` occurs only after durable reconciliation proves
+  routing disabled, subscription cancellation authoritative, all admitted calls
+  terminal, the old number released, and current number-cycle state reset.
+- `inactive -> active` requires a new subscription for the current lifecycle
+  generation. It does not itself make the account ready to serve calls.
 
-- Brand: Presvo only.
-- Launch customer: SMEs and individual professionals.
-- Initial market and phone-number country: France.
-- Initial interface and receptionist language: English; French comes later.
-- Initial job: answer missed calls and make the summary, outcome, follow-up, and
-  original audio obvious.
-- Existing business numbers reach Presvo through conditional forwarding for
-  unanswered, busy, and unreachable calls. Unconditional forwarding is not the
-  default journey.
-- Onboarding collects owner, business, receptionist, existing-number, and
-  carrier information.
-- Payment establishes eligibility only. A separate explicit confirmation is
-  required before number provisioning.
-- Provisioning, forwarding verification, and go-live are separate durable
-  decisions.
-- Original audio remains available until owner removal or a future approved
-  retention policy.
-- Per-terminal-call removal is implemented. Account-wide export/deletion is
-  not.
-- Automatic 30-day retention remains future work and is deliberately disabled.
-- Conversation flows come before appointment booking. The product reference is
-  Retell AI's structured flows, not Recall.ai.
-- Ireland is the preferred possible future hosting region, not a customer
-  number country. No hosting decision was executed.
-- Customer support should remain minimal or unnecessary through self-service
-  recovery and clear next actions.
+Owner deactivation requires exact `DEACTIVATE` confirmation. It requests
+immediate Stripe cancellation with `invoice_now=false` and `prorate=false`;
+there is no automatic prorated refund. Subscription-only cancellation remains a
+separate Stripe Billing Portal action that is scheduled for the paid-period end.
+The account stays active until Stripe reports final cancellation, at which point
+the same deactivation workflow starts. An unexpected immediate final
+cancellation also fails closed into deactivation.
 
-## Completed program
+An already-admitted call may finish. Telnyx routing disablement and Stripe
+cancellation can finish while that call is active, but number release cannot.
+The deactivation worker makes no provider request while a business database
+transaction is open.
 
-The activation work remains complete:
+## Durable coordination and truthful progress
 
-1. `docs/superpowers/plans/2026-07-17-activation-domain-and-profile-api.md`
-   established the persisted activation/profile domain, bounded contracts,
-   carrier confirmation, activation snapshot, audit events, and authenticated
-   default-off API.
-2. `docs/superpowers/plans/2026-07-17-consent-provisioning-and-local-providers.md`
-   separated payment from explicit provisioning consent and added durable
-   French-number provisioning, local providers, fail-closed real-provider
-   modes, and the provider-free local journey.
-3. `docs/superpowers/plans/2026-07-17-forwarding-verification-and-go-live.md`
-   added carrier-aware conditional-forwarding guidance, the bounded test-call
-   window, scoped verification, explicit go-live, and safe routing
-   compensation.
-4. `docs/superpowers/plans/2026-07-17-activation-web-journey-and-dashboard-handoff.md`
-   added the resumable five-milestone UI, active dashboard, structured call
-   review, owner removal, and disposable browser/restart proof.
+One private deactivation operation belongs to one account lifecycle generation.
+The entry transaction increments that generation, makes the account and local
+phone non-serving, disables the receptionist, and records one
+`account.deactivate` outbox event whose payload is exactly `operation_id`.
+Repeated owner requests and final Stripe events converge on the same incomplete
+operation.
 
-The durable recording work in
-`docs/superpowers/plans/2026-07-19-durable-recording-egress-synchronization.md`
-is also implemented:
+The request or Stripe-webhook transaction does not claim provider work that has
+not happened. In particular, it leaves `routing_disabled_at` and
+`subscription_canceled_at` unset. Only the reconciler writes each phase
+timestamp after provider success or authoritative terminal-state verification.
+Process restart and redelivery resume from those committed timestamps.
 
-- one private database recording operation and reference-only start intent
-  commit before recording-start provider I/O;
-- every terminal transition requests reconciliation even without a known
-  provider egress ID;
-- `recording.reconcile` is the only active recording outbox topic, with
-  aggregate `recording-egress-operation` and payload containing only
-  `operation_id`;
-- signed egress webhooks persist sanitized facts and wake reconciliation only
-  after commit, with no provider or storage I/O in the webhook;
-- terminal owner removal atomically purges and hides customer content and
-  returns `204` without waiting for LiveKit or storage; when recording cleanup
-  metadata exists, it also records stop/delete intent and reference-only work;
-- asynchronous cleanup is idempotent and non-exhausting, including late,
-  uncertain, conflicting, restored, and legacy recording identities;
-- the resolved start/delete race, PostgreSQL concurrency behavior, migration
-  round trip, privacy bounds, readiness contracts, and low-cardinality signals
-  have focused test coverage.
+Retryable provider unavailability and active-call drainage are non-exhausting.
+Authentication, provider-contract, and identity-conflict faults commit an
+`attention_required` state and a bounded safe code while the account remains
+non-serving. Provider identifiers, credentials, raw errors, provider bodies,
+customer content, and typed confirmation are absent from customer responses,
+outbox payloads, logs, and metric attributes.
 
-Current capability and limitation wording is maintained in
-`docs/PROJECT_STATUS.md`. The active recording contract is in
-`docs/superpowers/specs/2026-07-19-recording-egress-synchronization-design.md`.
+## Retention and reactivation
 
-## Current verification evidence
+Deactivation retains identity, the confirmed business profile and carrier,
+receptionist prompt/context/knowledge, calls, transcripts, summaries,
+recordings, notifications, usage, and billing history. Inactive owners retain
+authenticated read-only access to historical Calls and Billing surfaces.
 
-Fresh local evidence completed through this documentation refresh:
+After release, the old active phone assignment and obsolete provisioning row
+are removed. Provisioning consent, verification window/session/result,
+forwarding verification, go-live approval, and activation time are reset. The
+agent remains disabled. The old number is not recoverable through Presvo.
 
-- API Ruff: clean.
-- API mypy: clean.
-- Focused recording/readiness regression gate: 475 passed, 33 skipped, 1
-  upstream Starlette/httpx deprecation warning.
-- Authoritative Task 7 PostgreSQL/Redis infrastructure gate: 30 passed, 0
-  skipped.
-- Provider-free full API suite: 1,718 passed, 87 skipped, 1 upstream
-  Starlette/httpx deprecation warning.
-- Complete isolated PostgreSQL 17/Redis 7 API suite: 1,805 passed, 0 skipped, 1
-  upstream Starlette/httpx deprecation warning.
-- Agent lock, Ruff, and mypy checks: clean; deterministic tests: 250 passed, 4
-  credentialed LiveKit evaluations deselected.
-- Web checks used Node 22.23.1: Biome checked 145 files, TypeScript passed, and
-  Vitest passed 228 tests. The exact default `npm run build` Turbopack
-  production gate compiled, completed TypeScript, and generated 9/9 static
-  pages in the clean normal checkout after `git diff --exit-code main..HEAD --
-  apps/web` proved its tracked web source identical. The isolated worktree's
-  out-of-root `node_modules` symlink was not used as build evidence.
-- Disposable provider-free browser activation: 1 passed. Full-service restart
-  and persisted active-dashboard resume: 1 passed.
-- Shell syntax, Playwright discovery, stale-contract scans, and
-  `git diff --check`: clean. Both disposable Compose projects were removed and
-  their containers, networks, and volumes were verified absent.
+A generation-matched replacement subscription reactivates the account with the
+confirmed profile/carrier and receptionist configuration intact. The activation
+journey resumes directly at fresh number-provisioning consent, then assigns a
+new number and requires forwarding verification and explicit go-live approval.
 
-These local gates do not constitute cloud, legal, behavioral-model, carrier, or
-real-provider certification.
+## Product and integration surfaces
 
-Four agent behavioral evaluations require `LIVEKIT_API_KEY`,
-`LIVEKIT_API_SECRET`, and an explicit `LIVEKIT_EVAL_MODEL` selection.
-`LIVEKIT_EVAL_MODEL` chooses the model used only by those opt-in evaluation
-tests. It is required only when explicitly running those tests; it is not used
-by the API or worker runtime and is not required to run or deploy Presvo. A
-skipped or unrun credentialed evaluation is not provider certification.
+- `GET /api/account` returns the safe account status, serving flag,
+  deactivation progress, reactivation eligibility, and bounded blocker.
+- `POST /api/account/deactivate` is owner-authenticated, rate-limited to five
+  requests per minute, requires `{"confirmation":"DEACTIVATE"}`, and returns
+  `202 Accepted` with safe progress for the first or repeated valid request.
+- `POST /api/development/call-drain-fixture/start` and
+  `POST /api/development/call-drain-fixture/finish` exist only when
+  `APP_ENV=development`. Both additionally require `AUTH_MODE=local`,
+  `TELEPHONY_MODE=fake`, and the authenticated local owner. They exercise the
+  real call lifecycle without LiveKit or Telnyx work and are not staging or
+  customer tools.
+
+Production uses `BILLING_MODE=stripe`. The API and the Stripe-mode worker need
+`STRIPE_SECRET_KEY`; production API startup also requires
+`STRIPE_BILLING_PORTAL_CONFIGURATION_ID`. That ID must select an externally
+reviewed Stripe Portal configuration that offers period-end subscription
+cancellation and disables proration. Repository tests verify the request
+contract, not the real Stripe configuration.
+
+## Operations contract
+
+The implemented low-cardinality metrics are:
+
+- `presvo.account_deactivation.operations`
+- `presvo.account_deactivation.oldest_incomplete_age`
+- `presvo.account_deactivation.reconciliation_results`
+- `presvo.account_deactivation.attention`
+- `presvo.account_deactivation.completion_duration`
+
+Before release, configure paging for every increment of
+`presvo.account_deactivation.attention`, and alert when
+`presvo.account_deactivation.oldest_incomplete_age` exceeds
+`MAX_CALL_DURATION_SECONDS + 900` seconds.
+
+For an attention incident, use the operation ID and bounded trigger/phase/code
+only. Remediate the credential, provider-contract, or identity fault; then use
+the approved datastore/queue administration path to requeue only the failed
+reference-only `account.deactivate` outbox event for that recorded operation ID.
+Do not synthesize a second operation or payload. Verify that the durable
+operation reaches `completed` and the account reaches `inactive` before closing
+the incident.
+
+## Local verification evidence
+
+Fresh Task 11 release-gate evidence:
+
+- API Ruff and mypy passed across the complete source tree.
+- The complete SQLite suite passed 1,901 tests and skipped 111
+  PostgreSQL-specific tests.
+- The complete isolated PostgreSQL 17/Redis 7 suite passed 2,012 tests with zero
+  skips. Its disposable containers, volumes, and network were removed.
+- Node 22.23.1 web verification passed Biome across 156 files, TypeScript,
+  all 257 Vitest tests, and the production build; the build generated 10 static
+  pages and completed the dynamic route manifest.
+- The provider-free browser journey passed activation, deactivation with an
+  active call, API/worker restart, durable resume, historical-data preservation,
+  reactivation, and fresh-number provisioning: three Playwright tests passed.
+  Its disposable containers, volumes, and network were removed.
+- Customer-response privacy and reference-only `account.deactivate` payload
+  audits passed. `git diff --check` was clean.
+
+Exact commands, durations, warnings, cleanup checks, and the initial corrected
+gate failures are recorded in
+`.superpowers/sdd/2026-07-24-account-deactivation-lifecycle/task-11-report.md`.
+
+These local gates do not constitute cloud, legal, behavioral-model, carrier,
+Stripe, Telnyx, LiveKit, or other real-provider certification.
 
 ## Remaining production blockers
 
-These eight items are not implemented or not evidenced yet:
+The following are explicitly open or unevidenced:
 
-1. Account-wide export and deletion orchestration, recording-access audit, and
-   complete account/session controls.
-2. Qualified French/EU legal, privacy, recording-disclosure, retention,
-   subprocessor, and minimal-support approval and surfaces.
-3. Approved automatic retention behavior. The old local automatic expiration
-   configuration was removed intentionally.
-4. Accessibility end-to-end tests, frontend performance budgets, load and
-   concurrency definitions, provider-outage tests, recovery drills, and a
-   demonstrated backup restore.
-5. Credentialed behavioral evaluation evidence against an approved
-   production-equivalent model.
-6. Fresh multi-customer Clerk/Stripe/Telnyx/LiveKit staging certification and
-   real Orange/SFR/Free/Bouygues/Other forwarding evidence.
-7. Approved Ireland deployment, DNS/TLS, secret management, monitoring,
-   rollback, restore, and controlled-beta operating evidence.
-8. The optional realtime observer remains unsupported and has a documented
-   identity-key mismatch. Private push delivery is also incomplete.
+1. Account-wide export and permanent account/identity deletion.
+2. Automatic retention, recording-access audit, backup/historical-copy erasure,
+   and a demonstrated backup restore.
+3. Qualified French/EU legal, privacy, recording-disclosure, retention,
+   subprocessor, and support approval and surfaces.
+4. Fresh multi-customer Clerk/Stripe/Telnyx/LiveKit staging certification,
+   including real Portal cancellation, non-proration, active-call drainage,
+   number release, reactivation, and provider-fault recovery.
+5. Cloud deployment, DNS/TLS, secret management, alert routing, rollback,
+   restore, and controlled-beta operating evidence.
+6. Accessibility end-to-end tests, frontend performance budgets, load tests,
+   outage drills, recovery drills, and credentialed behavioral evaluation
+   evidence.
+7. The optional realtime observer identity-key mismatch and private push
+   delivery.
 
-Do not describe Presvo as production-ready until the applicable gates in
-`docs/PROJECT_STATUS.md` have evidence.
-
-## Planned product phases after blockers
-
-1. Customer workflow completion: call pagination, search, tags, notes, richer
-   account controls, export/deletion, and later French localization.
-2. Conversation-flow runtime: typed flows, business templates, transitions,
-   fallbacks, validation, versioning, simulation, and call-path traces. Build a
-   visual node editor only after the runtime is proven.
-3. Appointment booking: calendar availability, booking, confirmation,
-   rescheduling, and CRM integration.
-4. Advanced capabilities: live monitoring/intervention, human transfer, tools,
-   outbound calls, mobile, multiple numbers/plans, and additional countries.
+Deactivation is reversible service shutdown, not deletion. Do not describe it
+as export, permanent deletion, retention enforcement, or backup erasure.
 
 ## Recommended next implementation unit
 
-Implement auditable account-wide export and deletion orchestration, including
-safe drainage of private recording cleanup before any hard-delete boundary.
-Keep legal approval, retention-policy activation, provider certification, and
-cloud deployment as separate workstreams so none is implied by the local data
-workflow.
+Design account-wide export and permanent deletion separately from deactivation.
+Define export scope, legal and retention authority, active-call behavior,
+recording-cleanup drainage, audit evidence, and the boundary for backups and
+historical copies before product code changes. Do not infer erasure policy from
+the implemented inactive state.
 
-Before editing product code, write and review the account-level contract. It
-must define export scope, deletion states, failure recovery, audit evidence,
-active-call behavior, private cleanup drainage, and the boundary for backups or
-historical copies without claiming synchronous erasure.
+## Resume procedure
 
-## Resume procedure for a new coding session
-
-1. Check out the latest local branch and verify a clean worktree.
-2. Read this handoff, `README.md`, `docs/PROJECT_STATUS.md`, and
-   `docs/architecture/integration-endpoints.md` completely.
-3. Inspect the recording implementation from `c6bf2bb` through `e911143` and
-   the documentation commit that follows it.
-4. Read
-   `docs/superpowers/specs/2026-07-19-recording-egress-synchronization-design.md`,
-   `docs/superpowers/plans/2026-07-19-durable-recording-egress-synchronization.md`,
-   and the root `CONTEXT.md`.
-5. Confirm the documentation commit and local merge preserve the fresh evidence
-   above; do not copy older counts into later completion claims.
-6. For the recommended next unit, create and review a focused design and
-   test-first implementation plan before editing product code.
-7. If a defect is found, reproduce it and use the repository's test-first and
+1. Verify a clean checkout and read this handoff, `docs/PROJECT_STATUS.md`,
+   `docs/architecture/local-self-service-activation.md`,
+   `docs/architecture/integration-endpoints.md`, and `docs/runbooks/deploy.md`.
+2. Read
+   `docs/superpowers/specs/2026-07-24-account-deactivation-lifecycle-design.md`
+   and the Task 11 report. Do not reuse old verification counts.
+3. Confirm the Stripe Portal configuration and both deactivation alerts are
+   reviewed deployment artifacts; repository configuration alone is not
+   evidence.
+4. Preserve the boundary: local test infrastructure is authorized; provider
+   accounts, cloud resources, deployments, real credentials, external
+   publishing, and pushes require separate approval.
+5. If a defect is found, reproduce it and use the repository's test-first and
    systematic-debugging workflows.
-8. Preserve the boundary: local development and test infrastructure are
-   authorized; provider accounts, cloud resources, deployments, real
-   credentials, external publishing, and pushes require separate approval.
 
-Useful local checks after checkout:
-
-```bash
-git status --short --branch
-git log --oneline --decorate -10
-cd apps/web && npm run check && npm run typecheck && npm run test:ci
-```
-
-The disposable local acceptance journey is available when needed:
+The disposable local acceptance journey uses only local identity and fake
+product providers, but requires Docker, Chromium, and Node.js 22:
 
 ```bash
 bash scripts/run-local-e2e.sh
 ```
-
-It uses only local identity and fake product providers, but it requires the
-local Docker daemon and Chromium.

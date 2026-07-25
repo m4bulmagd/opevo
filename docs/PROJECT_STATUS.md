@@ -11,9 +11,10 @@ longer match the current implementation.
 production-certified.**
 
 Presvo is a working MVP with a production-oriented architecture. The local
-five-milestone self-service journey and durable recording lifecycle are
-implemented and locally verified. Compliance, recovery evidence, cloud
-deployment, and real-provider certification remain controlled-beta gates.
+five-milestone self-service journey, durable recording lifecycle, and
+reversible account-deactivation/reactivation lifecycle are implemented and
+locally verified. Compliance, recovery evidence, cloud deployment, and
+real-provider certification remain controlled-beta gates.
 
 ## Current product boundary
 
@@ -43,24 +44,25 @@ deployment, and real-provider certification remain controlled-beta gates.
 | Public landing page and authentication shell | **Implemented** | Next.js landing page, Clerk sign-in/sign-up routes, and protected dashboard routing are present. |
 | Customer dashboard | **Implemented** | Dashboard, calls, agent settings, billing, onboarding status, empty states, and server actions are present. |
 | Guided onboarding | **Implemented** | A resumable five-milestone web journey covers business/receptionist content, local or Stripe billing, explicit number consent, provisioning, carrier-aware conditional forwarding, a timed test call, and explicit go-live. The disposable Playwright path proves local operation; real-provider certification remains a release gate. |
-| Starter billing | **Implemented** | Stripe Checkout, Billing Portal, paid-invoice minute grants, subscription lifecycle handling, and PostgreSQL-backed usage accounting are present. |
+| Starter billing | **Implemented** | Stripe Checkout, a pinned Billing Portal configuration, paid-invoice minute grants, subscription lifecycle handling, and PostgreSQL-backed usage accounting are present. Portal subscription-only cancellation remains active until the paid-period end; owner account deactivation cancels immediately without automatic proration or refund. The Portal configuration still requires deployment-time review and real Stripe certification. |
 | French number provisioning | **Implemented** | Queue-backed provisioning, persisted status, retry handling, assignment, and routing gates are present. Payment eligibility and explicit provisioning consent are separate. The fake local path is browser-proven; Telnyx still needs fresh staging certification. |
 | Agent configuration | **Implemented** | Customer-owned agent identity, owner context, system prompt, knowledge base, fixed launch pipeline, and guarded routing toggle are present. |
 | Inbound voice runtime | **Implemented** | LiveKit dispatch and a separate agent worker support Speechmatics or Deepgram STT, Gemini LLM, and Speechmatics or ElevenLabs TTS. |
 | Native-audio STS runtime | **Partial** | Gemini native-audio support exists in the worker and tests but is intentionally hidden from the customer-facing France launch. |
 | Durable call lifecycle | **Implemented** | Incremental transcript persistence, call-scoped agent JWTs, a state machine, reconciliation, duration limits, and idempotent finalization are present. |
 | Call review | **Implemented** | Call list/detail, transcript, summary, recording availability, signed recording URLs, and usage charge are present. |
+| Account deactivation and reactivation | **Implemented** | Authenticated owners can enter exact `DEACTIVATE` confirmation. `active -> deactivating` immediately blocks new service, then durable reference-only work disables routing, cancels an owner-requested subscription without automatic proration/refund, drains any admitted call, releases the number, resets number-cycle state, and reaches `inactive`. Inactive owners keep read-only historical calls, recordings, billing, and retained business/receptionist configuration. A generation-matched new subscription reactivates the account, preserves the confirmed profile/carrier, and resumes at fresh number consent for a new number, forwarding verification, and explicit go-live. |
 | Terminal-call removal | **Implemented** | An authenticated owner can use **Remove call** on a terminal call. One local transaction purges customer content, hides the call, and returns `204` without LiveKit or storage I/O. When a private recording operation or legacy recording metadata exists, it also records stop/delete intent and reference-only reconciliation work; non-exhausting asynchronous cleanup follows. Repeated removal is idempotent, active calls reject removal, and no synchronous provider, backup, or historical-copy erasure claim is made. |
 | Rich call-review workflow | **Partial** | Pagination contracts, inline original-audio playback, and structured next-action presentation are implemented, but the web UI lacks pagination controls, search, tags, and notes. |
 | Recording lifecycle | **Implemented** | A private recording operation and reference-only reconciliation intent commit before recording-start provider I/O. Completion requests stop reconciliation even without a provider ID; signed egress webhooks store sanitized facts and wake reconciliation after commit. Private object storage, signed playback, and asynchronous owner-removal cleanup are implemented; no automatic bucket lifecycle is configured. |
-| Transactional outbox | **Implemented** | Handlers cover `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, and `recording.reconcile`. Recording events use aggregate `recording-egress-operation` and carry only `operation_id`. |
+| Transactional outbox | **Implemented** | Handlers cover `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, `recording.reconcile`, and `account.deactivate`. Recording and account-deactivation events use private operation aggregates and carry only `operation_id`. |
 | Call finalization effects | **Implemented** | Usage debit and the pending notification row are direct writes in the same call-finalization transaction. |
 | Live dashboard and intervention | **Partial** | An optional backend WebSocket observer exists but is disabled by default, has a documented identity-key mismatch, and has no live-call web interface. |
 | Push notifications | **Partial** | Notification records and provider boundaries exist, but private device-token delivery is not part of the launch path. |
-| Production observability and CI | **Partial** | Readiness checks, safe logging, bounded recording metrics, OpenTelemetry, pinned CI actions, dependency audits, secret scanning, and container scanning are configured and locally verified. Cloud monitoring, alert routing, and operating evidence are absent. |
+| Production observability and CI | **Partial** | Readiness checks, safe logging, bounded recording and account-deactivation metrics, OpenTelemetry, pinned CI actions, dependency audits, secret scanning, and container scanning are configured and locally verified. Cloud monitoring, required alert routing, and operating evidence are absent. |
 | Production deployment | **Partial** | Hardened images, release migrations, deployment and rollback runbooks, and a provider comparison exist; a production platform and operating evidence are not yet approved. |
 | French localization and legal surfaces | **Planned** | The launch UI is still English and approved privacy, terms, legal notice, support, retention, and subprocessor surfaces are absent. |
-| Account export and deletion | **Planned** | Per-terminal-call **Remove call** is implemented, but account-wide export, deletion orchestration, and recording-access audit records are absent. The intended account-deletion contract removes active call content and active object storage but makes no claim that historical backup copies are erased. |
+| Account export and permanent deletion | **Planned** | Reversible account deactivation and per-terminal-call **Remove call** are implemented, but account-wide export, permanent deletion orchestration, and recording-access audit records are absent. No retention, backup-erasure, or historical-copy-erasure claim is made. |
 | Automatic 30-day retention | **Planned** | Bucket lifecycle primitives exist, but an approved customer-facing automatic 30-day retention policy and operating proof are not implemented. |
 | Appointment booking | **Planned** | No appointment workflow or calendar integration is part of the launch path. |
 | Conversation flows | **Planned** | The current runtime uses one bounded receptionist configuration; typed flows, transitions, simulation, and authoring remain roadmap work. |
@@ -75,9 +77,14 @@ deployment, and real-provider certification remain controlled-beta gates.
   application service.
 - The current self-serve flow has not completed fresh multi-customer staging
   certification against all real providers.
+- The account lifecycle has provider-free acceptance evidence only. Its Stripe
+  cancellation/Portal and Telnyx disable/release behavior has not been
+  certified against real providers, and the required Portal and monitoring
+  configuration are external deployment artifacts.
 - The optional realtime observer is not a supported customer feature.
 - The application lacks French localization, approved legal pages,
-  account-wide export/deletion orchestration, and a complete account menu.
+  account-wide export/permanent-deletion orchestration, an approved retention
+  and backup-erasure policy, and a complete account menu.
 - The repository contains four credential-gated LiveKit behavioral voice
   evaluations, but no completed credentialed run or evidence against an
   approved production-equivalent model. Accessibility end-to-end tests, load
@@ -89,8 +96,18 @@ Presvo is intended for production, but it should not be described as
 production-ready until all of these gates have evidence:
 
 - Real-provider certification of the implemented guided activation workflow
+- Real Stripe/Telnyx certification of immediate and period-end cancellation,
+  active-call drainage, number release, reactivation, and provider-failure
+  recovery
+- A reviewed Stripe Portal configuration that permits period-end cancellation,
+  disables proration, and is pinned through
+  `STRIPE_BILLING_PORTAL_CONFIGURATION_ID`
+- Production alerts that page on every increment of
+  `presvo.account_deactivation.attention` and alert when
+  `presvo.account_deactivation.oldest_incomplete_age` exceeds
+  `MAX_CALL_DURATION_SECONDS + 900`
 - Approved French legal, privacy, recording, retention, and support surfaces
-- Auditable account export, deletion, and recording access
+- Auditable account export, permanent deletion, and recording access
 - Managed backups with a demonstrated restore
 - Three clean real-provider staging certification journeys
 - Load, concurrency, provider-outage, and recovery drills
@@ -113,7 +130,7 @@ production-ready until all of these gates have evidence:
 - French localization and locale-aware formatting
 - Account and session controls
 - Call pagination, search, and richer review workflows
-- Account data export and deletion
+- Account data export and permanent deletion
 - Approved automatic 30-day retention behavior
 - Approved legal, privacy, retention, subprocessor, and support surfaces
 - Accessibility and frontend performance gates
@@ -156,4 +173,5 @@ This direction is inspired by [Retell AI's structured conversation flows](https:
 - [Production deployment decision](architecture/production-deployment.md)
 - [Staging smoke runbook](architecture/staging-smoke-runbook.md)
 - [Local self-service activation](architecture/local-self-service-activation.md)
+- [Controlled deployment and account-deactivation recovery](runbooks/deploy.md)
 - [Production-readiness hardening design](superpowers/specs/2026-07-12-production-readiness-hardening-design.md)
