@@ -150,14 +150,47 @@ def test_account_deactivation_instruments_and_attributes_are_bounded() -> None:
     ].measurements
     assert operations == [
         (
+            0,
+            {"trigger": "owner_request", "operation_status": "pending"},
+        ),
+        (
             2,
             {"trigger": "owner_request", "operation_status": "processing"},
+        ),
+        (
+            0,
+            {
+                "trigger": "owner_request",
+                "operation_status": "attention_required",
+            },
+        ),
+        (
+            0,
+            {"trigger": "owner_request", "operation_status": "completed"},
+        ),
+        (
+            0,
+            {"trigger": "subscription_ended", "operation_status": "pending"},
+        ),
+        (
+            0,
+            {
+                "trigger": "subscription_ended",
+                "operation_status": "processing",
+            },
         ),
         (
             1,
             {
                 "trigger": "subscription_ended",
                 "operation_status": "attention_required",
+            },
+        ),
+        (
+            0,
+            {
+                "trigger": "subscription_ended",
+                "operation_status": "completed",
             },
         ),
     ]
@@ -195,6 +228,50 @@ def test_account_deactivation_instruments_and_attributes_are_bounded() -> None:
     assert meter.instruments[
         "presvo.account_deactivation.completion_duration"
     ].measurements == [(12.5, {"trigger": "owner_request"})]
+
+
+def test_account_deactivation_snapshot_zeros_vacated_status_and_attention() -> None:
+    meter = _Meter()
+    telemetry = _observability(meter=meter)
+
+    telemetry.record_account_deactivation_snapshot(
+        SimpleNamespace(
+            counts={("owner_request", "processing"): 1},
+            oldest_incomplete_age_seconds=20.0,
+            attention_counts={"owner_request": 1},
+        )
+    )
+    telemetry.record_account_deactivation_snapshot(
+        SimpleNamespace(
+            counts={("owner_request", "completed"): 1},
+            oldest_incomplete_age_seconds=0.0,
+            attention_counts={},
+        )
+    )
+
+    operation_measurements = meter.instruments[
+        "presvo.account_deactivation.operations"
+    ].measurements
+    assert [
+        value
+        for value, attributes in operation_measurements
+        if attributes
+        == {"trigger": "owner_request", "operation_status": "processing"}
+    ] == [1, 0]
+    assert [
+        value
+        for value, attributes in operation_measurements
+        if attributes
+        == {"trigger": "owner_request", "operation_status": "completed"}
+    ] == [0, 1]
+    assert meter.instruments[
+        "presvo.account_deactivation.attention"
+    ].measurements == [
+        (1, {"trigger": "owner_request"}),
+        (0, {"trigger": "subscription_ended"}),
+        (0, {"trigger": "owner_request"}),
+        (0, {"trigger": "subscription_ended"}),
+    ]
 
 
 def test_no_endpoint_constructs_no_exporter_and_initialization_is_idempotent() -> None:

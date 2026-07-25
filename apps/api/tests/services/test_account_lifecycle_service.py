@@ -300,7 +300,7 @@ async def test_completed_and_stale_subscription_events_do_not_restart_deactivati
 
 
 @pytest.mark.anyio
-async def test_subscription_end_request_records_completed_local_routing_before_cancel(
+async def test_subscription_end_request_leaves_worker_phase_timestamps_unclaimed(
     db_session: AsyncSession,
     active_user: User,
 ) -> None:
@@ -323,8 +323,12 @@ async def test_subscription_end_request_records_completed_local_routing_before_c
     )
 
     assert operation is not None
-    assert operation.routing_disabled_at == operation.requested_at
-    assert operation.subscription_canceled_at == operation.requested_at
+    assert operation.routing_disabled_at is None
+    assert operation.subscription_canceled_at is None
+    projection = await service.get_account(active_user.id)
+    assert projection.status == "deactivating"
+    assert projection.deactivation is not None
+    assert projection.deactivation.state == "requested"
 
 
 @pytest.mark.anyio

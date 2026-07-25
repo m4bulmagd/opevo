@@ -474,6 +474,99 @@ async def test_subscription_ended_never_calls_subscription_provider(
     ]
 
 
+@pytest.mark.anyio
+async def test_real_subscription_ended_request_disables_before_drain_and_release(
+    deactivation_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with deactivation_session_factory() as session:
+        user = User(
+            clerk_user_id="real-subscription-ended",
+            email="real-subscription-ended@example.com",
+            status="active",
+        )
+        session.add(user)
+        await session.flush()
+        phone = PhoneNumber(
+            user_id=user.id,
+            e164=PRIVATE_E164,
+            country_code="FR",
+            provider="telnyx",
+            provider_number_id=PRIVATE_PHONE_PROVIDER_ID,
+            provider_connection_name="app-active",
+            is_active=True,
+        )
+        session.add_all(
+            [
+                phone,
+                AgentConfig(user_id=user.id, is_enabled=True),
+                Subscription(
+                    user_id=user.id,
+                    stripe_customer_id="cus-real-subscription-ended",
+                    stripe_subscription_id=PRIVATE_SUBSCRIPTION_ID,
+                    plan_tier="starter",
+                    status="canceled",
+                    allocated_minutes=0,
+                ),
+            ]
+        )
+        await session.flush()
+        call = Call(
+            user_id=user.id,
+            phone_number_id=phone.id,
+            status="connected",
+        )
+        session.add(call)
+        await session.commit()
+        user_id = user.id
+        call_id = call.id
+
+    async with deactivation_session_factory() as session:
+        operation = await AccountLifecycleService(session).request_in_transaction(
+            user_id,
+            trigger="subscription_ended",
+            stripe_subscription_id=PRIVATE_SUBSCRIPTION_ID,
+        )
+        assert operation is not None
+        await session.commit()
+        operation_id = operation.id
+        event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.aggregate_id == operation_id,
+                OutboxEvent.topic == "account.deactivate",
+            )
+        )
+        assert event is not None
+        assert operation.routing_disabled_at is None
+        assert operation.subscription_canceled_at is None
+
+    ctx, provider_calls, _ = _ctx(deactivation_session_factory)
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_account_deactivation(ctx, event)
+
+    assert exc_info.value.error_code == "account_call_draining"
+    assert provider_calls == [
+        ("telephony.disable", PRIVATE_PHONE_PROVIDER_ID),
+    ]
+    async with deactivation_session_factory() as session:
+        operation = await session.get(AccountDeactivationOperation, operation_id)
+        call = await session.get(Call, call_id)
+        assert operation is not None
+        assert call is not None
+        assert operation.routing_disabled_at is not None
+        assert operation.subscription_canceled_at is not None
+        assert operation.active_call_drained_at is None
+        assert operation.number_released_at is None
+        call.status = "completed"
+        await session.commit()
+
+    await deliver_account_deactivation(ctx, event)
+
+    assert provider_calls == [
+        ("telephony.disable", PRIVATE_PHONE_PROVIDER_ID),
+        ("telephony.release", PRIVATE_PHONE_PROVIDER_ID),
+    ]
+
+
 @pytest.mark.parametrize("trigger", ["owner_request", "subscription_ended"])
 @pytest.mark.anyio
 async def test_terminal_local_subscription_satisfies_step_without_identity_match(
@@ -927,8 +1020,14 @@ async def test_observability_snapshot_aggregates_only_safe_operation_dimensions(
         ).observability_snapshot(NOW)
 
     assert snapshot.counts == {
+        ("owner_request", "pending"): 0,
         ("owner_request", "processing"): 1,
+        ("owner_request", "attention_required"): 0,
+        ("owner_request", "completed"): 0,
+        ("subscription_ended", "pending"): 0,
+        ("subscription_ended", "processing"): 0,
         ("subscription_ended", "attention_required"): 1,
+        ("subscription_ended", "completed"): 0,
     }
     assert snapshot.oldest_incomplete_age_seconds == 600.0
     assert snapshot.attention_counts == {

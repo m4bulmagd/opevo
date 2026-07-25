@@ -192,10 +192,6 @@ class AccountLifecycleService:
             stripe_subscription_id=current_subscription_id,
             phone_provider_id=phone_provider_id,
         )
-        if trigger == "subscription_ended":
-            operation.routing_disabled_at = requested_at
-            operation.subscription_canceled_at = requested_at
-            await self.session.flush()
         await self.outbox_service.add(
             topic="account.deactivate",
             aggregate_type="account-deactivation-operation",
