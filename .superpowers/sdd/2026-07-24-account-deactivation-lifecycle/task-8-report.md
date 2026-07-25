@@ -278,3 +278,77 @@ The disposable `presvo-task8-fix1` PostgreSQL and Redis containers, network,
 and named volumes were removed with `down --volumes --remove-orphans`.
 No plan, design, ledger, migration, unrelated documentation, or web file was
 changed. Remaining concerns: none.
+
+## Fix round 2/5
+
+Rejected fix commit:
+`4716a4cfefe7cf33c670e0886ecc0ed5c52406c7`.
+
+The two remaining review findings were evidence gaps in the authoritative
+PostgreSQL tests. This round changes tests and this report only; production
+behavior and interfaces are unchanged.
+
+### Direct message and summary-event preservation
+
+The preservation test now reloads the retained `CallMessage` and
+`summary.generate` `OutboxEvent` rows themselves through owner-scoped
+PostgreSQL joins to the retained call. The owner results assert:
+
+- the exact original message ID, call ID, speaker, private text, and sequence;
+- the exact original summary-event ID, topic, `call-summary` aggregate type,
+  call aggregate ID, real `summary.generate:<call-id>:v1` idempotency key,
+  payload, and pending status.
+
+The equivalent joins for a second owner return empty lists. The existing
+call-history service and authenticated route checks continue to prove the
+owner can read the transcript while the second owner receives `404`; the new
+row assertions no longer infer message or summary-event preservation only
+from the parent call's existence.
+
+For the RED mutation check, the retained message and summary event were
+temporarily deleted after worker completion. The new direct assertions failed
+with an empty owner message result (`1 failed in 1.50s`). After removing that
+controlled mutation, the authoritative preservation test passed
+(`1 passed in 1.36s`).
+
+### User-scoped stale go-live intent
+
+The stale go-live test no longer queries outbox rows with the deactivation
+operation ID. It seeds a real-shaped prior `phone.enable` event using:
+
+```text
+topic            = phone.enable
+aggregate_type   = user
+aggregate_id     = <deactivating user ID>
+idempotency_key  = activation:go-live:<activation ID>:attempt:<token>
+payload          = {user_id, lifecycle_generation}
+```
+
+Before and after the actual blocked `ActivationGoLiveService.go_live` call,
+the test snapshots every matching event's stable ID, topic, aggregate type,
+aggregate ID, idempotency key, payload, and status. Exact equality proves the
+pre-existing intent is neither hidden nor changed, and the matching-event
+count delta is zero. Activation and agent-configuration projections are also
+unchanged, while the command raises `account_deactivating`.
+
+The corrected query first failed with `[]` instead of the expected real
+contract row (`1 failed in 1.25s`). After the contract fixture was seeded, the
+before/after test passed (`1 passed in 1.14s`). A new user-scoped
+`phone.enable` intent would change both the snapshot and count.
+
+### Fix-round verification
+
+- Complete Task 8 PostgreSQL file: `18 passed in 6.42s`.
+- Full focused affected suite: `120 passed in 23.27s`.
+- Full PostgreSQL integration suite: `110 passed in 34.03s`; output contained
+  no skips.
+- Changed-scope Ruff: `All checks passed!`.
+- Changed production-scope mypy:
+  `Success: no issues found in 3 source files`.
+- `git diff --check`: exit `0`.
+
+The disposable `presvo-task8-fix2` and `presvo-task8-fix2-final` PostgreSQL
+and Redis containers, networks, and named volumes were removed with
+`down --volumes --remove-orphans`.
+No plan, design, ledger, migration, unrelated documentation, production, or
+web file was changed. Remaining concerns: none.

@@ -1090,16 +1090,42 @@ async def test_stale_go_live_command_preserves_activation_config_and_outbox(
         suffix="stale-go-live-command",
     )
     async with account_session_factory() as session:
+        prior_enable_at = NOW - timedelta(hours=1)
         activation = CustomerActivation(
             user_id=seeded.user_id,
             profile_confirmed_revision=1,
             profile_confirmed_at=NOW - timedelta(hours=1),
             verification_status="succeeded",
             forwarding_verified_at=NOW - timedelta(minutes=5),
+            go_live_requested_at=prior_enable_at,
+            go_live_approved_at=prior_enable_at,
+            activated_at=prior_enable_at + timedelta(minutes=1),
         )
         session.add(activation)
-        await session.commit()
+        await session.flush()
         activation_id = activation.id
+        prior_enable_event_id = uuid4()
+        prior_enable_key = (
+            f"activation:go-live:{activation_id}:attempt:1784970000000000"
+        )
+        prior_enable_payload = {
+            "user_id": str(seeded.user_id),
+            "lifecycle_generation": 1,
+        }
+        session.add(
+            OutboxEvent(
+                id=prior_enable_event_id,
+                topic="phone.enable",
+                aggregate_type="user",
+                aggregate_id=seeded.user_id,
+                idempotency_key=prior_enable_key,
+                payload=prior_enable_payload,
+                status="delivered",
+                next_attempt_at=prior_enable_at,
+                delivered_at=prior_enable_at,
+            )
+        )
+        await session.commit()
 
     async with account_session_factory() as session:
         operation = await AccountLifecycleService(
@@ -1116,11 +1142,15 @@ async def test_stale_go_live_command_preserves_activation_config_and_outbox(
         config = await session.scalar(
             select(AgentConfig).where(AgentConfig.user_id == seeded.user_id)
         )
-        before_events = list(
+        before_enable_events = list(
             (
                 await session.scalars(
                     select(OutboxEvent)
-                    .where(OutboxEvent.aggregate_id == operation.id)
+                    .where(
+                        OutboxEvent.topic == "phone.enable",
+                        OutboxEvent.aggregate_type == "user",
+                        OutboxEvent.aggregate_id == seeded.user_id,
+                    )
                     .order_by(OutboxEvent.id)
                 )
             ).all()
@@ -1134,9 +1164,30 @@ async def test_stale_go_live_command_preserves_activation_config_and_outbox(
             activation.last_failure_code,
         )
         before_config = config.is_enabled
-        before_event_evidence = [
-            (event.id, event.topic, dict(event.payload)) for event in before_events
+        before_enable_evidence = [
+            (
+                event.id,
+                event.topic,
+                event.aggregate_type,
+                event.aggregate_id,
+                event.idempotency_key,
+                dict(event.payload),
+                event.status,
+            )
+            for event in before_enable_events
         ]
+        expected_enable_evidence = [
+            (
+                prior_enable_event_id,
+                "phone.enable",
+                "user",
+                seeded.user_id,
+                prior_enable_key,
+                prior_enable_payload,
+                "delivered",
+            )
+        ]
+        assert before_enable_evidence == expected_enable_evidence
 
         with pytest.raises(AccountStateBlockedError) as error:
             await ActivationGoLiveService(
@@ -1153,11 +1204,15 @@ async def test_stale_go_live_command_preserves_activation_config_and_outbox(
         config = await session.scalar(
             select(AgentConfig).where(AgentConfig.user_id == seeded.user_id)
         )
-        events = list(
+        enable_events = list(
             (
                 await session.scalars(
                     select(OutboxEvent)
-                    .where(OutboxEvent.aggregate_id == operation.id)
+                    .where(
+                        OutboxEvent.topic == "phone.enable",
+                        OutboxEvent.aggregate_type == "user",
+                        OutboxEvent.aggregate_id == seeded.user_id,
+                    )
                     .order_by(OutboxEvent.id)
                 )
             ).all()
@@ -1171,10 +1226,20 @@ async def test_stale_go_live_command_preserves_activation_config_and_outbox(
             activation.last_failure_code,
         ) == before_activation
         assert config.is_enabled is before_config is False
-        assert [
-            (event.id, event.topic, dict(event.payload)) for event in events
-        ] == before_event_evidence
-        assert all(event.topic != "phone.enable" for event in events)
+        after_enable_evidence = [
+            (
+                event.id,
+                event.topic,
+                event.aggregate_type,
+                event.aggregate_id,
+                event.idempotency_key,
+                dict(event.payload),
+                event.status,
+            )
+            for event in enable_events
+        ]
+        assert after_enable_evidence == before_enable_evidence
+        assert len(after_enable_evidence) - len(before_enable_evidence) == 0
 
 
 @pytest.mark.anyio
@@ -1285,9 +1350,9 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         )
         summary_event = OutboxEvent(
             topic="summary.generate",
-            aggregate_type="call",
+            aggregate_type="call-summary",
             aggregate_id=call.id,
-            idempotency_key=f"summary.generate:{call.id}",
+            idempotency_key=f"summary.generate:{call.id}:v1",
             payload={"call_id": str(call.id)},
             next_attempt_at=NOW,
         )
@@ -1394,6 +1459,66 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
             retained_ids["call"],
             user_id=other_user_id,
         )
+        messages = list(
+            (
+                await session.scalars(
+                    select(CallMessage)
+                    .join(Call, Call.id == CallMessage.call_id)
+                    .where(
+                        CallMessage.call_id == retained_ids["call"],
+                        Call.user_id == seeded.user_id,
+                        Call.deleted_at.is_(None),
+                    )
+                    .order_by(CallMessage.sequence_number)
+                )
+            ).all()
+        )
+        other_messages = list(
+            (
+                await session.scalars(
+                    select(CallMessage)
+                    .join(Call, Call.id == CallMessage.call_id)
+                    .where(
+                        CallMessage.call_id == retained_ids["call"],
+                        Call.user_id == other_user_id,
+                        Call.deleted_at.is_(None),
+                    )
+                    .order_by(CallMessage.sequence_number)
+                )
+            ).all()
+        )
+        summary_events = list(
+            (
+                await session.scalars(
+                    select(OutboxEvent)
+                    .join(Call, Call.id == OutboxEvent.aggregate_id)
+                    .where(
+                        OutboxEvent.topic == "summary.generate",
+                        OutboxEvent.aggregate_type == "call-summary",
+                        OutboxEvent.aggregate_id == retained_ids["call"],
+                        Call.user_id == seeded.user_id,
+                        Call.deleted_at.is_(None),
+                    )
+                    .order_by(OutboxEvent.id)
+                )
+            ).all()
+        )
+        other_summary_events = list(
+            (
+                await session.scalars(
+                    select(OutboxEvent)
+                    .join(Call, Call.id == OutboxEvent.aggregate_id)
+                    .where(
+                        OutboxEvent.topic == "summary.generate",
+                        OutboxEvent.aggregate_type == "call-summary",
+                        OutboxEvent.aggregate_id == retained_ids["call"],
+                        Call.user_id == other_user_id,
+                        Call.deleted_at.is_(None),
+                    )
+                    .order_by(OutboxEvent.id)
+                )
+            ).all()
+        )
         recording = await RecordingEgressOperationRepository(
             session
         ).get_by_call_id_for_user(
@@ -1445,6 +1570,8 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         assert other_subscription is None
         assert other_profile is None
         assert other_call is None
+        assert other_messages == []
+        assert other_summary_events == []
         assert other_recording is None
         assert other_notifications == []
         assert other_usage.entries == []
@@ -1504,6 +1631,46 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         )
         assert call.id == retained_ids["call"]
         assert call.phone_number_id is None
+        assert [
+            (
+                item.id,
+                item.call_id,
+                item.speaker,
+                item.text,
+                item.sequence_number,
+            )
+            for item in messages
+        ] == [
+            (
+                retained_ids["message"],
+                retained_ids["call"],
+                "CALLER",
+                PRIVATE_CONTENT,
+                1,
+            )
+        ]
+        assert [
+            (
+                item.id,
+                item.topic,
+                item.aggregate_type,
+                item.aggregate_id,
+                item.idempotency_key,
+                dict(item.payload),
+                item.status,
+            )
+            for item in summary_events
+        ] == [
+            (
+                retained_ids["summary_event"],
+                "summary.generate",
+                "call-summary",
+                retained_ids["call"],
+                f"summary.generate:{retained_ids['call']}:v1",
+                {"call_id": str(retained_ids["call"])},
+                "pending",
+            )
+        ]
         assert call.summary_text == PRIVATE_CONTENT
         assert call.summary_data == {
             "summary_text": PRIVATE_CONTENT,
