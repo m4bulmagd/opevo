@@ -181,7 +181,10 @@ async def test_phone_routing_preserves_safe_provider_category(
             raise AssertionError
 
     event = _event(active_user.id, topic="phone.enable", aggregate_type="user")
-    event.payload = {"user_id": str(active_user.id)}
+    event.payload = {
+        "user_id": str(active_user.id),
+        "lifecycle_generation": 1,
+    }
     db_session.add(event)
     await db_session.commit()
 
@@ -227,7 +230,10 @@ async def test_phone_provisioning_outbox_preserves_safe_provider_category(
 
     user_id = active_user.id
     event = _event(user_id, topic="phone.provision", aggregate_type="user")
-    event.payload = {"user_id": str(user_id)}
+    event.payload = {
+        "user_id": str(user_id),
+        "lifecycle_generation": 1,
+    }
     db_session.add(
         PhoneNumberProvisioning(
             user_id=user_id,
@@ -284,7 +290,10 @@ async def test_malformed_provisioning_result_is_safe_terminal_outbox_failure(
         topic="phone.provision",
         aggregate_type="user",
     )
-    event.payload = {"user_id": str(active_user.id)}
+    event.payload = {
+        "user_id": str(active_user.id),
+        "lifecycle_generation": 1,
+    }
     db_session.add(
         PhoneNumberProvisioning(
             user_id=active_user.id,

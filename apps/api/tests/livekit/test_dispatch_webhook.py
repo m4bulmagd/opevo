@@ -230,7 +230,10 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
     assert call is not None
     assert outbox is not None
     assert response.status_code == 202
-    assert outbox.payload == {"call_id": str(call.id)}
+    assert outbox.payload == {
+        "call_id": str(call.id),
+        "lifecycle_generation": 1,
+    }
     assert realtime_service.call_started_events[0]["user_id"] == str(call.user_id)
     assert realtime_service.call_started_events[0]["call_id"] == str(call.id)
     assert realtime_service.call_started_events[0]["room_name"] == ROOM_NAME_SENTINEL
