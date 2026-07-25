@@ -138,12 +138,35 @@ describe("StatusSurface", () => {
   it.each([
     ["a false conditional", false],
     ["an empty string", ""],
+    ["a whitespace-only string", "   "],
     ["an empty child array", []],
+    // biome-ignore lint/complexity/noUselessFragments: An empty Fragment is the behavior under test.
+    ["an empty fragment", <></>],
+    ["a zero-valued conditional", 0],
   ])("provides a static marker when the icon is %s", (_case, icon) => {
     const { container } = render(<StatusSurface icon={icon} label="Paused" title="Presvo is paused" tone="paused" />);
 
     expect(screen.getByText("Paused")).toBeInTheDocument();
     expect(container.querySelector("[data-status-marker]")).toBeInTheDocument();
+  });
+
+  it("does not duplicate the marker for a renderable fragment icon", () => {
+    const { container } = render(
+      <StatusSurface
+        icon={
+          <>
+            {false}
+            <svg aria-label="Paused status" />
+          </>
+        }
+        label="Paused"
+        title="Presvo is paused"
+        tone="paused"
+      />,
+    );
+
+    expect(screen.getByLabelText("Paused status")).toBeInTheDocument();
+    expect(container.querySelector("[data-status-marker]")).not.toBeInTheDocument();
   });
 });
 

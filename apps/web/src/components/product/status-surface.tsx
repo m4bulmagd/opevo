@@ -1,4 +1,4 @@
-import { Children, type ReactNode } from "react";
+import { Children, Fragment, isValidElement, type ReactNode } from "react";
 
 import { AnimatedStatusBadge, type StatusTone as AnimatedStatusTone } from "@/components/motion/animated-status-badge";
 import { cn } from "@/lib/utils";
@@ -26,8 +26,15 @@ const TONE_CLASS: Record<StatusSurfaceTone, string> = {
   inactive: "border-border bg-surface-subtle/60",
 };
 
-function hasRenderableIcon(icon: ReactNode) {
-  return Children.toArray(icon).some((child) => typeof child !== "string" || child.length > 0);
+function hasRenderableIcon(icon: ReactNode): boolean {
+  return Children.toArray(icon).some((child) => {
+    if (typeof child === "string") return child.trim().length > 0;
+    if (typeof child === "number" || typeof child === "bigint") return false;
+    if (isValidElement<{ children?: ReactNode }>(child) && child.type === Fragment) {
+      return hasRenderableIcon(child.props.children);
+    }
+    return true;
+  });
 }
 
 export function StatusSurface({ tone, label, title, description, icon, action, children }: StatusSurfaceProps) {
