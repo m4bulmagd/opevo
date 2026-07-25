@@ -166,3 +166,80 @@ related local-billing/provisioning regression tests, and
 `user_repository.py` for the standards-compliant reactivation write. No plan,
 design, migration, ledger, documentation-status, provider, or Task 8 files
 were changed.
+
+## Fix round 1/5
+
+Rejected base: `158dab525d993d10920c2f969b35db4b536ff14a`.
+
+### Root causes and fixes
+
+1. Current-generation invoices delivered while an account was inactive
+   returned normally from invoice-context resolution. That committed the
+   webhook identity even though no subscription state, grant, failure state,
+   or watermark was applied. Premature exact-generation invoices now use the
+   existing retryable lifecycle-conflict path: the transaction and webhook
+   identity roll back with HTTP 503. Once an exact-owner subscription event
+   safely reactivates the account, Stripe retry applies the invoice exactly
+   once. Inactive delivery performs no grant, phone intent, service enablement,
+   or provider I/O.
+2. Subscription and invoice ingestion resolved `clerk_user_id` but ignored the
+   internal `user_id` metadata. Present internal ownership metadata is now
+   parsed as a UUID and must equal the Clerk-resolved locked user. Malformed or
+   conflicting values are ignored safely. Missing ownership metadata remains
+   compatible only when generation metadata is also absent for a legacy
+   generation-1 event, or for the previously approved exact
+   incomplete-operation terminal convergence. Partial metadata that declares
+   generation 1 but omits `user_id` is rejected; missing metadata cannot
+   attach, reactivate, or grant a later generation.
+3. Same-ID legacy subscriptions deliberately preserved a null event watermark,
+   and invoice watermark advancement was conditional on an existing non-null
+   value. Every accepted non-null Stripe event timestamp now becomes the
+   watermark. The existing routing/nonrouting stale rule still protects a
+   legacy terminal projection before its first accepted timestamp.
+4. Two required broader suites still expected the pre-fencing local identities.
+   Their assertions and grant lookup now use
+   `local_subscription_<user_id>_g1` and `local_invoice_<user_id>_g1`.
+   Production fake identity generation was already correct and was not changed.
+
+### RED evidence
+
+- Invoice-before-subscription paid and payment-failed cases both failed because
+  the premature response was HTTP 202 instead of retryable HTTP 503:
+  **2 failed**.
+- Subscription and invoice ownership cases for conflicting, malformed, and
+  missing-current `user_id` all accepted unsafe state: subscriptions attached
+  and invoices granted, for **6 failed**.
+- The follow-up partial-metadata mutation (explicit generation 1 with no
+  `user_id`) also attached/granted before the legacy boundary was narrowed:
+  **2 failed**.
+- Ordered legacy schedule delivery left the watermark null; out-of-order
+  delivery allowed an older schedule to overwrite a newer reversal:
+  **2 failed**.
+- The broader-gate review identified the old literal subscription identity and
+  old grant-source identity while `LocalBillingService` already emitted the
+  generation-specific `_g1` values. This was a test-contract correction, not a
+  production behavior change.
+
+### GREEN and final verification
+
+- Focused invoice ordering: **2 passed**.
+- Expanded ownership matrix plus approved legacy compatibility:
+  **11 passed**.
+- Focused ordered/out-of-order legacy schedule matrix: **2 passed**.
+- Final exact nine-file Task 7 PostgreSQL/Redis gate: **177 passed, zero
+  skipped, 17.93s**.
+- Adjacent lifecycle gate: **55 passed, 6.17s**.
+- Required development API and PostgreSQL usage-concurrency gates:
+  **22 passed, 5.84s**.
+- Final combined regression gate after all behavior edits:
+  **254 passed, zero skipped, 27.51s**.
+- Ruff: all checks passed.
+- Mypy: `Success: no issues found in 6 source files`.
+- `git diff --check`: clean before report append and repeated before commit.
+- Disposable PostgreSQL and Redis containers, network, and volumes were
+  removed after verification.
+
+No Task 8 behavior was added. Account-deactivation webhook timestamps remain
+truthful: webhooks do not set reconciler-owned phase timestamps, and the
+existing reconciler still advances routing disablement before subscription
+cancellation and completion.

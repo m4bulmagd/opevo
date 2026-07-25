@@ -264,7 +264,12 @@ async def test_legacy_same_id_delayed_nonrouting_event_still_revokes_access(
 
     assert updated is legacy
     assert legacy.status == "past_due"
-    assert legacy.last_stripe_event_created_at is None
+    assert legacy.last_stripe_event_created_at == datetime(
+        2026,
+        3,
+        1,
+        tzinfo=UTC,
+    )
 
 
 @pytest.mark.anyio

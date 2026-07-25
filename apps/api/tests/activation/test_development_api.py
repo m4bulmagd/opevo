@@ -391,7 +391,7 @@ async def test_development_starter_returns_canonical_snapshot_for_owner_only(
     assert subscriptions[0].user_id == users["owner"].id
     assert subscriptions[0].user_id != users["other"].id
     assert subscriptions[0].stripe_subscription_id == (
-        f"local_subscription_{users['owner'].id}"
+        f"local_subscription_{users['owner'].id}_g1"
     )
 
 

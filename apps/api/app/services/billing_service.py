@@ -146,7 +146,8 @@ class BillingService:
                 stripe_subscription_id
             )
         )
-        clerk_user_id = event_object.get("metadata", {}).get("clerk_user_id")
+        metadata = event_object.get("metadata", {})
+        clerk_user_id = metadata.get("clerk_user_id")
         discovered_user = (
             await self.user_repository.get_by_clerk_user_id(clerk_user_id)
             if clerk_user_id
@@ -159,6 +160,9 @@ class BillingService:
             return
         user = await self.user_repository.get_by_id_for_update(user_id)
         if user is None:
+            return
+        owner_metadata_present, metadata_user_id = self._metadata_user_id(metadata)
+        if owner_metadata_present and metadata_user_id != user.id:
             return
         incomplete_operation = await self.account_deactivation_repository.get_incomplete_by_user_id_for_update(
             user_id
@@ -206,9 +210,8 @@ class BillingService:
             and current_subscription is not None
             and current_subscription.stripe_subscription_id == stripe_subscription_id
         )
-        lifecycle_generation = self._metadata_lifecycle_generation(
-            event_object.get("metadata", {})
-        )
+        metadata_generation = self._metadata_lifecycle_generation(metadata)
+        lifecycle_generation = metadata_generation
         if exact_incomplete_terminal:
             assert current_subscription is not None
             lifecycle_generation = current_subscription.lifecycle_generation
@@ -216,6 +219,12 @@ class BillingService:
             if user.lifecycle_generation != 1:
                 return
             lifecycle_generation = 1
+        if (
+            not owner_metadata_present
+            and not exact_incomplete_terminal
+            and metadata_generation is not None
+        ):
+            return
         if (
             not exact_incomplete_terminal
             and lifecycle_generation != user.lifecycle_generation
@@ -502,14 +511,28 @@ class BillingService:
         if user_id is None:
             return None
         user = await self.user_repository.get_by_id_for_update(user_id)
-        if user is None or user.status != "active":
+        if user is None:
             return None
-        lifecycle_generation = self._invoice_lifecycle_generation(event_object)
+        owner_metadata_present, metadata_user_id = self._invoice_metadata_user_id(
+            event_object
+        )
+        if owner_metadata_present and metadata_user_id != user.id:
+            return None
+        metadata_generation = self._invoice_lifecycle_generation(event_object)
+        lifecycle_generation = metadata_generation
         if lifecycle_generation is None:
             if user.lifecycle_generation != 1:
                 return None
             lifecycle_generation = 1
+        if not owner_metadata_present and metadata_generation is not None:
+            return None
         if lifecycle_generation != user.lifecycle_generation:
+            return None
+        if user.status == "inactive":
+            raise StripeSubscriptionConflictError(
+                "Invoice arrived before current subscription reactivation"
+            )
+        if user.status != "active":
             return None
         current_subscription = (
             await self.subscription_repository.get_by_user_id_for_update(user_id)
@@ -660,6 +683,32 @@ class BillingService:
         if generation is not None:
             return generation
         return cls._metadata_lifecycle_generation(event_object.get("metadata", {}))
+
+    @staticmethod
+    def _metadata_user_id(metadata: object) -> tuple[bool, UUID | None]:
+        if not isinstance(metadata, dict) or "user_id" not in metadata:
+            return False, None
+        raw_user_id = metadata.get("user_id")
+        if not isinstance(raw_user_id, str):
+            return True, None
+        try:
+            return True, UUID(raw_user_id)
+        except ValueError:
+            return True, None
+
+    @classmethod
+    def _invoice_metadata_user_id(
+        cls,
+        event_object: dict,
+    ) -> tuple[bool, UUID | None]:
+        subscription_details = event_object.get("parent", {}).get(
+            "subscription_details",
+            {},
+        )
+        metadata = subscription_details.get("metadata", {})
+        if isinstance(metadata, dict) and "user_id" in metadata:
+            return cls._metadata_user_id(metadata)
+        return cls._metadata_user_id(event_object.get("metadata", {}))
 
     @staticmethod
     def _metadata_lifecycle_generation(metadata: object) -> int | None:

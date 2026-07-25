@@ -106,12 +106,6 @@ class SubscriptionRepository:
                 return None
         elif lifecycle_generation != locked_user.lifecycle_generation:
             return None
-        preserve_unknown_event_watermark = bool(
-            is_same_subscription
-            and subscription is not None
-            and subscription.last_stripe_event_created_at is None
-        )
-
         if subscription is not None:
             if is_same_subscription:
                 if self._same_subscription_event_is_stale(
@@ -194,10 +188,7 @@ class SubscriptionRepository:
             subscription.current_period_end = current_period_end
         if stripe_subscription_created_at is not None:
             subscription.stripe_subscription_created_at = stripe_subscription_created_at
-        if (
-            last_stripe_event_created_at is not None
-            and not preserve_unknown_event_watermark
-        ):
+        if last_stripe_event_created_at is not None:
             subscription.last_stripe_event_created_at = last_stripe_event_created_at
 
         await self.session.flush()
@@ -341,8 +332,7 @@ class SubscriptionRepository:
         subscription: Subscription,
         event_created_at: datetime,
     ) -> None:
-        if subscription.last_stripe_event_created_at is not None:
-            subscription.last_stripe_event_created_at = event_created_at
+        subscription.last_stripe_event_created_at = event_created_at
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
