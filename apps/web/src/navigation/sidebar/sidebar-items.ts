@@ -1,4 +1,4 @@
-import { Bot, CreditCard, House, Phone } from "lucide-react";
+import { Bot, CreditCard, House, Phone, UserRound } from "lucide-react";
 
 export type NavItem = {
   title: string;
@@ -26,5 +26,10 @@ export const sidebarItems: NavItem[] = [
     title: "Billing",
     url: "/dashboard/billing",
     icon: CreditCard,
+  },
+  {
+    title: "Account",
+    url: "/dashboard/account",
+    icon: UserRound,
   },
 ];

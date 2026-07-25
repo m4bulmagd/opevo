@@ -13,14 +13,16 @@ const clerkConfigState = vi.hoisted(() => ({
   authMode: "local" as "local" | "clerk",
   shouldWrapClerk: false,
 }));
-const { getActivationSnapshotMock, getDevelopmentCapabilitiesMock, redirectMock, refreshMock } = vi.hoisted(() => ({
-  getActivationSnapshotMock: vi.fn(),
-  getDevelopmentCapabilitiesMock: vi.fn(),
-  redirectMock: vi.fn(() => {
-    throw new Error("NEXT_REDIRECT");
-  }),
-  refreshMock: vi.fn(),
-}));
+const { getAccountMock, getActivationSnapshotMock, getDevelopmentCapabilitiesMock, redirectMock, refreshMock } =
+  vi.hoisted(() => ({
+    getAccountMock: vi.fn(),
+    getActivationSnapshotMock: vi.fn(),
+    getDevelopmentCapabilitiesMock: vi.fn(),
+    redirectMock: vi.fn(() => {
+      throw new Error("NEXT_REDIRECT");
+    }),
+    refreshMock: vi.fn(),
+  }));
 
 vi.mock("@/lib/auth/clerk-config", () => ({
   get authMode() {
@@ -42,6 +44,10 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/api/activation", () => ({
   getActivationSnapshot: getActivationSnapshotMock,
+}));
+
+vi.mock("@/lib/api/account", () => ({
+  getAccount: getAccountMock,
 }));
 
 vi.mock("@/app/(activation)/activate/actions", () => ({
@@ -142,6 +148,13 @@ function buildSnapshot(overrides: Partial<ActivationSnapshot> = {}): ActivationS
 
 describe("activation page", () => {
   beforeEach(() => {
+    getAccountMock.mockReset().mockResolvedValue({
+      status: "active",
+      serving: false,
+      deactivation: null,
+      reactivation_allowed: false,
+      blocker: "customer_not_ready",
+    });
     getActivationSnapshotMock.mockReset();
     getDevelopmentCapabilitiesMock.mockReset().mockReturnValue({
       localBilling: false,
@@ -209,6 +222,24 @@ describe("activation page", () => {
 
     await expect(Page({ searchParams: Promise.resolve({}) })).rejects.toThrow("NEXT_REDIRECT");
     expect(redirectMock).toHaveBeenCalledWith("/dashboard");
+  });
+
+  it.each([
+    "deactivating",
+    "inactive",
+  ] as const)("redirects a %s owner to Account before rendering mutable activation milestones", async (status) => {
+    getAccountMock.mockResolvedValueOnce({
+      status,
+      serving: false,
+      deactivation: status === "deactivating" ? { state: "finalizing", requested_at: "2026-07-24T10:00:00Z" } : null,
+      reactivation_allowed: status === "inactive",
+      blocker: status === "deactivating" ? "account_deactivating" : "account_inactive",
+    });
+    getActivationSnapshotMock.mockResolvedValue(buildSnapshot());
+
+    await expect(Page({ searchParams: Promise.resolve({}) })).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(redirectMock).toHaveBeenCalledWith("/dashboard/account");
   });
 
   it("redirects a previously activated runtime-paused customer to the dashboard", async () => {

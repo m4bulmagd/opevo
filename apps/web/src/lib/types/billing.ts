@@ -16,6 +16,8 @@ export type Subscription = {
   stripe_customer_id: string | null;
   stripe_subscription_id: string | null;
   can_start_checkout: boolean;
+  cancel_at_period_end: boolean;
+  cancellation_effective_at: string | null;
 };
 
 export type UsageLedgerEntry = {

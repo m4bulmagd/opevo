@@ -1,6 +1,7 @@
 import { AgentRuntimeCard } from "@/components/agent/agent-runtime-card";
 import { AgentSettingsForm } from "@/components/agent/agent-settings-form";
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
+import { getAccount } from "@/lib/api/account";
 import { getAgentConfig } from "@/lib/api/agent";
 import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 
@@ -14,11 +15,11 @@ export default async function AgentPage() {
     );
   }
 
-  const agentConfig = await getAgentConfig();
+  const [agentConfig, account] = await Promise.all([getAgentConfig(), getAccount()]);
 
   return (
     <div className="@container/main grid gap-4 md:gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(320px,1fr)]">
-      <AgentSettingsForm initialConfig={agentConfig} />
+      <AgentSettingsForm initialConfig={agentConfig} readOnly={account.status !== "active"} />
       <aside className="flex flex-col gap-4 md:gap-6">
         <AgentRuntimeCard agentConfig={agentConfig} />
       </aside>

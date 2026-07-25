@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
+import { getAccount } from "@/lib/api/account";
 import { getActivationSnapshot } from "@/lib/api/activation";
 import { getDevelopmentCapabilities } from "@/lib/development/capabilities";
 
@@ -44,9 +45,17 @@ const MILESTONE_COPY: Record<ActivationMilestoneId, { eyebrow: string; title: st
 };
 
 export default async function ActivationPage({ searchParams }: ActivationPageProps) {
-  const requested = await searchParams;
+  const [requested, account, snapshot, capabilities] = await Promise.all([
+    searchParams,
+    getAccount(),
+    getActivationSnapshot(),
+    getDevelopmentCapabilities(),
+  ]);
   const requestedMilestone = Array.isArray(requested.milestone) ? requested.milestone[0] : requested.milestone;
-  const [snapshot, capabilities] = await Promise.all([getActivationSnapshot(), getDevelopmentCapabilities()]);
+
+  if (account.status !== "active") {
+    redirect("/dashboard/account");
+  }
 
   if (canEnterDashboard(snapshot)) {
     redirect("/dashboard");

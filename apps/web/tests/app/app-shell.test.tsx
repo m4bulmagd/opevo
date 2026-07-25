@@ -40,7 +40,7 @@ afterEach(() => {
 });
 
 describe("app shell", () => {
-  it("renders Dashboard, Calls, Agent, and Billing in the sidebar", async () => {
+  it("renders Dashboard, Calls, Agent, Billing, and Account in the sidebar", async () => {
     const { AppSidebar } = await import("@/app/(app)/dashboard/_components/sidebar/app-sidebar");
     const { SidebarProvider } = await import("@/components/ui/sidebar");
     const { TooltipProvider } = await import("@/components/ui/tooltip");
@@ -57,6 +57,7 @@ describe("app shell", () => {
     expect(screen.getByRole("link", { name: /Calls/i })).toHaveAttribute("href", "/dashboard/calls");
     expect(screen.getByRole("link", { name: /Agent/i })).toHaveAttribute("href", "/dashboard/agent");
     expect(screen.getByRole("link", { name: /Billing/i })).toHaveAttribute("href", "/dashboard/billing");
+    expect(screen.getByRole("link", { name: /Account/i })).toHaveAttribute("href", "/dashboard/account");
   });
 
   it("renders protected dashboard content in guarded local mode", async () => {

@@ -5,9 +5,11 @@ import { cookies } from "next/headers";
 import { AppSidebar } from "@/app/(app)/dashboard/_components/sidebar/app-sidebar";
 import { LayoutControls } from "@/app/(app)/dashboard/_components/sidebar/layout-controls";
 import { ThemeSwitcher } from "@/app/(app)/dashboard/_components/sidebar/theme-switcher";
+import { AccountLifecycleBanner } from "@/components/account/account-lifecycle-banner";
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { getAccount } from "@/lib/api/account";
 import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 import { SIDEBAR_COLLAPSIBLE_VALUES, SIDEBAR_VARIANT_VALUES } from "@/lib/preferences/layout";
 import { cn } from "@/lib/utils";
@@ -23,12 +25,13 @@ export default async function AppLayout({ children }: Readonly<{ children: React
     );
   }
 
-  const cookieStore = await cookies();
-  const defaultOpen = cookieStore.get("sidebar_state")?.value !== "false";
-  const [variant, collapsible] = await Promise.all([
+  const [cookieStore, account, variant, collapsible] = await Promise.all([
+    cookies(),
+    getAccount(),
     getPreference("sidebar_variant", SIDEBAR_VARIANT_VALUES, "inset"),
     getPreference("sidebar_collapsible", SIDEBAR_COLLAPSIBLE_VALUES, "icon"),
   ]);
+  const defaultOpen = cookieStore.get("sidebar_state")?.value !== "false";
 
   return (
     <SidebarProvider
@@ -69,6 +72,11 @@ export default async function AppLayout({ children }: Readonly<{ children: React
             </div>
           </div>
         </header>
+        {account.status === "active" ? null : (
+          <div className="px-4 pt-4 md:px-6 md:pt-6">
+            <AccountLifecycleBanner account={account} />
+          </div>
+        )}
         <div className="h-full p-4 md:p-6">{children}</div>
       </SidebarInset>
     </SidebarProvider>
