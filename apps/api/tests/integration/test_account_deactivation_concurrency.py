@@ -497,6 +497,7 @@ async def test_worker_cancellation_commit_and_lifecycle_entry_use_compatible_loc
             )
         )
         assert event is not None
+        assert event.payload == {"operation_id": str(operation_id)}
 
     provider_entered = asyncio.Event()
     resume_provider = asyncio.Event()
@@ -684,6 +685,7 @@ async def test_stale_drain_evidence_never_releases_while_call_is_active(
             select(OutboxEvent).where(OutboxEvent.aggregate_id == operation_id)
         )
         assert event is not None
+        assert event.payload == {"operation_id": str(operation_id)}
 
     telephony = _ForbiddenReleaseProvider()
     with pytest.raises(OutboxDeliveryError) as error:
@@ -1413,6 +1415,7 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
             )
         )
         assert event is not None
+        assert event.payload == {"operation_id": str(operation_id)}
 
     tracking = _TrackingSessionFactory(account_session_factory)
     telephony = _WorkerTelephonyProvider(tracking.assert_provider_safe)

@@ -2370,6 +2370,7 @@ async def test_deactivating_account_rejects_new_and_old_subscription_events(
     assert operation is not None and operation.trigger == "subscription_ended"
     assert len(outbox_events) == 1
     assert outbox_events[0].topic == "account.deactivate"
+    assert outbox_events[0].payload == {"operation_id": str(operation.id)}
 
 
 @pytest.mark.anyio
