@@ -60,8 +60,8 @@ describe("forwarding milestone", () => {
     render(<ForwardingMilestone snapshot={activationSnapshot()} />);
 
     fireEvent.click(screen.getAllByRole("button", { name: /Copy dial code/i })[0]);
-    await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith("*61*0187654321#"));
-    expect(screen.getByRole("status")).toHaveTextContent(/Copied/i);
+    expect(await screen.findByRole("status")).toHaveTextContent(/Copied/i);
+    expect(writeTextMock).toHaveBeenCalledWith("*61*0187654321#");
 
     writeTextMock.mockRejectedValueOnce(new Error("clipboard blocked"));
     fireEvent.click(screen.getAllByRole("button", { name: /Copy dial code/i })[1]);
