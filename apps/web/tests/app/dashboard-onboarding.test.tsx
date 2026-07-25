@@ -121,7 +121,13 @@ describe("dashboard onboarding", () => {
     );
     getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
     getOnboardingStatusMock.mockResolvedValueOnce(buildOnboardingStatus());
-    listCallsMock.mockResolvedValueOnce([]);
+    listCallsMock.mockResolvedValueOnce({
+      calls: [],
+      total: 0,
+      limit: 5,
+      offset: 0,
+      has_more: false,
+    });
     getUsageSnapshotMock.mockResolvedValueOnce(buildUsageSnapshot());
 
     const { default: Page } = await import("@/app/(app)/dashboard/page");
@@ -134,7 +140,13 @@ describe("dashboard onboarding", () => {
   it("renders provisioning progress clearly", async () => {
     getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
     getOnboardingStatusMock.mockResolvedValueOnce(buildOnboardingStatus());
-    listCallsMock.mockResolvedValueOnce([]);
+    listCallsMock.mockResolvedValueOnce({
+      calls: [],
+      total: 0,
+      limit: 5,
+      offset: 0,
+      has_more: false,
+    });
     getUsageSnapshotMock.mockResolvedValueOnce(buildUsageSnapshot());
 
     const { default: Page } = await import("@/app/(app)/dashboard/page");
@@ -154,7 +166,13 @@ describe("dashboard onboarding", () => {
         can_retry_provisioning: true,
       }),
     );
-    listCallsMock.mockResolvedValueOnce([]);
+    listCallsMock.mockResolvedValueOnce({
+      calls: [],
+      total: 0,
+      limit: 5,
+      offset: 0,
+      has_more: false,
+    });
     getUsageSnapshotMock.mockResolvedValueOnce(buildUsageSnapshot());
 
     const { default: Page } = await import("@/app/(app)/dashboard/page");
@@ -177,7 +195,13 @@ describe("dashboard onboarding", () => {
         can_activate: true,
       }),
     );
-    listCallsMock.mockResolvedValueOnce([]);
+    listCallsMock.mockResolvedValueOnce({
+      calls: [],
+      total: 0,
+      limit: 5,
+      offset: 0,
+      has_more: false,
+    });
     getUsageSnapshotMock.mockResolvedValueOnce(buildUsageSnapshot());
 
     const { default: Page } = await import("@/app/(app)/dashboard/page");
@@ -203,7 +227,13 @@ describe("dashboard onboarding", () => {
         blockers: [],
       }),
     );
-    listCallsMock.mockResolvedValueOnce([]);
+    listCallsMock.mockResolvedValueOnce({
+      calls: [],
+      total: 0,
+      limit: 5,
+      offset: 0,
+      has_more: false,
+    });
     getUsageSnapshotMock.mockResolvedValueOnce(buildUsageSnapshot());
 
     const { default: Page } = await import("@/app/(app)/dashboard/page");

@@ -22,6 +22,10 @@ export type CallHistoryListItem = CallSummaryFields & {
 
 export type CallHistoryListResponse = {
   calls: CallHistoryListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
 };
 
 export type CallTranscriptLine = {

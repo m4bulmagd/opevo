@@ -42,31 +42,43 @@ describe("calls pages", () => {
   });
 
   it("renders empty and populated call states", async () => {
-    listCallsMock.mockResolvedValueOnce([]);
+    listCallsMock.mockResolvedValueOnce({
+      calls: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+      has_more: false,
+    });
 
     const { default: Page } = await import("@/app/(app)/dashboard/calls/page");
     render(await Page());
 
     expect(screen.getByText(/No calls yet/i)).toBeInTheDocument();
 
-    listCallsMock.mockResolvedValueOnce([
-      {
-        id: "call-1",
-        status: "completed",
-        caller_number: "+33123456789",
-        started_at: "2026-03-28T10:00:00Z",
-        ended_at: "2026-03-28T10:01:00Z",
-        duration_seconds: 60,
-        minutes_charged: 1,
-        summary_text: "Caller asked about opening hours.",
-        summary_status: "ready",
-        caller_intent: "Check opening hours",
-        action_items: ["Send weekday hours"],
-        sentiment: "neutral",
-        follow_up_required: true,
-        has_recording: true,
-      },
-    ]);
+    listCallsMock.mockResolvedValueOnce({
+      calls: [
+        {
+          id: "call-1",
+          status: "completed",
+          caller_number: "+33123456789",
+          started_at: "2026-03-28T10:00:00Z",
+          ended_at: "2026-03-28T10:01:00Z",
+          duration_seconds: 60,
+          minutes_charged: 1,
+          summary_text: "Caller asked about opening hours.",
+          summary_status: "ready",
+          caller_intent: "Check opening hours",
+          action_items: ["Send weekday hours"],
+          sentiment: "neutral",
+          follow_up_required: true,
+          has_recording: true,
+        },
+      ],
+      total: 1,
+      limit: 20,
+      offset: 0,
+      has_more: false,
+    });
 
     const { default: HydratedPage } = await import("@/app/(app)/dashboard/calls/page");
     render(await HydratedPage());
