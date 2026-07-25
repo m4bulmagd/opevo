@@ -39,7 +39,7 @@ export function parseCallHistoryNavigation(params: CallHistorySearchParams): Cal
   };
 }
 
-export function callHistoryPageCount(total: number, pageSize = CALLS_PAGE_SIZE): number {
+export function callHistoryPageCount(total: number, pageSize: number = CALLS_PAGE_SIZE): number {
   return Math.max(1, Math.ceil(total / pageSize));
 }
 

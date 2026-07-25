@@ -53,7 +53,7 @@ real-provider certification remain controlled-beta gates.
 | Call review | **Implemented** | Call list/detail, transcript, summary, recording availability, signed recording URLs, and usage charge are present. |
 | Account deactivation and reactivation | **Implemented** | Authenticated owners can enter exact `DEACTIVATE` confirmation. `active -> deactivating` immediately blocks new service, then durable reference-only work disables routing, cancels an owner-requested subscription without automatic proration/refund, drains any admitted call, releases the number, resets number-cycle state, and reaches `inactive`. Inactive owners keep read-only historical calls, recordings, billing, and retained business/receptionist configuration. A generation-matched new subscription reactivates the account, preserves the confirmed profile/carrier, and resumes at fresh number consent for a new number, forwarding verification, and explicit go-live. |
 | Terminal-call removal | **Implemented** | An authenticated owner can use **Remove call** on a terminal call. One local transaction purges customer content, hides the call, and returns `204` without LiveKit or storage I/O. When a private recording operation or legacy recording metadata exists, it also records stop/delete intent and reference-only reconciliation work; non-exhausting asynchronous cleanup follows. Repeated removal is idempotent, active calls reject removal, and no synchronous provider, backup, or historical-copy erasure claim is made. |
-| Rich call-review workflow | **Partial** | Pagination contracts, inline original-audio playback, and structured next-action presentation are implemented, but the web UI lacks pagination controls, search, tags, and notes. |
+| Rich call-review workflow | **Partial** | Server-rendered pagination and caller-number/summary/intent search, inline original-audio playback, and structured next-action presentation are implemented; tags and notes remain. |
 | Recording lifecycle | **Implemented** | A private recording operation and reference-only reconciliation intent commit before recording-start provider I/O. Completion requests stop reconciliation even without a provider ID; signed egress webhooks store sanitized facts and wake reconciliation after commit. Private object storage, signed playback, and asynchronous owner-removal cleanup are implemented; no automatic bucket lifecycle is configured. |
 | Transactional outbox | **Implemented** | Handlers cover `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, `recording.reconcile`, and `account.deactivate`. Recording and account-deactivation events use private operation aggregates and carry only `operation_id`. |
 | Call finalization effects | **Implemented** | Usage debit and the pending notification row are direct writes in the same call-finalization transaction. |
@@ -129,7 +129,7 @@ production-ready until all of these gates have evidence:
 
 - French localization and locale-aware formatting
 - Account and session controls
-- Call pagination, search, and richer review workflows
+- Call tags, notes, and richer review workflows
 - Account data export and permanent deletion
 - Approved automatic 30-day retention behavior
 - Approved legal, privacy, retention, subprocessor, and support surfaces
