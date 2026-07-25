@@ -289,10 +289,83 @@ async def test_list_calls_returns_visible_calls_newest_first(
     )
 
     assert response.status_code == 200
-    assert [UUID(item["id"]) for item in response.json()["calls"]] == [
+    payload = response.json()
+    assert [UUID(item["id"]) for item in payload["calls"]] == [
         ids["newest_id"],
         ids["older_id"],
     ]
+    assert payload == {
+        "calls": payload["calls"],
+        "total": 2,
+        "limit": 20,
+        "offset": 0,
+        "has_more": False,
+    }
+
+
+@pytest.mark.anyio
+async def test_list_calls_applies_search_and_pagination_metadata(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+) -> None:
+    ids = await seed_call_history(
+        client_database_url,
+        clerk_user_id="user_calls_search",
+        email="calls-search@example.invalid",
+    )
+
+    response = await async_client.get(
+        "/api/calls?q=older&limit=1&offset=0",
+        headers={
+            "authorization": (
+                f"Bearer {rs256_clerk_token_for('user_calls_search')}"
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "calls": [response.json()["calls"][0]],
+        "total": 1,
+        "limit": 1,
+        "offset": 0,
+        "has_more": False,
+    }
+    assert UUID(response.json()["calls"][0]["id"]) == ids["older_id"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "query_string",
+    [
+        "limit=0",
+        "limit=101",
+        "offset=-1",
+        f"q={'x' * 101}",
+    ],
+)
+async def test_list_calls_rejects_invalid_query_bounds(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    query_string,
+) -> None:
+    await seed_user(
+        client_database_url,
+        clerk_user_id="user_calls_bounds",
+        email="calls-bounds@example.invalid",
+    )
+    response = await async_client.get(
+        f"/api/calls?{query_string}",
+        headers={
+            "authorization": (
+                f"Bearer {rs256_clerk_token_for('user_calls_bounds')}"
+            )
+        },
+    )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.anyio
@@ -350,6 +423,10 @@ async def test_inactive_owner_can_list_get_and_play_back_historical_call(
 
     assert listed.status_code == 200
     assert [UUID(item["id"]) for item in listed.json()["calls"]] == [call_id]
+    assert listed.json()["total"] == 1
+    assert listed.json()["limit"] == 20
+    assert listed.json()["offset"] == 0
+    assert listed.json()["has_more"] is False
     assert detail.status_code == 200
     assert UUID(detail.json()["id"]) == call_id
     assert foreign_detail.status_code == 404
@@ -376,7 +453,7 @@ async def test_list_and_detail_expose_bounded_structured_summary(db_session) -> 
     )
     service = CallHistoryService(db_session, recording_service=FakeRecordingService())
 
-    list_item = (await service.list_calls(call.user_id))[0]
+    list_item = (await service.list_calls(call.user_id)).calls[0]
     detail = await service.get_call_detail(call.user_id, call.id)
 
     for response in (list_item, detail):
@@ -426,7 +503,7 @@ async def test_summary_status_is_server_authoritative_with_ready_precedence(
             db_session,
             recording_service=FakeRecordingService(),
         ).list_calls(call.user_id)
-    )[0]
+    ).calls[0]
 
     assert item.summary_status == expected_status
     assert item.caller_intent is None
@@ -448,7 +525,7 @@ async def test_has_recording_uses_private_object_key_not_legacy_url(db_session) 
             db_session,
             recording_service=FakeRecordingService(),
         ).list_calls(call.user_id)
-    )[0]
+    ).calls[0]
 
     assert item.has_recording is False
 

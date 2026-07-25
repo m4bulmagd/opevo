@@ -16,6 +16,20 @@ The token must resolve to a synced local user.
 
 Returns the authenticated user's non-deleted calls, newest first.
 
+Query parameters:
+
+- `q`: optional trimmed search text, maximum 100 characters
+- `limit`: page size from 1 through 100, default 20
+- `offset`: zero-based row offset, default 0
+
+Search is owner-scoped and excludes removed calls. It matches `summary_text`
+and structured `caller_intent` case-insensitively. A fully phone-shaped query
+with at least three digits also matches the stored caller number after query
+punctuation is removed. Transcripts and arbitrary summary metadata are not
+searched.
+
+Rows use `started_at DESC NULLS LAST`, `created_at DESC`, and `id DESC`.
+
 Response:
 
 ```json
@@ -32,7 +46,11 @@ Response:
       "summary_text": "Caller asked about opening hours.",
       "has_recording": true
     }
-  ]
+  ],
+  "total": 47,
+  "limit": 20,
+  "offset": 20,
+  "has_more": true
 }
 ```
 

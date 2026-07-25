@@ -40,6 +40,6 @@ async def test_call_repository_excludes_soft_deleted_calls(db_session, active_us
     await repository.soft_delete(deleted_call)
     await db_session.commit()
 
-    visible_calls = await repository.list_visible_by_user_id(active_user.id)
+    page = await repository.list_visible_page_by_user_id(active_user.id)
 
-    assert [call.id for call in visible_calls] == [visible_call.id]
+    assert [call.id for call in page.calls] == [visible_call.id]

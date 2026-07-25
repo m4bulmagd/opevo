@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +30,15 @@ SUMMARY_PROCESSING_STATES = frozenset({"pending", "connected", "ending", "finali
 CALL_DELETE_TERMINAL_STATES = frozenset({"completed", "failed"})
 
 
+@dataclass(frozen=True)
+class CallHistoryPageResult:
+    calls: list[CallHistoryListItem]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class CallHistoryService:
     def __init__(
         self,
@@ -46,12 +56,30 @@ class CallHistoryService:
         )
 
     async def list_calls(
-        self, user_id: UUID, *, limit: int = 100, offset: int = 0
-    ) -> list[CallHistoryListItem]:
-        calls = await self.call_repository.list_visible_by_user_id(
-            user_id, limit=limit, offset=offset
+        self,
+        user_id: UUID,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        query: str | None = None,
+    ) -> CallHistoryPageResult:
+        normalized_query = query.strip() if query is not None else None
+        if normalized_query == "":
+            normalized_query = None
+        page = await self.call_repository.list_visible_page_by_user_id(
+            user_id,
+            limit=limit,
+            offset=offset,
+            query=normalized_query,
         )
-        return [self._list_item(call) for call in calls]
+        calls = [self._list_item(call) for call in page.calls]
+        return CallHistoryPageResult(
+            calls=calls,
+            total=page.total,
+            limit=limit,
+            offset=offset,
+            has_more=offset + len(calls) < page.total,
+        )
 
     @staticmethod
     def _summary_fields(call: Call) -> tuple[str, CallSummaryProjection | None]:
