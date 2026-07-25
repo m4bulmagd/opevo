@@ -101,6 +101,102 @@ def _observability(*, meter=None, tracer=None, lifecycle=None):
     )
 
 
+def test_account_deactivation_instruments_and_attributes_are_bounded() -> None:
+    meter = _SpecificationMeter()
+    telemetry = _observability(meter=meter)
+
+    assert meter.specifications[
+        "presvo.account_deactivation.operations"
+    ] == ("gauge", None)
+    assert meter.specifications[
+        "presvo.account_deactivation.oldest_incomplete_age"
+    ] == ("gauge", "s")
+    assert meter.specifications[
+        "presvo.account_deactivation.reconciliation_results"
+    ] == ("counter", None)
+    assert meter.specifications[
+        "presvo.account_deactivation.attention"
+    ] == ("gauge", None)
+    assert meter.specifications[
+        "presvo.account_deactivation.completion_duration"
+    ] == ("histogram", "s")
+
+    snapshot = SimpleNamespace(
+        counts={
+            ("owner_request", "processing"): 2,
+            ("subscription_ended", "attention_required"): 1,
+            ("unsafe-trigger-id", "private-status"): 99,
+        },
+        oldest_incomplete_age_seconds=123.0,
+        attention_counts={"owner_request": 0, "subscription_ended": 1},
+    )
+    telemetry.record_account_deactivation_snapshot(snapshot)
+    telemetry.record_account_deactivation_result(
+        "owner_request",
+        "release_number",
+        "retry",
+        "rate_limited",
+    )
+    telemetry.record_account_deactivation_result(
+        "private-trigger",
+        "private-provider-id",
+        "private-outcome",
+        "private-error",
+    )
+    telemetry.record_account_deactivation_completion("owner_request", 12.5)
+
+    operations = meter.instruments[
+        "presvo.account_deactivation.operations"
+    ].measurements
+    assert operations == [
+        (
+            2,
+            {"trigger": "owner_request", "operation_status": "processing"},
+        ),
+        (
+            1,
+            {
+                "trigger": "subscription_ended",
+                "operation_status": "attention_required",
+            },
+        ),
+    ]
+    assert meter.instruments[
+        "presvo.account_deactivation.oldest_incomplete_age"
+    ].measurements == [(123.0, {})]
+    assert meter.instruments[
+        "presvo.account_deactivation.attention"
+    ].measurements == [
+        (0, {"trigger": "owner_request"}),
+        (1, {"trigger": "subscription_ended"}),
+    ]
+    assert meter.instruments[
+        "presvo.account_deactivation.reconciliation_results"
+    ].measurements == [
+        (
+            1,
+            {
+                "trigger": "owner_request",
+                "step": "release_number",
+                "outcome": "retry",
+                "error_class": "rate_limited",
+            },
+        ),
+        (
+            1,
+            {
+                "trigger": "unknown",
+                "step": "unknown",
+                "outcome": "unknown",
+                "error_class": "unknown",
+            },
+        ),
+    ]
+    assert meter.instruments[
+        "presvo.account_deactivation.completion_duration"
+    ].measurements == [(12.5, {"trigger": "owner_request"})]
+
+
 def test_no_endpoint_constructs_no_exporter_and_initialization_is_idempotent() -> None:
     try:
         from app.core.observability import (
@@ -922,6 +1018,7 @@ def test_outbox_metric_topic_allowlist_exactly_matches_supported_topics() -> Non
     from app.core.observability import _OUTBOX_TOPICS
 
     assert _OUTBOX_TOPICS == {
+        "account.deactivate",
         "phone.provision",
         "phone.enable",
         "phone.disable",

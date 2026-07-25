@@ -180,3 +180,10 @@ class PhoneNumberProvisioningRepository:
         provisioning.phone_number_id = None
         await self.session.flush()
         return provisioning
+
+    async def delete_for_user_id(self, user_id) -> None:
+        provisioning = await self.get_by_user_id_for_update(user_id)
+        if provisioning is None:
+            return
+        await self.session.delete(provisioning)
+        await self.session.flush()

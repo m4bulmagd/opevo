@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
 from app.models.user import User
 
@@ -64,3 +65,35 @@ class CustomerActivationRepository:
             self.session.add(activation)
             await self.session.flush()
         return activation
+
+    async def reset_number_cycle(self, user_id: UUID) -> None:
+        activation = await self.get_by_user_id_for_update(user_id)
+        if activation is not None:
+            activation.provisioning_consented_at = None
+            activation.provisioning_idempotency_key = None
+            activation.verification_window_started_at = None
+            activation.verification_window_expires_at = None
+            activation.verification_session_id = None
+            activation.verification_claimed_at = None
+            activation.verification_dispatch_id = None
+            activation.verification_routing_fingerprint = None
+            activation.verification_status = "not_started"
+            activation.verified_routing_fingerprint = None
+            activation.forwarding_verified_at = None
+            activation.go_live_requested_at = None
+            activation.go_live_approved_at = None
+            activation.activated_at = None
+            activation.last_failure_code = None
+        profile = await self.session.scalar(
+            select(BusinessProfile)
+            .where(BusinessProfile.user_id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if profile is not None:
+            profile.detected_carrier = None
+            profile.detected_number_type = None
+            profile.carrier_lookup_status = None
+            profile.carrier_looked_up_at = None
+            profile.confirmed_carrier = None
+        await self.session.flush()

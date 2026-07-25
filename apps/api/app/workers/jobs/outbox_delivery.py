@@ -8,6 +8,9 @@ from uuid import UUID
 from app.core.database import get_session_factory
 from app.core.observability import bind_call_id, get_observability
 from app.models.outbox_event import OutboxEvent
+from app.repositories.account_deactivation_repository import (
+    AccountDeactivationRepository,
+)
 from app.repositories.call_repository import CallRepository
 from app.repositories.outbox_repository import OutboxRepository
 from app.repositories.recording_egress_operation_repository import (
@@ -49,6 +52,12 @@ SAFE_OUTBOX_ERROR_CODES = frozenset(
         "recording_identity_mismatch",
         "recording_identity_conflict",
         "recording_legacy_incomplete",
+        "account_call_draining",
+        "subscription_authentication",
+        "subscription_contract",
+        "telephony_authentication",
+        "telephony_release_conflict",
+        "provider_contract",
     }
 )
 
@@ -118,6 +127,12 @@ def _outbox_error_class(error_code: str) -> str:
         "recording_identity_mismatch": "validation",
         "recording_identity_conflict": "conflict",
         "recording_legacy_incomplete": "validation",
+        "account_call_draining": "unavailable",
+        "subscription_authentication": "authentication",
+        "subscription_contract": "validation",
+        "telephony_authentication": "authentication",
+        "telephony_release_conflict": "conflict",
+        "provider_contract": "validation",
     }.get(error_code, "unknown")
 
 
@@ -298,6 +313,28 @@ async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:
             logger,
             event="observability_snapshot_failed",
             operation="collect_recording_operation_snapshot",
+            error=error,
+            status="failed",
+            level=logging.WARNING,
+        )
+
+    deactivation_now_provider = ctx.get(
+        "account_deactivation_observability_now",
+        lambda: datetime.now(UTC),
+    )
+    try:
+        async with session_factory() as session:
+            deactivation_snapshot = await AccountDeactivationRepository(
+                session
+            ).observability_snapshot(deactivation_now_provider())
+        telemetry.record_account_deactivation_snapshot(deactivation_snapshot)
+    except Exception as error:
+        from app.core.logging import report_safe_exception
+
+        report_safe_exception(
+            logger,
+            event="observability_snapshot_failed",
+            operation="collect_account_deactivation_snapshot",
             error=error,
             status="failed",
             level=logging.WARNING,

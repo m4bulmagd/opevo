@@ -11,7 +11,11 @@ from app.core.observability import (
 from app.core.runtime_validation import validate_worker_runtime
 from app.workers.jobs.call_finalization import call_finalization_job
 from app.workers.jobs.call_reconciliation import call_reconciliation_job
-from app.workers.jobs.outbox_delivery import outbox_delivery_job, outbox_reconciliation_job
+from app.workers.jobs.outbox_delivery import (
+    get_default_outbox_handlers,
+    outbox_delivery_job,
+    outbox_reconciliation_job,
+)
 from app.workers.jobs.transcript_flush import transcript_flush_job
 from app.workers.jobs.verification_expiry import verification_expiry_job
 
@@ -24,6 +28,7 @@ async def on_startup(ctx: dict) -> None:
         service_name="presvo-worker",
         endpoint=settings.otel_exporter_otlp_endpoint,
     )
+    ctx["outbox_handlers"] = get_default_outbox_handlers()
 
 
 async def on_shutdown(ctx: dict) -> None:

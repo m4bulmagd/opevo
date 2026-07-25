@@ -1,13 +1,21 @@
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account_deactivation_operation import (
     AccountDeactivationOperation,
     DeactivationTrigger,
 )
+
+
+@dataclass(frozen=True)
+class AccountDeactivationObservabilitySnapshot:
+    counts: dict[tuple[str, str], int]
+    oldest_incomplete_age_seconds: float
+    attention_counts: dict[str, int]
 
 
 class AccountDeactivationRepository:
@@ -60,6 +68,57 @@ class AccountDeactivationRepository:
             .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
+
+    async def observability_snapshot(
+        self,
+        now: datetime,
+    ) -> AccountDeactivationObservabilitySnapshot:
+        rows = await self.session.execute(
+            select(
+                AccountDeactivationOperation.trigger,
+                AccountDeactivationOperation.status,
+                func.count(AccountDeactivationOperation.id),
+            ).group_by(
+                AccountDeactivationOperation.trigger,
+                AccountDeactivationOperation.status,
+            )
+        )
+        counts = {
+            (trigger, status): int(count)
+            for trigger, status, count in rows
+        }
+        oldest = await self.session.scalar(
+            select(func.min(AccountDeactivationOperation.requested_at)).where(
+                AccountDeactivationOperation.completed_at.is_(None)
+            )
+        )
+        if oldest is None:
+            oldest_age = 0.0
+        else:
+            if oldest.tzinfo is None:
+                oldest = oldest.replace(tzinfo=now.tzinfo)
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=oldest.tzinfo)
+            oldest_age = max(0.0, (now - oldest).total_seconds())
+        attention_rows = await self.session.execute(
+            select(
+                AccountDeactivationOperation.trigger,
+                func.count(AccountDeactivationOperation.id),
+            )
+            .where(AccountDeactivationOperation.status == "attention_required")
+            .group_by(AccountDeactivationOperation.trigger)
+        )
+        attention_counts = {
+            "owner_request": 0,
+            "subscription_ended": 0,
+        }
+        for trigger, count in attention_rows:
+            attention_counts[trigger] = int(count)
+        return AccountDeactivationObservabilitySnapshot(
+            counts=counts,
+            oldest_incomplete_age_seconds=oldest_age,
+            attention_counts=attention_counts,
+        )
 
     async def create(
         self,
