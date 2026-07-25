@@ -9,6 +9,7 @@ from minio.error import InvalidResponseError, S3Error, ServerError
 from app.providers.notifications.firebase import FirebaseNotificationProvider
 from app.providers.storage.base import StorageProviderError
 from app.providers.storage.s3 import S3Storage, StorageConfigurationError
+from app.providers.telephony.twilio import TelephonyTwilio
 
 
 class _StorageTelemetry:
@@ -459,3 +460,9 @@ async def test_firebase_provider_remains_disabled_without_private_tokens() -> No
     )
 
     assert status == "disabled"
+
+
+@pytest.mark.anyio
+async def test_dormant_twilio_release_is_explicitly_unsupported() -> None:
+    with pytest.raises(NotImplementedError):
+        await TelephonyTwilio().release_number(provider_number_id="pn_123")

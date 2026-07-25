@@ -15,3 +15,6 @@ class TelephonyTwilio(TelephonyProvider):
 
     async def disable_number(self, *, provider_number_id: str) -> str:
         raise NotImplementedError
+
+    async def release_number(self, *, provider_number_id: str) -> None:
+        raise NotImplementedError

@@ -871,6 +871,18 @@ async def test_recording_listing_provider_operation_is_allowlisted_and_private()
 
 
 @pytest.mark.anyio
+async def test_telnyx_release_provider_operation_is_allowlisted() -> None:
+    tracer = _Tracer()
+    telemetry = _observability(tracer=tracer)
+
+    async with telemetry.provider_operation("telnyx", "release_number"):
+        await asyncio.sleep(0)
+
+    assert tracer.spans[0].attributes["presvo.provider.name"] == "telnyx"
+    assert tracer.spans[0].attributes["presvo.provider.operation"] == "release_number"
+
+
+@pytest.mark.anyio
 async def test_recording_not_running_provider_operation_is_allowlisted() -> None:
     tracer = _Tracer()
     telemetry = _observability(tracer=tracer)
@@ -1338,6 +1350,9 @@ async def test_validated_outbox_call_reference_correlates_nested_provider_span(
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
     factory = async_sessionmaker(engine, expire_on_commit=False)
     call_id = uuid4()
+    payload = {"call_id": str(call_id)}
+    if topic == "livekit.dispatch":
+        payload["lifecycle_generation"] = 1
     tracer = _Tracer()
     telemetry = _observability(tracer=tracer)
 
@@ -1364,7 +1379,7 @@ async def test_validated_outbox_call_reference_correlates_nested_provider_span(
                     aggregate_type=aggregate_type,
                     aggregate_id=call_id,
                     idempotency_key=f"correlation-{operation}",
-                    payload={"call_id": str(call_id)},
+                    payload=payload,
                     status="pending",
                     next_attempt_at=datetime.now(UTC),
                 )

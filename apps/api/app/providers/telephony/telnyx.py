@@ -343,7 +343,37 @@ class TelephonyTelnyx(TelephonyProvider):
         self._confirm_connection(response, self.disabled_connection_id)
         return "app-disabled"
 
+    @instrument_provider("telnyx", "release_number")
+    async def release_number(self, *, provider_number_id: str) -> None:
+        if not isinstance(provider_number_id, str) or not provider_number_id:
+            raise TelephonyProviderError(
+                "provider_terminal",
+                error_class="validation",
+            )
+        response = await self._run_resource_call(
+            self.phone_number_resource.delete,
+            provider_number_id,
+            api_key=self.api_key,
+            _allow_missing=True,
+        )
+        if response is None:
+            return
+
+        data = self._read_field(response, "data")
+        released_number_id = self._read_field(data, "id")
+        status = self._read_field(data, "status")
+        if not isinstance(released_number_id, str) or not isinstance(status, str):
+            raise TelephonyProviderError("provider_terminal")
+        if released_number_id != provider_number_id:
+            raise TelephonyProviderError(
+                "provider_terminal",
+                error_class="conflict",
+            )
+        if status != "deleted":
+            raise TelephonyProviderError("provider_terminal")
+
     async def _run_resource_call(self, operation, *args, **kwargs):
+        allow_missing = kwargs.pop("_allow_missing", False)
         try:
             return await asyncio.to_thread(operation, *args, **kwargs)
         except telnyx.error.APIConnectionError as exc:
@@ -379,9 +409,15 @@ class TelephonyTelnyx(TelephonyProvider):
                 "provider_terminal",
                 error_class="authentication",
             ) from None
+        except telnyx.error.ResourceNotFoundError as exc:
+            if allow_missing and exc.http_status == 404:
+                return None
+            raise TelephonyProviderError(
+                "provider_terminal",
+                error_class="validation",
+            ) from None
         except (
             telnyx.error.InvalidRequestError,
-            telnyx.error.ResourceNotFoundError,
             telnyx.error.MethodNotSupportedError,
             telnyx.error.UnsupportedMediaTypeError,
             telnyx.error.InvalidParametersError,
