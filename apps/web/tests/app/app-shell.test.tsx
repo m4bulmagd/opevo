@@ -2,15 +2,23 @@ import type { AnchorHTMLAttributes } from "react";
 
 import type { LinkProps } from "next/link";
 
-import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const listCallsMock = vi.fn();
-const getAccountMock = vi.fn();
-const cookiesMock = vi.fn();
-const redirectMock = vi.fn(() => {
-  throw new Error("NEXT_REDIRECT");
-});
+import type { AccountStatus } from "@/lib/types/account";
+import type { AgentConfig } from "@/lib/types/agent";
+
+const testState = vi.hoisted(() => ({
+  pathname: "/dashboard",
+  reducedMotion: false,
+  listCallsMock: vi.fn(),
+  getAccountMock: vi.fn(),
+  getAgentConfigForRequestMock: vi.fn(),
+  cookiesMock: vi.fn(),
+  redirectMock: vi.fn(() => {
+    throw new Error("NEXT_REDIRECT");
+  }),
+}));
 
 type MockLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
   href: string;
@@ -26,58 +34,302 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/dashboard",
-  redirect: redirectMock,
+  usePathname: () => testState.pathname,
+  redirect: testState.redirectMock,
 }));
 
 vi.mock("next/headers", () => ({
-  cookies: cookiesMock,
+  cookies: testState.cookiesMock,
 }));
 
 vi.mock("@/lib/api/calls", () => ({
-  listCalls: listCallsMock,
+  listCalls: testState.listCallsMock,
 }));
 
 vi.mock("@/lib/api/account", () => ({
-  getAccount: getAccountMock,
+  getAccount: testState.getAccountMock,
 }));
 
-vi.mock("@/app/(app)/dashboard/_components/sidebar/layout-controls", () => ({
-  LayoutControls: () => <div data-testid="layout-controls" />,
+vi.mock("@/lib/api/request-data", () => ({
+  getAgentConfigForRequest: testState.getAgentConfigForRequestMock,
 }));
 
-vi.mock("@/app/(app)/dashboard/_components/sidebar/theme-switcher", () => ({
-  ThemeSwitcher: () => <div data-testid="theme-switcher" />,
+vi.mock("@/lib/fonts/registry", () => ({
+  authenticatedFontVariable: "font-figtree",
 }));
+
+vi.mock("motion/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("motion/react")>();
+
+  return {
+    ...actual,
+    useReducedMotion: () => testState.reducedMotion,
+  };
+});
+
+const activeAccount: AccountStatus = {
+  status: "active",
+  serving: true,
+  deactivation: null,
+  reactivation_allowed: false,
+  blocker: null,
+};
+
+function agentConfig(agentName: string, isEnabled = true): AgentConfig {
+  return {
+    agent_name: agentName,
+    owner_context: "Reception for North Clinic",
+    system_prompt: "Be helpful.",
+    knowledge_base: "Open weekdays",
+    pipeline_mode: "stt_llm_tts",
+    is_enabled: isEnabled,
+  };
+}
+
+async function renderDashboardLayout({
+  account = activeAccount,
+  agentEnabled = true,
+  agentName = "Ava",
+}: {
+  account?: AccountStatus;
+  agentEnabled?: boolean;
+  agentName?: string;
+} = {}) {
+  vi.stubEnv("NODE_ENV", "development");
+  vi.stubEnv("AUTH_MODE", "local");
+  testState.getAccountMock.mockResolvedValue(account);
+  testState.getAgentConfigForRequestMock.mockResolvedValue(agentConfig(agentName, agentEnabled));
+  testState.cookiesMock.mockResolvedValue({ get: vi.fn().mockReturnValue(undefined) });
+
+  const { default: DashboardLayout } = await import("@/app/(app)/dashboard/layout");
+  const { TooltipProvider } = await import("@/components/ui/tooltip");
+  const { PreferencesStoreProvider } = await import("@/stores/preferences/preferences-provider");
+
+  return render(
+    <TooltipProvider>
+      <PreferencesStoreProvider themeMode="light">
+        {
+          await DashboardLayout({
+            children: <div>Dashboard content</div>,
+          })
+        }
+      </PreferencesStoreProvider>
+    </TooltipProvider>,
+  );
+}
+
+function desktopNavigation() {
+  const rail = screen.getByRole("complementary", { name: "Workspace command rail" });
+  return within(rail).getByRole("navigation", { name: "Workspace navigation" });
+}
+
+beforeAll(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {
+        return undefined;
+      }
+      unobserve() {
+        return undefined;
+      }
+      disconnect() {
+        return undefined;
+      }
+    },
+  );
+});
+
+beforeEach(() => {
+  testState.pathname = "/dashboard";
+  testState.reducedMotion = false;
+  testState.listCallsMock.mockReset();
+  testState.getAccountMock.mockReset();
+  testState.getAgentConfigForRequestMock.mockReset();
+  testState.cookiesMock.mockReset();
+  testState.redirectMock.mockClear();
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.resetModules();
-  listCallsMock.mockReset();
-  getAccountMock.mockReset();
-  cookiesMock.mockReset();
-  redirectMock.mockClear();
+});
+
+afterAll(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("app shell", () => {
-  it("renders Dashboard, Calls, Agent, Billing, and Account in the sidebar", async () => {
-    const { AppSidebar } = await import("@/app/(app)/dashboard/_components/sidebar/app-sidebar");
-    const { SidebarProvider } = await import("@/components/ui/sidebar");
-    const { TooltipProvider } = await import("@/components/ui/tooltip");
+  it("uses the configured agent name in the complete desktop destination set", async () => {
+    await renderDashboardLayout({ agentName: "Ava" });
 
-    render(
-      <TooltipProvider>
-        <SidebarProvider defaultOpen>
-          <AppSidebar />
-        </SidebarProvider>
-      </TooltipProvider>,
+    const navigation = desktopNavigation();
+    const destinations = within(navigation).getAllByRole("link");
+
+    expect(destinations).toHaveLength(5);
+    expect(destinations.map((link) => link.getAttribute("href"))).toEqual([
+      "/dashboard",
+      "/dashboard/calls",
+      "/dashboard/agent",
+      "/dashboard/billing",
+      "/dashboard/account",
+    ]);
+    expect(destinations.map((link) => link.getAttribute("aria-label"))).toEqual([
+      "Overview",
+      "Calls",
+      "Ava",
+      "Billing",
+      "Account",
+    ]);
+  });
+
+  it.each([
+    ["Enabled", true],
+    ["Paused", false],
+  ] as const)("shows the configured agent and honest %s runtime state in the labelled rail", async (state, agentEnabled) => {
+    const longAgentName = "Ava, North Clinic Evening Receptionist";
+    await renderDashboardLayout({ agentEnabled, agentName: longAgentName });
+
+    const rail = screen.getByRole("complementary", { name: "Workspace command rail" });
+    const runtime = within(rail).getByRole("group", {
+      name: `Agent runtime: ${longAgentName}, ${state}`,
+    });
+    const visibleAgentName = within(runtime).getByText(longAgentName);
+
+    expect(runtime).toHaveClass("hidden", "lg:block");
+    expect(visibleAgentName).toHaveClass("truncate");
+    expect(visibleAgentName).toHaveAttribute("title", longAgentName);
+    expect(within(runtime).getByText(state)).toBeInTheDocument();
+  });
+
+  it("normalizes a blank configured agent name to Receptionist in desktop and mobile navigation", async () => {
+    await renderDashboardLayout({ agentName: " \n\t " });
+
+    expect(within(desktopNavigation()).getByRole("link", { name: "Receptionist" })).toHaveAttribute(
+      "href",
+      "/dashboard/agent",
+    );
+    expect(
+      within(screen.getByRole("navigation", { name: "Mobile workspace navigation" })).getByRole("link", {
+        name: "Receptionist",
+      }),
+    ).toHaveAttribute("href", "/dashboard/agent");
+  });
+
+  it("truncates only the visible long agent label while preserving its accessible name and tooltip", async () => {
+    const longAgentName = "Ava, North Clinic Evening Receptionist";
+    await renderDashboardLayout({ agentName: `  ${longAgentName}  ` });
+
+    const agentLink = within(desktopNavigation()).getByRole("link", { name: longAgentName });
+    const visibleLabel = within(agentLink).getByText(longAgentName);
+
+    expect(visibleLabel).toHaveClass("truncate");
+    expect(agentLink).toHaveAccessibleName(longAgentName);
+
+    fireEvent.focus(agentLink);
+    expect(await screen.findByRole("tooltip", { name: longAgentName })).toBeInTheDocument();
+  });
+
+  it("exposes labelled desktop, compact tablet, and mobile shell compositions", async () => {
+    const view = await renderDashboardLayout();
+
+    const rail = screen.getByRole("complementary", { name: "Workspace command rail" });
+    expect(rail).toHaveClass("hidden", "md:flex", "md:w-18", "lg:w-64");
+
+    for (const link of within(desktopNavigation()).getAllByRole("link")) {
+      expect(link).toHaveClass("min-h-11", "min-w-11");
+      expect(within(link).getByText(link.getAttribute("aria-label") ?? "")).toHaveClass(
+        "hidden",
+        "truncate",
+        "lg:block",
+      );
+    }
+
+    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
+    expect(mobileNavigation).toHaveClass("md:hidden");
+    expect(within(mobileNavigation).getAllByRole("link")).toHaveLength(3);
+    for (const link of within(mobileNavigation).getAllByRole("link")) {
+      expect(link).toHaveClass("min-h-11", "min-w-11");
+    }
+    expect(
+      within(mobileNavigation)
+        .getAllByRole("link")
+        .map((link) => link.getAttribute("aria-label")),
+    ).toEqual(["Overview", "Calls", "Ava"]);
+    expect(within(mobileNavigation).getByRole("button", { name: "More" })).toHaveClass("min-h-11", "min-w-11");
+    expect(within(mobileNavigation).queryByRole("link", { name: "Billing" })).not.toBeInTheDocument();
+    expect(within(mobileNavigation).queryByRole("link", { name: "Account" })).not.toBeInTheDocument();
+
+    const workspaceHeader = screen.getByRole("banner");
+    expect(workspaceHeader).not.toHaveClass("hidden", "md:hidden");
+    expect(within(workspaceHeader).getByText("Local development")).toBeInTheDocument();
+    expect(within(workspaceHeader).getByRole("button", { name: /Current theme:/i })).toHaveClass("size-11");
+
+    const workspaceShell = view.container.querySelector('[data-slot="workspace-shell"]');
+    const workspaceContent = view.container.querySelector('[data-slot="workspace-content"]');
+    expect(workspaceShell).toHaveClass("font-figtree", "font-[family-name:var(--font-figtree)]");
+    expect(document.body).not.toHaveClass("font-figtree");
+    expect(workspaceContent).toHaveClass(
+      "pb-[calc(4rem+env(safe-area-inset-bottom))]",
+      "md:pb-0",
+      "md:pl-18",
+      "lg:pl-64",
     );
 
-    expect(screen.getByRole("link", { name: /Dashboard/i })).toHaveAttribute("href", "/dashboard");
-    expect(screen.getByRole("link", { name: /Calls/i })).toHaveAttribute("href", "/dashboard/calls");
-    expect(screen.getByRole("link", { name: /Agent/i })).toHaveAttribute("href", "/dashboard/agent");
-    expect(screen.getByRole("link", { name: /Billing/i })).toHaveAttribute("href", "/dashboard/billing");
-    expect(screen.getByRole("link", { name: /Account/i })).toHaveAttribute("href", "/dashboard/account");
+    const activeMarkers = view.container.querySelectorAll('[data-slot="active-navigation-marker"]');
+    expect(activeMarkers).toHaveLength(2);
+    expect(new Set(Array.from(activeMarkers, (marker) => marker.getAttribute("data-layout-id"))).size).toBe(2);
+    for (const marker of activeMarkers) {
+      expect(marker).toHaveAttribute("data-motion", "layout");
+      expect(marker.getAttribute("data-layout-id")).toMatch(/^workspace-active-/);
+    }
+  });
+
+  it("uses static active markers when the user prefers reduced motion", async () => {
+    testState.reducedMotion = true;
+    const view = await renderDashboardLayout();
+
+    const activeMarkers = view.container.querySelectorAll('[data-slot="active-navigation-marker"]');
+    expect(activeMarkers).toHaveLength(2);
+    for (const marker of activeMarkers) {
+      expect(marker).toHaveAttribute("data-motion", "static");
+      expect(marker).not.toHaveAttribute("data-layout-id");
+    }
+  });
+
+  it("announces and traps the More sheet, closes it with Escape, and restores focus", async () => {
+    await renderDashboardLayout();
+
+    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
+    const moreTrigger = within(mobileNavigation).getByRole("button", { name: "More" });
+    const backgroundControl = within(screen.getByRole("banner")).getByRole("button", {
+      name: /Current theme:/i,
+    });
+    fireEvent.click(moreTrigger);
+
+    const sheet = await screen.findByRole("dialog", { name: "More workspace destinations" });
+    const billingLink = within(sheet).getByRole("link", { name: "Billing" });
+    const accountLink = within(sheet).getByRole("link", { name: "Account" });
+
+    expect(billingLink).toHaveAttribute("href", "/dashboard/billing");
+    expect(accountLink).toHaveAttribute("href", "/dashboard/account");
+    await waitFor(() => expect(sheet).toContainElement(document.activeElement as HTMLElement));
+
+    backgroundControl.focus();
+    await waitFor(() => expect(sheet).toContainElement(document.activeElement as HTMLElement));
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "More workspace destinations" })).toBeNull());
+    await waitFor(() => expect(moreTrigger).toHaveFocus());
+  });
+
+  it("marks only the matching nested destination as the current page", async () => {
+    testState.pathname = "/dashboard/calls/call-123";
+    await renderDashboardLayout();
+
+    const navigation = desktopNavigation();
+    expect(within(navigation).getByRole("link", { name: "Calls" })).toHaveAttribute("aria-current", "page");
+    expect(within(navigation).getByRole("link", { name: "Overview" })).not.toHaveAttribute("aria-current");
   });
 
   it("renders protected dashboard content in guarded local mode", async () => {
@@ -85,7 +337,7 @@ describe("app shell", () => {
     vi.stubEnv("AUTH_MODE", "local");
     vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "");
     vi.stubEnv("CLERK_SECRET_KEY", "");
-    listCallsMock.mockResolvedValueOnce({
+    testState.listCallsMock.mockResolvedValueOnce({
       calls: [],
       total: 0,
       limit: 20,
@@ -127,43 +379,40 @@ describe("app shell", () => {
       },
       "Presvo is inactive",
     ],
-  ] as const)("shows the global lifecycle banner and retained navigation while %s", async (_status, account, title) => {
-    vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "local");
-    cookiesMock.mockResolvedValue({ get: vi.fn().mockReturnValue(undefined) });
-    getAccountMock.mockResolvedValue(account);
-
-    const { default: DashboardLayout } = await import("@/app/(app)/dashboard/layout");
-    const { TooltipProvider } = await import("@/components/ui/tooltip");
-    render(<TooltipProvider>{await DashboardLayout({ children: <div>Dashboard content</div> })}</TooltipProvider>);
+  ] as const)("shows the global lifecycle banner and every retained navigation destination while %s", async (_status, account, title) => {
+    await renderDashboardLayout({ account });
 
     expect(screen.getByText(title)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^Account$/i })).toHaveAttribute("href", "/dashboard/account");
-    expect(screen.getByRole("link", { name: /^Calls$/i })).toHaveAttribute("href", "/dashboard/calls");
-    expect(screen.getByRole("link", { name: /^Billing$/i })).toHaveAttribute("href", "/dashboard/billing");
+    expect(
+      within(desktopNavigation())
+        .getAllByRole("link")
+        .map((link) => link.getAttribute("href")),
+    ).toEqual(["/dashboard", "/dashboard/calls", "/dashboard/agent", "/dashboard/billing", "/dashboard/account"]);
+
+    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
+    fireEvent.click(within(mobileNavigation).getByRole("button", { name: "More" }));
+    const sheet = await screen.findByRole("dialog", { name: "More workspace destinations" });
+    expect(within(sheet).getByRole("link", { name: "Billing" })).toBeInTheDocument();
+    expect(within(sheet).getByRole("link", { name: "Account" })).toBeInTheDocument();
   });
 
   it("omits the global lifecycle banner while active and retains navigation", async () => {
-    vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "local");
-    cookiesMock.mockResolvedValue({ get: vi.fn().mockReturnValue(undefined) });
-    getAccountMock.mockResolvedValue({
-      status: "active",
-      serving: true,
-      deactivation: null,
-      reactivation_allowed: false,
-      blocker: null,
-    });
-
-    const { default: DashboardLayout } = await import("@/app/(app)/dashboard/layout");
-    const { TooltipProvider } = await import("@/components/ui/tooltip");
-    render(<TooltipProvider>{await DashboardLayout({ children: <div>Dashboard content</div> })}</TooltipProvider>);
+    await renderDashboardLayout();
 
     expect(screen.queryByText("Presvo is no longer accepting new calls")).not.toBeInTheDocument();
     expect(screen.queryByText("Presvo is inactive")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^Account$/i })).toHaveAttribute("href", "/dashboard/account");
-    expect(screen.getByRole("link", { name: /^Calls$/i })).toHaveAttribute("href", "/dashboard/calls");
-    expect(screen.getByRole("link", { name: /^Billing$/i })).toHaveAttribute("href", "/dashboard/billing");
+    expect(within(desktopNavigation()).getByRole("link", { name: "Account" })).toHaveAttribute(
+      "href",
+      "/dashboard/account",
+    );
+    expect(within(desktopNavigation()).getByRole("link", { name: "Calls" })).toHaveAttribute(
+      "href",
+      "/dashboard/calls",
+    );
+    expect(within(desktopNavigation()).getByRole("link", { name: "Billing" })).toHaveAttribute(
+      "href",
+      "/dashboard/billing",
+    );
   });
 
   it.each([
@@ -178,6 +427,6 @@ describe("app shell", () => {
     const { default: AuthPage } = await import(/* @vite-ignore */ modulePath);
 
     await expect(AuthPage()).rejects.toThrow("NEXT_REDIRECT");
-    expect(redirectMock).toHaveBeenCalledWith("/activate");
+    expect(testState.redirectMock).toHaveBeenCalledWith("/activate");
   });
 });
