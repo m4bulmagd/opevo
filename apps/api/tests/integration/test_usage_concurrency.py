@@ -125,7 +125,7 @@ async def test_concurrent_local_starter_activation_preserves_first_period_and_gr
     user_id = user.id
     first_now = datetime(2026, 7, 18, 10, tzinfo=UTC)
     later_now = first_now + timedelta(days=5)
-    grant_source = f"local-starter:{user_id}"
+    grant_source = f"local_invoice_{user_id}_g1"
 
     async def activate(
         now: datetime,
@@ -241,7 +241,9 @@ async def test_concurrent_local_starter_activation_preserves_first_period_and_gr
         balance = await UsageRepository(session).get_current_balance(user_id=user_id)
 
     assert len(subscriptions) == 1
-    assert subscriptions[0].stripe_subscription_id == f"local_subscription_{user_id}"
+    assert subscriptions[0].stripe_subscription_id == (
+        f"local_subscription_{user_id}_g1"
+    )
     assert subscriptions[0].current_period_start == first_now
     assert subscriptions[0].current_period_end == first_now + timedelta(days=30)
     assert len(grants) == 1
