@@ -59,6 +59,7 @@ from app.services.livekit_dispatch_service import (
 from app.services.livekit_dispatch_lock import livekit_dispatch_lock
 from app.services.livekit_dispatch_lock import verification_dispatch_lock
 from app.services.livekit_recording_service import LiveKitRecordingService
+from app.services.provider_work_policy import UnresolvedProviderWorkError
 from app.services.forwarding_verification_service import COMPLETION_GRACE, as_utc
 from app.services.summary_service import SummaryService
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
@@ -119,13 +120,11 @@ async def deliver_phone_provision(
         lifecycle_generation=lifecycle_generation,
     )
     async with session_factory() as session:
-        provisioning = await PhoneNumberProvisioningRepository(
-            session
-        ).get_by_user_id(user_id)
+        provisioning = await PhoneNumberProvisioningRepository(session).get_by_user_id(
+            user_id
+        )
         provider_operation_key = (
-            provisioning.provider_operation_key
-            if provisioning is not None
-            else None
+            provisioning.provider_operation_key if provisioning is not None else None
         )
         await session.commit()
     if not provider_operation_key:
@@ -140,6 +139,12 @@ async def deliver_phone_provision(
         raise OutboxDeliveryError(
             "dispatch_ineligible",
             retryable=False,
+        ) from None
+    except UnresolvedProviderWorkError:
+        raise OutboxDeliveryError(
+            "provider_retryable",
+            retryable=True,
+            exhaustible=False,
         ) from None
     except TelephonyProviderError as exc:
         raise OutboxDeliveryError(
@@ -957,9 +962,7 @@ async def deliver_livekit_verification_dispatch(
         )
 
         try:
-            dispatches = await provider.list_dispatches(
-                room_name=snapshot.room_name
-            )
+            dispatches = await provider.list_dispatches(room_name=snapshot.room_name)
         except ValueError:
             raise OutboxDeliveryError(
                 "dispatch_configuration",
@@ -1097,11 +1100,9 @@ async def _verification_dispatch_snapshot(
             )
         user_id = resolved_activation.user_id
         user = await UserRepository(session).get_by_id_for_update(user_id)
-        activation = (
-            await CustomerActivationRepository(session).get_by_user_id_for_update(
-                user_id
-            )
-        )
+        activation = await CustomerActivationRepository(
+            session
+        ).get_by_user_id_for_update(user_id)
         if (
             user is None
             or user.status != "active"

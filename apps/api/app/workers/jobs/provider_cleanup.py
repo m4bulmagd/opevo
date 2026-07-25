@@ -7,12 +7,18 @@ from uuid import UUID
 from app.core.config import get_settings
 from app.core.database import get_session_factory
 from app.models.outbox_event import OutboxEvent
+from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.providers.subscriptions.base import SubscriptionProviderError
 from app.providers.subscriptions.factory import build_subscription_provider
 from app.providers.telephony.base import TelephonyProviderError
 from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
+from app.repositories.phone_number_provisioning_repository import (
+    PhoneNumberProvisioningRepository,
+)
+from app.repositories.user_repository import UserRepository
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+from app.workers.provider_single_flight import provider_single_flight
 
 
 @dataclass(frozen=True)
@@ -33,24 +39,50 @@ async def deliver_provider_cleanup(
         "provider_cleanup_now",
         lambda: datetime.now(UTC),
     )
-    snapshot = await _begin_attempt(session_factory, operation_id)
-    if snapshot is None:
-        return
+    async with provider_single_flight(
+        session_factory,
+        f"provider.cleanup:{operation_id}",
+    ) as provider_guard:
+        snapshot = await _begin_attempt(session_factory, operation_id)
+        if snapshot is None:
+            return
 
-    if snapshot.resource_type == "phone_number":
-        provider = ctx.get("telephony_provider")
-        if provider is None:
-            provider = create_telephony_provider(get_settings())
-        if not snapshot.routing_disabled:
+        if snapshot.resource_type == "phone_number":
+            provider = ctx.get("telephony_provider")
+            if provider is None:
+                provider = create_telephony_provider(get_settings())
+            if not snapshot.routing_disabled:
+                try:
+                    provider_guard.assert_transaction_free()
+                    result = await provider.disable_number(
+                        provider_number_id=snapshot.provider_resource_id
+                    )
+                    if result != "app-disabled":
+                        raise TelephonyProviderError(
+                            "provider_retryable",
+                            error_class="conflict",
+                        )
+                except TelephonyProviderError as error:
+                    await _record_failure(
+                        session_factory,
+                        operation_id,
+                        error.category,
+                    )
+                    raise OutboxDeliveryError(
+                        error.category,
+                        retryable=error.retryable,
+                        exhaustible=not error.retryable,
+                    ) from None
+                await _mark_routing_disabled(
+                    session_factory,
+                    operation_id,
+                    now_provider(),
+                )
             try:
-                result = await provider.disable_number(
+                provider_guard.assert_transaction_free()
+                await provider.release_number(
                     provider_number_id=snapshot.provider_resource_id
                 )
-                if result != "app-disabled":
-                    raise TelephonyProviderError(
-                        "provider_retryable",
-                        error_class="conflict",
-                    )
             except TelephonyProviderError as error:
                 await _record_failure(
                     session_factory,
@@ -62,45 +94,26 @@ async def deliver_provider_cleanup(
                     retryable=error.retryable,
                     exhaustible=not error.retryable,
                 ) from None
-            await _mark_routing_disabled(
-                session_factory,
-                operation_id,
-                now_provider(),
-            )
-        try:
-            await provider.release_number(
-                provider_number_id=snapshot.provider_resource_id
-            )
-        except TelephonyProviderError as error:
-            await _record_failure(
-                session_factory,
-                operation_id,
-                error.category,
-            )
-            raise OutboxDeliveryError(
-                error.category,
-                retryable=error.retryable,
-                exhaustible=not error.retryable,
-            ) from None
-    else:
-        provider = ctx.get("subscription_provider")
-        if provider is None:
-            provider = build_subscription_provider(get_settings())
-        try:
-            await provider.cancel_immediately(snapshot.provider_resource_id)
-        except SubscriptionProviderError as error:
-            await _record_failure(
-                session_factory,
-                operation_id,
-                error.category,
-            )
-            raise OutboxDeliveryError(
-                error.category,
-                retryable=error.retryable,
-                exhaustible=not error.retryable,
-            ) from None
+        else:
+            provider = ctx.get("subscription_provider")
+            if provider is None:
+                provider = build_subscription_provider(get_settings())
+            try:
+                provider_guard.assert_transaction_free()
+                await provider.cancel_immediately(snapshot.provider_resource_id)
+            except SubscriptionProviderError as error:
+                await _record_failure(
+                    session_factory,
+                    operation_id,
+                    error.category,
+                )
+                raise OutboxDeliveryError(
+                    error.category,
+                    retryable=error.retryable,
+                    exhaustible=not error.retryable,
+                ) from None
 
-    await _mark_completed(session_factory, operation_id, now_provider())
+        await _mark_completed(session_factory, operation_id, now_provider())
 
 
 def _validated_operation_id(event: OutboxEvent) -> UUID:
@@ -120,11 +133,11 @@ def _validated_operation_id(event: OutboxEvent) -> UUID:
     return operation_id
 
 
-async def _begin_attempt(session_factory, operation_id: UUID) -> _CleanupSnapshot | None:
+async def _begin_attempt(
+    session_factory, operation_id: UUID
+) -> _CleanupSnapshot | None:
     async with session_factory() as session:
-        operation = await ProviderCleanupRepository(session).get_by_id_for_update(
-            operation_id
-        )
+        operation = await _lock_operation_with_owner(session, operation_id)
         if operation is None:
             await session.commit()
             raise OutboxDeliveryError("invalid_payload", retryable=False)
@@ -150,9 +163,7 @@ async def _mark_routing_disabled(
     now: datetime,
 ) -> None:
     async with session_factory() as session:
-        operation = await ProviderCleanupRepository(session).get_by_id_for_update(
-            operation_id
-        )
+        operation = await _lock_operation_with_owner(session, operation_id)
         if operation is not None and operation.routing_disabled_at is None:
             operation.routing_disabled_at = now
         await session.commit()
@@ -164,9 +175,7 @@ async def _record_failure(
     error_code: str,
 ) -> None:
     async with session_factory() as session:
-        operation = await ProviderCleanupRepository(session).get_by_id_for_update(
-            operation_id
-        )
+        operation = await _lock_operation_with_owner(session, operation_id)
         if operation is not None and operation.completed_at is None:
             operation.status = (
                 "pending"
@@ -183,11 +192,27 @@ async def _mark_completed(
     now: datetime,
 ) -> None:
     async with session_factory() as session:
-        operation = await ProviderCleanupRepository(session).get_by_id_for_update(
-            operation_id
-        )
+        operation = await _lock_operation_with_owner(session, operation_id)
         if operation is not None and operation.completed_at is None:
+            if operation.resource_type == "phone_number":
+                await PhoneNumberProvisioningRepository(session).delete_for_user_id(
+                    operation.user_id
+                )
             operation.status = "completed"
             operation.completed_at = now
             operation.last_error_code = None
         await session.commit()
+
+
+async def _lock_operation_with_owner(
+    session,
+    operation_id: UUID,
+) -> ProviderCleanupOperation | None:
+    repository = ProviderCleanupRepository(session)
+    observed = await session.get(ProviderCleanupOperation, operation_id)
+    if observed is None:
+        return None
+    owner = await UserRepository(session).get_by_id_for_update(observed.user_id)
+    if owner is None:
+        return None
+    return await repository.get_by_id_for_update(operation_id)

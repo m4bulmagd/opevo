@@ -14,7 +14,9 @@ class PhoneNumberProvisioningRepository:
 
     async def get_by_user_id(self, user_id) -> PhoneNumberProvisioning | None:
         result = await self.session.execute(
-            select(PhoneNumberProvisioning).where(PhoneNumberProvisioning.user_id == user_id)
+            select(PhoneNumberProvisioning).where(
+                PhoneNumberProvisioning.user_id == user_id
+            )
         )
         return result.scalar_one_or_none()
 
@@ -113,7 +115,9 @@ class PhoneNumberProvisioningRepository:
         await self.session.flush()
         return provisioning
 
-    async def mark_succeeded(self, *, user_id, phone_number_id, target_country_code: str) -> PhoneNumberProvisioning:
+    async def mark_succeeded(
+        self, *, user_id, phone_number_id, target_country_code: str
+    ) -> PhoneNumberProvisioning:
         provisioning = await self.get_by_user_id(user_id)
         if provisioning is None:
             provisioning = PhoneNumberProvisioning(
@@ -184,6 +188,13 @@ class PhoneNumberProvisioningRepository:
     async def delete_for_user_id(self, user_id) -> None:
         provisioning = await self.get_by_user_id_for_update(user_id)
         if provisioning is None:
+            return
+        await self.session.delete(provisioning)
+        await self.session.flush()
+
+    async def delete_resolved_for_deactivation(self, user_id) -> None:
+        provisioning = await self.get_by_user_id_for_update(user_id)
+        if provisioning is None or provisioning.status == "running":
             return
         await self.session.delete(provisioning)
         await self.session.flush()

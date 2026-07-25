@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from sqlalchemy import func, select
 
 from app.models.billing_checkout_attempt import BillingCheckoutAttempt
+from app.models.phone_number_provisioning import PhoneNumberProvisioning
+from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.subscription import Subscription
 
 
@@ -175,4 +177,62 @@ async def test_prepare_checkout_reuses_retained_customer_and_attempt(
             select(func.count()).select_from(BillingCheckoutAttempt)
         )
         == 1
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("unresolved_work", ["provider_cleanup", "provisioning"])
+async def test_prepare_checkout_blocks_unresolved_prior_provider_work(
+    db_session,
+    active_user,
+    unresolved_work: str,
+) -> None:
+    from app.services.billing_query_service import BillingQueryService
+
+    active_user.status = "inactive"
+    active_user.lifecycle_generation = 2
+    db_session.add(
+        Subscription(
+            user_id=active_user.id,
+            stripe_customer_id="cus_retained_blocked",
+            stripe_subscription_id="sub_canceled_blocked",
+            plan_tier="starter",
+            status="canceled",
+            allocated_minutes=60,
+            lifecycle_generation=1,
+        )
+    )
+    if unresolved_work == "provider_cleanup":
+        db_session.add(
+            ProviderCleanupOperation(
+                user_id=active_user.id,
+                lifecycle_generation=1,
+                resource_type="stripe_subscription",
+                provider_resource_id="sub-stale-unresolved",
+                status="pending",
+            )
+        )
+    else:
+        db_session.add(
+            PhoneNumberProvisioning(
+                user_id=active_user.id,
+                target_country_code="FR",
+                status="running",
+                attempt_count=1,
+                can_retry=False,
+                provider_operation_key="activation:provision:prior-generation",
+            )
+        )
+    await db_session.commit()
+
+    preparation = await BillingQueryService(db_session).prepare_checkout_attempt(
+        active_user.id
+    )
+
+    assert preparation.allowed is False
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(BillingCheckoutAttempt)
+        )
+        == 0
     )

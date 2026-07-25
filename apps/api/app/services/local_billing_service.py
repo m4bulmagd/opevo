@@ -8,9 +8,14 @@ from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
 )
 from app.repositories.phone_number_repository import PhoneNumberRepository
+from app.repositories.phone_number_provisioning_repository import (
+    PhoneNumberProvisioningRepository,
+)
+from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.user_repository import UserRepository
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
+from app.services.provider_work_policy import unresolved_provider_work_blocker
 from app.services.usage_accounting_service import UsageAccountingService
 
 
@@ -30,6 +35,10 @@ class LocalBillingService:
         self.user_repository = UserRepository(session)
         self.account_deactivation_repository = AccountDeactivationRepository(session)
         self.phone_number_repository = PhoneNumberRepository(session)
+        self.phone_number_provisioning_repository = PhoneNumberProvisioningRepository(
+            session
+        )
+        self.provider_cleanup_repository = ProviderCleanupRepository(session)
         self.subscription_repository = SubscriptionRepository(session)
         self.usage_accounting_service = UsageAccountingService(session)
 
@@ -62,6 +71,16 @@ class LocalBillingService:
             incomplete_operation = await self.account_deactivation_repository.get_incomplete_by_user_id_for_update(
                 user_id
             )
+            cleanup_operations = await self.provider_cleanup_repository.list_incomplete_by_user_id_for_update(
+                user_id
+            )
+            provisioning = await self.phone_number_provisioning_repository.get_by_user_id_for_update(
+                user_id
+            )
+            provider_work_blocker = unresolved_provider_work_blocker(
+                cleanup_operations=cleanup_operations,
+                provisioning=provisioning,
+            )
 
             subscription = await self.subscription_repository.get_by_user_id_for_update(
                 user_id
@@ -75,6 +94,8 @@ class LocalBillingService:
                     lifecycle_generation=lifecycle_generation,
                 )
             )
+            if user.status == "inactive" and provider_work_blocker is not None:
+                raise LocalBillingConflictError("local_subscription_unavailable")
             if not is_expected_subscription:
                 if subscription is not None and not (
                     subscription.stripe_subscription_id or ""

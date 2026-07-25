@@ -14,6 +14,10 @@ from app.repositories.account_deactivation_repository import (
 )
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
+from app.repositories.phone_number_provisioning_repository import (
+    PhoneNumberProvisioningRepository,
+)
+from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.account import (
@@ -22,6 +26,7 @@ from app.schemas.account import (
 )
 from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.outbox_service import OutboxService
+from app.services.provider_work_policy import unresolved_provider_work_blocker
 
 
 logger = logging.getLogger(__name__)
@@ -35,6 +40,9 @@ class AccountLifecycleService:
         account_deactivation_repository: AccountDeactivationRepository | None = None,
         agent_config_repository: AgentConfigRepository | None = None,
         phone_number_repository: PhoneNumberRepository | None = None,
+        phone_number_provisioning_repository: PhoneNumberProvisioningRepository
+        | None = None,
+        provider_cleanup_repository: ProviderCleanupRepository | None = None,
         readiness_service: CustomerReadinessService | None = None,
         subscription_repository: SubscriptionRepository | None = None,
         outbox_service: OutboxService | None = None,
@@ -46,11 +54,18 @@ class AccountLifecycleService:
         self.account_deactivation_repository = (
             account_deactivation_repository or AccountDeactivationRepository(session)
         )
-        self.agent_config_repository = (
-            agent_config_repository or AgentConfigRepository(session)
+        self.agent_config_repository = agent_config_repository or AgentConfigRepository(
+            session
         )
-        self.phone_number_repository = (
-            phone_number_repository or PhoneNumberRepository(session)
+        self.phone_number_repository = phone_number_repository or PhoneNumberRepository(
+            session
+        )
+        self.phone_number_provisioning_repository = (
+            phone_number_provisioning_repository
+            or PhoneNumberProvisioningRepository(session)
+        )
+        self.provider_cleanup_repository = (
+            provider_cleanup_repository or ProviderCleanupRepository(session)
         )
         self.readiness_service = readiness_service or CustomerReadinessService(session)
         self.subscription_repository = (
@@ -62,7 +77,7 @@ class AccountLifecycleService:
         self.now = now_provider or (lambda: datetime.now(UTC))
 
     async def get_account(self, user_id: UUID) -> AccountStatusResponse:
-        user = await self.user_repository.get_by_id(user_id)
+        user = await self.user_repository.get_by_id_for_update(user_id)
         if user is None:
             raise ValueError("Account not found")
 
@@ -95,8 +110,22 @@ class AccountLifecycleService:
             )
 
         phone_number = await self.phone_number_repository.get_by_user_id(user_id)
+        cleanup_operations = await self.provider_cleanup_repository.list_incomplete_by_user_id_for_update(
+            user_id
+        )
+        provisioning = (
+            await self.phone_number_provisioning_repository.get_by_user_id_for_update(
+                user_id
+            )
+        )
+        provider_work_blocker = unresolved_provider_work_blocker(
+            cleanup_operations=cleanup_operations,
+            provisioning=provisioning,
+        )
         incomplete = operation is not None and operation.completed_at is None
-        reactivation_allowed = not incomplete and phone_number is None
+        reactivation_allowed = (
+            not incomplete and phone_number is None and provider_work_blocker is None
+        )
         return AccountStatusResponse(
             status="inactive",
             serving=False,
@@ -104,7 +133,11 @@ class AccountLifecycleService:
             reactivation_allowed=reactivation_allowed,
             blocker=(
                 "deactivation_attention_required"
-                if progress is not None and progress.state == "attention_required"
+                if (
+                    progress is not None
+                    and progress.state == "attention_required"
+                    or provider_work_blocker == "deactivation_attention_required"
+                )
                 else "reactivation_not_ready"
                 if not reactivation_allowed
                 else None
@@ -145,15 +178,15 @@ class AccountLifecycleService:
             user_id
         )
         config = await self.agent_config_repository.get_by_user_id_for_update(user_id)
-        incomplete = (
-            await self.account_deactivation_repository.get_incomplete_by_user_id_for_update(
-                user_id
-            )
+        incomplete = await self.account_deactivation_repository.get_incomplete_by_user_id_for_update(
+            user_id
         )
         if incomplete is not None:
             return incomplete
 
-        latest = await self.account_deactivation_repository.get_latest_by_user_id(user_id)
+        latest = await self.account_deactivation_repository.get_latest_by_user_id(
+            user_id
+        )
         if user.status == "inactive":
             if (
                 latest is not None
@@ -163,12 +196,9 @@ class AccountLifecycleService:
                 return latest
             return None
 
-        if (
-            trigger == "subscription_ended"
-            and (
-                subscription is None
-                or subscription.stripe_subscription_id != stripe_subscription_id
-            )
+        if trigger == "subscription_ended" and (
+            subscription is None
+            or subscription.stripe_subscription_id != stripe_subscription_id
         ):
             return None
 
@@ -226,7 +256,9 @@ class AccountLifecycleService:
             state = "finalizing"
         else:
             state = "finalizing"
-        return DeactivationProgressResponse(state=state, requested_at=operation.requested_at)
+        return DeactivationProgressResponse(
+            state=state, requested_at=operation.requested_at
+        )
 
     async def _wake_outbox(self) -> None:
         if self.arq_pool is None:

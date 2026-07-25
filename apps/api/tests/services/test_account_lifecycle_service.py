@@ -9,6 +9,8 @@ from app.models.account_deactivation_operation import AccountDeactivationOperati
 from app.models.agent_config import AgentConfig
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.models.phone_number_provisioning import PhoneNumberProvisioning
+from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.services.account_lifecycle_service import AccountLifecycleService
@@ -258,6 +260,63 @@ async def test_inactive_cleanup_blocker_is_bounded_reactivation_not_ready(
         requested_at=datetime.now(UTC),
     )
     db_session.add(operation)
+    await db_session.flush()
+
+    response = await AccountLifecycleService(db_session).get_account(active_user.id)
+
+    assert response.reactivation_allowed is False
+    assert response.blocker == "reactivation_not_ready"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("cleanup_status", "expected_blocker"),
+    [
+        ("pending", "reactivation_not_ready"),
+        ("processing", "reactivation_not_ready"),
+        ("attention_required", "deactivation_attention_required"),
+    ],
+)
+async def test_inactive_response_blocks_on_unresolved_provider_cleanup(
+    db_session: AsyncSession,
+    active_user: User,
+    cleanup_status: str,
+    expected_blocker: str,
+) -> None:
+    active_user.status = "inactive"
+    db_session.add(
+        ProviderCleanupOperation(
+            user_id=active_user.id,
+            lifecycle_generation=active_user.lifecycle_generation,
+            resource_type="stripe_subscription",
+            provider_resource_id=f"sub-unresolved-{cleanup_status}",
+            status=cleanup_status,
+        )
+    )
+    await db_session.flush()
+
+    response = await AccountLifecycleService(db_session).get_account(active_user.id)
+
+    assert response.reactivation_allowed is False
+    assert response.blocker == expected_blocker
+
+
+@pytest.mark.anyio
+async def test_inactive_response_blocks_while_prior_provisioning_can_still_complete(
+    db_session: AsyncSession,
+    active_user: User,
+) -> None:
+    active_user.status = "inactive"
+    db_session.add(
+        PhoneNumberProvisioning(
+            user_id=active_user.id,
+            target_country_code="FR",
+            status="running",
+            attempt_count=1,
+            can_retry=False,
+            provider_operation_key="activation:provision:prior-generation",
+        )
+    )
     await db_session.flush()
 
     response = await AccountLifecycleService(db_session).get_account(active_user.id)

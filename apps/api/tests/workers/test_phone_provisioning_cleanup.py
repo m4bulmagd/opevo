@@ -6,10 +6,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.user import User
 from app.services.account_access_policy import AccountStateBlockedError
 from app.services.outbox_service import OutboxService
+from app.services.provider_work_policy import UnresolvedProviderWorkError
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
 
 
@@ -54,6 +56,55 @@ class LateProvisioningProvider:
             "provider_number_id": "pn-late-acquired",
             "provider_connection_name": "app-disabled",
         }
+
+
+@pytest.mark.anyio
+async def test_phone_provisioning_admission_waits_for_prior_provider_cleanup(
+    db_session,
+    active_user,
+) -> None:
+    active_user.country_code = "FR"
+    db_session.add(
+        ProviderCleanupOperation(
+            user_id=active_user.id,
+            lifecycle_generation=active_user.lifecycle_generation,
+            resource_type="stripe_subscription",
+            provider_resource_id="sub-prior-provider-work",
+            status="pending",
+        )
+    )
+    await db_session.commit()
+    provider_calls: list[str] = []
+
+    class ForbiddenProvider:
+        async def provision_number(self, **_kwargs):
+            provider_calls.append("provision")
+            raise AssertionError("unresolved cleanup must block provider I/O")
+
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    with pytest.raises(UnresolvedProviderWorkError) as raised:
+        await phone_provisioning_job(
+            {
+                "session_factory": session_factory,
+                "telephony_provider": ForbiddenProvider(),
+            },
+            {
+                "user_id": str(active_user.id),
+                "lifecycle_generation": active_user.lifecycle_generation,
+            },
+            provider_operation_key="activation:phone.provision:new-lifecycle",
+        )
+
+    assert raised.value.code == "reactivation_not_ready"
+    assert provider_calls == []
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(PhoneNumberProvisioning)
+            .where(PhoneNumberProvisioning.user_id == active_user.id)
+        )
+        == 0
+    )
 
 
 @pytest.mark.anyio
@@ -137,7 +188,12 @@ async def test_crash_before_cleanup_adoption_recovers_same_provider_order(
             payload,
             provider_operation_key="activation:phone.provision:crash-boundary",
         )
-    assert await db_session.scalar(select(func.count()).select_from(ProviderCleanupOperation)) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(ProviderCleanupOperation)
+        )
+        == 0
+    )
 
     with pytest.raises(AccountStateBlockedError):
         await phone_provisioning_job(
