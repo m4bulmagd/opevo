@@ -16,7 +16,7 @@ from app.core.observability import (
     install_http_observability,
     shutdown_observability,
 )
-from app.core.rate_limit import limiter
+from app.core.rate_limit import configure_rate_limiter
 from app.core.redis import RedisEventBus, create_arq_pool
 from app.core.runtime_validation import validate_api_runtime
 from app.routers.activation import router as activation_router
@@ -174,7 +174,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application = FastAPI(lifespan=_lifespan(configured_settings))
     application.state.settings = configured_settings
     install_http_observability(application)
-    application.state.limiter = limiter
+    application.state.limiter = configure_rate_limiter(configured_settings)
     application.add_exception_handler(
         RateLimitExceeded,
         _handle_rate_limit_exception,
