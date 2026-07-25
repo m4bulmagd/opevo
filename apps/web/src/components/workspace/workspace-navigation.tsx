@@ -77,14 +77,10 @@ function NavigationLink({ active, item, layoutId, variant }: NavigationLinkProps
     </Link>
   );
 
-  if (variant === "mobile") {
-    return link;
-  }
-
   return (
     <Tooltip>
       <TooltipTrigger asChild>{link}</TooltipTrigger>
-      <TooltipContent side="right" sideOffset={8}>
+      <TooltipContent side={variant === "mobile" ? "top" : "right"} sideOffset={8}>
         {item.title}
       </TooltipContent>
     </Tooltip>

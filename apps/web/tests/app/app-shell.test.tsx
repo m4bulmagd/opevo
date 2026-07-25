@@ -14,7 +14,6 @@ const testState = vi.hoisted(() => ({
   listCallsMock: vi.fn(),
   getAccountMock: vi.fn(),
   getAgentConfigForRequestMock: vi.fn(),
-  cookiesMock: vi.fn(),
   redirectMock: vi.fn(() => {
     throw new Error("NEXT_REDIRECT");
   }),
@@ -36,10 +35,6 @@ vi.mock("next/link", () => ({
 vi.mock("next/navigation", () => ({
   usePathname: () => testState.pathname,
   redirect: testState.redirectMock,
-}));
-
-vi.mock("next/headers", () => ({
-  cookies: testState.cookiesMock,
 }));
 
 vi.mock("@/lib/api/calls", () => ({
@@ -99,7 +94,6 @@ async function renderDashboardLayout({
   vi.stubEnv("AUTH_MODE", "local");
   testState.getAccountMock.mockResolvedValue(account);
   testState.getAgentConfigForRequestMock.mockResolvedValue(agentConfig(agentName, agentEnabled));
-  testState.cookiesMock.mockResolvedValue({ get: vi.fn().mockReturnValue(undefined) });
 
   const { default: DashboardLayout } = await import("@/app/(app)/dashboard/layout");
   const { TooltipProvider } = await import("@/components/ui/tooltip");
@@ -146,7 +140,6 @@ beforeEach(() => {
   testState.listCallsMock.mockReset();
   testState.getAccountMock.mockReset();
   testState.getAgentConfigForRequestMock.mockReset();
-  testState.cookiesMock.mockReset();
   testState.redirectMock.mockClear();
 });
 
@@ -224,6 +217,20 @@ describe("app shell", () => {
     const visibleLabel = within(agentLink).getByText(longAgentName);
 
     expect(visibleLabel).toHaveClass("truncate");
+    expect(agentLink).toHaveAccessibleName(longAgentName);
+
+    fireEvent.focus(agentLink);
+    expect(await screen.findByRole("tooltip", { name: longAgentName })).toBeInTheDocument();
+  });
+
+  it("reveals the complete long agent name from the mobile command tooltip", async () => {
+    const longAgentName = "Ava, North Clinic Evening Receptionist";
+    await renderDashboardLayout({ agentName: longAgentName });
+
+    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
+    const agentLink = within(mobileNavigation).getByRole("link", { name: longAgentName });
+
+    expect(agentLink).toHaveClass("min-h-11", "min-w-11");
     expect(agentLink).toHaveAccessibleName(longAgentName);
 
     fireEvent.focus(agentLink);
@@ -321,6 +328,21 @@ describe("app shell", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "More workspace destinations" })).toBeNull());
     await waitFor(() => expect(moreTrigger).toHaveFocus());
+  });
+
+  it("leaves More sheet presentation to one reduced-motion opacity entrance", async () => {
+    testState.reducedMotion = true;
+    await renderDashboardLayout();
+
+    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
+    fireEvent.click(within(mobileNavigation).getByRole("button", { name: "More" }));
+
+    const sheet = await screen.findByRole("dialog", { name: "More workspace destinations" });
+    expect(sheet).toHaveClass("!animate-none", "!transform-none", "!transition-none");
+
+    const bottomSheet = sheet.querySelector('[data-slot="bottom-sheet-motion"]');
+    expect(bottomSheet).toHaveAttribute("data-motion", "opacity-only");
+    expect((bottomSheet as HTMLElement).style.transform).toBe("");
   });
 
   it("marks only the matching nested destination as the current page", async () => {
