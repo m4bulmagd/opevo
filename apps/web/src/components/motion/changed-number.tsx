@@ -24,6 +24,8 @@ export function ChangedNumber({ value, duration = 0.24, format = formatNumber, c
   const [displayValue, setDisplayValue] = useState(value);
   const previousValueRef = useRef(value);
   const hasMountedRef = useRef(false);
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
 
   useEffect(() => {
     if (!hasMountedRef.current) {
@@ -33,23 +35,24 @@ export function ChangedNumber({ value, duration = 0.24, format = formatNumber, c
     }
 
     const previousValue = previousValueRef.current;
-    previousValueRef.current = value;
-
-    if (previousValue === value) return;
 
     if (reduceMotion) {
+      previousValueRef.current = value;
       setDisplayValue(value);
       return;
     }
 
+    if (previousValue === value) return;
+
+    previousValueRef.current = value;
     const controls = animate(previousValue, value, {
-      duration,
+      duration: durationRef.current,
       ease: EASE_OUT,
       onUpdate: setDisplayValue,
     });
 
     return () => controls.stop();
-  }, [duration, reduceMotion, value]);
+  }, [reduceMotion, value]);
 
-  return <span className={cn("tabular-nums", className)}>{format(displayValue)}</span>;
+  return <span className={cn("tabular-nums", className)}>{format(reduceMotion ? value : displayValue)}</span>;
 }
