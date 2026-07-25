@@ -95,6 +95,7 @@ describe("account page", () => {
 
     const input = screen.getByLabelText("Type DEACTIVATE to confirm");
     const confirmation = screen.getByRole("button", { name: "Deactivate account" });
+    expect(input).toHaveAttribute("name", "deactivation-confirmation");
     expect(confirmation).toBeDisabled();
 
     fireEvent.change(input, { target: { value: "deactivate" } });
@@ -108,6 +109,24 @@ describe("account page", () => {
     fireEvent.click(confirmation);
 
     await waitFor(() => expect(deactivateAccountMock).toHaveBeenCalledWith("DEACTIVATE"));
+  });
+
+  it("contains the confirmation workflow in a viewport-bounded, internally scrollable dialog", async () => {
+    getAccountMock.mockResolvedValue(activeAccount);
+
+    const { default: Page } = await import("@/app/(app)/dashboard/account/page");
+    render(await Page());
+    fireEvent.click(screen.getByRole("button", { name: "Deactivate Presvo" }));
+
+    const dialog = screen.getByRole("alertdialog");
+    const scrollRegion = dialog.querySelector('[data-slot="deactivation-dialog-scroll-region"]');
+
+    expect(dialog).toHaveClass("max-h-[calc(100dvh-2rem)]", "overflow-hidden", "overscroll-contain");
+    expect(scrollRegion).toHaveClass("min-h-0", "overflow-y-auto", "overscroll-contain");
+    expect(screen.getByRole("list", { name: "Account deactivation consequences" }).children).toHaveLength(6);
+    expect(screen.getByLabelText("Type DEACTIVATE to confirm")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep Presvo active" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deactivate account" })).toBeInTheDocument();
   });
 
   it.each([

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BackendApiError } from "@/lib/api/backend-client";
 
@@ -57,6 +57,10 @@ describe("account server actions", () => {
       reactivation_allowed: false,
       blocker: "account_deactivating",
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("rejects anything except the exact DEACTIVATE confirmation before mutation", async () => {
@@ -140,13 +144,52 @@ describe("account server actions", () => {
     });
   });
 
-  it("does not expose an unsafe hosted redirect or backend provider details", async () => {
-    createCheckoutSessionMock.mockResolvedValueOnce({ url: "http://provider.internal/session-secret" });
-    const unsafeUrlResult = await reactivateAccount();
+  it("limits the Stripe test fixture to the test environment", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    createCheckoutSessionMock.mockResolvedValue({ url: "https://checkout.stripe.test/reactivate" });
 
-    expect(unsafeUrlResult).toMatchObject({ status: "error", code: "request_failed" });
-    expect(JSON.stringify(unsafeUrlResult)).not.toContain("provider.internal");
+    const result = await reactivateAccount();
 
+    expect(result).toEqual({
+      status: "error",
+      code: "request_failed",
+      message: "We couldn't open checkout. Refresh and try again.",
+    });
+  });
+
+  it("accepts Stripe Checkout as the hosted reactivation boundary", async () => {
+    createCheckoutSessionMock.mockResolvedValue({
+      url: "https://checkout.stripe.com/c/pay/cs_live_123",
+    });
+
+    const result = await reactivateAccount();
+
+    expect(result).toEqual({
+      status: "success",
+      message: "Checkout is ready.",
+      url: "https://checkout.stripe.com/c/pay/cs_live_123",
+    });
+  });
+
+  it.each([
+    "http://checkout.stripe.com/c/pay/cs_secret",
+    "https://provider.internal/session-secret",
+    "https://checkout.stripe.com.evil.example/session-secret",
+    "https://checkout.stripe.com:444/session-secret",
+    "https://user:password@checkout.stripe.com/session-secret",
+  ])("does not expose an untrusted hosted redirect: %s", async (unsafeUrl) => {
+    createCheckoutSessionMock.mockResolvedValueOnce({ url: unsafeUrl });
+    const result = await reactivateAccount();
+
+    expect(result).toEqual({
+      status: "error",
+      code: "request_failed",
+      message: "We couldn't open checkout. Refresh and try again.",
+    });
+    expect(JSON.stringify(result)).not.toContain("session-secret");
+  });
+
+  it("does not expose backend provider details", async () => {
     createCheckoutSessionMock.mockRejectedValueOnce(
       new BackendApiError({ code: "reactivation_not_ready", subscription_id: "sub_secret" }, 409),
     );
