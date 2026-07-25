@@ -25,8 +25,10 @@ Query parameters:
 Search is owner-scoped and excludes removed calls. It matches `summary_text`
 and structured `caller_intent` case-insensitively. A fully phone-shaped query
 with at least three digits also matches the stored caller number after query
-punctuation is removed. Transcripts and arbitrary summary metadata are not
-searched.
+punctuation is removed. When those digits start with a domestic trunk `0`, the
+search also tries the digits with exactly that leading zero removed, so `01 87`
+matches an E.164 number containing `33187`. Transcripts and arbitrary summary
+metadata are not searched.
 
 Rows use `started_at DESC NULLS LAST`, `created_at DESC`, and `id DESC`.
 

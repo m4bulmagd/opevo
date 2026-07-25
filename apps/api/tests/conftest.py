@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import time
 from pathlib import Path
 
@@ -119,8 +120,16 @@ async def test_app(tmp_path: Path):
     app = main_module.create_app(get_settings())
     try:
         main_module.app = app
-        database_path = tmp_path / "test_client.db"
-        database_url = f"sqlite+aiosqlite:///{database_path}"
+        database_url = os.getenv("CLIENT_TEST_DATABASE_URL")
+        if database_url is None:
+            database_path = tmp_path / "test_client.db"
+            database_url = f"sqlite+aiosqlite:///{database_path}"
+        elif database_url.startswith("postgresql://"):
+            database_url = database_url.replace(
+                "postgresql://",
+                "postgresql+asyncpg://",
+                1,
+            )
 
         async def setup_database() -> None:
             engine = create_async_engine(database_url, future=True)

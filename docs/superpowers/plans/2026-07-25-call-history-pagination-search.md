@@ -13,7 +13,7 @@
 - `GET /api/calls` accepts optional `q`, trimmed by the service, with a maximum request length of 100 characters.
 - `limit` remains an integer from 1 through 100 with default 20; `offset` remains a non-negative integer with default 0.
 - Search is case-insensitive partial matching over `summary_text` and only the `caller_intent` key in `summary_data`.
-- Phone matching is added only when the whole query contains digits plus common phone punctuation/whitespace and normalizes to at least three digits.
+- Phone matching is added only when the whole query contains digits plus common phone punctuation/whitespace and normalizes to at least three digits. The full digit candidate is retained; when it starts with a national trunk `0`, search also uses the candidate with exactly that leading zero removed if at least three digits remain, so `01 87` matches stored E.164 `+33187001234`.
 - Every count and row query is constrained by the authenticated `user_id` and `deleted_at IS NULL`.
 - Search must not inspect transcripts, provider identifiers, recording metadata, deleted content, or arbitrary JSON keys.
 - Row order is exactly `started_at DESC NULLS LAST`, `created_at DESC`, then `id DESC`.
@@ -46,7 +46,9 @@
 - `apps/api/tests/calls/test_call_history_search.py`
   - Proves repository/service search scope, phone normalization, count alignment, deterministic ordering, tenant/deletion isolation, blank search, and transcript exclusion.
 - `apps/api/tests/calls/test_call_history_api.py`
-  - Proves the HTTP contract, request bounds, inactive-account access, and updates existing service assertions for the typed page result.
+  - Proves the HTTP contract, request bounds, domestic trunk-prefix matching, inactive-account access, and updates existing service assertions for the typed page result.
+- `apps/api/tests/conftest.py`
+  - Allows the real API/client database fixture to target an explicit disposable PostgreSQL URL for cross-database HTTP regression checks while retaining isolated SQLite by default.
 - `apps/api/tests/calls/test_call_lifecycle.py`
   - Updates the one direct repository-list assertion to consume the new page result.
 - `docs/architecture/call-history-api.md`
@@ -92,6 +94,7 @@
 - Modify: `apps/api/app/services/call_history_service.py:1-18,28-54`
 - Modify: `apps/api/app/schemas/calls.py:59-61`
 - Modify: `apps/api/app/routers/calls.py:48-58`
+- Modify: `apps/api/tests/conftest.py:1-8,113-132`
 - Modify: `apps/api/tests/calls/test_call_history_api.py:276-453`
 - Modify: `apps/api/tests/calls/test_call_lifecycle.py:38-45`
 - Modify: `docs/architecture/call-history-api.md:11-39`
@@ -274,6 +277,11 @@ Replace `list_visible_by_user_id` with a private predicate builder and the page 
             digits = "".join(character for character in query if character.isdigit())
             if len(digits) >= 3:
                 search_predicates.append(Call.caller_number.ilike(f"%{digits}%"))
+            domestic_digits = digits[1:]
+            if digits.startswith("0") and len(domestic_digits) >= 3:
+                search_predicates.append(
+                    Call.caller_number.ilike(f"%{domestic_digits}%")
+                )
 
         predicates.append(or_(*search_predicates))
         return tuple(predicates)
@@ -450,10 +458,12 @@ async def test_phone_search_normalizes_punctuation_and_requires_three_digits(
 
     international = await service.list_calls(active_user.id, query="+33 1 87")
     punctuated = await service.list_calls(active_user.id, query="(187)")
+    domestic = await service.list_calls(active_user.id, query="01 87")
     too_short = await service.list_calls(active_user.id, query="87")
 
     assert [item.id for item in international.calls] == [phone_call.id]
     assert [item.id for item in punctuated.calls] == [phone_call.id]
+    assert [item.id for item in domestic.calls] == [phone_call.id]
     assert too_short.total == 0
 ```
 
@@ -470,6 +480,25 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
 Expected: all tests PASS. A failure involving JSON extraction must be fixed in the repository expression, not by searching serialized arbitrary JSON.
 
 - [ ] **Step 8: Write failing HTTP contract and bounds assertions**
+
+Update `seed_call_history` to accept a caller-number override for its newest
+call:
+
+```python
+async def seed_call_history(
+    database_url: str,
+    *,
+    clerk_user_id: str,
+    email: str,
+    user_status: str = "active",
+    newest_caller_number: str = "+33111111111",
+) -> dict[str, UUID]:
+    # Existing setup remains unchanged.
+    newest_call = Call(
+        # Existing fields remain unchanged.
+        caller_number=newest_caller_number,
+    )
+```
 
 Update `test_list_calls_returns_visible_calls_newest_first` in `apps/api/tests/calls/test_call_history_api.py` to assert:
 
@@ -525,6 +554,41 @@ async def test_list_calls_applies_search_and_pagination_metadata(
 
 
 @pytest.mark.anyio
+async def test_list_calls_phone_search_matches_domestic_trunk_prefix_to_e164_number(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+) -> None:
+    ids = await seed_call_history(
+        client_database_url,
+        clerk_user_id="user_calls_domestic_phone_search",
+        email="calls-domestic-phone-search@example.invalid",
+        newest_caller_number="+33187001234",
+    )
+
+    response = await async_client.get(
+        "/api/calls",
+        params={"q": "01 87"},
+        headers={
+            "authorization": (
+                "Bearer "
+                f"{rs256_clerk_token_for('user_calls_domestic_phone_search')}"
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert [UUID(item["id"]) for item in payload["calls"]] == [
+        ids["newest_id"]
+    ]
+    assert payload["limit"] == 20
+    assert payload["offset"] == 0
+    assert payload["has_more"] is False
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "query_string",
     [
@@ -572,10 +636,13 @@ cd apps/api
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
   tests/calls/test_call_history_api.py::test_list_calls_returns_visible_calls_newest_first \
   tests/calls/test_call_history_api.py::test_list_calls_applies_search_and_pagination_metadata \
+  tests/calls/test_call_history_api.py::test_list_calls_phone_search_matches_domestic_trunk_prefix_to_e164_number \
   tests/calls/test_call_history_api.py::test_list_calls_rejects_invalid_query_bounds
 ```
 
 Expected: FAIL because the Pydantic response still exposes only `calls`, the router has no `q` parameter, and it passes the page object as though it were a list.
+The domestic phone regression additionally returns no calls until trunk-prefix
+matching is implemented.
 
 - [ ] **Step 10: Implement the FastAPI response and request contract**
 
@@ -636,6 +703,23 @@ Expected: all focused tests PASS, including inactive history access and the exis
 
 - [ ] **Step 12: Verify the search expression against PostgreSQL**
 
+In `apps/api/tests/conftest.py`, import `os` and let the real API test fixture
+use an explicit PostgreSQL URL when requested while retaining isolated SQLite
+by default:
+
+```python
+        database_url = os.getenv("CLIENT_TEST_DATABASE_URL")
+        if database_url is None:
+            database_path = tmp_path / "test_client.db"
+            database_url = f"sqlite+aiosqlite:///{database_path}"
+        elif database_url.startswith("postgresql://"):
+            database_url = database_url.replace(
+                "postgresql://",
+                "postgresql+asyncpg://",
+                1,
+            )
+```
+
 Start a disposable PostgreSQL container:
 
 ```bash
@@ -657,13 +741,16 @@ Wait until `docker inspect --format '{{.State.Health.Status}}' presvo-call-searc
 cd apps/api
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_call_test \
 TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_call_test \
+CLIENT_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_call_test \
 UV_CACHE_DIR=/tmp/uv-cache \
   uv run --frozen --no-sync python -m pytest -q -ra \
   tests/calls/test_call_history_search.py \
-  tests/calls/test_call_history_api.py::test_list_calls_applies_search_and_pagination_metadata
+  tests/calls/test_call_history_api.py::test_list_calls_applies_search_and_pagination_metadata \
+  tests/calls/test_call_history_api.py::test_list_calls_phone_search_matches_domestic_trunk_prefix_to_e164_number
 ```
 
-Expected: all selected tests PASS and the summary contains no PostgreSQL skip.
+Expected: all selected tests PASS, the API tests use PostgreSQL through
+`client_database_url`, and the summary contains no PostgreSQL skip.
 
 Remove the disposable container:
 
@@ -685,8 +772,10 @@ Query parameters:
 Search is owner-scoped and excludes removed calls. It matches `summary_text`
 and structured `caller_intent` case-insensitively. A fully phone-shaped query
 with at least three digits also matches the stored caller number after query
-punctuation is removed. Transcripts and arbitrary summary metadata are not
-searched.
+punctuation is removed. When those digits start with a domestic trunk `0`, the
+search also tries the digits with exactly that leading zero removed, so `01 87`
+matches an E.164 number containing `33187`. Transcripts and arbitrary summary
+metadata are not searched.
 ```
 
 Extend the response example with:
@@ -718,6 +807,7 @@ git add \
   apps/api/app/services/call_history_service.py \
   apps/api/app/schemas/calls.py \
   apps/api/app/routers/calls.py \
+  apps/api/tests/conftest.py \
   apps/api/tests/calls/test_call_history_search.py \
   apps/api/tests/calls/test_call_history_api.py \
   apps/api/tests/calls/test_call_lifecycle.py \
