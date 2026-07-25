@@ -36,6 +36,8 @@ export type HostedActionResult =
     };
 
 const confirmationSchema = z.literal("DEACTIVATE");
+const STRIPE_CHECKOUT_ORIGIN = "https://checkout.stripe.com";
+const TEST_STRIPE_CHECKOUT_ORIGIN = "https://checkout.stripe.test";
 
 const SAFE_ACCOUNT_MESSAGES = {
   account_deactivating: "Account deactivation is already in progress.",
@@ -129,9 +131,18 @@ function revalidateAccountPaths(): void {
   revalidatePath("/activate");
 }
 
-function isSafeHostedUrl(value: string): boolean {
+function isTrustedStripeCheckoutUrl(value: string): boolean {
   try {
-    return new URL(value).protocol === "https:";
+    const checkoutUrl = new URL(value);
+    if (checkoutUrl.username || checkoutUrl.password || checkoutUrl.port) {
+      return false;
+    }
+
+    if (checkoutUrl.origin === STRIPE_CHECKOUT_ORIGIN) {
+      return true;
+    }
+
+    return process.env.NODE_ENV === "test" && checkoutUrl.origin === TEST_STRIPE_CHECKOUT_ORIGIN;
   } catch {
     return false;
   }
@@ -182,7 +193,7 @@ export async function reactivateAccount(): Promise<HostedActionResult> {
     }
 
     const session = await createCheckoutSession("starter");
-    if (!isSafeHostedUrl(session.url)) {
+    if (!isTrustedStripeCheckoutUrl(session.url)) {
       return {
         status: "error",
         code: "request_failed",

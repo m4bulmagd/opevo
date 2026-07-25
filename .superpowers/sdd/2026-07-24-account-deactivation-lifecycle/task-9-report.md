@@ -171,3 +171,52 @@ does not describe a scheduled-cancellation account as inactive.
   build completed successfully.
 - No unresolved Task 9 code, design, accessibility, performance, or privacy
   concern remains.
+
+## Fix round 1/5
+
+Review base: `611dd60d622c3ceeb868bbcdbf1a726c34e6b6fa`.
+
+### Changes
+
+- Bounded the destructive AlertDialog to
+  `max-h-[calc(100dvh-2rem)]`, contained outer overscroll, and split it into a
+  `minmax(0,1fr)` scroll body plus a non-scrolling footer. All six
+  consequences and the labelled confirmation input remain vertically
+  reachable, while Cancel and Deactivate remain visible in the existing
+  stacked mobile footer. The Radix content/root and focus trap are unchanged.
+- Added the meaningful `deactivation-confirmation` name to the confirmation
+  input.
+- Replaced the generic HTTPS redirect check with an exact Stripe Checkout
+  boundary. Production accepts only `https://checkout.stripe.com` with no
+  credentials or custom port. The established `https://checkout.stripe.test`
+  fixture is accepted only when `NODE_ENV=test`; a dedicated assertion proves
+  it is rejected in production. Non-HTTPS, unrelated, lookalike, credentialed,
+  and custom-port URLs return the existing bounded error without leaking the
+  rejected URL.
+- Added direct dashboard layout coverage proving deactivating and inactive
+  accounts render the global lifecycle banner, active accounts omit it, and
+  Account, Calls, and Billing navigation remains available in every state.
+  The layout behavior was already present; this review item closed the missing
+  regression coverage.
+
+### RED and GREEN evidence
+
+- The review RED pass produced the expected failures for the missing input
+  name and viewport/scroll contract, and four arbitrary-HTTPS redirect cases
+  were accepted by the previous validator. The existing HTTP rejection
+  remained green. Direct layout tests initially exposed test-harness-only font
+  and Tooltip provider dependencies; after isolating those unrelated controls,
+  the new state assertions exercised the existing layout behavior.
+- Final focused verification:
+  **3 test files passed, 27 tests passed**.
+- Final full web verification:
+  **30 test files passed, 257 tests passed**.
+- `biome check`: **155 files checked**, no fixes or errors.
+- `tsc --noEmit`: exit `0`.
+- `git diff --check`: exit `0`.
+- The sandboxed Turbopack build again stalled during compilation. The
+  authorized normal-environment build with the documented CI-only Clerk/API
+  placeholders compiled in 8.1s, completed TypeScript in 9.0s, generated
+  **10/10 static pages**, and exited `0`. No provider was contacted.
+
+No Task 10 fixture, E2E, or provider work was added.

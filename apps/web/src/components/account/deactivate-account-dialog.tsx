@@ -66,46 +66,51 @@ export function DeactivateAccountDialog() {
           Deactivate Presvo
         </Button>
       </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Deactivate Presvo?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Review each consequence. Deactivation preserves your data but ends the current service cycle.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
+      <AlertDialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[minmax(0,1fr)_auto] gap-0 overflow-hidden overscroll-contain p-0">
+        <div data-slot="deactivation-dialog-scroll-region" className="min-h-0 overflow-y-auto overscroll-contain p-6">
+          <div className="grid gap-6">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Deactivate Presvo?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Review each consequence. Deactivation preserves your data but ends the current service cycle.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
 
-        <ul className="grid gap-2 text-sm" aria-label="Account deactivation consequences">
-          {CONSEQUENCES.map((consequence) => (
-            <li key={consequence} className="flex gap-2">
-              <span className="mt-2 size-1.5 shrink-0 rounded-full bg-destructive" aria-hidden="true" />
-              <span>{consequence}</span>
-            </li>
-          ))}
-        </ul>
+            <ul className="grid gap-2 text-sm" aria-label="Account deactivation consequences">
+              {CONSEQUENCES.map((consequence) => (
+                <li key={consequence} className="flex gap-2">
+                  <span className="mt-2 size-1.5 shrink-0 rounded-full bg-destructive" aria-hidden="true" />
+                  <span>{consequence}</span>
+                </li>
+              ))}
+            </ul>
 
-        <div className="grid gap-2">
-          <Label htmlFor="deactivation-confirmation">Type DEACTIVATE to confirm</Label>
-          <Input
-            id="deactivation-confirmation"
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            disabled={isPending}
-            aria-invalid={error ? true : undefined}
-            aria-describedby={error ? "deactivation-error" : "deactivation-help"}
-          />
-          <p id="deactivation-help" className="text-muted-foreground text-xs">
-            Confirmation is case-sensitive.
-          </p>
-          {error ? (
-            <p id="deactivation-error" className="text-destructive text-sm" role="alert" aria-live="polite">
-              {error}
-            </p>
-          ) : null}
+            <div className="grid gap-2">
+              <Label htmlFor="deactivation-confirmation">Type DEACTIVATE to confirm</Label>
+              <Input
+                id="deactivation-confirmation"
+                name="deactivation-confirmation"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={isPending}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "deactivation-error" : "deactivation-help"}
+              />
+              <p id="deactivation-help" className="text-muted-foreground text-xs">
+                Confirmation is case-sensitive.
+              </p>
+              {error ? (
+                <p id="deactivation-error" className="text-destructive text-sm" role="alert" aria-live="polite">
+                  {error}
+                </p>
+              ) : null}
+            </div>
+          </div>
         </div>
 
-        <AlertDialogFooter>
+        <AlertDialogFooter className="shrink-0 border-t bg-popover px-6 py-4">
           <AlertDialogCancel disabled={isPending}>Keep Presvo active</AlertDialogCancel>
           <AlertDialogAction variant="destructive" disabled={!isConfirmed || isPending} onClick={handleDeactivate}>
             {isPending ? <Spinner data-icon="inline-start" /> : <TriangleAlert data-icon="inline-start" />}
