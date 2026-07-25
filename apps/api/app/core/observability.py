@@ -113,11 +113,21 @@ _OUTBOX_TOPICS = frozenset(
         "summary.generate",
     }
 )
+_ACCOUNT_DEACTIVATION_TRIGGER_VALUES = (
+    "owner_request",
+    "subscription_ended",
+)
 _ACCOUNT_DEACTIVATION_TRIGGERS = frozenset(
-    {"owner_request", "subscription_ended"}
+    _ACCOUNT_DEACTIVATION_TRIGGER_VALUES
+)
+_ACCOUNT_DEACTIVATION_STATUS_VALUES = (
+    "pending",
+    "processing",
+    "attention_required",
+    "completed",
 )
 _ACCOUNT_DEACTIVATION_STATUSES = frozenset(
-    {"pending", "processing", "attention_required", "completed"}
+    _ACCOUNT_DEACTIVATION_STATUS_VALUES
 )
 _ACCOUNT_DEACTIVATION_STEPS = frozenset(
     {
@@ -687,12 +697,19 @@ class Observability:
         )
 
     def record_account_deactivation_snapshot(self, snapshot) -> None:
+        counts = {
+            (trigger, status): 0
+            for trigger in _ACCOUNT_DEACTIVATION_TRIGGER_VALUES
+            for status in _ACCOUNT_DEACTIVATION_STATUS_VALUES
+        }
         for (trigger, status), count in snapshot.counts.items():
             if (
                 trigger not in _ACCOUNT_DEACTIVATION_TRIGGERS
                 or status not in _ACCOUNT_DEACTIVATION_STATUSES
             ):
                 continue
+            counts[(trigger, status)] = count
+        for (trigger, status), count in counts.items():
             _safe_call(
                 "record_account_deactivation_operations",
                 partial(
@@ -711,9 +728,8 @@ class Observability:
                 {},
             ),
         )
-        for trigger, count in snapshot.attention_counts.items():
-            if trigger not in _ACCOUNT_DEACTIVATION_TRIGGERS:
-                continue
+        for trigger in _ACCOUNT_DEACTIVATION_TRIGGER_VALUES:
+            count = snapshot.attention_counts.get(trigger, 0)
             _safe_call(
                 "record_account_deactivation_attention",
                 partial(

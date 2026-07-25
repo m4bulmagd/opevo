@@ -73,6 +73,13 @@ class AccountDeactivationRepository:
         self,
         now: datetime,
     ) -> AccountDeactivationObservabilitySnapshot:
+        triggers = ("owner_request", "subscription_ended")
+        statuses = ("pending", "processing", "attention_required", "completed")
+        counts = {
+            (trigger, status): 0
+            for trigger in triggers
+            for status in statuses
+        }
         rows = await self.session.execute(
             select(
                 AccountDeactivationOperation.trigger,
@@ -83,10 +90,9 @@ class AccountDeactivationRepository:
                 AccountDeactivationOperation.status,
             )
         )
-        counts = {
-            (trigger, status): int(count)
-            for trigger, status, count in rows
-        }
+        for trigger, status, count in rows:
+            if trigger in triggers and status in statuses:
+                counts[(trigger, status)] = int(count)
         oldest = await self.session.scalar(
             select(func.min(AccountDeactivationOperation.requested_at)).where(
                 AccountDeactivationOperation.completed_at.is_(None)
@@ -108,10 +114,7 @@ class AccountDeactivationRepository:
             .where(AccountDeactivationOperation.status == "attention_required")
             .group_by(AccountDeactivationOperation.trigger)
         )
-        attention_counts = {
-            "owner_request": 0,
-            "subscription_ended": 0,
-        }
+        attention_counts = {trigger: 0 for trigger in triggers}
         for trigger, count in attention_rows:
             attention_counts[trigger] = int(count)
         return AccountDeactivationObservabilitySnapshot(
