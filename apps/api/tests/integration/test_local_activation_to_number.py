@@ -379,6 +379,11 @@ async def test_call_drain_fixture_uses_real_owner_scoped_call_lifecycle(
         "/api/development/call-drain-fixture/start"
     )
     assert unauthenticated.status_code == 401
+    unauthenticated_finish = await client.post(
+        "/api/development/call-drain-fixture/finish",
+        json={"call_id": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert unauthenticated_finish.status_code == 401
 
     started = await client.post(
         "/api/development/call-drain-fixture/start",
@@ -460,6 +465,83 @@ async def test_call_drain_fixture_rejects_non_fake_telephony(
     assert response.json() == {
         "detail": {"code": "local_telephony_disabled"}
     }
+
+
+@pytest.mark.anyio
+async def test_call_drain_fixture_rejects_clerk_auth_before_mutation(
+    local_client: tuple[
+        httpx.AsyncClient,
+        async_sessionmaker[AsyncSession],
+        FastAPI,
+    ],
+) -> None:
+    from app.core.auth import AuthProvider, UserIdentity, get_auth_provider
+
+    client, session_factory, application = local_client
+    async with session_factory() as session:
+        clerk_user = User(
+            clerk_user_id="clerk_fixture_owner",
+            email="clerk-fixture-owner@example.invalid",
+        )
+        session.add(clerk_user)
+        await session.commit()
+
+    class AuthenticatedClerkProvider(AuthProvider):
+        def verify_token(self, token: str) -> UserIdentity:
+            assert token == "authenticated-clerk-fixture-test-token"
+            return UserIdentity(clerk_user_id=clerk_user.clerk_user_id)
+
+    def clerk_auth_provider() -> AuthProvider:
+        return AuthenticatedClerkProvider()
+
+    application.state.settings.auth_mode = "clerk"
+    application.dependency_overrides[get_auth_provider] = clerk_auth_provider
+    clerk_headers = {
+        "Authorization": "Bearer authenticated-clerk-fixture-test-token"
+    }
+    try:
+        started = await client.post(
+            "/api/development/call-drain-fixture/start",
+            headers=clerk_headers,
+        )
+        async with session_factory() as session:
+            existing_call = await session.scalar(
+                select(Call).where(Call.user_id == clerk_user.id)
+            )
+            if existing_call is None:
+                existing_call = Call(
+                    user_id=clerk_user.id,
+                    status="connected",
+                )
+                session.add(existing_call)
+                await session.commit()
+            existing_call_id = existing_call.id
+        finished = await client.post(
+            "/api/development/call-drain-fixture/finish",
+            headers=clerk_headers,
+            json={"call_id": str(existing_call_id)},
+        )
+    finally:
+        application.dependency_overrides.pop(get_auth_provider, None)
+        application.state.settings.auth_mode = "local"
+
+    unavailable = {"detail": {"code": "local_telephony_disabled"}}
+    assert started.status_code == 409
+    assert started.json() == unavailable
+    assert finished.status_code == 409
+    assert finished.json() == unavailable
+
+    async with session_factory() as session:
+        calls = list(
+            (
+                await session.execute(
+                    select(Call).where(Call.user_id == clerk_user.id)
+                )
+            ).scalars()
+        )
+        assert [(call.id, call.status) for call in calls] == [
+            (existing_call_id, "connected")
+        ]
 
 
 @pytest.mark.anyio
