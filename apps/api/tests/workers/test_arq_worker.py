@@ -49,16 +49,22 @@ def test_worker_registers_outbox_wakeup_and_reconciliation() -> None:
         for job in arq_worker.WorkerSettings.cron_jobs
     )
     assert set(DEFAULT_OUTBOX_HANDLERS) == set(SUPPORTED_OUTBOX_TOPICS)
+    assert (
+        DEFAULT_OUTBOX_HANDLERS["account.deactivate"].__name__
+        == "deliver_account_deactivation"
+    )
 
 
 @pytest.mark.anyio
 async def test_worker_startup_initializes_safe_logging(monkeypatch) -> None:
     setup_calls: list[bool] = []
     monkeypatch.setattr(arq_worker, "setup_logging", lambda: setup_calls.append(True), raising=False)
+    ctx = {}
 
-    await arq_worker.WorkerSettings.on_startup({})
+    await arq_worker.WorkerSettings.on_startup(ctx)
 
     assert setup_calls == [True]
+    assert "account.deactivate" in ctx["outbox_handlers"]
 
 
 @pytest.mark.anyio

@@ -103,6 +103,7 @@ _RECORDING_WEBHOOK_MISMATCH_CATEGORIES = frozenset(
 )
 _OUTBOX_TOPICS = frozenset(
     {
+        "account.deactivate",
         "phone.provision",
         "phone.enable",
         "phone.disable",
@@ -111,6 +112,25 @@ _OUTBOX_TOPICS = frozenset(
         "recording.reconcile",
         "summary.generate",
     }
+)
+_ACCOUNT_DEACTIVATION_TRIGGERS = frozenset(
+    {"owner_request", "subscription_ended"}
+)
+_ACCOUNT_DEACTIVATION_STATUSES = frozenset(
+    {"pending", "processing", "attention_required", "completed"}
+)
+_ACCOUNT_DEACTIVATION_STEPS = frozenset(
+    {
+        "disable_routing",
+        "cancel_subscription",
+        "drain_call",
+        "release_number",
+        "reset_activation",
+        "complete",
+    }
+)
+_ACCOUNT_DEACTIVATION_OUTCOMES = frozenset(
+    {"success", "retry", "attention"}
 )
 SAFE_ERROR_CLASSES = frozenset(
     {
@@ -411,6 +431,23 @@ class Observability:
             unit="s",
         )
         self.provider_errors = meter.create_counter("presvo.provider.errors")
+        self.account_deactivation_operations = meter.create_gauge(
+            "presvo.account_deactivation.operations"
+        )
+        self.account_deactivation_oldest_incomplete_age = meter.create_gauge(
+            "presvo.account_deactivation.oldest_incomplete_age",
+            unit="s",
+        )
+        self.account_deactivation_reconciliation_results = meter.create_counter(
+            "presvo.account_deactivation.reconciliation_results"
+        )
+        self.account_deactivation_attention = meter.create_gauge(
+            "presvo.account_deactivation.attention"
+        )
+        self.account_deactivation_completion_duration = meter.create_histogram(
+            "presvo.account_deactivation.completion_duration",
+            unit="s",
+        )
 
     def record_http_request(
         self,
@@ -646,6 +683,96 @@ class Observability:
             lambda: self.outbox_terminal_failures.add(
                 1,
                 {"topic": topic, "error_class": error_class},
+            ),
+        )
+
+    def record_account_deactivation_snapshot(self, snapshot) -> None:
+        for (trigger, status), count in snapshot.counts.items():
+            if (
+                trigger not in _ACCOUNT_DEACTIVATION_TRIGGERS
+                or status not in _ACCOUNT_DEACTIVATION_STATUSES
+            ):
+                continue
+            _safe_call(
+                "record_account_deactivation_operations",
+                partial(
+                    self.account_deactivation_operations.set,
+                    count,
+                    {
+                        "trigger": trigger,
+                        "operation_status": status,
+                    },
+                ),
+            )
+        _safe_call(
+            "record_account_deactivation_oldest_incomplete_age",
+            lambda: self.account_deactivation_oldest_incomplete_age.set(
+                snapshot.oldest_incomplete_age_seconds,
+                {},
+            ),
+        )
+        for trigger, count in snapshot.attention_counts.items():
+            if trigger not in _ACCOUNT_DEACTIVATION_TRIGGERS:
+                continue
+            _safe_call(
+                "record_account_deactivation_attention",
+                partial(
+                    self.account_deactivation_attention.set,
+                    count,
+                    {"trigger": trigger},
+                ),
+            )
+
+    def record_account_deactivation_result(
+        self,
+        trigger: str,
+        step: str,
+        outcome: str,
+        error_class: str,
+    ) -> None:
+        attributes = {
+            "trigger": _safe_label(
+                trigger,
+                _ACCOUNT_DEACTIVATION_TRIGGERS,
+            ),
+            "step": _safe_label(step, _ACCOUNT_DEACTIVATION_STEPS),
+            "outcome": _safe_label(outcome, _ACCOUNT_DEACTIVATION_OUTCOMES),
+            "error_class": _safe_label(error_class, SAFE_ERROR_CLASSES),
+        }
+        _safe_call(
+            "record_account_deactivation_result",
+            lambda: self.account_deactivation_reconciliation_results.add(
+                1,
+                attributes,
+            ),
+        )
+
+    def record_account_deactivation_attention(
+        self,
+        trigger: str,
+        _step: str,
+        _error_class: str,
+    ) -> None:
+        trigger = _safe_label(trigger, _ACCOUNT_DEACTIVATION_TRIGGERS)
+        _safe_call(
+            "record_account_deactivation_attention",
+            lambda: self.account_deactivation_attention.set(
+                1,
+                {"trigger": trigger},
+            ),
+        )
+
+    def record_account_deactivation_completion(
+        self,
+        trigger: str,
+        duration_seconds: float,
+    ) -> None:
+        trigger = _safe_label(trigger, _ACCOUNT_DEACTIVATION_TRIGGERS)
+        _safe_call(
+            "record_account_deactivation_completion",
+            lambda: self.account_deactivation_completion_duration.record(
+                max(0.0, duration_seconds),
+                {"trigger": trigger},
             ),
         )
 

@@ -25,6 +25,10 @@ from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.usage_ledger import UsageLedger
+from app.repositories.account_deactivation_repository import (
+    AccountDeactivationObservabilitySnapshot,
+    AccountDeactivationRepository,
+)
 from app.repositories.outbox_repository import OutboxRepository, OutboxSnapshot
 from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
@@ -711,6 +715,48 @@ async def test_delivery_retries_all_backoffs_then_fails_terminally_with_safe_cod
 
 
 @pytest.mark.anyio
+async def test_non_exhausting_delivery_error_keeps_using_bounded_backoff(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.workers.jobs.outbox_delivery import (
+        OUTBOX_RETRY_DELAYS,
+        OutboxDeliveryError,
+        outbox_delivery_job,
+    )
+
+    event = await _add_event(outbox_session_factory)
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+
+    async def draining_handler(_ctx: dict, _event: OutboxEvent) -> None:
+        raise OutboxDeliveryError(
+            "account_call_draining",
+            retryable=True,
+            exhaustible=False,
+        )
+
+    ctx = {
+        "session_factory": outbox_session_factory,
+        "outbox_handlers": {"phone.disable": draining_handler},
+        "outbox_now": lambda: current_time,
+    }
+    for expected_attempt in range(1, len(OUTBOX_RETRY_DELAYS) + 4):
+        result = await outbox_delivery_job(ctx)
+        assert result == {
+            "claimed": 1,
+            "delivered": 0,
+            "retried": 1,
+            "failed": 0,
+        }
+        async with outbox_session_factory() as session:
+            stored = await session.get(OutboxEvent, event.id)
+            assert stored is not None
+            assert stored.status == "pending"
+            assert stored.attempt_count == expected_attempt
+            assert stored.last_error_code == "account_call_draining"
+            current_time = stored.next_attempt_at
+
+
+@pytest.mark.anyio
 async def test_delivered_event_is_not_repeated_by_harmless_duplicate_wakeup(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -860,6 +906,8 @@ async def test_reconciliation_sweep_recovers_committed_event_without_wakeup(
         ("outbox_metric", "collect_outbox_snapshot"),
         ("recording_query", "collect_recording_operation_snapshot"),
         ("recording_metric", "collect_recording_operation_snapshot"),
+        ("deactivation_query", "collect_account_deactivation_snapshot"),
+        ("deactivation_metric", "collect_account_deactivation_snapshot"),
     ],
 )
 @pytest.mark.anyio
@@ -879,6 +927,8 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
     metric_attempts: list[str] = []
     recording_clock = datetime(2026, 7, 19, 12, 30, tzinfo=UTC)
     recording_clocks: list[datetime] = []
+    deactivation_clock = datetime(2026, 7, 19, 12, 31, tzinfo=UTC)
+    deactivation_clocks: list[datetime] = []
     private_exception_message = "customer-room credential=do-not-log"
 
     outbox_snapshot = OutboxSnapshot(
@@ -904,6 +954,14 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
         pending_deletion_count=0,
         oldest_pending_deletion_age_seconds=0.0,
     )
+    deactivation_snapshot = AccountDeactivationObservabilitySnapshot(
+        counts={},
+        oldest_incomplete_age_seconds=0.0,
+        attention_counts={
+            "owner_request": 0,
+            "subscription_ended": 0,
+        },
+    )
 
     async def collect_outbox_snapshot(
         repository: OutboxRepository,
@@ -926,6 +984,17 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
             raise RuntimeError(private_exception_message)
         return recording_snapshot
 
+    async def collect_deactivation_snapshot(
+        repository: AccountDeactivationRepository,
+        now: datetime,
+    ) -> AccountDeactivationObservabilitySnapshot:
+        query_attempts.append("deactivation")
+        snapshot_sessions.append(repository.session)
+        deactivation_clocks.append(now)
+        if failure_target == "deactivation_query":
+            raise RuntimeError(private_exception_message)
+        return deactivation_snapshot
+
     class SnapshotObservability:
         def record_outbox_snapshot(self, snapshot: OutboxSnapshot) -> None:
             assert snapshot is outbox_snapshot
@@ -942,6 +1011,15 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
             if failure_target == "recording_metric":
                 raise RuntimeError(private_exception_message)
 
+        def record_account_deactivation_snapshot(
+            self,
+            snapshot: AccountDeactivationObservabilitySnapshot,
+        ) -> None:
+            assert snapshot is deactivation_snapshot
+            metric_attempts.append("deactivation")
+            if failure_target == "deactivation_metric":
+                raise RuntimeError(private_exception_message)
+
     async def handler(_ctx: dict, item: OutboxEvent) -> None:
         delivered.append(item.idempotency_key)
 
@@ -955,6 +1033,11 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
         "observability_snapshot",
         collect_recording_snapshot,
     )
+    monkeypatch.setattr(
+        AccountDeactivationRepository,
+        "observability_snapshot",
+        collect_deactivation_snapshot,
+    )
     caplog.set_level(
         logging.WARNING,
         logger="app.workers.jobs.outbox_delivery",
@@ -966,21 +1049,25 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
             "outbox_handlers": {"phone.disable": handler},
             "observability": SnapshotObservability(),
             "recording_observability_now": lambda: recording_clock,
+            "account_deactivation_observability_now": lambda: deactivation_clock,
         }
     )
 
     assert result == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
     assert delivered == [event.idempotency_key]
-    assert query_attempts == ["outbox", "recording"]
-    assert len(snapshot_sessions) == 2
-    assert snapshot_sessions[0] is not snapshot_sessions[1]
+    assert query_attempts == ["outbox", "recording", "deactivation"]
+    assert len(snapshot_sessions) == 3
+    assert len({id(session) for session in snapshot_sessions}) == 3
     assert recording_clocks == [recording_clock]
+    assert deactivation_clocks == [deactivation_clock]
 
-    expected_metric_attempts = ["outbox", "recording"]
+    expected_metric_attempts = ["outbox", "recording", "deactivation"]
     if failure_target == "outbox_query":
         expected_metric_attempts.remove("outbox")
     if failure_target == "recording_query":
         expected_metric_attempts.remove("recording")
+    if failure_target == "deactivation_query":
+        expected_metric_attempts.remove("deactivation")
     assert metric_attempts == expected_metric_attempts
 
     warning_records = [

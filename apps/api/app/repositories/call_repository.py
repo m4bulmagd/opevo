@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import case, func, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.call import Call
@@ -47,6 +49,29 @@ class CallRepository:
 
     async def get_by_id(self, call_id: UUID) -> Call | None:
         return await self.session.get(Call, call_id)
+
+    async def has_active_by_user_id(self, user_id: UUID) -> bool:
+        active_call_id = await self.session.scalar(
+            select(Call.id)
+            .where(
+                Call.user_id == user_id,
+                Call.status.in_(("pending", "connected", "ending", "finalizing")),
+                Call.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        return active_call_id is not None
+
+    async def detach_phone_number(self, phone_number_id: UUID) -> int:
+        result = cast(
+            CursorResult[Any],
+            await self.session.execute(
+                update(Call)
+                .where(Call.phone_number_id == phone_number_id)
+                .values(phone_number_id=None)
+            ),
+        )
+        return int(result.rowcount or 0)
 
     async def observability_snapshot(
         self,

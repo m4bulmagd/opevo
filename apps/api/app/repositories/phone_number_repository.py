@@ -80,3 +80,7 @@ class PhoneNumberRepository:
         self.session.add(phone_number)
         await self.session.flush()
         return phone_number
+
+    async def delete_for_deactivation(self, phone_number: PhoneNumber) -> None:
+        await self.session.delete(phone_number)
+        await self.session.flush()
