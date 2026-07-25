@@ -66,9 +66,9 @@
   --shadow-overlay: var(--shadow-overlay-value);
   --ease-presvo-out: var(--motion-ease-out);
   --ease-presvo-drawer: var(--motion-ease-drawer);
-  --duration-feedback: var(--motion-duration-feedback);
-  --duration-state: var(--motion-duration-state);
-  --duration-entrance: var(--motion-duration-entrance);
+  --transition-duration-feedback: var(--motion-duration-feedback);
+  --transition-duration-state: var(--motion-duration-state);
+  --transition-duration-entrance: var(--motion-duration-entrance);
 }
 
 :root {
