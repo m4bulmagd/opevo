@@ -1,10 +1,11 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import Depends
+from fastapi import Depends, FastAPI
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -15,7 +16,9 @@ from sqlalchemy.ext.asyncio import (
 from app.core.config import Settings
 from app.core.database import get_session
 from app.models import Base
+from app.models.call import Call
 from app.models.customer_activation import CustomerActivation
+from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
@@ -79,7 +82,9 @@ def _complete_profile_payload() -> dict[str, object]:
 @pytest_asyncio.fixture
 async def local_client(
     tmp_path: Path,
-) -> AsyncIterator[tuple[httpx.AsyncClient, async_sessionmaker[AsyncSession]]]:
+) -> AsyncIterator[
+    tuple[httpx.AsyncClient, async_sessionmaker[AsyncSession], FastAPI]
+]:
     from app.main import create_app
 
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'local-activation.db'}"
@@ -123,7 +128,7 @@ async def local_client(
             transport=transport,
             base_url="http://testserver",
         ) as client:
-            yield client, session_factory
+            yield client, session_factory, application
     finally:
         application.dependency_overrides.clear()
         await engine.dispose()
@@ -131,9 +136,13 @@ async def local_client(
 
 @pytest.mark.anyio
 async def test_provider_free_journey_reaches_forwarding_required(
-    local_client: tuple[httpx.AsyncClient, async_sessionmaker[AsyncSession]],
+    local_client: tuple[
+        httpx.AsyncClient,
+        async_sessionmaker[AsyncSession],
+        FastAPI,
+    ],
 ) -> None:
-    client, session_factory = local_client
+    client, session_factory, _application = local_client
     headers = {"Authorization": f"Bearer {LOCAL_TOKEN}"}
 
     saved = await client.put(
@@ -264,24 +273,14 @@ async def test_provider_free_journey_reaches_forwarding_required(
         headers=headers,
     )
     assert reactivated.status_code == 200
-    assert reactivated.json()["stage"] == "profile_required"
-    refreshed_carrier = await client.post(
-        "/api/activation/lookup-carrier",
-        headers=headers,
-    )
-    assert refreshed_carrier.status_code == 200
-    refreshed_profile = await client.put(
-        "/api/business-profile",
-        headers=headers,
-        json=_complete_profile_payload(),
-    )
-    assert refreshed_profile.status_code == 200
-    reconfirmed = await client.post(
-        "/api/activation/confirm-profile",
-        headers=headers,
-    )
-    assert reconfirmed.status_code == 200, reconfirmed.text
-    assert reconfirmed.json()["stage"] == "provisioning_consent_required"
+    reactivation_snapshot = reactivated.json()
+    assert reactivation_snapshot["stage"] == "provisioning_consent_required"
+    assert reactivation_snapshot["profile"]["business_name"] == "Atelier Martin"
+    assert reactivation_snapshot["profile"]["receptionist_name"] == "Léa"
+    assert reactivation_snapshot["profile"]["confirmed_carrier"] == "orange"
+    assert reactivation_snapshot["activation"]["profile_confirmed_at"] is not None
+    assert reactivation_snapshot["activation"]["provisioning_consented_at"] is None
+    assert reactivation_snapshot["number"]["assigned_e164"] is None
 
     async with session_factory() as session:
         current_user = await session.scalar(select(User))
@@ -344,3 +343,196 @@ async def test_provider_free_journey_reaches_forwarding_required(
     second_snapshot = (await client.get("/api/activation", headers=headers)).json()
     assert second_snapshot["stage"] == "forwarding_required"
     assert second_snapshot["number"]["assigned_e164"] != first_number
+
+
+@pytest.mark.anyio
+async def test_call_drain_fixture_uses_real_owner_scoped_call_lifecycle(
+    local_client: tuple[
+        httpx.AsyncClient,
+        async_sessionmaker[AsyncSession],
+        FastAPI,
+    ],
+) -> None:
+    client, session_factory, _application = local_client
+    headers = {"Authorization": f"Bearer {LOCAL_TOKEN}"}
+
+    account = await client.get("/api/account", headers=headers)
+    assert account.status_code == 200
+
+    async with session_factory() as session:
+        local_user = await session.scalar(
+            select(User).where(User.clerk_user_id == "local_presvo_user")
+        )
+        assert local_user is not None
+        session.add(
+            UsageLedger(
+                user_id=local_user.id,
+                event_type="subscription_activated",
+                source_id="local_call_drain_fixture_grant",
+                minutes_delta=10,
+                balance_after=10,
+            )
+        )
+        await session.commit()
+
+    unauthenticated = await client.post(
+        "/api/development/call-drain-fixture/start"
+    )
+    assert unauthenticated.status_code == 401
+
+    started = await client.post(
+        "/api/development/call-drain-fixture/start",
+        headers=headers,
+    )
+    assert started.status_code == 200
+    assert set(started.json()) == {"call_id"}
+    call_id = UUID(started.json()["call_id"])
+
+    async with session_factory() as session:
+        call = await session.get(Call, call_id)
+        assert call is not None
+        assert call.user_id == local_user.id
+        assert call.status == "connected"
+        assert call.livekit_room_id is None
+        assert call.livekit_dispatch_id is None
+
+    visible_while_connected = await client.get("/api/calls", headers=headers)
+    assert visible_while_connected.status_code == 200
+    assert [
+        (item["id"], item["status"])
+        for item in visible_while_connected.json()["calls"]
+    ] == [(str(call_id), "connected")]
+
+    finished = await client.post(
+        "/api/development/call-drain-fixture/finish",
+        headers=headers,
+        json={"call_id": str(call_id)},
+    )
+    assert finished.status_code == 200
+    assert finished.json() == {"call_id": str(call_id)}
+
+    async with session_factory() as session:
+        call = await session.get(Call, call_id)
+        assert call is not None
+        assert call.status == "completed"
+        assert call.duration_seconds == 1
+        assert call.minutes_charged == 1
+        notification_count = await session.scalar(
+            select(func.count(Notification.id)).where(
+                Notification.call_id == call.id
+            )
+        )
+        summary_event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.topic == "summary.generate",
+                OutboxEvent.aggregate_id == call.id,
+            )
+        )
+        assert notification_count == 1
+        assert summary_event is not None
+        assert summary_event.payload == {"call_id": str(call_id)}
+
+    visible_after_completion = await client.get("/api/calls", headers=headers)
+    assert visible_after_completion.status_code == 200
+    assert [
+        (item["id"], item["status"])
+        for item in visible_after_completion.json()["calls"]
+    ] == [(str(call_id), "completed")]
+
+
+@pytest.mark.anyio
+async def test_call_drain_fixture_rejects_non_fake_telephony(
+    local_client: tuple[
+        httpx.AsyncClient,
+        async_sessionmaker[AsyncSession],
+        FastAPI,
+    ],
+) -> None:
+    client, _session_factory, application = local_client
+    application.state.settings.telephony_mode = "telnyx"
+
+    response = await client.post(
+        "/api/development/call-drain-fixture/start",
+        headers={"Authorization": f"Bearer {LOCAL_TOKEN}"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {"code": "local_telephony_disabled"}
+    }
+
+
+@pytest.mark.anyio
+async def test_call_drain_fixture_hides_foreign_calls(
+    local_client: tuple[
+        httpx.AsyncClient,
+        async_sessionmaker[AsyncSession],
+        FastAPI,
+    ],
+) -> None:
+    client, session_factory, _application = local_client
+    headers = {"Authorization": f"Bearer {LOCAL_TOKEN}"}
+
+    account = await client.get("/api/account", headers=headers)
+    assert account.status_code == 200
+
+    async with session_factory() as session:
+        foreign_user = User(
+            clerk_user_id="foreign_call_drain_owner",
+            email="foreign-call-drain-owner@example.invalid",
+        )
+        session.add(foreign_user)
+        await session.flush()
+        foreign_call = Call(
+            user_id=foreign_user.id,
+            status="connected",
+        )
+        session.add(foreign_call)
+        await session.commit()
+        foreign_call_id = foreign_call.id
+
+    response = await client.post(
+        "/api/development/call-drain-fixture/finish",
+        headers=headers,
+        json={"call_id": str(foreign_call_id)},
+    )
+
+    assert response.status_code == 404
+    async with session_factory() as session:
+        foreign_call = await session.get(Call, foreign_call_id)
+        assert foreign_call is not None
+        assert foreign_call.status == "connected"
+
+
+@pytest.mark.anyio
+async def test_call_drain_fixture_routes_are_absent_outside_development(
+    tmp_path: Path,
+) -> None:
+    from app.main import create_app
+
+    application = create_app(
+        Settings(
+            app_env="test",
+            database_url=(
+                f"sqlite+aiosqlite:///{tmp_path / 'non-development.db'}"
+            ),
+            redis_url="redis://localhost:6379/0",
+            auth_mode="clerk",
+            agent_dispatch_jwt_secret="a" * 32,
+        )
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://testserver",
+    ) as client:
+        start = await client.post(
+            "/api/development/call-drain-fixture/start"
+        )
+        finish = await client.post(
+            "/api/development/call-drain-fixture/finish",
+            json={"call_id": "00000000-0000-0000-0000-000000000000"},
+        )
+
+    assert start.status_code == 404
+    assert finish.status_code == 404

@@ -1,8 +1,22 @@
 import { expect, type Page, test } from "@playwright/test";
 
+import { writeFile } from "node:fs/promises";
+
 test.describe.configure({ mode: "serial" });
 
 const FIXED_EXISTING_NUMBER = "01 99 00 00 00";
+
+function stateFilePath(): string {
+  const path = process.env.E2E_STATE_FILE?.trim();
+  if (!path) {
+    throw new Error("E2E_STATE_FILE is required for the local lifecycle journey.");
+  }
+  return path;
+}
+
+function normalizeDisplayedNumber(value: string): string {
+  return `+${value.replace(/\D/g, "")}`;
+}
 
 async function completeBusinessMilestone(page: Page) {
   await expect(page.getByRole("heading", { name: "Tell us about your business" })).toBeVisible();
@@ -56,7 +70,9 @@ test("local owner activates Presvo without external providers", async ({ page })
   await page.getByRole("button", { name: "Activate local starter plan" }).click();
   await page.getByRole("button", { name: "Review number provisioning" }).click();
   await page.getByRole("button", { name: "Confirm and provision my number" }).click();
-  await expect(page.getByText(/^\+33\s*9/)).toBeVisible({ timeout: 60_000 });
+  const assignedNumber = page.getByText(/^\+33\s*9/).first();
+  await expect(assignedNumber).toBeVisible({ timeout: 60_000 });
+  const oldNumber = normalizeDisplayedNumber(await assignedNumber.innerText());
   await expect(page.getByText(/conditionally forward unanswered, busy, and unreachable calls/i)).toBeVisible();
   await page.getByRole("link", { name: "Continue to forwarding" }).click();
   await expect(page.getByRole("heading", { name: "Forward missed calls to Presvo" })).toBeVisible();
@@ -74,4 +90,9 @@ test("local owner activates Presvo without external providers", async ({ page })
 
   await expect(page).toHaveURL(/\/dashboard$/, { timeout: 60_000 });
   await expect(page.getByText("Presvo is answering")).toBeVisible();
+
+  await writeFile(stateFilePath(), `${JSON.stringify({ oldNumber })}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
 });

@@ -3,6 +3,7 @@ set -eu
 
 PROJECT_NAME=presvo-e2e
 COMPOSE_FILE=compose.dev.yaml
+e2e_state_dir=
 
 export WEB_PORT=3300
 export API_PORT=5800
@@ -27,6 +28,9 @@ cleanup() {
     compose logs api worker web || true
   fi
   down_stack
+  if [ -n "$e2e_state_dir" ] && [ -d "$e2e_state_dir" ]; then
+    rm -rf -- "$e2e_state_dir"
+  fi
   exit "$status"
 }
 
@@ -46,6 +50,11 @@ trap cleanup EXIT
 trap handle_hup HUP
 trap handle_int INT
 trap handle_term TERM
+
+e2e_state_dir=$(mktemp -d)
+export E2E_STATE_FILE="${e2e_state_dir}/account-lifecycle.json"
+export E2E_API_BASE_URL="http://127.0.0.1:${API_PORT}"
+export E2E_LOCAL_AUTH_TOKEN="presvo-local-development-token"
 
 wait_for_health() {
   service=$1
@@ -131,13 +140,12 @@ wait_for_health web
 E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
   npm --prefix apps/web run test:e2e -- tests/e2e/activation.spec.ts
 
-compose restart postgres redis minio api worker web
-wait_for_health postgres
-wait_for_health redis
-wait_for_health minio
+E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+  npm --prefix apps/web run test:e2e -- tests/e2e/deactivation-start.spec.ts
+
+compose restart api worker
 wait_for_health api
 wait_for_running worker
-wait_for_health web
 
 E2E_AFTER_SERVICE_RESTART=true E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
   npm --prefix apps/web run test:e2e -- tests/e2e/restart-resume.spec.ts

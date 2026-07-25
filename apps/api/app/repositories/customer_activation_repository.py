@@ -3,7 +3,6 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
 from app.models.user import User
 
@@ -84,16 +83,4 @@ class CustomerActivationRepository:
             activation.go_live_approved_at = None
             activation.activated_at = None
             activation.last_failure_code = None
-        profile = await self.session.scalar(
-            select(BusinessProfile)
-            .where(BusinessProfile.user_id == user_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-        if profile is not None:
-            profile.detected_carrier = None
-            profile.detected_number_type = None
-            profile.carrier_lookup_status = None
-            profile.carrier_looked_up_at = None
-            profile.confirmed_carrier = None
         await self.session.flush()
