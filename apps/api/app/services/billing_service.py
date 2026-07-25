@@ -164,11 +164,14 @@ class BillingService:
         owner_metadata_present, metadata_user_id = self._metadata_user_id(metadata)
         if owner_metadata_present and metadata_user_id != user.id:
             return
-        incomplete_operation = await self.account_deactivation_repository.get_incomplete_by_user_id_for_update(
-            user_id
-        )
         current_subscription = (
             await self.subscription_repository.get_by_user_id_for_update(user_id)
+        )
+        phone_number = await self.phone_number_repository.get_by_user_id_for_update(
+            user_id
+        )
+        incomplete_operation = await self.account_deactivation_repository.get_incomplete_by_user_id_for_update(
+            user_id
         )
 
         plan_tier = self._extract_subscription_plan_tier(event_object)
@@ -254,9 +257,6 @@ class BillingService:
         if account_was_inactive:
             if not is_replacement and not is_authorized_progression:
                 return
-            phone_number = await self.phone_number_repository.get_by_user_id_for_update(
-                user_id
-            )
             safe_reactivation_boundary = bool(
                 incomplete_operation is None and phone_number is None
             )

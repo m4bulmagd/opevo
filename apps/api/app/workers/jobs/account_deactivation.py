@@ -396,26 +396,18 @@ async def _drain_active_call(
         if stored.active_call_drained_at is not None:
             await session.commit()
             return
-        active = await CallRepository(session).has_active_by_user_id(stored.user_id)
+        user_id = stored.user_id
         await session.commit()
+    active = await _has_active_call(
+        session_factory,
+        user_id=user_id,
+    )
     if active:
-        await _mark_retryable(
+        await _mark_call_draining(
             session_factory,
-            operation_id=operation.operation_id,
+            operation=operation,
             now=now_provider(),
-            code="account_call_draining",
-        )
-        _record_result(
-            telemetry,
-            trigger=operation.trigger,
-            step="drain_call",
-            outcome="retry",
-            error_class="unavailable",
-        )
-        raise OutboxDeliveryError(
-            "account_call_draining",
-            retryable=True,
-            exhaustible=False,
+            telemetry=telemetry,
         )
     await _mark_timestamp(
         session_factory,
@@ -440,6 +432,16 @@ async def _release_number(
     now_provider: Callable[[], datetime],
     telemetry,
 ) -> None:
+    if await _has_active_call(
+        session_factory,
+        user_id=operation.user_id,
+    ):
+        await _mark_call_draining(
+            session_factory,
+            operation=operation,
+            now=now_provider(),
+            telemetry=telemetry,
+        )
     provider_number_id = await _pending_private_identity(
         session_factory,
         operation.operation_id,
@@ -498,11 +500,23 @@ async def _reset_activation(
         user_id = uncommitted.user_id
         await session.commit()
 
+    if await _has_active_call(
+        session_factory,
+        user_id=user_id,
+    ):
+        await _mark_call_draining(
+            session_factory,
+            operation=operation,
+            now=now_provider(),
+            telemetry=telemetry,
+        )
+
     async with session_factory() as session:
         user = await UserRepository(session).get_by_id_for_update(user_id)
         if user is None:
             await session.commit()
             raise OutboxDeliveryError("invalid_payload", retryable=False)
+        phone = await PhoneNumberRepository(session).get_by_user_id_for_update(user_id)
         stored = await AccountDeactivationRepository(session).get_by_id_for_update(
             operation.operation_id
         )
@@ -512,7 +526,6 @@ async def _reset_activation(
         if stored.activation_reset_at is not None:
             await session.commit()
             return None
-        phone = await PhoneNumberRepository(session).get_by_user_id_for_update(user_id)
         if phone is not None:
             await CallRepository(session).detach_phone_number(phone.id)
         await PhoneNumberProvisioningRepository(session).delete_for_user_id(user_id)
@@ -534,6 +547,44 @@ async def _reset_activation(
         error_class="unknown",
     )
     return completed_at
+
+
+async def _has_active_call(
+    session_factory,
+    *,
+    user_id: UUID,
+) -> bool:
+    async with session_factory() as session:
+        active = await CallRepository(session).has_active_by_user_id(user_id)
+        await session.commit()
+        return active
+
+
+async def _mark_call_draining(
+    session_factory,
+    *,
+    operation: _OperationSnapshot,
+    now: datetime,
+    telemetry,
+) -> None:
+    await _mark_retryable(
+        session_factory,
+        operation_id=operation.operation_id,
+        now=now,
+        code="account_call_draining",
+    )
+    _record_result(
+        telemetry,
+        trigger=operation.trigger,
+        step="drain_call",
+        outcome="retry",
+        error_class="unavailable",
+    )
+    raise OutboxDeliveryError(
+        "account_call_draining",
+        retryable=True,
+        exhaustible=False,
+    )
 
 
 async def _complete(

@@ -135,6 +135,13 @@ class AccountLifecycleService:
         if user is None:
             return None
 
+        subscription = await self.subscription_repository.get_by_user_id_for_update(
+            user_id
+        )
+        phone_number = await self.phone_number_repository.get_by_user_id_for_update(
+            user_id
+        )
+        config = await self.agent_config_repository.get_by_user_id_for_update(user_id)
         incomplete = (
             await self.account_deactivation_repository.get_incomplete_by_user_id_for_update(
                 user_id
@@ -153,9 +160,6 @@ class AccountLifecycleService:
                 return latest
             return None
 
-        subscription = await self.subscription_repository.get_by_user_id_for_update(
-            user_id
-        )
         if (
             trigger == "subscription_ended"
             and (
@@ -165,10 +169,6 @@ class AccountLifecycleService:
         ):
             return None
 
-        phone_number = await self.phone_number_repository.get_by_user_id_for_update(
-            user_id
-        )
-        config = await self.agent_config_repository.get_by_user_id_for_update(user_id)
         requested_at = self.now()
         current_subscription_id = (
             subscription.stripe_subscription_id if subscription is not None else None

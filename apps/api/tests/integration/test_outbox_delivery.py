@@ -500,7 +500,7 @@ async def test_concurrent_provisioning_confirmation_creates_one_durable_intent(
         )
         assert activation is not None
         assert provisioning is not None
-        operation_key = f"activation:phone.provision:{activation_id}"
+        operation_key = f"activation:provision:{activation_id}:g1"
         assert activation.provisioning_idempotency_key == operation_key
         assert provisioning.provider_operation_key == operation_key
         assert await session.scalar(
