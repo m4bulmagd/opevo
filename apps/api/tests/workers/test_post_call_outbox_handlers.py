@@ -624,6 +624,7 @@ async def test_recording_reconcile_malformed_results_fail_closed_without_exhaust
 
 def test_default_handlers_exactly_match_supported_topics_without_placeholders() -> None:
     expected_topics = {
+        "account.deactivate",
         "phone.provision",
         "phone.enable",
         "phone.disable",
