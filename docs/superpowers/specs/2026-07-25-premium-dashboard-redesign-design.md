@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-25
 
-**Status:** Approved in collaborative design review; awaiting written-spec review
+**Status:** Approved
 
 **Scope:** Authenticated dashboard and its existing pages
 
