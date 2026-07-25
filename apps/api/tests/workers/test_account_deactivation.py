@@ -539,6 +539,7 @@ async def test_real_subscription_ended_request_disables_before_drain_and_release
             )
         )
         assert event is not None
+        assert event.payload == {"operation_id": str(operation_id)}
         assert operation.routing_disabled_at is None
         assert operation.subscription_canceled_at is None
 
