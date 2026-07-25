@@ -30,8 +30,11 @@ def _upsert_arguments(
     subscription_id: str,
     customer_id: str,
     status: str = "active",
+    lifecycle_generation: int = 1,
     subscription_created_at: datetime | None = None,
     event_created_at: datetime | None = None,
+    cancel_at_period_end: bool = False,
+    cancellation_effective_at: datetime | None = None,
 ) -> dict:
     return {
         "user_id": user_id,
@@ -44,6 +47,9 @@ def _upsert_arguments(
         "current_period_end": None,
         "stripe_subscription_created_at": subscription_created_at,
         "last_stripe_event_created_at": event_created_at,
+        "lifecycle_generation": lifecycle_generation,
+        "cancel_at_period_end": cancel_at_period_end,
+        "cancellation_effective_at": cancellation_effective_at,
     }
 
 
@@ -74,9 +80,84 @@ async def test_resubscription_updates_the_existing_user_row(
         )
     )
 
+    assert original is not None
+    assert replacement is not None
     assert replacement.id == original.id
     assert replacement.stripe_subscription_id == "sub_new"
     assert await db_session.scalar(select(func.count()).select_from(Subscription)) == 1
+
+
+@pytest.mark.anyio
+async def test_upsert_persists_and_reverses_scheduled_cancellation(
+    db_session: AsyncSession,
+) -> None:
+    user = await _user(db_session, "scheduled-cancellation")
+    repository = SubscriptionRepository(db_session)
+    effective_at = datetime(2026, 4, 1, tzinfo=UTC)
+
+    scheduled = await repository.upsert_by_stripe_subscription_id(
+        **_upsert_arguments(
+            user.id,
+            subscription_id="sub_scheduled",
+            customer_id="cus_scheduled",
+            event_created_at=datetime(2026, 3, 1, tzinfo=UTC),
+            cancel_at_period_end=True,
+            cancellation_effective_at=effective_at,
+        )
+    )
+    reversed_schedule = await repository.upsert_by_stripe_subscription_id(
+        **_upsert_arguments(
+            user.id,
+            subscription_id="sub_scheduled",
+            customer_id="cus_scheduled",
+            event_created_at=datetime(2026, 3, 2, tzinfo=UTC),
+        )
+    )
+
+    assert scheduled is not None
+    assert reversed_schedule is not None
+    assert scheduled is reversed_schedule
+    assert reversed_schedule.cancel_at_period_end is False
+    assert reversed_schedule.cancellation_effective_at is None
+
+
+@pytest.mark.anyio
+async def test_old_lifecycle_generation_cannot_replace_current_subscription(
+    db_session: AsyncSession,
+) -> None:
+    user = await _user(db_session, "lifecycle-generation")
+    user.lifecycle_generation = 2
+    repository = SubscriptionRepository(db_session)
+    current = Subscription(
+        user_id=user.id,
+        stripe_customer_id="cus_generation_2",
+        stripe_subscription_id="sub_generation_2",
+        plan_tier="starter",
+        status="active",
+        allocated_minutes=60,
+        lifecycle_generation=2,
+        stripe_subscription_created_at=datetime(2026, 3, 1, tzinfo=UTC),
+        last_stripe_event_created_at=datetime(2026, 3, 1, tzinfo=UTC),
+    )
+    db_session.add(current)
+    await db_session.flush()
+
+    ignored = await repository.upsert_by_stripe_subscription_id(
+        **_upsert_arguments(
+            user.id,
+            subscription_id="sub_generation_1_late",
+            customer_id="cus_generation_1",
+            status="canceled",
+            lifecycle_generation=1,
+            subscription_created_at=datetime(2026, 4, 1, tzinfo=UTC),
+            event_created_at=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+    )
+
+    assert current is not None
+    assert ignored is None
+    assert current.stripe_subscription_id == "sub_generation_2"
+    assert current.status == "active"
 
 
 @pytest.mark.anyio
@@ -106,6 +187,7 @@ async def test_older_subscription_generation_cannot_replace_current_row(
         )
     )
 
+    assert current is not None
     assert ignored is None
     assert current.stripe_subscription_id == "sub_new"
     assert current.status == "active"
@@ -132,9 +214,7 @@ async def test_legacy_same_id_delayed_routing_event_cannot_restore_access(
     db_session.add(legacy)
     await db_session.flush()
 
-    ignored = await SubscriptionRepository(
-        db_session
-    ).upsert_by_stripe_subscription_id(
+    ignored = await SubscriptionRepository(db_session).upsert_by_stripe_subscription_id(
         **_upsert_arguments(
             user.id,
             subscription_id="sub_legacy_delayed",
@@ -171,9 +251,7 @@ async def test_legacy_same_id_delayed_nonrouting_event_still_revokes_access(
     db_session.add(legacy)
     await db_session.flush()
 
-    updated = await SubscriptionRepository(
-        db_session
-    ).upsert_by_stripe_subscription_id(
+    updated = await SubscriptionRepository(db_session).upsert_by_stripe_subscription_id(
         **_upsert_arguments(
             user.id,
             subscription_id="sub_legacy_revocation",
@@ -209,9 +287,7 @@ async def test_older_subscription_cannot_replace_terminal_legacy_row(
     db_session.add(legacy)
     await db_session.flush()
 
-    ignored = await SubscriptionRepository(
-        db_session
-    ).upsert_by_stripe_subscription_id(
+    ignored = await SubscriptionRepository(db_session).upsert_by_stripe_subscription_id(
         **_upsert_arguments(
             user.id,
             subscription_id="sub_legacy_older",
@@ -340,6 +416,7 @@ async def test_stripe_subscription_cannot_be_reassigned_to_another_user(
             customer_id="cus_owner",
         )
     )
+    assert owned is not None
 
     with pytest.raises(StripeSubscriptionOwnershipError):
         await repository.upsert_by_stripe_subscription_id(

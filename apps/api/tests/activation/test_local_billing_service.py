@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -46,7 +47,8 @@ async def test_local_billing_activates_starter_and_grants_once(
     )
     assert first.id == second.id
     assert first.stripe_customer_id == f"local_customer_{active_user.id}"
-    assert first.stripe_subscription_id == f"local_subscription_{active_user.id}"
+    assert first.stripe_subscription_id == (f"local_subscription_{active_user.id}_g1")
+    assert first.lifecycle_generation == 1
     assert first.plan_tier == "starter"
     assert first.status == "active"
     assert first.allocated_minutes == 60
@@ -56,9 +58,9 @@ async def test_local_billing_activates_starter_and_grants_once(
     assert _as_utc(second.current_period_end) == FIXED_NOW + timedelta(days=30)
     assert (
         await db_session.scalar(
-            select(func.count()).select_from(UsageLedger).where(
-                UsageLedger.source_id == f"local-starter:{active_user.id}"
-            )
+            select(func.count())
+            .select_from(UsageLedger)
+            .where(UsageLedger.source_id == f"local_invoice_{active_user.id}_g1")
         )
         == 1
     )
@@ -97,9 +99,7 @@ async def test_local_billing_never_overwrites_real_subscription(
     assert persisted is not None
     assert persisted.stripe_customer_id == "cus_real"
     assert persisted.stripe_subscription_id == "sub_real"
-    assert await UsageRepository(db_session).get_current_balance(
-        user_id=user_id
-    ) == 0
+    assert await UsageRepository(db_session).get_current_balance(user_id=user_id) == 0
 
 
 @pytest.mark.anyio
@@ -120,22 +120,24 @@ async def test_local_billing_rolls_back_subscription_when_grant_fails(
         await service.activate_starter(user_id, now=FIXED_NOW)
 
     assert await SubscriptionRepository(db_session).get_by_user_id(user_id) is None
-    assert await UsageRepository(db_session).get_current_balance(
-        user_id=user_id
-    ) == 0
+    assert await UsageRepository(db_session).get_current_balance(user_id=user_id) == 0
 
 
 @pytest.mark.anyio
-async def test_local_billing_preserves_global_grant_lock_order(
-) -> None:
+async def test_local_billing_preserves_global_grant_lock_order() -> None:
     events: list[str] = []
     user_id = uuid4()
-    user = SimpleNamespace(id=user_id)
+    user = SimpleNamespace(
+        id=user_id,
+        status="active",
+        lifecycle_generation=1,
+    )
     subscription = SimpleNamespace(
         id=user_id,
         user_id=user_id,
         stripe_customer_id=f"local_customer_{user_id}",
-        stripe_subscription_id=f"local_subscription_{user_id}",
+        stripe_subscription_id=f"local_subscription_{user_id}_g1",
+        lifecycle_generation=1,
         plan_tier="starter",
         status="active",
         allocated_minutes=60,
@@ -145,7 +147,7 @@ async def test_local_billing_preserves_global_grant_lock_order(
 
     class Usage:
         async def acquire_invoice_grant_lock(self, *, invoice_id: str) -> None:
-            assert invoice_id == f"local-starter:{user_id}"
+            assert invoice_id == f"local_invoice_{user_id}_g1"
             events.append("grant_advisory_lock")
 
         async def grant_invoice(self, **_kwargs):
@@ -153,10 +155,21 @@ async def test_local_billing_preserves_global_grant_lock_order(
             return SimpleNamespace(already_granted=False)
 
     class Users:
+        async def get_by_id(self, requested_user_id):
+            assert requested_user_id == user_id
+            events.append("generation_read")
+            return user
+
         async def get_by_id_for_update(self, requested_user_id):
             assert requested_user_id == user_id
             events.append("user_lock")
             return user
+
+    class Operations:
+        async def get_incomplete_by_user_id_for_update(self, requested_user_id):
+            assert requested_user_id == user_id
+            events.append("operation_lock")
+            return None
 
     class Subscriptions:
         async def get_by_user_id_for_update(self, requested_user_id):
@@ -168,6 +181,12 @@ async def test_local_billing_preserves_global_grant_lock_order(
             events.append("subscription_upsert")
             return subscription
 
+    class PhoneNumbers:
+        async def get_by_user_id_for_update(self, requested_user_id):
+            assert requested_user_id == user_id
+            events.append("phone_lock")
+            return None
+
     class Session:
         async def commit(self) -> None:
             events.append("transaction_commit")
@@ -175,19 +194,24 @@ async def test_local_billing_preserves_global_grant_lock_order(
         async def rollback(self) -> None:
             events.append("transaction_rollback")
 
-    service = LocalBillingService.__new__(LocalBillingService)
+    service: Any = LocalBillingService.__new__(LocalBillingService)
     service.session = Session()
     service.usage_accounting_service = Usage()
     service.user_repository = Users()
+    service.account_deactivation_repository = Operations()
+    service.phone_number_repository = PhoneNumbers()
     service.subscription_repository = Subscriptions()
 
     result = await service.activate_starter(user_id, now=FIXED_NOW)
 
     assert result is subscription
     assert events == [
+        "generation_read",
         "grant_advisory_lock",
         "user_lock",
+        "operation_lock",
         "subscription_lock",
+        "phone_lock",
         "subscription_upsert",
         "usage_grant",
         "transaction_commit",

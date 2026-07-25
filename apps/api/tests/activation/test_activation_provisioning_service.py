@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -112,7 +113,7 @@ async def test_confirm_records_one_consent_and_one_outbox_across_duplicate_calls
         )
     )
     assert provisioning is not None
-    operation_key = f"activation:phone.provision:{activation_id}"
+    operation_key = f"activation:provision:{activation_id}:g1"
     assert provisioning.status == "queued"
     assert provisioning.attempt_count == 0
     assert provisioning.provider_operation_key == operation_key
@@ -120,19 +121,28 @@ async def test_confirm_records_one_consent_and_one_outbox_across_duplicate_calls
     assert second.activation.provisioning_consented_at == first_consent_at
     assert first.number.provisioning_status == "queued"
     assert second.number.provisioning_status == "queued"
-    assert await db_session.scalar(
-        select(func.count()).select_from(PhoneNumberProvisioning)
-    ) == 1
-    assert await db_session.scalar(
-        select(func.count())
-        .select_from(OutboxEvent)
-        .where(OutboxEvent.topic == "phone.provision")
-    ) == 1
-    assert await db_session.scalar(
-        select(func.count())
-        .select_from(ActivationEvent)
-        .where(ActivationEvent.event_type == "provisioning_consented")
-    ) == 1
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(PhoneNumberProvisioning)
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.topic == "phone.provision")
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(ActivationEvent)
+            .where(ActivationEvent.event_type == "provisioning_consented")
+        )
+        == 1
+    )
     outbox = await db_session.scalar(select(OutboxEvent))
     event = await db_session.scalar(select(ActivationEvent))
     assert outbox is not None
@@ -182,19 +192,28 @@ async def test_repeat_confirm_accepts_completed_matching_provisioning_without_ne
     )
     assert repeated.number.provisioning_status == "succeeded"
     assert repeated.number.assigned_e164 == "+33123456789"
-    assert await db_session.scalar(
-        select(func.count()).select_from(PhoneNumberProvisioning)
-    ) == 1
-    assert await db_session.scalar(
-        select(func.count())
-        .select_from(OutboxEvent)
-        .where(OutboxEvent.topic == "phone.provision")
-    ) == 1
-    assert await db_session.scalar(
-        select(func.count())
-        .select_from(ActivationEvent)
-        .where(ActivationEvent.event_type == "provisioning_consented")
-    ) == 1
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(PhoneNumberProvisioning)
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.topic == "phone.provision")
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(ActivationEvent)
+            .where(ActivationEvent.event_type == "provisioning_consented")
+        )
+        == 1
+    )
 
 
 class _FailingArqPool:
@@ -216,9 +235,7 @@ async def test_confirm_redis_wakeup_failure_keeps_committed_canonical_snapshot(
 
     assert result.activation.provisioning_consented_at is not None
     assert result.number.provisioning_status == "queued"
-    assert await db_session.scalar(
-        select(func.count()).select_from(OutboxEvent)
-    ) == 1
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
 
 
 @pytest.mark.anyio
@@ -303,13 +320,14 @@ async def test_confirm_rejects_ineligible_state_with_stable_blocker_code(
             arq_pool=None,
         )
 
-    assert exc_info.value.code == expected_code
-    assert await db_session.scalar(
-        select(func.count()).select_from(PhoneNumberProvisioning)
-    ) == 0
-    assert await db_session.scalar(
-        select(func.count()).select_from(OutboxEvent)
-    ) == 0
+    assert cast(Any, exc_info.value).code == expected_code
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(PhoneNumberProvisioning)
+        )
+        == 0
+    )
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
 @pytest.mark.anyio
@@ -364,11 +382,7 @@ async def test_retry_queues_new_delivery_identity_but_keeps_provider_identity(
     result = await service.retry(active_user.id, arq_pool=None)
 
     await db_session.refresh(provisioning)
-    outbox_events = list(
-        (
-            await db_session.execute(select(OutboxEvent))
-        ).scalars()
-    )
+    outbox_events = list((await db_session.execute(select(OutboxEvent))).scalars())
     assert result.number.provisioning_status == "queued"
     assert provisioning.status == "queued"
     assert provisioning.can_retry is False
@@ -377,7 +391,7 @@ async def test_retry_queues_new_delivery_identity_but_keeps_provider_identity(
     assert provisioning.last_error_payload is None
     assert provisioning.provider_operation_key == provider_operation_key
     assert len(outbox_events) == 2
-    retry_outbox_key = f"activation:phone.provision:{activation.id}:attempt:2"
+    retry_outbox_key = f"activation:provision:{activation.id}:g1:attempt:2"
     assert {event.idempotency_key for event in outbox_events} == {
         provider_operation_key,
         retry_outbox_key,
@@ -437,12 +451,15 @@ async def test_confirm_rolls_back_consent_when_outbox_insert_fails(
     assert activation is not None
     assert activation.provisioning_consented_at is None
     assert activation.provisioning_idempotency_key is None
-    assert await db_session.scalar(
-        select(func.count()).select_from(PhoneNumberProvisioning)
-    ) == 0
-    assert await db_session.scalar(
-        select(func.count()).select_from(ActivationEvent)
-    ) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(PhoneNumberProvisioning)
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 0
+    )
 
 
 @pytest.mark.anyio
@@ -544,7 +561,7 @@ async def test_confirm_acquires_command_locks_in_required_order() -> None:
             return canonical_snapshot
 
     service = ActivationProvisioningService(
-        Session(),
+        cast(Any, Session()),
         user_repository=Users(),
         activation_repository=Activations(),
         business_profile_repository=Profiles(),
