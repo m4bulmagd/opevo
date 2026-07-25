@@ -1916,8 +1916,8 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         assert other_recording is None
         assert other_notifications == []
         assert other_usage.entries == []
-        assert [item.id for item in listed_calls] == [retained_ids["call"]]
-        assert other_listed_calls == []
+        assert [item.id for item in listed_calls.calls] == [retained_ids["call"]]
+        assert other_listed_calls.calls == []
         assert user.status == "inactive"
         assert operation.status == "completed"
         assert operation.phone_provider_id is not None

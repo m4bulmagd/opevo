@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.call import Call
 
@@ -31,6 +33,18 @@ CALL_FAILURE_CODES = frozenset(
         "legacy_failure",
     }
 )
+
+PHONE_QUERY_PATTERN = re.compile(r"^[0-9\s()+.\-]+$")
+
+
+@dataclass(frozen=True)
+class CallHistoryPage:
+    calls: list[Call]
+    total: int
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 @dataclass(frozen=True)
@@ -243,17 +257,60 @@ class CallRepository:
         await self.session.flush()
         return call
 
-    async def list_visible_by_user_id(
-        self, user_id: UUID, *, limit: int = 100, offset: int = 0
-    ) -> list[Call]:
+    @staticmethod
+    def _visible_call_predicates(
+        user_id: UUID,
+        query: str | None,
+    ) -> tuple[ColumnElement[bool], ...]:
+        predicates: list[ColumnElement[bool]] = [
+            Call.user_id == user_id,
+            Call.deleted_at.is_(None),
+        ]
+        if query is None:
+            return tuple(predicates)
+
+        escaped_query = _escape_like(query)
+        search_predicates: list[ColumnElement[bool]] = [
+            Call.summary_text.ilike(f"%{escaped_query}%", escape="\\"),
+            Call.summary_data["caller_intent"]
+            .as_string()
+            .ilike(f"%{escaped_query}%", escape="\\"),
+        ]
+        if PHONE_QUERY_PATTERN.fullmatch(query):
+            digits = "".join(character for character in query if character.isdigit())
+            if len(digits) >= 3:
+                search_predicates.append(Call.caller_number.ilike(f"%{digits}%"))
+
+        predicates.append(or_(*search_predicates))
+        return tuple(predicates)
+
+    async def list_visible_page_by_user_id(
+        self,
+        user_id: UUID,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        query: str | None = None,
+    ) -> CallHistoryPage:
+        predicates = self._visible_call_predicates(user_id, query)
+        total = await self.session.scalar(
+            select(func.count(Call.id)).where(*predicates)
+        )
         result = await self.session.execute(
             select(Call)
-            .where(Call.user_id == user_id, Call.deleted_at.is_(None))
-            .order_by(Call.started_at.desc().nullslast(), Call.created_at.desc())
+            .where(*predicates)
+            .order_by(
+                Call.started_at.desc().nullslast(),
+                Call.created_at.desc(),
+                Call.id.desc(),
+            )
             .limit(limit)
             .offset(offset)
         )
-        return list(result.scalars())
+        return CallHistoryPage(
+            calls=list(result.scalars()),
+            total=int(total or 0),
+        )
 
     async def get_visible_by_id(self, call_id: UUID, *, user_id: UUID) -> Call | None:
         result = await self.session.execute(

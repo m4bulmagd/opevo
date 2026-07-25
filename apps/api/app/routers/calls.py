@@ -51,11 +51,23 @@ async def list_calls(
     request: Request,
     identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_history_service),
+    q: Annotated[str | None, Query(max_length=100)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> CallHistoryListResponse:
-    calls = await service.list_calls(identity.internal_user_id, limit=limit, offset=offset)
-    return CallHistoryListResponse(calls=calls)
+    page = await service.list_calls(
+        identity.internal_user_id,
+        limit=limit,
+        offset=offset,
+        query=q,
+    )
+    return CallHistoryListResponse(
+        calls=page.calls,
+        total=page.total,
+        limit=page.limit,
+        offset=page.offset,
+        has_more=page.has_more,
+    )
 
 
 @router.get("/{call_id}", response_model=CallDetailResponse)
