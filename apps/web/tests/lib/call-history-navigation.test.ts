@@ -38,6 +38,7 @@ describe("call history navigation", () => {
     expect(callHistoryPageCount(0)).toBe(1);
     expect(callHistoryPageCount(40)).toBe(2);
     expect(callHistoryPageCount(41)).toBe(3);
+    expect(callHistoryPageCount(21, 10)).toBe(3);
   });
 
   it("builds canonical links that retain q and omit page one", () => {

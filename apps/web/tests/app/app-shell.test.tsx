@@ -94,7 +94,11 @@ describe("app shell", () => {
     });
 
     const { default: CallsPage } = await import("@/app/(app)/dashboard/calls/page");
-    render(await CallsPage());
+    render(
+      await CallsPage({
+        searchParams: Promise.resolve({}),
+      }),
+    );
 
     expect(screen.getByText(/No calls yet/i)).toBeInTheDocument();
     expect(screen.queryByText(/Call history is unavailable/i)).not.toBeInTheDocument();

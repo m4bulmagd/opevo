@@ -10,7 +10,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { formatCallTime, formatDuration, formatPhoneNumber } from "@/lib/formatters";
 import type { CallHistoryListItem } from "@/lib/types/calls";
 
-export function CallsTable({ calls }: { calls: CallHistoryListItem[] }) {
+export function CallsTable({ calls, query = "" }: { calls: CallHistoryListItem[]; query?: string }) {
   return (
     <Card>
       <CardHeader>
@@ -24,9 +24,11 @@ export function CallsTable({ calls }: { calls: CallHistoryListItem[] }) {
               <EmptyMedia variant="icon">
                 <Phone />
               </EmptyMedia>
-              <EmptyTitle>No calls yet</EmptyTitle>
+              <EmptyTitle>{query ? `No calls match “${query}”` : "No calls yet"}</EmptyTitle>
               <EmptyDescription>
-                Your visible call history will appear here after the first handled conversation.
+                {query
+                  ? "Try another caller number or summary phrase."
+                  : "Your visible call history will appear here after the first handled conversation."}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
