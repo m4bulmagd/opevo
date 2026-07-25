@@ -67,6 +67,15 @@ def _require_fake_telephony(request: Request) -> None:
         )
 
 
+def _require_local_call_fixture(request: Request) -> None:
+    settings = _request_settings(request)
+    if settings.auth_mode != "local" or settings.telephony_mode != "fake":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "local_telephony_disabled"},
+        )
+
+
 @router.post(
     "/activate-starter",
     response_model=ActivationSnapshotResponse,
@@ -134,7 +143,7 @@ async def start_call_drain_fixture(
     identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     session: AsyncSession = Depends(get_session),
 ) -> CallDrainFixtureResponse:
-    _require_fake_telephony(request)
+    _require_local_call_fixture(request)
 
     call_repository = CallRepository(session)
     phone_number = await PhoneNumberRepository(session).get_by_user_id(
@@ -170,7 +179,7 @@ async def finish_call_drain_fixture(
     identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     session: AsyncSession = Depends(get_session),
 ) -> CallDrainFixtureResponse:
-    _require_fake_telephony(request)
+    _require_local_call_fixture(request)
 
     owned_call = await CallRepository(session).get_visible_by_id(
         payload.call_id,

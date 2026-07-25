@@ -162,3 +162,63 @@ Web and static gates:
 - Fixture isolation, provider transaction boundaries, restart durability,
   history preservation, token handling, temporary-state cleanup, and
   disposable Docker teardown all have passing regression or acceptance proof.
+
+## Fix round 1/5
+
+Review base: `6c403678ec266bb5f743d4b83db44aa94277a6f6`.
+
+### Finding and correction
+
+The development router and fake-telephony gate alone did not prevent a
+development deployment using Clerk auth from exposing the call-drain fixture
+to authenticated customers. Both fixture routes now share one pre-repository
+boundary that requires:
+
+- `APP_ENV=development` through existing router registration;
+- `AUTH_MODE=local`;
+- `TELEPHONY_MODE=fake`;
+- an authenticated local identity through the existing dependency.
+
+Any non-local or non-fake registered configuration receives the same bounded
+`local_telephony_disabled` conflict. The response does not reveal whether auth
+mode or telephony mode made the fixture unavailable. The gate runs before call,
+phone, agent, or lifecycle repository access.
+
+### RED and GREEN evidence
+
+The new Clerk-authenticated regression represented a synced Clerk owner through
+the route's authenticated-identity dependency. Before the fix, the start route
+returned `200` and the start/finish sequence exercised real lifecycle
+mutations. The isolated RED failed on expected `409` versus actual `200`.
+
+After centralizing the local fixture gate:
+
+- focused fixture integration: **6 passed in 1.86s**;
+- fixture, call history/lifecycle, and deactivation worker regressions:
+  **63 passed in 8.12s**;
+- Ruff: all checks passed;
+- Mypy: no issues in the development router;
+- shell syntax and `git diff --check`: exit `0`.
+
+Coverage proves both Clerk-mode routes return the same safe conflict and leave
+the pre-existing connected call unchanged; local-mode start/finish still use
+the real lifecycle; missing auth remains `401`; non-fake local mode is blocked;
+foreign calls remain hidden; and both routes remain absent outside
+development.
+
+### Full restart acceptance and privacy
+
+The complete Node 22.23.1 runner remained green with its Compose API
+configuration explicitly setting local auth:
+
+```text
+activation.spec.ts          1 passed (31.9s; test 31.3s)
+deactivation-start.spec.ts  1 passed (14.9s; test 14.3s)
+restart-resume.spec.ts      1 passed (59.8s; test 59.2s)
+```
+
+The secured fixtures therefore remain available only to the intended local
+runner. The bearer value remained in the server-side request context and was
+not written to URLs, browser storage, traces, screenshots, state JSON, or
+output. The success trap removed every E2E container, network, all five named
+volumes, and private temporary state.
