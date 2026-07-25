@@ -61,7 +61,13 @@ describe("dashboard page", () => {
       evaluated_at: "2026-07-16T12:00:00Z",
       policy_version: "runtime-v1",
     });
-    listCallsMock.mockResolvedValueOnce([]);
+    listCallsMock.mockResolvedValueOnce({
+      calls: [],
+      total: 0,
+      limit: 5,
+      offset: 0,
+      has_more: false,
+    });
     getUsageSnapshotMock.mockResolvedValueOnce({
       minutes_remaining: 0,
       allocated_minutes: 0,
@@ -74,6 +80,7 @@ describe("dashboard page", () => {
     const { default: Page } = await import("@/app/(app)/dashboard/page");
     render(await Page());
 
+    expect(listCallsMock).toHaveBeenCalledWith({ limit: 5 });
     expect(screen.getByText(/Setup checklist/i)).toBeInTheDocument();
     expect(screen.getByText(/Activate billing/i)).toBeInTheDocument();
     expect(screen.getByText(/eligible for a Presvo number/i)).toBeInTheDocument();
@@ -109,19 +116,30 @@ describe("dashboard page", () => {
       evaluated_at: "2026-07-16T12:00:00Z",
       policy_version: "runtime-v1",
     });
-    listCallsMock.mockResolvedValueOnce([
-      {
-        id: "call-1",
-        status: "completed",
-        caller_number: "+33123456789",
-        started_at: "2026-03-28T10:00:00Z",
-        ended_at: "2026-03-28T10:01:00Z",
-        duration_seconds: 60,
-        minutes_charged: 1,
-        summary_text: "Caller asked about opening hours.",
-        has_recording: true,
-      },
-    ]);
+    listCallsMock.mockResolvedValueOnce({
+      calls: [
+        {
+          id: "call-1",
+          status: "completed",
+          caller_number: "+33123456789",
+          started_at: "2026-03-28T10:00:00Z",
+          ended_at: "2026-03-28T10:01:00Z",
+          duration_seconds: 60,
+          minutes_charged: 1,
+          summary_text: "Caller asked about opening hours.",
+          summary_status: "ready",
+          caller_intent: "Check opening hours",
+          action_items: [],
+          sentiment: "neutral",
+          follow_up_required: false,
+          has_recording: true,
+        },
+      ],
+      total: 1,
+      limit: 5,
+      offset: 0,
+      has_more: false,
+    });
     getUsageSnapshotMock.mockResolvedValueOnce({
       minutes_remaining: 183,
       allocated_minutes: 200,
@@ -134,6 +152,7 @@ describe("dashboard page", () => {
     const { default: Page } = await import("@/app/(app)/dashboard/page");
     render(await Page());
 
+    expect(listCallsMock).toHaveBeenCalledWith({ limit: 5 });
     expect(screen.getAllByText(/Recent call activity/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Caller asked about opening hours/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Live/i).length).toBeGreaterThan(0);

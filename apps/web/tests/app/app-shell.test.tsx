@@ -85,7 +85,13 @@ describe("app shell", () => {
     vi.stubEnv("AUTH_MODE", "local");
     vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "");
     vi.stubEnv("CLERK_SECRET_KEY", "");
-    listCallsMock.mockResolvedValueOnce([]);
+    listCallsMock.mockResolvedValueOnce({
+      calls: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+      has_more: false,
+    });
 
     const { default: CallsPage } = await import("@/app/(app)/dashboard/calls/page");
     render(await CallsPage());

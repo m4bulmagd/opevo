@@ -1,13 +1,26 @@
 import { backendFetch } from "@/lib/api/backend-client";
 import type { CallDetail, CallHistoryListResponse } from "@/lib/types/calls";
 
-export async function listCalls(limit = 20, offset = 0) {
+export type ListCallsOptions = {
+  limit?: number;
+  offset?: number;
+  query?: string;
+};
+
+export async function listCalls({
+  limit = 20,
+  offset = 0,
+  query,
+}: ListCallsOptions = {}): Promise<CallHistoryListResponse> {
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),
   });
-  const response = await backendFetch<CallHistoryListResponse>(`/api/calls?${params.toString()}`);
-  return response.calls;
+  const normalizedQuery = query?.trim();
+  if (normalizedQuery) {
+    params.set("q", normalizedQuery);
+  }
+  return backendFetch<CallHistoryListResponse>(`/api/calls?${params.toString()}`);
 }
 
 export async function getCallDetail(callId: string) {

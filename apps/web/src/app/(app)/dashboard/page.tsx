@@ -31,13 +31,14 @@ export default async function DashboardPage() {
     redirect("/activate");
   }
 
-  const [agentConfig, onboardingStatus, calls, usageSnapshot] = await Promise.all([
+  const [agentConfig, onboardingStatus, callsPage, usageSnapshot] = await Promise.all([
     getAgentConfig(),
     getOnboardingStatus(),
-    listCalls(5),
+    listCalls({ limit: 5 }),
     getUsageSnapshot(),
   ]);
 
+  const calls = callsPage.calls;
   const isLive = onboardingStatus.can_route;
 
   return (
