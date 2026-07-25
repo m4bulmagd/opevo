@@ -46,6 +46,8 @@ async def _seed_dashboard(
     profile_revision: int = 1,
     confirmation_revision: int | None = None,
     confirmed_at: datetime | None = None,
+    owner_clerk_user_id: str | None = None,
+    owner_status: str = "active",
 ) -> DashboardOwners:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -53,8 +55,9 @@ async def _seed_dashboard(
     try:
         async with session_factory() as session:
             owner = User(
-                clerk_user_id=f"dashboard-owner-{unique}",
+                clerk_user_id=owner_clerk_user_id or f"dashboard-owner-{unique}",
                 email=f"dashboard-owner-{unique}@example.com",
+                status=owner_status,
             )
             other_owner = User(
                 clerk_user_id=f"dashboard-other-{unique}",
@@ -121,6 +124,157 @@ async def _get_metrics(
             )
     finally:
         await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_dashboard_metrics_requires_authentication(async_client) -> None:
+    response = await async_client.get("/api/dashboard/metrics")
+
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_dashboard_metrics_resolve_owner_and_return_exact_contract(
+    async_client,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    clerk_user_id = "dashboard-api-owner"
+    current = datetime.now(UTC)
+    previous = current - timedelta(days=8)
+    await _seed_dashboard(
+        client_database_url,
+        owner_clerk_user_id=clerk_user_id,
+        calls=[
+            _call(
+                started_at=current,
+                duration_seconds=30,
+                summary_data={
+                    "caller_intent": "Book a table",
+                    "action_items": ["Call the guest"],
+                    "sentiment": "positive",
+                    "follow_up_required": True,
+                },
+            ),
+            _call(started_at=previous, duration_seconds=90),
+        ],
+    )
+
+    response = await async_client.get(
+        "/api/dashboard/metrics",
+        headers={
+            "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "timezone": "Europe/Paris",
+        "calls_today": 1,
+        "calls_last_7_days": 1,
+        "calls_previous_7_days": 1,
+        "calls_change_from_previous_7_days": 0,
+        "follow_up_flagged_last_7_days": 1,
+        "average_duration_seconds_last_7_days": 30,
+    }
+
+
+@pytest.mark.anyio
+async def test_dashboard_metrics_exclude_calls_owned_by_another_user(
+    async_client,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    clerk_user_id = "dashboard-api-isolated-owner"
+    await _seed_dashboard(
+        client_database_url,
+        owner_clerk_user_id=clerk_user_id,
+        calls=[
+            _call(
+                owner="other",
+                started_at=datetime.now(UTC),
+                duration_seconds=600,
+            )
+        ],
+    )
+
+    response = await async_client.get(
+        "/api/dashboard/metrics",
+        headers={
+            "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "timezone": "Europe/Paris",
+        "calls_today": 0,
+        "calls_last_7_days": 0,
+        "calls_previous_7_days": 0,
+        "calls_change_from_previous_7_days": 0,
+        "follow_up_flagged_last_7_days": 0,
+        "average_duration_seconds_last_7_days": None,
+    }
+
+
+@pytest.mark.anyio
+async def test_dashboard_metrics_serialize_an_empty_average_as_json_null(
+    async_client,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    clerk_user_id = "dashboard-api-empty-average-owner"
+    await _seed_dashboard(
+        client_database_url,
+        owner_clerk_user_id=clerk_user_id,
+        calls=[
+            _call(
+                started_at=datetime.now(UTC),
+                status="pending",
+                duration_seconds=999,
+            )
+        ],
+    )
+
+    response = await async_client.get(
+        "/api/dashboard/metrics",
+        headers={
+            "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["average_duration_seconds_last_7_days"] is None
+
+
+@pytest.mark.anyio
+async def test_inactive_owner_can_read_dashboard_metrics_but_cannot_mutate_route(
+    async_client,
+    client_database_url: str,
+    rs256_clerk_token_for,
+) -> None:
+    clerk_user_id = "dashboard-api-inactive-owner"
+    await _seed_dashboard(
+        client_database_url,
+        owner_clerk_user_id=clerk_user_id,
+        owner_status="inactive",
+        calls=[
+            _call(started_at=datetime.now(UTC)),
+        ],
+    )
+    headers = {
+        "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+    }
+
+    response = await async_client.get("/api/dashboard/metrics", headers=headers)
+    mutation = await async_client.post(
+        "/api/dashboard/metrics",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["calls_last_7_days"] == 1
+    assert mutation.status_code == 405
 
 
 @pytest.mark.anyio

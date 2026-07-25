@@ -24,6 +24,7 @@ from app.routers.account import router as account_router
 from app.routers.agent import router as agent_router
 from app.routers.billing import router as billing_router
 from app.routers.calls import router as calls_router
+from app.routers.dashboard import router as dashboard_router
 from app.routers.development import router as development_router
 from app.routers.health import router as health_router
 from app.routers.onboarding import router as onboarding_router
@@ -199,6 +200,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(agent_router)
     application.include_router(billing_router)
     application.include_router(calls_router)
+    application.include_router(dashboard_router)
     if configured_settings.app_env == "development":
         application.include_router(development_router)
     application.include_router(health_router)
