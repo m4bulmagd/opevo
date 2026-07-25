@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Children, type ReactNode } from "react";
 
 import { AnimatedStatusBadge, type StatusTone as AnimatedStatusTone } from "@/components/motion/animated-status-badge";
 import { cn } from "@/lib/utils";
@@ -26,8 +26,16 @@ const TONE_CLASS: Record<StatusSurfaceTone, string> = {
   inactive: "border-border bg-surface-subtle/60",
 };
 
+function hasRenderableIcon(icon: ReactNode) {
+  return Children.toArray(icon).some((child) => typeof child !== "string" || child.length > 0);
+}
+
 export function StatusSurface({ tone, label, title, description, icon, action, children }: StatusSurfaceProps) {
-  const statusIcon = icon ?? <span aria-hidden className="size-1.5 rounded-full bg-current" data-status-marker />;
+  const statusIcon = hasRenderableIcon(icon) ? (
+    icon
+  ) : (
+    <span aria-hidden className="size-1.5 rounded-full bg-current" data-status-marker />
+  );
 
   return (
     <section

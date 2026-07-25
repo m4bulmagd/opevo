@@ -97,9 +97,9 @@ function isCompoundChild(
 }
 
 function DataLedgerRow({ children, __mode = "list" }: InternalRowProps) {
-  const rowChildren = Children.map(children, (child) =>
-    isCompoundChild(child) ? cloneElement(child, { __mode }) : child,
-  );
+  const rowChildren = Children.toArray(children)
+    .filter(isCompoundChild)
+    .map((child) => cloneElement(child, { __mode }));
 
   if (__mode === "table") {
     return (
@@ -124,7 +124,9 @@ function isLedgerRow(child: ReactNode): child is ReactElement<InternalRowProps, 
 }
 
 function rowsForMode(children: ReactNode, mode: LedgerMode) {
-  return Children.map(children, (child) => (isLedgerRow(child) ? cloneElement(child, { __mode: mode }) : child));
+  return Children.toArray(children)
+    .filter(isLedgerRow)
+    .map((child) => cloneElement(child, { __mode: mode }));
 }
 
 function tableHeaders(children: ReactNode) {
