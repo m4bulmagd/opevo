@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DataLedger } from "@/components/product/data-ledger";
 import { MetricBand, MetricItem } from "@/components/product/metric-band";
@@ -8,7 +8,10 @@ import { ProductSurface } from "@/components/product/product-surface";
 import { SettingsSection } from "@/components/product/settings-section";
 import { StatusSurface, type StatusSurfaceTone } from "@/components/product/status-surface";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("PageIntro", () => {
   it("provides the page h1 and optional context without adding a decorative heading icon", () => {
@@ -57,6 +60,33 @@ describe("ProductSurface", () => {
     expect(screen.getByText("Updated just now")).toBeInTheDocument();
     expect(container.querySelectorAll("[data-slot='product-surface']")).toHaveLength(1);
   });
+
+  it("makes a titled div a described region for ReactNode titles", () => {
+    render(
+      <ProductSurface as="div" description="Current minute allocation and renewal context." title={<span>Usage</span>}>
+        <p>42 minutes remaining</p>
+      </ProductSurface>,
+    );
+
+    const surface = screen.getByRole("region", {
+      description: "Current minute allocation and renewal context.",
+      name: "Usage",
+    });
+
+    expect(surface).toHaveAccessibleDescription("Current minute allocation and renewal context.");
+    expect(screen.getByRole("heading", { level: 2, name: "Usage" })).toBeInTheDocument();
+  });
+
+  it("does not turn an untitled div into an unnamed landmark", () => {
+    const { container } = render(
+      <ProductSurface as="div">
+        <p>Supporting content</p>
+      </ProductSurface>,
+    );
+
+    expect(container.querySelector("[data-slot='product-surface']")).not.toHaveAttribute("role");
+    expect(screen.queryByRole("region")).not.toBeInTheDocument();
+  });
 });
 
 describe("StatusSurface", () => {
@@ -102,6 +132,17 @@ describe("StatusSurface", () => {
 
     expect(screen.getByText("Paused")).toBeInTheDocument();
     expect(screen.getByText("Review the readiness blockers.")).toBeInTheDocument();
+    expect(container.querySelector("[data-status-marker]")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["a false conditional", false],
+    ["an empty string", ""],
+    ["an empty child array", []],
+  ])("provides a static marker when the icon is %s", (_case, icon) => {
+    const { container } = render(<StatusSurface icon={icon} label="Paused" title="Presvo is paused" tone="paused" />);
+
+    expect(screen.getByText("Paused")).toBeInTheDocument();
     expect(container.querySelector("[data-status-marker]")).toBeInTheDocument();
   });
 });
@@ -179,6 +220,58 @@ describe("DataLedger", () => {
     expect(screen.getByRole("columnheader", { name: "Duration" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     expect(screen.getByRole("cell", { name: /Caller/ })).toBeInTheDocument();
+    expect(screen.getByText("Caller", { selector: "[data-slot='data-ledger-mobile-label']" })).toHaveClass("md:hidden");
+  });
+
+  it.each(["list", "table"] as const)("renders normal mapped arrays of multiple rows in %s mode", (mode) => {
+    const rows = ["call-1", "call-2"].map((id, index) => (
+      <DataLedger.Row key={id}>
+        <DataLedger.Cell label="Caller" primary>
+          <a href={`/dashboard/calls/${id}`}>Caller {index + 1}</a>
+        </DataLedger.Cell>
+        <DataLedger.Cell hideAt="md" label="Duration">
+          {index + 1}m
+        </DataLedger.Cell>
+      </DataLedger.Row>
+    ));
+
+    render(
+      <DataLedger label="Recent calls" mode={mode}>
+        {rows}
+      </DataLedger>,
+    );
+
+    expect(screen.getByRole("link", { name: "Caller 1" })).toHaveAttribute("href", "/dashboard/calls/call-1");
+    expect(screen.getByRole("link", { name: "Caller 2" })).toHaveAttribute("href", "/dashboard/calls/call-2");
+    expect(screen.getAllByRole(mode === "list" ? "listitem" : "row")).toHaveLength(mode === "list" ? 2 : 3);
+  });
+
+  it.each([
+    "list",
+    "table",
+  ] as const)("filters unsupported ledger and row children before rendering %s semantics", (mode) => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    render(
+      <DataLedger label="Recent calls" mode={mode}>
+        <DataLedger.Row>
+          <DataLedger.Cell label="Caller" primary>
+            <a href="/dashboard/calls/call-1">Caller 1</a>
+          </DataLedger.Cell>
+          {false}
+          {null}
+          <p>Unsupported row child</p>
+        </DataLedger.Row>
+        {false}
+        {null}
+        <p>Loading more…</p>
+      </DataLedger>,
+    );
+
+    expect(screen.getByRole("link", { name: "Caller 1" })).toBeInTheDocument();
+    expect(screen.queryByText("Unsupported row child")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading more…")).not.toBeInTheDocument();
+    expect(consoleError).not.toHaveBeenCalled();
   });
 
   it("uses explicit empty, error, and pagination regions without inventing rows", () => {

@@ -28,15 +28,18 @@ export function ProductSurface({
   tone = "default",
 }: ProductSurfaceProps) {
   const titleId = useId();
+  const descriptionId = useId();
   const Component = as;
   const hasHeader = title !== undefined || description !== undefined || action !== undefined;
 
   return (
     <Component
+      aria-describedby={description !== undefined ? descriptionId : undefined}
       aria-labelledby={title !== undefined ? titleId : undefined}
       className={cn("overflow-hidden rounded-lg border text-text-primary", TONE_CLASS[tone])}
       data-slot="product-surface"
       data-tone={tone}
+      role={as === "div" && title !== undefined ? "region" : undefined}
     >
       {hasHeader ? (
         <header className="flex flex-col gap-4 px-4 pt-4 sm:flex-row sm:items-start sm:justify-between sm:px-6 sm:pt-6">
@@ -47,7 +50,9 @@ export function ProductSurface({
               </h2>
             ) : null}
             {description !== undefined ? (
-              <div className="text-sm text-text-secondary leading-relaxed">{description}</div>
+              <div className="text-sm text-text-secondary leading-relaxed" id={descriptionId}>
+                {description}
+              </div>
             ) : null}
           </div>
           {action !== undefined ? (
