@@ -862,19 +862,24 @@ def test_local_e2e_runner_proves_deactivation_survives_api_worker_restart() -> N
 
     activation_phase = "tests/e2e/activation.spec.ts"
     deactivation_phase = "tests/e2e/deactivation-start.spec.ts"
-    restart_command = "compose restart api worker"
     restart_marker = "E2E_AFTER_SERVICE_RESTART=true"
     resume_phase = "tests/e2e/restart-resume.spec.ts"
     resume_command = (
         'E2E_AFTER_SERVICE_RESTART=true E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \\\n'
         "  npm --prefix apps/web run test:e2e -- tests/e2e/restart-resume.spec.ts"
     )
+    restart_commands = [
+        line.split()
+        for line in runner.splitlines()
+        if line.startswith("compose restart")
+    ]
+    assert restart_commands == [["compose", "restart", "api", "worker"]]
+    restart_command = " ".join(restart_commands[0])
 
     assert activation_phase in runner
     assert deactivation_phase in runner
     assert restart_command in runner
     assert resume_phase in runner
-    assert runner.count("compose restart") == 1
     assert runner.count(restart_marker) == 1
     assert runner.count(resume_command) == 1
     activation_index = runner.index(activation_phase)

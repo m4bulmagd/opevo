@@ -2,7 +2,6 @@ import base64
 import hashlib
 import hmac
 import json
-import os
 import time
 from pathlib import Path
 
@@ -13,9 +12,6 @@ import pytest_asyncio
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-# The rate limiter captures APP_ENV when a router is imported during collection.
-os.environ["APP_ENV"] = "test"
 
 from app.models import Base
 
@@ -59,13 +55,17 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, clerk_key_material: dict[str, 
 
     from app.core.config import get_settings
     from app.core.database import get_engine, get_session_factory
+    from app.core.rate_limit import configure_rate_limiter, limiter
     from app.core.redis import get_redis_client
 
+    previous_limiter_enabled = limiter.enabled
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
     get_redis_client.cache_clear()
+    configure_rate_limiter(get_settings())
     yield
+    limiter.enabled = previous_limiter_enabled
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
