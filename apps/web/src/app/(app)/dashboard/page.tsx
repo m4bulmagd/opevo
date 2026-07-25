@@ -10,10 +10,10 @@ import { SetupChecklist } from "@/components/dashboard/setup-checklist";
 import { StatusSummaryCards } from "@/components/dashboard/status-summary-cards";
 import { UsageSummaryCard } from "@/components/dashboard/usage-summary-card";
 import { getActivationSnapshot } from "@/lib/api/activation";
-import { getAgentConfig } from "@/lib/api/agent";
 import { getUsageSnapshot } from "@/lib/api/billing";
 import { listCalls } from "@/lib/api/calls";
 import { getOnboardingStatus } from "@/lib/api/onboarding";
+import { getAgentConfigForRequest } from "@/lib/api/request-data";
 import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 
 export default async function DashboardPage() {
@@ -32,7 +32,7 @@ export default async function DashboardPage() {
   }
 
   const [agentConfig, onboardingStatus, callsPage, usageSnapshot] = await Promise.all([
-    getAgentConfig(),
+    getAgentConfigForRequest(),
     getOnboardingStatus(),
     listCalls({ limit: 5 }),
     getUsageSnapshot(),
