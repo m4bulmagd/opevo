@@ -25,6 +25,21 @@ export async function saveAgentSettingsAction(payload: AgentConfigPatch): Promis
     };
   } catch (error) {
     if (error instanceof BackendApiError) {
+      const detail = typeof error.detail === "object" ? error.detail : null;
+      if (detail?.code === "account_deactivating") {
+        return {
+          status: "error",
+          message: "Agent settings are read-only while account deactivation is finishing.",
+        };
+      }
+
+      if (detail?.code === "account_inactive") {
+        return {
+          status: "error",
+          message: "Reactivate Presvo before changing agent settings.",
+        };
+      }
+
       if (error.status === 409) {
         return {
           status: "error",
@@ -41,7 +56,7 @@ export async function saveAgentSettingsAction(payload: AgentConfigPatch): Promis
 
       return {
         status: "error",
-        message: error.message,
+        message: "We couldn't save agent settings. Refresh and try again.",
       };
     }
 

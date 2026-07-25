@@ -89,6 +89,38 @@ describe("billing page", () => {
     expect(screen.getByRole("button", { name: /Manage billing/i })).toBeInTheDocument();
   });
 
+  it("renders scheduled period-end cancellation and its effective date without calling the account inactive", async () => {
+    getSubscriptionMock.mockResolvedValueOnce({
+      plan_tier: "starter",
+      status: "active",
+      allocated_minutes: 200,
+      current_period_start: "2026-03-01T00:00:00Z",
+      current_period_end: "2026-04-01T00:00:00Z",
+      stripe_customer_id: "cus_123",
+      stripe_subscription_id: "sub_123",
+      can_start_checkout: false,
+      cancel_at_period_end: true,
+      cancellation_effective_at: "2026-04-01T00:00:00Z",
+    });
+    getUsageSnapshotMock.mockResolvedValueOnce({
+      minutes_remaining: 183,
+      allocated_minutes: 200,
+      plan_tier: "starter",
+      subscription_status: "active",
+      current_period_start: "2026-03-01T00:00:00Z",
+      current_period_end: "2026-04-01T00:00:00Z",
+    });
+    getUsageLedgerMock.mockResolvedValueOnce({ entries: [] });
+
+    const { default: Page } = await import("@/app/(app)/dashboard/billing/page");
+    render(await Page());
+
+    expect(screen.getByText("Cancels at the end of your paid period")).toBeInTheDocument();
+    expect(screen.getByText(/April 1, 2026/i)).toBeInTheDocument();
+    expect(screen.getAllByText("Active").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/account is inactive/i)).not.toBeInTheDocument();
+  });
+
   it.each([
     "trialing",
     "past_due",
