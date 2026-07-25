@@ -9,6 +9,7 @@ import pytest
 
 import app.providers.telephony.telnyx as telnyx_module
 import telnyx
+import telnyx.util as telnyx_util
 from app.providers.telephony.base import (
     TelephonyProviderError,
     TelephonyProvisioningPending,
@@ -33,6 +34,33 @@ class _ProviderTelemetry:
             self.calls.append((provider, operation, "success"))
 
 
+class _TelnyxReleaseHTTPClient:
+    name = "provider-free-telnyx-stub"
+    _timeout = (5, 30)
+
+    def __init__(self, *, response_body: str, status: int = 200) -> None:
+        self.response_body = response_body
+        self.status = status
+        self.calls: list[dict[str, object]] = []
+
+    def request_with_retries(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        post_data: object,
+    ) -> tuple[str, int, dict[str, str]]:
+        self.calls.append(
+            {
+                "method": method,
+                "url": url,
+                "headers": headers,
+                "post_data": post_data,
+            }
+        )
+        return self.response_body, self.status, {}
+
+
 @pytest.mark.anyio
 async def test_telnyx_provider_operation_is_observed_once() -> None:
     telemetry = _ProviderTelemetry()
@@ -49,11 +77,36 @@ async def test_telnyx_provider_operation_is_observed_once() -> None:
 
 
 @pytest.mark.anyio
+async def test_telnyx_release_uses_pinned_sdk_instance_delete_without_get(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_number_id = "123456789"
+    http_client = _TelnyxReleaseHTTPClient(
+        response_body=(
+            '{"data":{"id":"123456789","record_type":"phone_number",'
+            '"status":"deleted"}}'
+        )
+    )
+    monkeypatch.setattr(telnyx, "default_http_client", http_client)
+    provider = TelephonyTelnyx(api_key="KEY")
+
+    await provider.release_number(provider_number_id=provider_number_id)
+
+    assert [call["method"] for call in http_client.calls] == ["delete"]
+    assert http_client.calls[0]["url"] == (
+        f"{telnyx.api_base}/v2/phone_numbers/{provider_number_id}"
+    )
+    assert http_client.calls[0]["post_data"] is None
+
+
+@pytest.mark.anyio
 async def test_telnyx_release_deletes_exact_provider_number_and_confirms_response() -> None:
-    phone_number_resource = MagicMock()
-    phone_number_resource.delete.return_value = {
+    phone_number = MagicMock()
+    phone_number.delete.return_value = {
         "data": {"id": "123456789", "status": "deleted"}
     }
+    phone_number_resource = MagicMock()
+    phone_number_resource.return_value = phone_number
     provider = TelephonyTelnyx(
         api_key="KEY",
         phone_number_resource=phone_number_resource,
@@ -61,15 +114,18 @@ async def test_telnyx_release_deletes_exact_provider_number_and_confirms_respons
 
     await provider.release_number(provider_number_id="123456789")
 
-    phone_number_resource.delete.assert_called_once_with("123456789", api_key="KEY")
+    phone_number_resource.assert_called_once_with("123456789", api_key="KEY")
+    phone_number.delete.assert_called_once_with()
 
 
 @pytest.mark.anyio
-async def test_telnyx_release_normalizes_sdk_response_object() -> None:
-    phone_number_resource = MagicMock()
-    phone_number_resource.delete.return_value = SimpleNamespace(
+async def test_telnyx_release_accepts_supported_nested_response_object() -> None:
+    phone_number = MagicMock()
+    phone_number.delete.return_value = SimpleNamespace(
         data=SimpleNamespace(id="123456789", status="deleted")
     )
+    phone_number_resource = MagicMock()
+    phone_number_resource.return_value = phone_number
     provider = TelephonyTelnyx(
         api_key="KEY",
         phone_number_resource=phone_number_resource,
@@ -80,8 +136,8 @@ async def test_telnyx_release_normalizes_sdk_response_object() -> None:
 
 @pytest.mark.anyio
 async def test_telnyx_release_treats_missing_exact_provider_number_as_success() -> None:
-    phone_number_resource = MagicMock()
-    phone_number_resource.delete.side_effect = [
+    phone_number = MagicMock()
+    phone_number.delete.side_effect = [
         telnyx.error.ResourceNotFoundError(
             [{"title": "private provider response"}],
             http_status=404,
@@ -91,6 +147,8 @@ async def test_telnyx_release_treats_missing_exact_provider_number_as_success() 
             http_status=404,
         ),
     ]
+    phone_number_resource = MagicMock()
+    phone_number_resource.return_value = phone_number
     provider = TelephonyTelnyx(
         api_key="KEY",
         phone_number_resource=phone_number_resource,
@@ -99,8 +157,30 @@ async def test_telnyx_release_treats_missing_exact_provider_number_as_success() 
     await provider.release_number(provider_number_id="123456789")
     await provider.release_number(provider_number_id="123456789")
 
-    phone_number_resource.delete.assert_called_with("123456789", api_key="KEY")
-    assert phone_number_resource.delete.call_count == 2
+    phone_number_resource.assert_called_with("123456789", api_key="KEY")
+    assert phone_number_resource.call_count == 2
+    assert phone_number.delete.call_count == 2
+
+
+@pytest.mark.anyio
+async def test_telnyx_release_rejects_none_provider_response() -> None:
+    class NoneReturningPhoneNumber:
+        def __init__(self, provider_number_id: str, *, api_key: str) -> None:
+            pass
+
+        def delete(self) -> None:
+            return None
+
+    provider = TelephonyTelnyx(
+        api_key="KEY",
+        phone_number_resource=NoneReturningPhoneNumber,
+    )
+
+    with pytest.raises(TelephonyProviderError) as exc_info:
+        await provider.release_number(provider_number_id="123456789")
+
+    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.error_class == "unknown"
 
 
 @pytest.mark.anyio
@@ -118,8 +198,10 @@ async def test_telnyx_release_requires_exact_deleted_response(
     result: dict,
     expected_error_class: str,
 ) -> None:
+    phone_number = MagicMock()
+    phone_number.delete.return_value = result
     phone_number_resource = MagicMock()
-    phone_number_resource.delete.return_value = result
+    phone_number_resource.return_value = phone_number
     provider = TelephonyTelnyx(
         api_key="KEY",
         phone_number_resource=phone_number_resource,
@@ -135,28 +217,52 @@ async def test_telnyx_release_requires_exact_deleted_response(
 
 
 @pytest.mark.anyio
-async def test_telnyx_release_does_not_log_private_provider_details(caplog) -> None:
+async def test_telnyx_sdk_release_error_parsing_cannot_log_private_details(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider_number_id = "PROVIDER_NUMBER_ID_SENTINEL"
-    private_response = "PRIVATE_RESPONSE_SENTINEL"
-    private_number = "+33123456789"
-    phone_number_resource = MagicMock()
-    phone_number_resource.delete.side_effect = telnyx.error.APIError(
-        [{"title": f"{private_response} {private_number}"}],
-        http_status=503,
+    private_sentinels = (
+        provider_number_id,
+        "RAW_TELNYX_CODE_SENTINEL",
+        "RAW_TELNYX_TITLE_SENTINEL",
+        "RAW_TELNYX_DETAIL_SENTINEL",
+        "RAW_TELNYX_SOURCE_SENTINEL",
+        "+33123456789",
     )
-    provider = TelephonyTelnyx(
-        api_key="CREDENTIAL_SENTINEL",
-        phone_number_resource=phone_number_resource,
+    http_client = _TelnyxReleaseHTTPClient(
+        response_body=(
+            '{"errors":[{"code":"RAW_TELNYX_CODE_SENTINEL",'
+            '"title":"RAW_TELNYX_TITLE_SENTINEL",'
+            '"detail":"RAW_TELNYX_DETAIL_SENTINEL +33123456789",'
+            '"source":{"pointer":"RAW_TELNYX_SOURCE_SENTINEL"}}]}'
+        ),
+        status=422,
     )
+    monkeypatch.setattr(telnyx, "default_http_client", http_client)
+    monkeypatch.setattr(telnyx, "log", "debug")
+    monkeypatch.setattr(telnyx_util, "TELNYX_LOG", "debug")
+    provider = TelephonyTelnyx(api_key="CREDENTIAL_SENTINEL")
 
-    with caplog.at_level(logging.INFO):
-        with pytest.raises(TelephonyProviderError):
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(TelephonyProviderError) as exc_info:
+            logging.getLogger("app.unrelated").info(
+                "unrelated application log remains visible"
+            )
             await provider.release_number(provider_number_id=provider_number_id)
 
-    assert provider_number_id not in caplog.text
-    assert private_response not in caplog.text
-    assert private_number not in caplog.text
+    captured = capsys.readouterr()
+    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.error_class == "validation"
+    assert len(http_client.calls) == 1
+    for sentinel in private_sentinels:
+        assert sentinel not in caplog.text
+        assert sentinel not in captured.err
     assert "CREDENTIAL_SENTINEL" not in caplog.text
+    assert "CREDENTIAL_SENTINEL" not in captured.err
+    assert "unrelated application log remains visible" in caplog.text
+    assert "Telnyx API provider details suppressed" in caplog.text
 
 
 @pytest.mark.anyio
@@ -217,8 +323,10 @@ async def test_telnyx_release_uses_safe_provider_error_categories(
     expected_category: str,
     expected_error_class: str,
 ) -> None:
+    phone_number = MagicMock()
+    phone_number.delete.side_effect = provider_error
     phone_number_resource = MagicMock()
-    phone_number_resource.delete.side_effect = provider_error
+    phone_number_resource.return_value = phone_number
     provider = TelephonyTelnyx(
         api_key="KEY",
         phone_number_resource=phone_number_resource,
