@@ -40,6 +40,7 @@ async def seed_call_history(
     clerk_user_id: str,
     email: str,
     user_status: str = "active",
+    newest_caller_number: str = "+33111111111",
 ) -> dict[str, UUID]:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -55,7 +56,7 @@ async def seed_call_history(
         base_time = datetime(2026, 3, 28, 10, 0, tzinfo=UTC)
         newest_call = Call(
             user_id=user.id,
-            caller_number="+33111111111",
+            caller_number=newest_caller_number,
             status="completed",
             started_at=base_time + timedelta(minutes=2),
             ended_at=base_time + timedelta(minutes=3),
@@ -333,6 +334,41 @@ async def test_list_calls_applies_search_and_pagination_metadata(
         "has_more": False,
     }
     assert UUID(response.json()["calls"][0]["id"]) == ids["older_id"]
+
+
+@pytest.mark.anyio
+async def test_list_calls_phone_search_matches_domestic_trunk_prefix_to_e164_number(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+) -> None:
+    ids = await seed_call_history(
+        client_database_url,
+        clerk_user_id="user_calls_domestic_phone_search",
+        email="calls-domestic-phone-search@example.invalid",
+        newest_caller_number="+33187001234",
+    )
+
+    response = await async_client.get(
+        "/api/calls",
+        params={"q": "01 87"},
+        headers={
+            "authorization": (
+                "Bearer "
+                f"{rs256_clerk_token_for('user_calls_domestic_phone_search')}"
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert [UUID(item["id"]) for item in payload["calls"]] == [
+        ids["newest_id"]
+    ]
+    assert payload["limit"] == 20
+    assert payload["offset"] == 0
+    assert payload["has_more"] is False
 
 
 @pytest.mark.anyio

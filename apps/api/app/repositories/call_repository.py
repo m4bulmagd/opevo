@@ -280,6 +280,11 @@ class CallRepository:
             digits = "".join(character for character in query if character.isdigit())
             if len(digits) >= 3:
                 search_predicates.append(Call.caller_number.ilike(f"%{digits}%"))
+            domestic_digits = digits[1:]
+            if digits.startswith("0") and len(domestic_digits) >= 3:
+                search_predicates.append(
+                    Call.caller_number.ilike(f"%{domestic_digits}%")
+                )
 
         predicates.append(or_(*search_predicates))
         return tuple(predicates)

@@ -170,8 +170,10 @@ async def test_phone_search_normalizes_punctuation_and_requires_three_digits(
 
     international = await service.list_calls(active_user.id, query="+33 1 87")
     punctuated = await service.list_calls(active_user.id, query="(187)")
+    domestic = await service.list_calls(active_user.id, query="01 87")
     too_short = await service.list_calls(active_user.id, query="87")
 
     assert [item.id for item in international.calls] == [phone_call.id]
     assert [item.id for item in punctuated.calls] == [phone_call.id]
+    assert [item.id for item in domestic.calls] == [phone_call.id]
     assert too_short.total == 0
