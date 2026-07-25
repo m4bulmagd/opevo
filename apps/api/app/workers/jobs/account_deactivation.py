@@ -29,9 +29,7 @@ from app.services.subscription_access_policy import SubscriptionAccessPolicy
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
 
 
-_RETRYABLE_OPERATION_CODES = frozenset(
-    {"provider_retryable", "account_call_draining"}
-)
+_RETRYABLE_OPERATION_CODES = frozenset({"provider_retryable", "account_call_draining"})
 _SAFE_STEPS = frozenset(
     {
         "disable_routing",
@@ -240,9 +238,7 @@ async def _cancel_subscription(
             stored.user_id
         )
         current_subscription_id = (
-            subscription.stripe_subscription_id
-            if subscription is not None
-            else None
+            subscription.stripe_subscription_id if subscription is not None else None
         )
         current_status = subscription.status if subscription is not None else None
         stored_subscription_id = stored.stripe_subscription_id
@@ -335,9 +331,9 @@ async def _cancel_subscription(
 
     mismatch = False
     async with session_factory() as session:
-        subscription = await SubscriptionRepository(
-            session
-        ).get_by_user_id_for_update(operation.user_id)
+        subscription = await SubscriptionRepository(session).get_by_user_id_for_update(
+            operation.user_id
+        )
         stored = await AccountDeactivationRepository(session).get_by_id_for_update(
             operation.operation_id
         )
@@ -542,7 +538,9 @@ async def _reset_activation(
         if stored.activation_reset_at is not None:
             await session.commit()
             return None
-        await PhoneNumberProvisioningRepository(session).delete_for_user_id(user_id)
+        await PhoneNumberProvisioningRepository(
+            session
+        ).delete_resolved_for_deactivation(user_id)
         if phone is not None:
             await PhoneNumberRepository(session).delete_for_deactivation(phone)
         await CustomerActivationRepository(session).reset_number_cycle(user_id)

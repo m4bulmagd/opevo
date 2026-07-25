@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -1354,6 +1355,20 @@ async def test_provisioning_provider_runs_without_provisioning_row_lock(
         user_id = user.id
         provisioning_id = provisioning.id
 
+    class TrackingFactory:
+        def __init__(self) -> None:
+            self.sessions: list[AsyncSession] = []
+
+        @asynccontextmanager
+        async def __call__(self):
+            async with outbox_session_factory() as session:
+                self.sessions.append(session)
+                yield session
+
+        def assert_transaction_free(self) -> None:
+            assert all(not session.in_transaction() for session in self.sessions)
+
+    tracking_factory = TrackingFactory()
     provider_observations: list[tuple[str, int]] = []
 
     class LockProbingProvider:
@@ -1363,6 +1378,7 @@ async def test_provisioning_provider_runs_without_provisioning_row_lock(
             country_code: str,
             operation_key: str | None = None,
         ) -> dict:
+            tracking_factory.assert_transaction_free()
             async with outbox_session_factory() as probe_session:
                 locked = await probe_session.scalar(
                     select(PhoneNumberProvisioning)
@@ -1386,7 +1402,7 @@ async def test_provisioning_provider_runs_without_provisioning_row_lock(
 
     await phone_provisioning_job(
         {
-            "session_factory": outbox_session_factory,
+            "session_factory": tracking_factory,
             "telephony_provider": LockProbingProvider(),
         },
         {"user_id": str(user_id), "lifecycle_generation": 1},

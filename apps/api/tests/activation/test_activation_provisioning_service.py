@@ -12,6 +12,7 @@ from app.models.customer_activation import CustomerActivation
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
+from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.schemas.business_profile import WEEKDAYS
@@ -154,6 +155,54 @@ async def test_confirm_records_one_consent_and_one_outbox_across_duplicate_calls
     }
     assert event.idempotency_key == f"activation-event:{operation_key}"
     assert event.event_metadata == {"country_code": "FR"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("unresolved_work", ["provider_cleanup", "provisioning"])
+async def test_confirm_blocks_unresolved_prior_provider_work(
+    db_session,
+    active_user,
+    unresolved_work: str,
+) -> None:
+    await _seed_eligible_customer(db_session, active_user)
+    if unresolved_work == "provider_cleanup":
+        db_session.add(
+            ProviderCleanupOperation(
+                user_id=active_user.id,
+                lifecycle_generation=1,
+                resource_type="phone_number",
+                provider_resource_id="pn-unresolved-prior-cycle",
+                status="pending",
+            )
+        )
+    else:
+        db_session.add(
+            PhoneNumberProvisioning(
+                user_id=active_user.id,
+                target_country_code="FR",
+                status="running",
+                attempt_count=1,
+                can_retry=False,
+                provider_operation_key="activation:provision:prior-cycle",
+            )
+        )
+    await db_session.commit()
+
+    with pytest.raises(ActivationProvisioningBlockedError) as raised:
+        await _provisioning_service(db_session).confirm(
+            active_user.id,
+            arq_pool=None,
+        )
+
+    assert raised.value.code == "reactivation_not_ready"
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.topic == "phone.provision")
+        )
+        == 0
+    )
 
 
 @pytest.mark.anyio
@@ -399,6 +448,43 @@ async def test_retry_queues_new_delivery_identity_but_keeps_provider_identity(
 
 
 @pytest.mark.anyio
+async def test_retry_waits_for_unresolved_provider_cleanup(
+    db_session,
+    active_user,
+) -> None:
+    await _seed_eligible_customer(db_session, active_user)
+    service = _provisioning_service(db_session)
+    await service.confirm(active_user.id, arq_pool=None)
+    provisioning = await db_session.scalar(
+        select(PhoneNumberProvisioning).where(
+            PhoneNumberProvisioning.user_id == active_user.id
+        )
+    )
+    assert provisioning is not None
+    provisioning.status = "failed"
+    provisioning.attempt_count = 1
+    provisioning.can_retry = True
+    db_session.add(
+        ProviderCleanupOperation(
+            user_id=active_user.id,
+            lifecycle_generation=active_user.lifecycle_generation,
+            resource_type="stripe_subscription",
+            provider_resource_id="sub-cleanup-before-retry",
+            status="pending",
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(ActivationProvisioningBlockedError) as raised:
+        await service.retry(active_user.id, arq_pool=None)
+
+    assert raised.value.code == "reactivation_not_ready"
+    await db_session.refresh(provisioning)
+    assert provisioning.status == "failed"
+    assert provisioning.can_retry is True
+
+
+@pytest.mark.anyio
 async def test_retry_requires_failed_retryable_state(
     db_session,
     active_user,
@@ -535,9 +621,20 @@ async def test_confirm_acquires_command_locks_in_required_order() -> None:
             return 60
 
     class Provisionings:
+        async def get_by_user_id_for_update(self, requested_user_id):
+            assert requested_user_id == user_id
+            events.append("provisioning_guard")
+            return None
+
         async def queue_initial(self, *, user_id, operation_key):
             events.append("provisioning")
             return SimpleNamespace(provider_operation_key=operation_key)
+
+    class Cleanups:
+        async def list_incomplete_by_user_id_for_update(self, requested_user_id):
+            assert requested_user_id == user_id
+            events.append("cleanup")
+            return []
 
     class Phones:
         async def get_by_user_id_for_update(self, requested_user_id):
@@ -568,6 +665,7 @@ async def test_confirm_acquires_command_locks_in_required_order() -> None:
         subscription_repository=Subscriptions(),
         usage_repository=Usage(),
         provisioning_repository=Provisionings(),
+        provider_cleanup_repository=Cleanups(),
         phone_number_repository=Phones(),
         outbox_service=Outbox(),
         activation_event_repository=ActivationEvents(),
@@ -581,6 +679,8 @@ async def test_confirm_acquires_command_locks_in_required_order() -> None:
     assert events == [
         "user",
         "activation",
+        "cleanup",
+        "provisioning_guard",
         "profile",
         "subscription",
         "provisioning",

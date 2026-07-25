@@ -3,8 +3,6 @@ from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import text
-
 from app.core.database import get_session_factory
 from app.core.config import get_settings
 from app.core.logging import report_safe_exception
@@ -28,7 +26,15 @@ from app.services.account_access_policy import (
     require_current_account_lifecycle,
 )
 from app.services.outbox_service import OutboxService
+from app.services.provider_work_policy import (
+    UnresolvedProviderWorkError,
+    unresolved_provider_work_blocker,
+)
 from app.services.telephony_service import TelephonyService
+from app.workers.provider_single_flight import (
+    ProviderSingleFlight,
+    provider_single_flight,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -40,26 +46,15 @@ def _safe_error_type(error: BaseException) -> str:
 
 @asynccontextmanager
 async def _provider_operation_lock(session_factory, operation_key: str | None):
-    if operation_key is None:
-        yield
-        return
-
-    async with session_factory() as lock_session:
-        if lock_session.get_bind().dialect.name != "postgresql":
-            yield
-            return
-        # A transaction-scoped advisory lock uses a dedicated connection and
-        # survives an outbox lease reclaim without holding business-row locks.
-        # PostgreSQL releases it automatically on rollback or connection loss.
-        async with lock_session.begin():
-            await lock_session.execute(
-                text(
-                    "SELECT pg_advisory_xact_lock("
-                    "hashtextextended(CAST(:operation_key AS text), 0))"
-                ),
-                {"operation_key": operation_key},
-            )
-            yield
+    async with provider_single_flight(
+        session_factory,
+        (
+            f"provider.phone-provision:{operation_key}"
+            if operation_key is not None
+            else None
+        ),
+    ) as guard:
+        yield guard
 
 
 async def _run_provider_attempt(
@@ -71,11 +66,14 @@ async def _run_provider_attempt(
     telephony_service: TelephonyService,
     provisioning_repo: PhoneNumberProvisioningRepository,
     lifecycle_generation: int | None = None,
+    provider_guard: ProviderSingleFlight | None = None,
 ) -> None:
     review_failure: tuple[str, dict[str, Any], str] | None = None
     provider_failure: tuple[str, bool] | None = None
     unexpected_error_type: str | None = None
     try:
+        if provider_guard is not None:
+            provider_guard.assert_transaction_free(session)
         service_kwargs = {"country_code": country_code}
         if provider_operation_key is not None:
             service_kwargs["operation_key"] = provider_operation_key
@@ -110,8 +108,7 @@ async def _run_provider_attempt(
                 status="failed",
             )
             raise RuntimeError(
-                "phone_provisioning_failure_handling_failed "
-                f"error_type={error_type}"
+                f"phone_provisioning_failure_handling_failed error_type={error_type}"
             ) from None
         raise TelephonyProvisioningPending(reason=pending_reason) from None
     except TelephonyProvisioningReviewRequired as exc:
@@ -158,6 +155,34 @@ async def _run_provider_attempt(
                 )
                 await session.commit()
                 raise lifecycle_error
+            cleanup_operations = await ProviderCleanupRepository(
+                session
+            ).list_incomplete_by_user_id_for_update(user_id)
+            current_provisioning = await provisioning_repo.get_by_user_id_for_update(
+                user_id
+            )
+            blocker = unresolved_provider_work_blocker(
+                cleanup_operations=cleanup_operations,
+                provisioning=current_provisioning,
+                allowed_provisioning_operation_key=provider_operation_key,
+                allow_matching_provisioning=True,
+            )
+            if blocker is not None:
+                cleanup = await ProviderCleanupRepository(session).adopt(
+                    user_id=user_id,
+                    lifecycle_generation=current_user.lifecycle_generation,
+                    resource_type="phone_number",
+                    provider_resource_id=acquired.provider_number_id,
+                )
+                await OutboxService(session).add(
+                    topic="provider.cleanup",
+                    aggregate_type="provider-cleanup-operation",
+                    aggregate_id=cleanup.id,
+                    idempotency_key=f"provider.cleanup:{cleanup.id}",
+                    payload={"cleanup_operation_id": str(cleanup.id)},
+                )
+                await session.commit()
+                raise UnresolvedProviderWorkError(blocker)
             phone_repo = PhoneNumberRepository(session)
             phone_number = await phone_repo.get_by_user_id_for_update(user_id)
             if phone_number is None:
@@ -298,7 +323,8 @@ async def phone_provisioning_job(
     async with session_factory() as session:
         user_repo = UserRepository(session)
         provisioning_repo = PhoneNumberProvisioningRepository(session)
-        user = await user_repo.get_by_id(user_id)
+        cleanup_repo = ProviderCleanupRepository(session)
+        user = await user_repo.get_by_id_for_update(user_id)
         if not user:
             logger.error(f"phone_provisioning_job: user {user_id} not found")
             return
@@ -323,6 +349,9 @@ async def phone_provisioning_job(
         if provider is None:
             provider = create_telephony_provider(get_settings())
         telephony_service = TelephonyService(session, provider=provider)
+        recovery_lifecycle_error: (
+            AccountStateBlockedError | AccountLifecycleGenerationMismatchError | None
+        ) = None
         try:
             require_current_account_lifecycle(
                 user,
@@ -332,7 +361,7 @@ async def phone_provisioning_job(
             AccountStateBlockedError,
             AccountLifecycleGenerationMismatchError,
         ) as lifecycle_error:
-            prior_attempt = await provisioning_repo.get_by_user_id(user_id)
+            prior_attempt = await provisioning_repo.get_by_user_id_for_update(user_id)
             if (
                 prior_attempt is None
                 or prior_attempt.status != "running"
@@ -341,62 +370,82 @@ async def phone_provisioning_job(
             ):
                 await session.rollback()
                 raise
-            recovered = await telephony_service.recover_acquired_number(
-                country_code=country_code,
-                operation_key=provider_operation_key,
+            recovery_lifecycle_error = lifecycle_error
+            await session.rollback()
+        else:
+            cleanup_operations = (
+                await cleanup_repo.list_incomplete_by_user_id_for_update(user_id)
             )
-            if recovered is None:
-                raise lifecycle_error
-            current_user = await user_repo.get_by_id_for_update(user_id)
-            if current_user is None:
+            prior_attempt = await provisioning_repo.get_by_user_id_for_update(user_id)
+            blocker = unresolved_provider_work_blocker(
+                cleanup_operations=cleanup_operations,
+                provisioning=prior_attempt,
+                allowed_provisioning_operation_key=provider_operation_key,
+                allow_matching_provisioning=provider_operation_key is not None,
+            )
+            if blocker is not None:
                 await session.rollback()
-                raise RuntimeError("phone_provisioning_owner_missing")
-            cleanup = await ProviderCleanupRepository(session).adopt(
+                raise UnresolvedProviderWorkError(blocker)
+            provisioning = await provisioning_repo.mark_running(
                 user_id=user_id,
-                lifecycle_generation=lifecycle_generation,
-                resource_type="phone_number",
-                provider_resource_id=recovered.provider_number_id,
+                target_country_code=country_code,
+                provider_operation_key=provider_operation_key,
             )
-            await OutboxService(session).add(
-                topic="provider.cleanup",
-                aggregate_type="provider-cleanup-operation",
-                aggregate_id=cleanup.id,
-                idempotency_key=f"provider.cleanup:{cleanup.id}",
-                payload={"cleanup_operation_id": str(cleanup.id)},
-            )
-            await session.commit()
-            raise lifecycle_error
-        provisioning = await provisioning_repo.mark_running(
-            user_id=user_id,
-            target_country_code=country_code,
-            provider_operation_key=provider_operation_key,
-        )
-        provider_operation_key = provisioning.provider_operation_key
-        start_persist_error_type: str | None = None
-        try:
-            # Release the provisioning-row write lock before provider I/O. The
-            # stable outbox operation key makes the provider call replayable.
-            await session.commit()
-        except Exception as exc:
-            start_persist_error_type = _safe_error_type(exc)
-        if start_persist_error_type is not None:
-            report_safe_exception(
-                logger,
-                event="phone_provisioning_start_persist_failed",
-                operation="persist_phone_provisioning_start",
-                error_type=start_persist_error_type,
-                user_id=user_id,
-                status="failed",
-            )
-            raise RuntimeError(
-                "phone_provisioning_start_persist_failed "
-                f"error_type={start_persist_error_type}"
-            ) from None
+            provider_operation_key = provisioning.provider_operation_key
+            start_persist_error_type: str | None = None
+            try:
+                # Release the provisioning-row write lock before provider I/O.
+                # The stable operation key makes the provider call replayable.
+                await session.commit()
+            except Exception as exc:
+                start_persist_error_type = _safe_error_type(exc)
+            if start_persist_error_type is not None:
+                report_safe_exception(
+                    logger,
+                    event="phone_provisioning_start_persist_failed",
+                    operation="persist_phone_provisioning_start",
+                    error_type=start_persist_error_type,
+                    user_id=user_id,
+                    status="failed",
+                )
+                raise RuntimeError(
+                    "phone_provisioning_start_persist_failed "
+                    f"error_type={start_persist_error_type}"
+                ) from None
 
         async with _provider_operation_lock(
             session_factory,
             provider_operation_key,
-        ):
+        ) as provider_guard:
+            if recovery_lifecycle_error is not None:
+                if provider_guard is not None:
+                    provider_guard.assert_transaction_free(session)
+                assert provider_operation_key is not None
+                recovered = await telephony_service.recover_acquired_number(
+                    country_code=country_code,
+                    operation_key=provider_operation_key,
+                )
+                if recovered is None:
+                    raise recovery_lifecycle_error
+                current_user = await user_repo.get_by_id_for_update(user_id)
+                if current_user is None:
+                    await session.rollback()
+                    raise RuntimeError("phone_provisioning_owner_missing")
+                cleanup = await cleanup_repo.adopt(
+                    user_id=user_id,
+                    lifecycle_generation=lifecycle_generation,
+                    resource_type="phone_number",
+                    provider_resource_id=recovered.provider_number_id,
+                )
+                await OutboxService(session).add(
+                    topic="provider.cleanup",
+                    aggregate_type="provider-cleanup-operation",
+                    aggregate_id=cleanup.id,
+                    idempotency_key=f"provider.cleanup:{cleanup.id}",
+                    payload={"cleanup_operation_id": str(cleanup.id)},
+                )
+                await session.commit()
+                raise recovery_lifecycle_error
             current_user = await user_repo.get_by_id_for_update(user_id)
             if current_user is None:
                 await session.rollback()
@@ -405,6 +454,21 @@ async def phone_provisioning_job(
                 current_user,
                 lifecycle_generation=lifecycle_generation,
             )
+            cleanup_operations = (
+                await cleanup_repo.list_incomplete_by_user_id_for_update(user_id)
+            )
+            current_provisioning = await provisioning_repo.get_by_user_id_for_update(
+                user_id
+            )
+            blocker = unresolved_provider_work_blocker(
+                cleanup_operations=cleanup_operations,
+                provisioning=current_provisioning,
+                allowed_provisioning_operation_key=provider_operation_key,
+                allow_matching_provisioning=True,
+            )
+            if blocker is not None:
+                await session.rollback()
+                raise UnresolvedProviderWorkError(blocker)
             existing_number = await PhoneNumberRepository(
                 session
             ).get_by_user_id_for_update(user_id)
@@ -425,4 +489,5 @@ async def phone_provisioning_job(
                 telephony_service=telephony_service,
                 provisioning_repo=provisioning_repo,
                 lifecycle_generation=lifecycle_generation,
+                provider_guard=provider_guard,
             )

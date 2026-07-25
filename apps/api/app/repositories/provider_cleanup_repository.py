@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.provider_cleanup_operation import ProviderCleanupOperation
+from app.repositories.user_repository import UserRepository
 
 
 class ProviderCleanupRepository:
@@ -30,9 +31,41 @@ class ProviderCleanupRepository:
         return await self.session.scalar(
             select(ProviderCleanupOperation).where(
                 ProviderCleanupOperation.resource_type == resource_type,
-                ProviderCleanupOperation.provider_resource_id
-                == provider_resource_id,
+                ProviderCleanupOperation.provider_resource_id == provider_resource_id,
             )
+        )
+
+    async def list_incomplete_by_user_id(
+        self,
+        user_id: UUID,
+    ) -> list[ProviderCleanupOperation]:
+        return list(
+            (
+                await self.session.scalars(
+                    select(ProviderCleanupOperation).where(
+                        ProviderCleanupOperation.user_id == user_id,
+                        ProviderCleanupOperation.completed_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+
+    async def list_incomplete_by_user_id_for_update(
+        self,
+        user_id: UUID,
+    ) -> list[ProviderCleanupOperation]:
+        return list(
+            (
+                await self.session.scalars(
+                    select(ProviderCleanupOperation)
+                    .where(
+                        ProviderCleanupOperation.user_id == user_id,
+                        ProviderCleanupOperation.completed_at.is_(None),
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
         )
 
     async def adopt(
@@ -47,6 +80,9 @@ class ProviderCleanupRepository:
             raise ValueError("Unsupported provider cleanup resource")
         if not provider_resource_id:
             raise ValueError("Provider cleanup identity is required")
+        owner = await UserRepository(self.session).get_by_id_for_update(user_id)
+        if owner is None:
+            raise ValueError("Provider cleanup owner does not exist")
         existing = await self.get_by_resource(
             resource_type=resource_type,
             provider_resource_id=provider_resource_id,

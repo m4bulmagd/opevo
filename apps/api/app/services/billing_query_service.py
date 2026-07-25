@@ -12,6 +12,10 @@ from app.repositories.billing_checkout_attempt_repository import (
     BillingCheckoutAttemptRepository,
 )
 from app.repositories.phone_number_repository import PhoneNumberRepository
+from app.repositories.phone_number_provisioning_repository import (
+    PhoneNumberProvisioningRepository,
+)
+from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
@@ -22,6 +26,7 @@ from app.schemas.billing_api import (
     UsageSnapshotResponse,
 )
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
+from app.services.provider_work_policy import unresolved_provider_work_blocker
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,9 @@ class BillingQueryService:
         user_repository: UserRepository | None = None,
         account_deactivation_repository: AccountDeactivationRepository | None = None,
         phone_number_repository: PhoneNumberRepository | None = None,
+        phone_number_provisioning_repository: PhoneNumberProvisioningRepository
+        | None = None,
+        provider_cleanup_repository: ProviderCleanupRepository | None = None,
     ) -> None:
         if subscription_repository is None or usage_repository is None:
             if session is None:
@@ -73,6 +81,17 @@ class BillingQueryService:
         self.phone_number_repository = phone_number_repository or (
             PhoneNumberRepository(session) if session is not None else None
         )
+        self.phone_number_provisioning_repository = (
+            phone_number_provisioning_repository
+            or (
+                PhoneNumberProvisioningRepository(session)
+                if session is not None
+                else None
+            )
+        )
+        self.provider_cleanup_repository = provider_cleanup_repository or (
+            ProviderCleanupRepository(session) if session is not None else None
+        )
         self.checkout_attempt_repository = (
             BillingCheckoutAttemptRepository(session) if session is not None else None
         )
@@ -91,6 +110,8 @@ class BillingQueryService:
             self.user_repository is not None
             and self.account_deactivation_repository is not None
             and self.phone_number_repository is not None
+            and self.phone_number_provisioning_repository is not None
+            and self.provider_cleanup_repository is not None
         ):
             user = await self.user_repository.get_by_id(user_id)
             operation = (
@@ -99,14 +120,29 @@ class BillingQueryService:
                 )
             )
             phone = await self.phone_number_repository.get_by_user_id(user_id)
+            cleanup_operations = (
+                await self.provider_cleanup_repository.list_incomplete_by_user_id(
+                    user_id
+                )
+            )
+            provisioning = (
+                await self.phone_number_provisioning_repository.get_by_user_id(user_id)
+            )
             if user is not None:
-                can_start_checkout = SubscriptionAccessPolicy.can_start_checkout(
-                    account_status=user.status,
-                    subscription_status=subscription.status,
-                    has_incomplete_deactivation=bool(
-                        operation is not None and operation.completed_at is None
-                    ),
-                    has_phone=phone is not None,
+                can_start_checkout = (
+                    SubscriptionAccessPolicy.can_start_checkout(
+                        account_status=user.status,
+                        subscription_status=subscription.status,
+                        has_incomplete_deactivation=bool(
+                            operation is not None and operation.completed_at is None
+                        ),
+                        has_phone=phone is not None,
+                    )
+                    and unresolved_provider_work_blocker(
+                        cleanup_operations=cleanup_operations,
+                        provisioning=provisioning,
+                    )
+                    is None
                 )
 
         return SubscriptionResponse(
@@ -130,6 +166,8 @@ class BillingQueryService:
             self.user_repository is None
             or self.account_deactivation_repository is None
             or self.phone_number_repository is None
+            or self.phone_number_provisioning_repository is None
+            or self.provider_cleanup_repository is None
         ):
             raise ValueError("session-backed repositories are required for checkout")
         user = await self.user_repository.get_by_id_for_update(user_id)
@@ -142,6 +180,14 @@ class BillingQueryService:
             user_id
         )
         phone = await self.phone_number_repository.get_by_user_id_for_update(user_id)
+        cleanup_operations = await self.provider_cleanup_repository.list_incomplete_by_user_id_for_update(
+            user_id
+        )
+        provisioning = (
+            await self.phone_number_provisioning_repository.get_by_user_id_for_update(
+                user_id
+            )
+        )
         return CheckoutEligibility(
             allowed=SubscriptionAccessPolicy.can_start_checkout(
                 account_status=user.status,
@@ -150,7 +196,12 @@ class BillingQueryService:
                 ),
                 has_incomplete_deactivation=operation is not None,
                 has_phone=phone is not None,
-            ),
+            )
+            and unresolved_provider_work_blocker(
+                cleanup_operations=cleanup_operations,
+                provisioning=provisioning,
+            )
+            is None,
             lifecycle_generation=user.lifecycle_generation,
         )
 
@@ -185,9 +236,7 @@ class BillingQueryService:
             idempotency_key=attempt.idempotency_key,
             existing_session_id=attempt.stripe_checkout_session_id,
             stripe_customer_id=(
-                subscription.stripe_customer_id
-                if subscription is not None
-                else None
+                subscription.stripe_customer_id if subscription is not None else None
             ),
         )
         await self.session.commit()

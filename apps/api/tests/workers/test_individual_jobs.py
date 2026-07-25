@@ -537,6 +537,9 @@ class FakePhoneProvisioningSession:
     async def rollback(self) -> None:
         self.rollbacks += 1
 
+    def in_transaction(self) -> bool:
+        return False
+
 
 class FakePhoneProvisioningSessionContext:
     def __init__(self, session: FakePhoneProvisioningSession) -> None:
@@ -552,11 +555,17 @@ class FakePhoneProvisioningSessionContext:
 class CapturingPhoneProvisioningRepository:
     def __init__(self) -> None:
         self.failed_calls: list[dict] = []
+        self.current = None
+
+    async def get_by_user_id_for_update(self, _user_id):
+        return self.current
 
     async def mark_running(self, **kwargs):
-        return SimpleNamespace(
-            provider_operation_key=kwargs.get("provider_operation_key")
+        self.current = SimpleNamespace(
+            status="running",
+            provider_operation_key=kwargs.get("provider_operation_key"),
         )
+        return self.current
 
     async def mark_failed(self, **kwargs) -> None:
         self.failed_calls.append(kwargs)
@@ -763,6 +772,13 @@ def install_phone_provisioning_job_fakes(
         async def get_by_user_id_for_update(self, _user_id: UUID):
             return None
 
+    class NoProviderCleanupRepository:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def list_incomplete_by_user_id_for_update(self, _user_id: UUID):
+            return []
+
     monkeypatch.setattr(phone_provisioning_module, "UserRepository", FakeUserRepository)
     monkeypatch.setattr(
         phone_provisioning_module,
@@ -773,6 +789,11 @@ def install_phone_provisioning_job_fakes(
         phone_provisioning_module,
         "PhoneNumberProvisioningRepository",
         lambda _session: provisioning_repository,
+    )
+    monkeypatch.setattr(
+        phone_provisioning_module,
+        "ProviderCleanupRepository",
+        NoProviderCleanupRepository,
     )
     monkeypatch.setattr(phone_provisioning_module, "TelephonyService", FailingTelephonyService)
     monkeypatch.setattr(

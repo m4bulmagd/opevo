@@ -29,6 +29,7 @@ from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
+from app.providers.telephony.base import TelephonyProviderError
 from app.core.database import get_session
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.account_deactivation_repository import (
@@ -43,6 +44,7 @@ from app.repositories.customer_activation_repository import (
 from app.repositories.recording_egress_operation_repository import (
     RecordingEgressOperationRepository,
 )
+from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_lifecycle_service import AccountLifecycleService
@@ -61,6 +63,7 @@ from app.services.local_billing_service import (
     LocalBillingConflictError,
     LocalBillingService,
 )
+from app.services.outbox_service import OutboxService
 from app.workers.jobs import account_deactivation as account_deactivation_module
 from app.workers.jobs.account_deactivation import deliver_account_deactivation
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
@@ -80,9 +83,7 @@ PRIVATE_CONTENT = "retained owner history"
 
 
 @pytest_asyncio.fixture
-async def account_session_factory() -> AsyncIterator[
-    async_sessionmaker[AsyncSession]
-]:
+async def account_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     database_url = os.getenv("TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("PostgreSQL account concurrency tests require TEST_DATABASE_URL")
@@ -109,7 +110,9 @@ async def account_session_factory() -> AsyncIterator[
         if engine is not None:
             await engine.dispose()
         async with admin.connect() as connection:
-            await connection.execute(text(f"DROP SCHEMA IF EXISTS {quoted_schema} CASCADE"))
+            await connection.execute(
+                text(f"DROP SCHEMA IF EXISTS {quoted_schema} CASCADE")
+            )
         await admin.dispose()
 
 
@@ -358,9 +361,7 @@ async def test_two_owner_requests_converge_on_one_generation_operation_and_inten
     async def request() -> UUID:
         async with account_session_factory() as session:
             await barrier.wait()
-            operation = await AccountLifecycleService(
-                session
-            ).request_in_transaction(
+            operation = await AccountLifecycleService(session).request_in_transaction(
                 seeded.user_id,
                 trigger="owner_request",
             )
@@ -385,9 +386,7 @@ async def test_two_owner_requests_converge_on_one_generation_operation_and_inten
         events = list(
             (
                 await session.scalars(
-                    select(OutboxEvent).where(
-                        OutboxEvent.topic == "account.deactivate"
-                    )
+                    select(OutboxEvent).where(OutboxEvent.topic == "account.deactivate")
                 )
             ).all()
         )
@@ -470,6 +469,31 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
         event,
     )
 
+    async with account_session_factory() as session:
+        projection = await AccountLifecycleService(session).get_account(user_id)
+        await session.rollback()
+        checkout = await BillingQueryService(session).prepare_checkout_attempt(user_id)
+        with pytest.raises(LocalBillingConflictError) as local_billing:
+            await LocalBillingService(session).activate_starter(user_id, NOW)
+        running = await session.scalar(
+            select(PhoneNumberProvisioning).where(
+                PhoneNumberProvisioning.user_id == user_id
+            )
+        )
+        cleanup_count = await session.scalar(
+            select(func.count())
+            .select_from(ProviderCleanupOperation)
+            .where(ProviderCleanupOperation.user_id == user_id)
+        )
+
+    assert projection.reactivation_allowed is False
+    assert projection.blocker == "reactivation_not_ready"
+    assert checkout.allowed is False
+    assert local_billing.value.code == "local_subscription_unavailable"
+    assert running is not None
+    assert running.status == "running"
+    assert cleanup_count == 0
+
     resume.set()
     with pytest.raises(AccountStateBlockedError):
         await provisioning_task
@@ -498,28 +522,212 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
         )
         assert cleanup_event is not None
 
+    async with account_session_factory() as session:
+        pending_projection = await AccountLifecycleService(session).get_account(user_id)
+    assert pending_projection.reactivation_allowed is False
+    assert pending_projection.blocker == "reactivation_not_ready"
+
+    cleanup_release_entered = asyncio.Event()
+    resume_cleanup_release = asyncio.Event()
+
+    class BarrierRetryCleanupProvider:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+            self.fail_release = True
+
+        async def disable_number(self, *, provider_number_id: str) -> str:
+            self.calls.append(("disable", provider_number_id))
+            return "app-disabled"
+
+        async def release_number(self, *, provider_number_id: str) -> None:
+            self.calls.append(("release", provider_number_id))
+            if self.fail_release:
+                cleanup_release_entered.set()
+                await resume_cleanup_release.wait()
+                raise TelephonyProviderError(
+                    "provider_retryable",
+                    error_class="timeout",
+                )
+
+    cleanup_provider = BarrierRetryCleanupProvider()
+    cleanup_ctx = {
+        "session_factory": account_session_factory,
+        "telephony_provider": cleanup_provider,
+        "provider_cleanup_now": lambda: NOW,
+    }
+    first_cleanup = asyncio.create_task(
+        deliver_provider_cleanup(cleanup_ctx, cleanup_event)
+    )
+    await asyncio.wait_for(cleanup_release_entered.wait(), timeout=5)
+    async with account_session_factory() as session:
+        processing = await session.get(ProviderCleanupOperation, cleanup.id)
+        processing_projection = await AccountLifecycleService(session).get_account(
+            user_id
+        )
+    assert processing is not None
+    assert processing.status == "processing"
+    assert processing_projection.reactivation_allowed is False
+    resume_cleanup_release.set()
+    with pytest.raises(OutboxDeliveryError) as retry:
+        await first_cleanup
+    assert retry.value.error_code == "provider_retryable"
+
+    async with account_session_factory() as session:
+        retrying = await session.get(ProviderCleanupOperation, cleanup.id)
+        provisioning = await session.scalar(
+            select(PhoneNumberProvisioning).where(
+                PhoneNumberProvisioning.user_id == user_id
+            )
+        )
+        retry_projection = await AccountLifecycleService(session).get_account(user_id)
+    assert retrying is not None
+    assert retrying.status == "pending"
+    assert provisioning is not None
+    assert provisioning.status == "running"
+    assert retry_projection.reactivation_allowed is False
+
+    cleanup_provider.fail_release = False
+    await deliver_provider_cleanup(cleanup_ctx, cleanup_event)
+    await deliver_provider_cleanup(cleanup_ctx, cleanup_event)
+
+    async with account_session_factory() as session:
+        phone_cleanup_projection = await AccountLifecycleService(session).get_account(
+            user_id
+        )
+        provisioning_count = await session.scalar(
+            select(func.count())
+            .select_from(PhoneNumberProvisioning)
+            .where(PhoneNumberProvisioning.user_id == user_id)
+        )
+        stale_cleanup = await ProviderCleanupRepository(session).adopt(
+            user_id=user_id,
+            lifecycle_generation=2,
+            resource_type="stripe_subscription",
+            provider_resource_id="sub-stale-after-deactivation",
+        )
+        stale_event = await OutboxService(session).add(
+            topic="provider.cleanup",
+            aggregate_type="provider-cleanup-operation",
+            aggregate_id=stale_cleanup.id,
+            idempotency_key=f"provider.cleanup:{stale_cleanup.id}",
+            payload={"cleanup_operation_id": str(stale_cleanup.id)},
+        )
+        await session.commit()
+    assert phone_cleanup_projection.reactivation_allowed is True
+    assert provisioning_count == 0
+
+    async with account_session_factory() as session:
+        stale_projection = await AccountLifecycleService(session).get_account(user_id)
+        stale_checkout = await BillingQueryService(session).prepare_checkout_attempt(
+            user_id
+        )
+    assert stale_projection.reactivation_allowed is False
+    assert stale_projection.blocker == "reactivation_not_ready"
+    assert stale_checkout.allowed is False
+
+    subscriptions = _WorkerSubscriptionProvider()
     await deliver_provider_cleanup(
         {
             "session_factory": account_session_factory,
-            "telephony_provider": provider,
+            "subscription_provider": subscriptions,
             "provider_cleanup_now": lambda: NOW,
         },
-        cleanup_event,
+        stale_event,
     )
     await deliver_provider_cleanup(
         {
             "session_factory": account_session_factory,
-            "telephony_provider": provider,
+            "subscription_provider": subscriptions,
             "provider_cleanup_now": lambda: NOW,
         },
-        cleanup_event,
+        stale_event,
     )
 
     assert provider.provision_calls == 1
-    assert provider.calls == [
+    assert cleanup_provider.calls == [
         ("disable", "pn-pg-late"),
         ("release", "pn-pg-late"),
+        ("release", "pn-pg-late"),
     ]
+    assert subscriptions.calls == ["sub-stale-after-deactivation"]
+    async with account_session_factory() as session:
+        completed_projection = await AccountLifecycleService(session).get_account(
+            user_id
+        )
+        completed_checkout = await BillingQueryService(
+            session
+        ).get_checkout_eligibility(user_id)
+    assert completed_projection.reactivation_allowed is True
+    assert completed_checkout.allowed is True
+
+
+@pytest.mark.anyio
+async def test_reclaimed_provider_cleanup_is_single_flight_without_transactions(
+    account_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with account_session_factory() as session:
+        user = User(
+            clerk_user_id=f"cleanup-single-flight-{uuid4().hex}",
+            email=f"cleanup-single-flight-{uuid4().hex}@example.invalid",
+        )
+        session.add(user)
+        await session.flush()
+        cleanup = ProviderCleanupOperation(
+            user_id=user.id,
+            lifecycle_generation=user.lifecycle_generation,
+            resource_type="stripe_subscription",
+            provider_resource_id="sub-cleanup-single-flight",
+            status="pending",
+        )
+        session.add(cleanup)
+        await session.flush()
+        event = await OutboxService(session).add(
+            topic="provider.cleanup",
+            aggregate_type="provider-cleanup-operation",
+            aggregate_id=cleanup.id,
+            idempotency_key=f"provider.cleanup:{cleanup.id}",
+            payload={"cleanup_operation_id": str(cleanup.id)},
+        )
+        await session.commit()
+        cleanup_id = cleanup.id
+
+    tracking_factory = _TrackingSessionFactory(account_session_factory)
+    entered = asyncio.Event()
+    resume = asyncio.Event()
+    second_provider_call = asyncio.Event()
+    calls: list[str] = []
+
+    class BarrierSubscriptionProvider:
+        async def cancel_immediately(self, subscription_id: str) -> None:
+            tracking_factory.assert_provider_safe()
+            calls.append(subscription_id)
+            if len(calls) == 1:
+                entered.set()
+                await resume.wait()
+            else:
+                second_provider_call.set()
+
+    ctx = {
+        "session_factory": tracking_factory,
+        "subscription_provider": BarrierSubscriptionProvider(),
+        "provider_cleanup_now": lambda: NOW,
+    }
+    first = asyncio.create_task(deliver_provider_cleanup(ctx, event))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    reclaimed = asyncio.create_task(deliver_provider_cleanup(ctx, event))
+    await asyncio.sleep(0.1)
+    overlapped = second_provider_call.is_set()
+    resume.set()
+    results = await asyncio.gather(first, reclaimed, return_exceptions=True)
+
+    assert overlapped is False
+    assert results == [None, None]
+    assert calls == ["sub-cleanup-single-flight"]
+    async with account_session_factory() as session:
+        stored = await session.get(ProviderCleanupOperation, cleanup_id)
+        assert stored is not None
+        assert stored.status == "completed"
+        assert stored.attempt_count == 1
 
 
 @pytest.mark.anyio
@@ -547,9 +755,7 @@ async def test_owner_request_and_terminal_stripe_event_converge_on_one_operation
     async def owner_request() -> None:
         async with account_session_factory() as session:
             competing_started.set()
-            operation = await AccountLifecycleService(
-                session
-            ).request_in_transaction(
+            operation = await AccountLifecycleService(session).request_in_transaction(
                 seeded.user_id,
                 trigger="owner_request",
             )
@@ -598,9 +804,7 @@ async def test_owner_request_and_terminal_stripe_event_converge_on_one_operation
         events = list(
             (
                 await session.scalars(
-                    select(OutboxEvent).where(
-                        OutboxEvent.topic == "account.deactivate"
-                    )
+                    select(OutboxEvent).where(OutboxEvent.topic == "account.deactivate")
                 )
             ).all()
         )
@@ -629,9 +833,7 @@ async def test_worker_cancellation_commit_and_lifecycle_entry_use_compatible_loc
         suffix="worker-lifecycle-locks",
     )
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(
-            session
-        ).request_in_transaction(
+        operation = await AccountLifecycleService(session).request_in_transaction(
             seeded.user_id,
             trigger="owner_request",
         )
@@ -711,9 +913,7 @@ async def test_worker_cancellation_commit_and_lifecycle_entry_use_compatible_loc
 
     async def enter_lifecycle() -> UUID:
         async with account_session_factory() as session:
-            existing = await AccountLifecycleService(
-                session
-            ).request_in_transaction(
+            existing = await AccountLifecycleService(session).request_in_transaction(
                 seeded.user_id,
                 trigger="owner_request",
             )
@@ -976,9 +1176,7 @@ async def test_stale_enable_provision_invoice_and_go_live_work_is_provider_free(
         suffix="stale-work",
     )
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(
-            session
-        ).request_in_transaction(
+        operation = await AccountLifecycleService(session).request_in_transaction(
             seeded.user_id,
             trigger="owner_request",
         )
@@ -1112,9 +1310,7 @@ async def test_stale_verification_dispatch_is_provider_free_and_keeps_claim_stat
         activation_id = activation.id
 
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(
-            session
-        ).request_in_transaction(
+        operation = await AccountLifecycleService(session).request_in_transaction(
             seeded.user_id,
             trigger="owner_request",
         )
@@ -1278,9 +1474,7 @@ async def test_stale_go_live_command_preserves_activation_config_and_outbox(
         await session.commit()
 
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(
-            session
-        ).request_in_transaction(
+        operation = await AccountLifecycleService(session).request_in_transaction(
             seeded.user_id,
             trigger="owner_request",
         )
@@ -1547,9 +1741,7 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         other_clerk_user_id = other.clerk_user_id
 
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(
-            session
-        ).request_in_transaction(
+        operation = await AccountLifecycleService(session).request_in_transaction(
             seeded.user_id,
             trigger="owner_request",
         )
@@ -1584,9 +1776,7 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         user = await session.get(User, seeded.user_id)
         operation = await session.get(AccountDeactivationOperation, operation_id)
         agent = await AgentConfigRepository(session).get_by_user_id(seeded.user_id)
-        other_agent = await AgentConfigRepository(session).get_by_user_id(
-            other_user_id
-        )
+        other_agent = await AgentConfigRepository(session).get_by_user_id(other_user_id)
         subscription = await SubscriptionRepository(session).get_by_user_id(
             seeded.user_id
         )
@@ -1685,9 +1875,9 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         notifications = await NotificationRepository(session).list_by_user_id(
             seeded.user_id
         )
-        other_notifications = await NotificationRepository(
-            session
-        ).list_by_user_id(other_user_id)
+        other_notifications = await NotificationRepository(session).list_by_user_id(
+            other_user_id
+        )
         usage = await BillingQueryService(session).get_usage_ledger(
             seeded.user_id,
             limit=20,
@@ -1838,10 +2028,7 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         }
         assert call.recording_object_key == "recordings/retained-history.ogg"
         assert call.recording_egress_id == "egress-retained-history"
-        assert (
-            call.recording_url
-            == "https://legacy.example.invalid/retained-history"
-        )
+        assert call.recording_url == "https://legacy.example.invalid/retained-history"
         assert call_detail.id == retained_ids["call"]
         assert call_detail.summary_text == PRIVATE_CONTENT
         assert [line.text for line in call_detail.transcript] == [PRIVATE_CONTENT]
@@ -1853,9 +2040,7 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
             retained_ids["notification"]
         ]
         assert notifications[0].payload == {"safe": "retained"}
-        assert [entry.id for entry in usage.entries] == [
-            str(retained_ids["usage"])
-        ]
+        assert [entry.id for entry in usage.entries] == [str(retained_ids["usage"])]
         assert usage.entries[0].call_id == str(retained_ids["call"])
         assert recording.id == retained_ids["recording"]
         assert recording.call_id == call.id

@@ -171,6 +171,18 @@ async def test_local_billing_preserves_global_grant_lock_order() -> None:
             events.append("operation_lock")
             return None
 
+    class ProviderCleanups:
+        async def list_incomplete_by_user_id_for_update(self, requested_user_id):
+            assert requested_user_id == user_id
+            events.append("provider_cleanup_lock")
+            return []
+
+    class Provisionings:
+        async def get_by_user_id_for_update(self, requested_user_id):
+            assert requested_user_id == user_id
+            events.append("provisioning_lock")
+            return None
+
     class Subscriptions:
         async def get_by_user_id_for_update(self, requested_user_id):
             assert requested_user_id == user_id
@@ -199,6 +211,8 @@ async def test_local_billing_preserves_global_grant_lock_order() -> None:
     service.usage_accounting_service = Usage()
     service.user_repository = Users()
     service.account_deactivation_repository = Operations()
+    service.provider_cleanup_repository = ProviderCleanups()
+    service.phone_number_provisioning_repository = Provisionings()
     service.phone_number_repository = PhoneNumbers()
     service.subscription_repository = Subscriptions()
 
@@ -210,6 +224,8 @@ async def test_local_billing_preserves_global_grant_lock_order() -> None:
         "grant_advisory_lock",
         "user_lock",
         "operation_lock",
+        "provider_cleanup_lock",
+        "provisioning_lock",
         "subscription_lock",
         "phone_lock",
         "subscription_upsert",

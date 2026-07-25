@@ -20,6 +20,7 @@ from app.repositories.phone_number_provisioning_repository import (
     ProvisioningStateConflictError,
 )
 from app.repositories.phone_number_repository import PhoneNumberRepository
+from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
@@ -29,6 +30,7 @@ from app.services.account_access_policy import require_active_account
 from app.services.business_profile_service import REQUIRED_PROFILE_FIELDS
 from app.services.customer_readiness_policy import CustomerReadinessPolicy
 from app.services.outbox_service import OutboxService
+from app.services.provider_work_policy import unresolved_provider_work_blocker
 
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,7 @@ class ActivationProvisioningService:
         outbox_service=None,
         activation_event_repository=None,
         snapshot_service=None,
+        provider_cleanup_repository=None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self.session = session
@@ -80,6 +83,9 @@ class ActivationProvisioningService:
             activation_event_repository or ActivationEventRepository(session)
         )
         self.snapshot_service = snapshot_service or ActivationSnapshotService(session)
+        self.provider_cleanup_repository = (
+            provider_cleanup_repository or ProviderCleanupRepository(session)
+        )
         self.now = now or (lambda: datetime.now(UTC))
 
     async def confirm(
@@ -95,6 +101,20 @@ class ActivationProvisioningService:
             require_active_account(user)
             activation = await self.activation_repository.get_by_user_id_for_update(
                 user_id
+            )
+            operation_key = (
+                activation.provisioning_idempotency_key
+                if activation is not None
+                and activation.provisioning_idempotency_key is not None
+                else (
+                    f"activation:provision:{activation.id}:g{user.lifecycle_generation}"
+                    if activation is not None
+                    else None
+                )
+            )
+            await self._require_resolved_provider_work(
+                user_id=user_id,
+                allowed_provisioning_operation_key=operation_key,
             )
             profile = await self.business_profile_repository.get_by_user_id_for_update(
                 user_id
@@ -117,9 +137,7 @@ class ActivationProvisioningService:
             )
 
             assert activation is not None
-            operation_key = activation.provisioning_idempotency_key or (
-                f"activation:provision:{activation.id}:g{user.lifecycle_generation}"
-            )
+            assert operation_key is not None
             already_consented = activation.provisioning_consented_at is not None
             provisioning = await self.provisioning_repository.queue_initial(
                 user_id=user_id,
@@ -185,6 +203,14 @@ class ActivationProvisioningService:
             require_active_account(user)
             activation = await self.activation_repository.get_by_user_id_for_update(
                 user_id
+            )
+            await self._require_resolved_provider_work(
+                user_id=user_id,
+                allowed_provisioning_operation_key=(
+                    activation.provisioning_idempotency_key
+                    if activation is not None
+                    else None
+                ),
             )
             profile = await self.business_profile_repository.get_by_user_id_for_update(
                 user_id
@@ -272,6 +298,29 @@ class ActivationProvisioningService:
             for field in REQUIRED_PROFILE_FIELDS
         ):
             raise ActivationProvisioningBlockedError("profile_incomplete")
+
+    async def _require_resolved_provider_work(
+        self,
+        *,
+        user_id: UUID,
+        allowed_provisioning_operation_key: str | None,
+    ) -> None:
+        cleanup_operations = await self.provider_cleanup_repository.list_incomplete_by_user_id_for_update(
+            user_id
+        )
+        provisioning = await self.provisioning_repository.get_by_user_id_for_update(
+            user_id
+        )
+        blocker = unresolved_provider_work_blocker(
+            cleanup_operations=cleanup_operations,
+            provisioning=provisioning,
+            allowed_provisioning_operation_key=allowed_provisioning_operation_key,
+            allow_matching_provisioning=(
+                allowed_provisioning_operation_key is not None
+            ),
+        )
+        if blocker is not None:
+            raise ActivationProvisioningBlockedError(blocker)
 
     @staticmethod
     def _require_eligible_access(

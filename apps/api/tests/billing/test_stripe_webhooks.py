@@ -11,6 +11,7 @@ from app.models.account_deactivation_operation import AccountDeactivationOperati
 from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.subscription import Subscription
 from app.models.user import User
@@ -729,6 +730,95 @@ async def test_matching_generation_replacement_reactivates_without_enabling_serv
     assert phones == []
     assert outbox_events == []
     assert ledgers == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("unresolved_work", ["provider_cleanup", "provisioning"])
+async def test_matching_replacement_waits_for_all_prior_provider_work(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+    unresolved_work: str,
+) -> None:
+    user_id = await _seed_completed_generation_one_deactivation(
+        client_database_url,
+        email=f"blocked-reactivation-{unresolved_work}@example.com",
+    )
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        if unresolved_work == "provider_cleanup":
+            session.add(
+                ProviderCleanupOperation(
+                    user_id=user_id,
+                    lifecycle_generation=1,
+                    resource_type="stripe_subscription",
+                    provider_resource_id="sub_prior_stale_cleanup",
+                    status="pending",
+                )
+            )
+        else:
+            session.add(
+                PhoneNumberProvisioning(
+                    user_id=user_id,
+                    target_country_code="FR",
+                    status="running",
+                    attempt_count=1,
+                    can_retry=False,
+                    provider_operation_key="activation:provision:prior-generation",
+                )
+            )
+        await session.commit()
+    await engine.dispose()
+
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(
+        id=f"evt_blocked_generation_2_{unresolved_work}",
+        created=1710000300,
+    )
+    payload["data"]["object"].update(
+        id=f"sub_blocked_generation_2_{unresolved_work}",
+        created=1710000200,
+        status="active",
+    )
+    payload["data"]["object"]["metadata"].update(
+        user_id=str(user_id),
+        lifecycle_generation="2",
+    )
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = await session.get(User, user_id)
+        subscription = await session.scalar(
+            select(Subscription).where(Subscription.user_id == user_id)
+        )
+        adopted_cleanup = await session.scalar(
+            select(ProviderCleanupOperation).where(
+                ProviderCleanupOperation.provider_resource_id
+                == payload["data"]["object"]["id"]
+            )
+        )
+        cleanup_event = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.aggregate_id == adopted_cleanup.id)
+        )
+    await engine.dispose()
+
+    assert user is not None
+    assert user.status == "inactive"
+    assert subscription is not None
+    assert subscription.stripe_subscription_id == "sub_generation_1"
+    assert adopted_cleanup is not None
+    assert cleanup_event is not None
+    assert cleanup_event.topic == "provider.cleanup"
 
 
 @pytest.mark.anyio

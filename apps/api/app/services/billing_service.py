@@ -11,6 +11,9 @@ from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
 )
 from app.repositories.phone_number_repository import PhoneNumberRepository
+from app.repositories.phone_number_provisioning_repository import (
+    PhoneNumberProvisioningRepository,
+)
 from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.repositories.subscription_repository import (
     StripeSubscriptionConflictError,
@@ -21,6 +24,7 @@ from app.repositories.user_repository import UserRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
 from app.services.account_lifecycle_service import AccountLifecycleService
 from app.services.outbox_service import OutboxService
+from app.services.provider_work_policy import unresolved_provider_work_blocker
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
 from app.services.usage_accounting_service import UsageAccountingService
 
@@ -73,6 +77,9 @@ class BillingService:
         self.account_deactivation_repository = AccountDeactivationRepository(session)
         self.subscription_repository = SubscriptionRepository(session)
         self.phone_number_repository = PhoneNumberRepository(session)
+        self.phone_number_provisioning_repository = PhoneNumberProvisioningRepository(
+            session
+        )
         self.provider_cleanup_repository = ProviderCleanupRepository(session)
         self.usage_accounting_service = UsageAccountingService(session)
         self.webhook_event_repository = WebhookEventRepository(session)
@@ -174,6 +181,14 @@ class BillingService:
         )
         incomplete_operation = await self.account_deactivation_repository.get_incomplete_by_user_id_for_update(
             user_id
+        )
+        cleanup_operations = await self.provider_cleanup_repository.list_incomplete_by_user_id_for_update(
+            user_id
+        )
+        provisioning = (
+            await self.phone_number_provisioning_repository.get_by_user_id_for_update(
+                user_id
+            )
         )
 
         plan_tier = self._extract_subscription_plan_tier(event_object)
@@ -314,7 +329,13 @@ class BillingService:
             if not is_replacement and not is_authorized_progression:
                 return
             safe_reactivation_boundary = bool(
-                incomplete_operation is None and phone_number is None
+                incomplete_operation is None
+                and phone_number is None
+                and unresolved_provider_work_blocker(
+                    cleanup_operations=cleanup_operations,
+                    provisioning=provisioning,
+                )
+                is None
             )
             if is_replacement:
                 safe_reactivation_boundary = (
@@ -416,9 +437,7 @@ class BillingService:
     ) -> None:
         if (
             not metadata_is_valid
-            or SubscriptionAccessPolicy.can_replace_subscription(
-                subscription_status
-            )
+            or SubscriptionAccessPolicy.can_replace_subscription(subscription_status)
             or (
                 current_subscription is not None
                 and current_subscription.stripe_subscription_id
