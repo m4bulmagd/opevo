@@ -28,7 +28,12 @@ class FakeCheckoutSessionAPI:
     def create(self, **kwargs):
         self.calls.append(kwargs)
         return type(
-            "CheckoutSession", (), {"url": "https://checkout.stripe.test/session"}
+            "CheckoutSession",
+            (),
+            {
+                "id": "cs_checkout_123",
+                "url": "https://checkout.stripe.test/session",
+            },
         )()
 
 
@@ -129,6 +134,35 @@ async def test_create_checkout_session_uses_price_mapping() -> None:
         == expected_metadata
     )
     assert telemetry.calls == [("stripe", "create_checkout_session", "success")]
+
+
+@pytest.mark.anyio
+async def test_reactivation_checkout_reuses_customer_and_durable_idempotency() -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    client = FakeStripeClient()
+    service = BillingSessionService(
+        stripe_client=client,
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+    )
+
+    result = await service.create_checkout_session(
+        user_id="user_123",
+        customer_email="billing@example.com",
+        customer_id="cus_retained",
+        clerk_user_id="clerk_123",
+        plan_tier="starter",
+        lifecycle_generation=7,
+        idempotency_key="checkout:user_123:g7",
+    )
+
+    assert result.provider_session_id == "cs_checkout_123"
+    call = client.checkout.Session.calls[0]
+    assert call["customer"] == "cus_retained"
+    assert "customer_email" not in call
+    assert call["idempotency_key"] == "checkout:user_123:g7"
 
 
 @pytest.mark.anyio

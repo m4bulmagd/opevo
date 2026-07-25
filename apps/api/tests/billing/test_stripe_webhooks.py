@@ -11,6 +11,7 @@ from app.models.account_deactivation_operation import AccountDeactivationOperati
 from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.usage_ledger import UsageLedger
@@ -1105,6 +1106,7 @@ async def test_missing_or_old_generation_replacement_cannot_reactivate(
         subscription = await session.scalar(select(Subscription))
         user = await session.scalar(select(User))
         outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+        cleanup = await session.scalar(select(ProviderCleanupOperation))
         ledgers = list((await session.execute(select(UsageLedger))).scalars())
     await engine.dispose()
 
@@ -1113,7 +1115,17 @@ async def test_missing_or_old_generation_replacement_cannot_reactivate(
     assert subscription.lifecycle_generation == 1
     assert subscription.status == "canceled"
     assert user is not None and user.status == "inactive"
-    assert outbox_events == []
+    assert cleanup is not None
+    assert cleanup.user_id == user.id
+    assert cleanup.provider_resource_id == (
+        f"sub_stale_replacement_{metadata_generation}"
+    )
+    assert cleanup.resource_type == "stripe_subscription"
+    assert len(outbox_events) == 1
+    assert outbox_events[0].topic == "provider.cleanup"
+    assert outbox_events[0].payload == {
+        "cleanup_operation_id": str(cleanup.id),
+    }
     assert ledgers == []
 
 
@@ -2356,6 +2368,7 @@ async def test_deactivating_account_rejects_new_and_old_subscription_events(
         subscription = await session.scalar(select(Subscription))
         user = await session.scalar(select(User))
         operation = await session.scalar(select(AccountDeactivationOperation))
+        cleanup = await session.scalar(select(ProviderCleanupOperation))
         outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
     await engine.dispose()
 
@@ -2368,9 +2381,90 @@ async def test_deactivating_account_rejects_new_and_old_subscription_events(
     ) == datetime.fromtimestamp(10, UTC)
     assert user is not None and user.status == "deactivating"
     assert operation is not None and operation.trigger == "subscription_ended"
+    assert cleanup is not None
+    assert cleanup.provider_resource_id == "sub_new"
+    assert cleanup.resource_type == "stripe_subscription"
+    events_by_topic = {event.topic: event for event in outbox_events}
+    assert set(events_by_topic) == {"account.deactivate", "provider.cleanup"}
+    assert events_by_topic["account.deactivate"].payload == {
+        "operation_id": str(operation.id)
+    }
+    assert events_by_topic["provider.cleanup"].payload == {
+        "cleanup_operation_id": str(cleanup.id)
+    }
+
+
+@pytest.mark.anyio
+async def test_conflicting_active_subscription_is_adopted_for_cleanup(
+    async_client,
+    client_database_url,
+    signed_stripe_headers_factory,
+    stripe_subscription_created_payload,
+) -> None:
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = User(
+            clerk_user_id="user_123",
+            email="conflicting-subscription@example.com",
+        )
+        session.add(user)
+        await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                stripe_customer_id="cus_retained",
+                stripe_subscription_id="sub_current",
+                plan_tier="starter",
+                status="active",
+                allocated_minutes=60,
+                lifecycle_generation=1,
+                stripe_subscription_created_at=datetime.fromtimestamp(10, UTC),
+                last_stripe_event_created_at=datetime.fromtimestamp(20, UTC),
+            )
+        )
+        await session.commit()
+        user_id = user.id
+    await engine.dispose()
+
+    payload = deepcopy(stripe_subscription_created_payload)
+    payload.update(id="evt_conflicting_active", created=30)
+    payload["data"]["object"].update(
+        id="sub_conflicting_active",
+        created=25,
+        status="active",
+    )
+    payload["data"]["object"]["metadata"].update(
+        user_id=str(user_id),
+        lifecycle_generation="1",
+    )
+
+    response = await _post_stripe_event(
+        async_client,
+        signed_stripe_headers_factory,
+        payload,
+    )
+
+    assert response.status_code == 202
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        subscription = await session.scalar(select(Subscription))
+        cleanup = await session.scalar(select(ProviderCleanupOperation))
+        outbox_events = list((await session.execute(select(OutboxEvent))).scalars())
+    await engine.dispose()
+
+    assert subscription is not None
+    assert subscription.stripe_subscription_id == "sub_current"
+    assert subscription.status == "active"
+    assert cleanup is not None
+    assert cleanup.provider_resource_id == "sub_conflicting_active"
+    assert cleanup.resource_type == "stripe_subscription"
     assert len(outbox_events) == 1
-    assert outbox_events[0].topic == "account.deactivate"
-    assert outbox_events[0].payload == {"operation_id": str(operation.id)}
+    assert outbox_events[0].topic == "provider.cleanup"
+    assert outbox_events[0].payload == {
+        "cleanup_operation_id": str(cleanup.id),
+    }
 
 
 @pytest.mark.anyio

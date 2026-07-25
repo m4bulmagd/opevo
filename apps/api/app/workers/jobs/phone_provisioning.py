@@ -16,11 +16,18 @@ from app.providers.telephony.base import (
 )
 from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
 )
 from app.repositories.user_repository import UserRepository
-from app.services.account_access_policy import require_current_account_lifecycle
+from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
+from app.services.account_access_policy import (
+    AccountLifecycleGenerationMismatchError,
+    AccountStateBlockedError,
+    require_current_account_lifecycle,
+)
+from app.services.outbox_service import OutboxService
 from app.services.telephony_service import TelephonyService
 
 
@@ -63,6 +70,7 @@ async def _run_provider_attempt(
     provider_operation_key: str | None,
     telephony_service: TelephonyService,
     provisioning_repo: PhoneNumberProvisioningRepository,
+    lifecycle_generation: int | None = None,
 ) -> None:
     review_failure: tuple[str, dict[str, Any], str] | None = None
     provider_failure: tuple[str, bool] | None = None
@@ -71,10 +79,16 @@ async def _run_provider_attempt(
         service_kwargs = {"country_code": country_code}
         if provider_operation_key is not None:
             service_kwargs["operation_key"] = provider_operation_key
-        phone_number = await telephony_service.provision_number(
-            user_id,
-            **service_kwargs,
-        )
+        acquire_number = getattr(telephony_service, "acquire_number", None)
+        if acquire_number is None:
+            phone_number = await telephony_service.provision_number(
+                user_id,
+                **service_kwargs,
+            )
+            acquired = None
+        else:
+            acquired = await acquire_number(**service_kwargs)
+            phone_number = None
     except TelephonyProvisioningPending as exc:
         pending_reason = exc.reason
         try:
@@ -107,6 +121,74 @@ async def _run_provider_attempt(
     except Exception as exc:
         unexpected_error_type = _safe_error_type(exc)
     else:
+        if acquired is not None:
+            current_user = await UserRepository(session).get_by_id_for_update(user_id)
+            if current_user is None:
+                await session.rollback()
+                raise RuntimeError("phone_provisioning_owner_missing")
+            try:
+                require_current_account_lifecycle(
+                    current_user,
+                    lifecycle_generation=(
+                        lifecycle_generation
+                        if lifecycle_generation is not None
+                        else current_user.lifecycle_generation
+                    ),
+                )
+            except (
+                AccountStateBlockedError,
+                AccountLifecycleGenerationMismatchError,
+            ) as lifecycle_error:
+                cleanup = await ProviderCleanupRepository(session).adopt(
+                    user_id=user_id,
+                    lifecycle_generation=(
+                        lifecycle_generation
+                        if lifecycle_generation is not None
+                        else current_user.lifecycle_generation
+                    ),
+                    resource_type="phone_number",
+                    provider_resource_id=acquired.provider_number_id,
+                )
+                await OutboxService(session).add(
+                    topic="provider.cleanup",
+                    aggregate_type="provider-cleanup-operation",
+                    aggregate_id=cleanup.id,
+                    idempotency_key=f"provider.cleanup:{cleanup.id}",
+                    payload={"cleanup_operation_id": str(cleanup.id)},
+                )
+                await session.commit()
+                raise lifecycle_error
+            phone_repo = PhoneNumberRepository(session)
+            phone_number = await phone_repo.get_by_user_id_for_update(user_id)
+            if phone_number is None:
+                phone_number = await phone_repo.create(
+                    user_id=user_id,
+                    e164=acquired.e164,
+                    country_code=country_code,
+                    provider_number_id=acquired.provider_number_id,
+                    provider_connection_name=acquired.provider_connection_name,
+                    is_active=acquired.provider_connection_name == "app-active",
+                )
+            elif phone_number.provider_number_id != acquired.provider_number_id:
+                cleanup = await ProviderCleanupRepository(session).adopt(
+                    user_id=user_id,
+                    lifecycle_generation=current_user.lifecycle_generation,
+                    resource_type="phone_number",
+                    provider_resource_id=acquired.provider_number_id,
+                )
+                await OutboxService(session).add(
+                    topic="provider.cleanup",
+                    aggregate_type="provider-cleanup-operation",
+                    aggregate_id=cleanup.id,
+                    idempotency_key=f"provider.cleanup:{cleanup.id}",
+                    payload={"cleanup_operation_id": str(cleanup.id)},
+                )
+                await session.commit()
+                raise TelephonyProviderError(
+                    "provider_terminal",
+                    error_class="conflict",
+                )
+        assert phone_number is not None
         await provisioning_repo.mark_succeeded(
             user_id=user_id,
             phone_number_id=phone_number.id,
@@ -220,11 +302,6 @@ async def phone_provisioning_job(
         if not user:
             logger.error(f"phone_provisioning_job: user {user_id} not found")
             return
-        require_current_account_lifecycle(
-            user,
-            lifecycle_generation=lifecycle_generation,
-        )
-
         country_code = (user.country_code or "FR").upper()
         if country_code != "FR":
             await provisioning_repo.mark_failed(
@@ -246,6 +323,49 @@ async def phone_provisioning_job(
         if provider is None:
             provider = create_telephony_provider(get_settings())
         telephony_service = TelephonyService(session, provider=provider)
+        try:
+            require_current_account_lifecycle(
+                user,
+                lifecycle_generation=lifecycle_generation,
+            )
+        except (
+            AccountStateBlockedError,
+            AccountLifecycleGenerationMismatchError,
+        ) as lifecycle_error:
+            prior_attempt = await provisioning_repo.get_by_user_id(user_id)
+            if (
+                prior_attempt is None
+                or prior_attempt.status != "running"
+                or prior_attempt.provider_operation_key != provider_operation_key
+                or provider_operation_key is None
+            ):
+                await session.rollback()
+                raise
+            recovered = await telephony_service.recover_acquired_number(
+                country_code=country_code,
+                operation_key=provider_operation_key,
+            )
+            if recovered is None:
+                raise lifecycle_error
+            current_user = await user_repo.get_by_id_for_update(user_id)
+            if current_user is None:
+                await session.rollback()
+                raise RuntimeError("phone_provisioning_owner_missing")
+            cleanup = await ProviderCleanupRepository(session).adopt(
+                user_id=user_id,
+                lifecycle_generation=lifecycle_generation,
+                resource_type="phone_number",
+                provider_resource_id=recovered.provider_number_id,
+            )
+            await OutboxService(session).add(
+                topic="provider.cleanup",
+                aggregate_type="provider-cleanup-operation",
+                aggregate_id=cleanup.id,
+                idempotency_key=f"provider.cleanup:{cleanup.id}",
+                payload={"cleanup_operation_id": str(cleanup.id)},
+            )
+            await session.commit()
+            raise lifecycle_error
         provisioning = await provisioning_repo.mark_running(
             user_id=user_id,
             target_country_code=country_code,
@@ -285,6 +405,17 @@ async def phone_provisioning_job(
                 current_user,
                 lifecycle_generation=lifecycle_generation,
             )
+            existing_number = await PhoneNumberRepository(
+                session
+            ).get_by_user_id_for_update(user_id)
+            if existing_number is not None:
+                await provisioning_repo.mark_succeeded(
+                    user_id=user_id,
+                    phone_number_id=existing_number.id,
+                    target_country_code=country_code,
+                )
+                await session.commit()
+                return
             await session.rollback()
             await _run_provider_attempt(
                 session=session,
@@ -293,4 +424,5 @@ async def phone_provisioning_job(
                 provider_operation_key=provider_operation_key,
                 telephony_service=telephony_service,
                 provisioning_repo=provisioning_repo,
+                lifecycle_generation=lifecycle_generation,
             )

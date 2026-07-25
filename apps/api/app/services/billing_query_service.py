@@ -8,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
 )
+from app.repositories.billing_checkout_attempt_repository import (
+    BillingCheckoutAttemptRepository,
+)
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
@@ -25,6 +28,16 @@ from app.services.subscription_access_policy import SubscriptionAccessPolicy
 class CheckoutEligibility:
     allowed: bool
     lifecycle_generation: int
+
+
+@dataclass(frozen=True)
+class CheckoutAttemptPreparation:
+    allowed: bool
+    lifecycle_generation: int
+    attempt_id: UUID | None
+    idempotency_key: str | None
+    existing_session_id: str | None
+    stripe_customer_id: str | None
 
 
 class BillingQueryService:
@@ -59,6 +72,9 @@ class BillingQueryService:
         )
         self.phone_number_repository = phone_number_repository or (
             PhoneNumberRepository(session) if session is not None else None
+        )
+        self.checkout_attempt_repository = (
+            BillingCheckoutAttemptRepository(session) if session is not None else None
         )
 
     async def end_business_transaction(self) -> None:
@@ -137,6 +153,63 @@ class BillingQueryService:
             ),
             lifecycle_generation=user.lifecycle_generation,
         )
+
+    async def prepare_checkout_attempt(
+        self,
+        user_id: UUID,
+    ) -> CheckoutAttemptPreparation:
+        if self.session is None or self.checkout_attempt_repository is None:
+            raise ValueError("session-backed repositories are required for checkout")
+        eligibility = await self.get_checkout_eligibility(user_id)
+        subscription = await self.subscription_repository.get_by_user_id_for_update(
+            user_id
+        )
+        if not eligibility.allowed:
+            await self.session.rollback()
+            return CheckoutAttemptPreparation(
+                allowed=False,
+                lifecycle_generation=eligibility.lifecycle_generation,
+                attempt_id=None,
+                idempotency_key=None,
+                existing_session_id=None,
+                stripe_customer_id=None,
+            )
+        attempt = await self.checkout_attempt_repository.get_or_create(
+            user_id=user_id,
+            lifecycle_generation=eligibility.lifecycle_generation,
+        )
+        preparation = CheckoutAttemptPreparation(
+            allowed=True,
+            lifecycle_generation=eligibility.lifecycle_generation,
+            attempt_id=attempt.id,
+            idempotency_key=attempt.idempotency_key,
+            existing_session_id=attempt.stripe_checkout_session_id,
+            stripe_customer_id=(
+                subscription.stripe_customer_id
+                if subscription is not None
+                else None
+            ),
+        )
+        await self.session.commit()
+        return preparation
+
+    async def complete_checkout_attempt(
+        self,
+        *,
+        attempt_id: UUID,
+        stripe_checkout_session_id: str,
+    ) -> None:
+        if self.session is None or self.checkout_attempt_repository is None:
+            raise ValueError("session-backed repositories are required for checkout")
+        try:
+            await self.checkout_attempt_repository.complete(
+                attempt_id=attempt_id,
+                stripe_checkout_session_id=stripe_checkout_session_id,
+            )
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
 
     async def get_usage_snapshot(self, user_id: UUID | str) -> UsageSnapshotResponse:
         subscription = await self.subscription_repository.get_by_user_id(user_id)

@@ -18,6 +18,7 @@ SUPPORTED_OUTBOX_TOPICS = frozenset(
         "summary.generate",
         "recording.reconcile",
         "account.deactivate",
+        "provider.cleanup",
     }
 )
 
@@ -32,6 +33,7 @@ REFERENCE_PAYLOAD_FIELDS = {
     "summary.generate": frozenset({"call_id"}),
     "recording.reconcile": frozenset({"operation_id"}),
     "account.deactivate": frozenset({"operation_id"}),
+    "provider.cleanup": frozenset({"cleanup_operation_id"}),
 }
 
 

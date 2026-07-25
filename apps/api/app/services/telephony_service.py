@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -6,6 +8,13 @@ from app.providers.telephony.base import TelephonyProvider, TelephonyProviderErr
 from app.providers.telephony.factory import create_telephony_provider
 from app.providers.telephony.telnyx import normalize_french_number
 from app.repositories.phone_number_repository import PhoneNumberRepository
+
+
+@dataclass(frozen=True)
+class AcquiredPhoneNumber:
+    e164: str
+    provider_number_id: str
+    provider_connection_name: str
 
 
 class TelephonyService:
@@ -29,10 +38,32 @@ class TelephonyService:
         if existing_number is not None:
             return existing_number
 
-        # Repository reads autobegin a transaction. End it before any provider
-        # await so no business transaction spans external I/O.
-        await self.session.rollback()
+        acquired = await self.acquire_number(
+            country_code=country_code,
+            operation_key=operation_key,
+        )
+        existing_number = await self.phone_number_repository.get_by_user_id(user_id)
+        if existing_number is not None:
+            return existing_number
+        phone_number = await self.phone_number_repository.create(
+            user_id=user_id,
+            e164=acquired.e164,
+            country_code=country_code,
+            provider_number_id=acquired.provider_number_id,
+            provider_connection_name=acquired.provider_connection_name,
+            is_active=acquired.provider_connection_name == "app-active",
+        )
+        await self.session.flush()
+        return phone_number
 
+    async def acquire_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str | None = None,
+    ) -> AcquiredPhoneNumber:
+        if self.session.in_transaction():
+            await self.session.rollback()
         provider_kwargs = {"country_code": country_code}
         if operation_key is not None:
             provider_kwargs["operation_key"] = operation_key
@@ -40,19 +71,34 @@ class TelephonyService:
         e164, provider_number_id, provider_connection_name = (
             self._validate_provisioned_result(provisioned)
         )
-        existing_number = await self.phone_number_repository.get_by_user_id(user_id)
-        if existing_number is not None:
-            return existing_number
-        phone_number = await self.phone_number_repository.create(
-            user_id=user_id,
+        return AcquiredPhoneNumber(
             e164=e164,
-            country_code=country_code,
             provider_number_id=provider_number_id,
             provider_connection_name=provider_connection_name,
-            is_active=provider_connection_name == "app-active",
         )
-        await self.session.flush()
-        return phone_number
+
+    async def recover_acquired_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str,
+    ) -> AcquiredPhoneNumber | None:
+        if self.session.in_transaction():
+            await self.session.rollback()
+        recovered = await self.provider.recover_provisioned_number(
+            country_code=country_code,
+            operation_key=operation_key,
+        )
+        if recovered is None:
+            return None
+        e164, provider_number_id, provider_connection_name = (
+            self._validate_provisioned_result(recovered)
+        )
+        return AcquiredPhoneNumber(
+            e164=e164,
+            provider_number_id=provider_number_id,
+            provider_connection_name=provider_connection_name,
+        )
 
     @staticmethod
     def _validate_provisioned_result(provisioned) -> tuple[str, str, str]:

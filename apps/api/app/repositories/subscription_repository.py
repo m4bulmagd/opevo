@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models.subscription import Subscription
+from app.models.subscription_cycle_history import SubscriptionCycleHistory
 from app.models.user import User
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
 
@@ -147,6 +148,8 @@ class SubscriptionRepository:
         if subscription is None:
             subscription = Subscription(user_id=user_id)
             self.session.add(subscription)
+        elif not is_same_subscription:
+            await self._preserve_cycle_history(subscription)
 
         resolved_customer_id: str | None
         resolved_plan_tier: str | None
@@ -193,6 +196,53 @@ class SubscriptionRepository:
 
         await self.session.flush()
         return subscription
+
+    async def _preserve_cycle_history(self, subscription: Subscription) -> None:
+        if (
+            subscription.stripe_customer_id is None
+            or subscription.stripe_subscription_id is None
+        ):
+            raise StripeSubscriptionDataError(
+                "Prior subscription cycle is missing provider identity"
+            )
+        existing = await self.session.scalar(
+            select(SubscriptionCycleHistory).where(
+                SubscriptionCycleHistory.user_id == subscription.user_id,
+                SubscriptionCycleHistory.lifecycle_generation
+                == subscription.lifecycle_generation,
+            )
+        )
+        if existing is not None:
+            if (
+                existing.stripe_subscription_id
+                != subscription.stripe_subscription_id
+            ):
+                raise StripeSubscriptionConflictError(
+                    "Prior subscription cycle history conflicts"
+                )
+            return
+        self.session.add(
+            SubscriptionCycleHistory(
+                user_id=subscription.user_id,
+                lifecycle_generation=subscription.lifecycle_generation,
+                stripe_customer_id=subscription.stripe_customer_id,
+                stripe_subscription_id=subscription.stripe_subscription_id,
+                plan_tier=subscription.plan_tier,
+                status=subscription.status,
+                allocated_minutes=subscription.allocated_minutes,
+                current_period_start=subscription.current_period_start,
+                current_period_end=subscription.current_period_end,
+                stripe_subscription_created_at=(
+                    subscription.stripe_subscription_created_at
+                ),
+                last_stripe_event_created_at=(
+                    subscription.last_stripe_event_created_at
+                ),
+                cancel_at_period_end=subscription.cancel_at_period_end,
+                cancellation_effective_at=subscription.cancellation_effective_at,
+            )
+        )
+        await self.session.flush()
 
     async def resolve_invoice_target_for_update(
         self,

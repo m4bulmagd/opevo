@@ -64,6 +64,7 @@ from app.services.summary_service import SummaryService
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
 from app.workers.jobs.account_deactivation import deliver_account_deactivation
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
+from app.workers.jobs.provider_cleanup import deliver_provider_cleanup
 
 
 @dataclass(frozen=True)
@@ -1458,6 +1459,7 @@ def _validated_post_call_reference(
 
 DEFAULT_OUTBOX_HANDLERS = {
     "account.deactivate": deliver_account_deactivation,
+    "provider.cleanup": deliver_provider_cleanup,
     "phone.provision": deliver_phone_provision,
     "phone.enable": deliver_phone_routing,
     "phone.disable": deliver_phone_routing,

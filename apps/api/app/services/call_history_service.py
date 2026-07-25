@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.call import Call
 from app.repositories.call_repository import CallRepository
 from app.repositories.message_repository import MessageRepository
+from app.repositories.user_repository import UserRepository
 from app.schemas.call_summary_projection import CallSummaryProjection
 from app.schemas.calls import (
     CallDetailResponse,
@@ -13,6 +14,7 @@ from app.schemas.calls import (
 )
 from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.services.recording_service import RecordingService
+from app.services.account_access_policy import require_active_account
 
 
 class CallHistoryNotFoundError(Exception):
@@ -37,6 +39,7 @@ class CallHistoryService:
         self.session = session
         self.call_repository = CallRepository(session)
         self.message_repository = MessageRepository(session)
+        self.user_repository = UserRepository(session)
         self.recording_service = recording_service
         self.recording_lifecycle_service = (
             recording_lifecycle_service or RecordingLifecycleService(session)
@@ -127,6 +130,10 @@ class CallHistoryService:
 
     async def delete_call(self, user_id: UUID, call_id: UUID) -> None:
         try:
+            user = await self.user_repository.get_by_id_for_update(user_id)
+            if user is None:
+                raise CallHistoryNotFoundError
+            require_active_account(user)
             call = (
                 await self.call_repository.get_by_id_for_user_including_deleted_for_update(
                     call_id,

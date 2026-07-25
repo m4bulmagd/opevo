@@ -40,6 +40,7 @@ class BillingPortalReturnUrlError(BillingSessionStateError):
 @dataclass(frozen=True)
 class HostedSession:
     url: str
+    provider_session_id: str | None = None
 
 
 class BillingSessionService:
@@ -83,6 +84,9 @@ class BillingSessionService:
         clerk_user_id: str,
         plan_tier: str,
         lifecycle_generation: int,
+        customer_id: str | None = None,
+        idempotency_key: str | None = None,
+        existing_session_id: str | None = None,
     ) -> HostedSession:
         price_id = self._resolve_price_id(plan_tier)
         metadata = {
@@ -93,20 +97,39 @@ class BillingSessionService:
         }
         stripe = await asyncio.to_thread(self._get_client)
         try:
-            session = await asyncio.to_thread(
-                stripe.checkout.Session.create,
-                mode="subscription",
-                customer_email=customer_email,
-                success_url=self._require_config(
-                    self.checkout_success_url, "Stripe checkout success URL is required"
-                ),
-                cancel_url=self._require_config(
-                    self.checkout_cancel_url, "Stripe checkout cancel URL is required"
-                ),
-                line_items=[{"price": price_id, "quantity": 1}],
-                metadata=metadata,
-                subscription_data={"metadata": metadata.copy()},
-            )
+            if existing_session_id is not None:
+                session = await asyncio.to_thread(
+                    stripe.checkout.Session.retrieve,
+                    existing_session_id,
+                )
+            else:
+                customer_argument = (
+                    {"customer": customer_id}
+                    if customer_id
+                    else {"customer_email": customer_email}
+                )
+                idempotency_argument = (
+                    {"idempotency_key": idempotency_key}
+                    if idempotency_key
+                    else {}
+                )
+                session = await asyncio.to_thread(
+                    stripe.checkout.Session.create,
+                    mode="subscription",
+                    success_url=self._require_config(
+                        self.checkout_success_url,
+                        "Stripe checkout success URL is required",
+                    ),
+                    cancel_url=self._require_config(
+                        self.checkout_cancel_url,
+                        "Stripe checkout cancel URL is required",
+                    ),
+                    line_items=[{"price": price_id, "quantity": 1}],
+                    metadata=metadata,
+                    subscription_data={"metadata": metadata.copy()},
+                    **customer_argument,
+                    **idempotency_argument,
+                )
         except Exception as exc:
             category, error_class = self._stripe_error_details(exc)
             raise BillingSessionProviderError(
@@ -114,7 +137,16 @@ class BillingSessionService:
                 error_class=error_class,
             ) from None
 
-        return HostedSession(url=session.url)
+        provider_session_id = getattr(session, "id", None)
+        if not isinstance(provider_session_id, str) or not provider_session_id:
+            raise BillingSessionProviderError(
+                "provider_terminal",
+                error_class="validation",
+            )
+        return HostedSession(
+            url=session.url,
+            provider_session_id=provider_session_id,
+        )
 
     @instrument_provider("stripe", "create_portal_session")
     async def create_portal_session(

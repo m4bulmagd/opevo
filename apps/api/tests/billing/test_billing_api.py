@@ -44,6 +44,8 @@ class FakeBillingQueryService:
         self.lifecycle_generation = lifecycle_generation
         self.has_incomplete_deactivation = has_incomplete_deactivation
         self.has_phone = has_phone
+        self.checkout_attempt_id = UUID("00000000-0000-0000-0000-000000000099")
+        self.checkout_session_id: str | None = None
 
     async def end_business_transaction(self) -> None:
         self.business_transaction_active = False
@@ -66,6 +68,43 @@ class FakeBillingQueryService:
             ),
             lifecycle_generation=self.lifecycle_generation,
         )
+
+    async def prepare_checkout_attempt(self, user_id):
+        from app.services.billing_query_service import CheckoutAttemptPreparation
+
+        eligibility = await self.get_checkout_eligibility(user_id)
+        subscription = await self.get_subscription(user_id)
+        self.business_transaction_active = False
+        return CheckoutAttemptPreparation(
+            allowed=eligibility.allowed,
+            lifecycle_generation=eligibility.lifecycle_generation,
+            attempt_id=self.checkout_attempt_id if eligibility.allowed else None,
+            idempotency_key=(
+                f"billing.checkout:{user_id}:g{eligibility.lifecycle_generation}"
+                if eligibility.allowed
+                else None
+            ),
+            existing_session_id=self.checkout_session_id,
+            stripe_customer_id=(
+                subscription.stripe_customer_id
+                if subscription is not None
+                else None
+            ),
+        )
+
+    async def complete_checkout_attempt(
+        self,
+        *,
+        attempt_id,
+        stripe_checkout_session_id,
+    ) -> None:
+        assert attempt_id == self.checkout_attempt_id
+        if (
+            self.checkout_session_id is not None
+            and self.checkout_session_id != stripe_checkout_session_id
+        ):
+            raise ValueError("Stripe checkout session identity conflict")
+        self.checkout_session_id = stripe_checkout_session_id
 
     async def get_usage_snapshot(self, user_id):
         return UsageSnapshotResponse(
@@ -169,6 +208,7 @@ class FakeBillingSessionService:
         self.portal_url = portal_url
         self.query_service = query_service
         self.checkout_generations: list[int] = []
+        self.checkout_calls: list[dict] = []
 
     def _assert_transaction_ended(self) -> None:
         if self.query_service is not None:
@@ -182,12 +222,30 @@ class FakeBillingSessionService:
         clerk_user_id,
         plan_tier,
         lifecycle_generation,
+        customer_id=None,
+        idempotency_key=None,
+        existing_session_id=None,
     ):
         self._assert_transaction_ended()
         if plan_tier != "starter":
             raise ValueError(f"Unsupported plan tier: {plan_tier}")
         self.checkout_generations.append(lifecycle_generation)
-        return type("HostedSession", (), {"url": self.checkout_url})()
+        self.checkout_calls.append(
+            {
+                "customer_email": customer_email,
+                "customer_id": customer_id,
+                "idempotency_key": idempotency_key,
+                "existing_session_id": existing_session_id,
+            }
+        )
+        return type(
+            "HostedSession",
+            (),
+            {
+                "url": self.checkout_url,
+                "provider_session_id": existing_session_id or "cs_durable",
+            },
+        )()
 
     async def create_portal_session(self, *, customer_id, return_url):
         self._assert_transaction_ended()
@@ -302,6 +360,59 @@ async def test_checkout_uses_generation_captured_by_locked_eligibility() -> None
 
     assert query_service.business_transaction_active is False
     assert service.checkout_generations == [4]
+
+
+@pytest.mark.anyio
+async def test_reactivation_checkout_reuses_customer_and_same_durable_session() -> None:
+    from app.routers.billing import create_checkout_session
+    from app.schemas.billing_api import CheckoutSessionRequest
+
+    query_service = FakeStatusSubscriptionQueryService("canceled")
+    query_service.account_status = "inactive"
+    query_service.lifecycle_generation = 4
+    service = FakeBillingSessionService(query_service=query_service)
+    identity = UserIdentity(
+        clerk_user_id="user_123",
+        internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+    )
+    payload = CheckoutSessionRequest(plan_tier="starter")
+
+    first = await create_checkout_session(
+        request=_fake_request(),
+        payload=payload,
+        identity=identity,
+        service=service,
+        query_service=query_service,
+        user=type("User", (), {"email": "billing@example.com"})(),
+    )
+    repeated = await create_checkout_session(
+        request=_fake_request(),
+        payload=payload,
+        identity=identity,
+        service=service,
+        query_service=query_service,
+        user=type("User", (), {"email": "billing@example.com"})(),
+    )
+
+    assert first.url == repeated.url
+    assert service.checkout_calls == [
+        {
+            "customer_email": "billing@example.com",
+            "customer_id": "cus_123",
+            "idempotency_key": (
+                "billing.checkout:00000000-0000-0000-0000-000000000000:g4"
+            ),
+            "existing_session_id": None,
+        },
+        {
+            "customer_email": "billing@example.com",
+            "customer_id": "cus_123",
+            "idempotency_key": (
+                "billing.checkout:00000000-0000-0000-0000-000000000000:g4"
+            ),
+            "existing_session_id": "cs_durable",
+        },
+    ]
 
 
 def test_checkout_request_rejects_standard_plan() -> None:

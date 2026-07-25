@@ -15,6 +15,7 @@ from app.services.call_history_service import (
     CallHistoryNotFoundError,
     CallHistoryService,
 )
+from app.services.account_access_policy import AccountStateBlockedError
 from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.services.recording_service import RecordingService, get_recording_service
 
@@ -87,6 +88,11 @@ async def delete_call(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "call_delete_active"},
+        ) from None
+    except AccountStateBlockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code},
         ) from None
     arq_pool = getattr(request.app.state, "arq_pool", None)
     if arq_pool is not None:

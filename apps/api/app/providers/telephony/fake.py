@@ -29,6 +29,17 @@ class FakeTelephonyProvider(TelephonyProvider):
             "provider_connection_name": "app-disabled",
         }
 
+    async def recover_provisioned_number(
+        self,
+        *,
+        country_code: str,
+        operation_key: str,
+    ) -> dict | None:
+        return await self.provision_number(
+            country_code=country_code,
+            operation_key=operation_key,
+        )
+
     async def enable_number(self, *, provider_number_id: str) -> str:
         self._require_fake_id(provider_number_id)
         return "app-active"

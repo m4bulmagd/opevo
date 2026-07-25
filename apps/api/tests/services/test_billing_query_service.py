@@ -2,6 +2,11 @@ import pytest
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+from sqlalchemy import func, select
+
+from app.models.billing_checkout_attempt import BillingCheckoutAttempt
+from app.models.subscription import Subscription
+
 
 class FakeSubscriptionRepository:
     def __init__(self, subscription=None) -> None:
@@ -131,3 +136,43 @@ async def test_get_usage_ledger_returns_newest_first_with_limit() -> None:
     result = await service.get_usage_ledger("user_123", limit=2)
 
     assert [entry.id for entry in result.entries] == ["ledger_3", "ledger_2"]
+
+
+@pytest.mark.anyio
+async def test_prepare_checkout_reuses_retained_customer_and_attempt(
+    db_session,
+    active_user,
+) -> None:
+    from app.services.billing_query_service import BillingQueryService
+
+    active_user.status = "inactive"
+    active_user.lifecycle_generation = 2
+    db_session.add(
+        Subscription(
+            user_id=active_user.id,
+            stripe_customer_id="cus_retained",
+            stripe_subscription_id="sub_canceled",
+            plan_tier="starter",
+            status="canceled",
+            allocated_minutes=60,
+            lifecycle_generation=1,
+        )
+    )
+    await db_session.commit()
+    service = BillingQueryService(db_session)
+
+    first = await service.prepare_checkout_attempt(active_user.id)
+    repeated = await service.prepare_checkout_attempt(active_user.id)
+
+    assert first.allowed is True
+    assert repeated.attempt_id == first.attempt_id
+    assert first.lifecycle_generation == 2
+    assert first.stripe_customer_id == "cus_retained"
+    assert first.idempotency_key == f"billing.checkout:{active_user.id}:g2"
+    assert first.existing_session_id is None
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(BillingCheckoutAttempt)
+        )
+        == 1
+    )

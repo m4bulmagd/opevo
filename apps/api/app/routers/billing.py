@@ -87,24 +87,34 @@ async def create_checkout_session(
     query_service: BillingQueryService = Depends(get_billing_query_service),
     user=Depends(get_current_user),
 ) -> HostedSessionResponse:
-    eligibility = await query_service.get_checkout_eligibility(
+    preparation = await query_service.prepare_checkout_attempt(
         identity.internal_user_id
     )
-    if not eligibility.allowed:
+    if not preparation.allowed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Subscription is not eligible for checkout",
         )
 
     customer_email = str(user.email)
-    await query_service.end_business_transaction()
+    if (
+        preparation.attempt_id is None
+        or preparation.idempotency_key is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Subscription is not eligible for checkout",
+        )
     try:
         session = await service.create_checkout_session(
             user_id=str(identity.internal_user_id),
             customer_email=customer_email,
+            customer_id=preparation.stripe_customer_id,
             clerk_user_id=identity.clerk_user_id,
             plan_tier=payload.plan_tier,
-            lifecycle_generation=eligibility.lifecycle_generation,
+            lifecycle_generation=preparation.lifecycle_generation,
+            idempotency_key=preparation.idempotency_key,
+            existing_session_id=preparation.existing_session_id,
         )
     except BillingSessionStateError as exc:
         raise HTTPException(
@@ -115,6 +125,22 @@ async def create_checkout_session(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to create Stripe checkout session",
+        ) from exc
+
+    if session.provider_session_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to create Stripe checkout session",
+        )
+    try:
+        await query_service.complete_checkout_attempt(
+            attempt_id=preparation.attempt_id,
+            stripe_checkout_session_id=session.provider_session_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Checkout session identity conflict",
         ) from exc
 
     return HostedSessionResponse(url=session.url)
