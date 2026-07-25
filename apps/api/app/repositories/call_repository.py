@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 import re
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import JSON, Text, and_, case, cast as sql_cast, exists, func, literal, or_, select, update
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -53,6 +55,15 @@ class CallObservabilitySnapshot:
     stale: dict[str, int]
 
 
+@dataclass(frozen=True)
+class DashboardMetricsAggregate:
+    calls_today: int
+    calls_last_7_days: int
+    calls_previous_7_days: int
+    follow_up_flagged_last_7_days: int
+    average_duration_seconds_last_7_days: int | None
+
+
 class CallTransitionError(ValueError):
     pass
 
@@ -63,6 +74,184 @@ class CallRepository:
 
     async def get_by_id(self, call_id: UUID) -> Call | None:
         return await self.session.get(Call, call_id)
+
+    @staticmethod
+    def _sqlite_valid_follow_up_expression() -> ColumnElement[bool]:
+        action_items = (
+            func.json_each(Call.summary_data, "$.action_items")
+            .table_valued("key", "value", "type")
+            .alias("dashboard_action_item")
+        )
+        invalid_action_item = exists(
+            select(1)
+            .select_from(action_items)
+            .where(
+                or_(
+                    action_items.c.type != "text",
+                    func.length(func.trim(action_items.c.value)) == 0,
+                    func.length(action_items.c.value) > 300,
+                )
+            )
+            .correlate(Call)
+        )
+        return and_(
+            func.json_type(Call.summary_data, "$.caller_intent") == "text",
+            func.length(
+                func.trim(func.json_extract(Call.summary_data, "$.caller_intent"))
+            ).between(1, 200),
+            func.json_type(Call.summary_data, "$.action_items") == "array",
+            func.json_array_length(
+                func.json_extract(Call.summary_data, "$.action_items")
+            )
+            <= 10,
+            ~invalid_action_item,
+            func.json_type(Call.summary_data, "$.sentiment") == "text",
+            func.length(
+                func.trim(func.json_extract(Call.summary_data, "$.sentiment"))
+            ).between(1, 32),
+            func.json_type(Call.summary_data, "$.follow_up_required") == "true",
+        )
+
+    @staticmethod
+    def _postgresql_valid_follow_up_expression() -> ColumnElement[bool]:
+        caller_intent_json = Call.summary_data.op("->")("caller_intent")
+        action_items_json = Call.summary_data.op("->")("action_items")
+        sentiment_json = Call.summary_data.op("->")("sentiment")
+        follow_up_json = Call.summary_data.op("->")("follow_up_required")
+        safe_action_items = case(
+            (
+                func.json_typeof(action_items_json) == "array",
+                action_items_json,
+            ),
+            else_=sql_cast(literal("[]"), JSON),
+        )
+        action_items = (
+            func.json_array_elements(safe_action_items)
+            .table_valued("value")
+            .alias("dashboard_action_item")
+        )
+        action_item_text = action_items.c.value.op("#>>")(
+            sql_cast(literal("{}"), ARRAY(Text))
+        )
+        invalid_action_item = exists(
+            select(1)
+            .select_from(action_items)
+            .where(
+                or_(
+                    func.json_typeof(action_items.c.value) != "string",
+                    func.length(func.trim(action_item_text)) == 0,
+                    func.length(action_item_text) > 300,
+                )
+            )
+            .correlate(Call)
+        )
+        return and_(
+            func.json_typeof(caller_intent_json) == "string",
+            func.length(
+                func.trim(Call.summary_data.op("->>")("caller_intent"))
+            ).between(1, 200),
+            func.json_typeof(action_items_json) == "array",
+            case(
+                (
+                    func.json_typeof(action_items_json) == "array",
+                    func.json_array_length(action_items_json),
+                ),
+                else_=None,
+            )
+            <= 10,
+            ~invalid_action_item,
+            func.json_typeof(sentiment_json) == "string",
+            func.length(
+                func.trim(Call.summary_data.op("->>")("sentiment"))
+            ).between(1, 32),
+            func.json_typeof(follow_up_json) == "boolean",
+            Call.summary_data.op("->>")("follow_up_required") == "true",
+        )
+
+    def _valid_follow_up_expression(self) -> ColumnElement[bool]:
+        dialect_name = self.session.get_bind().dialect.name
+        if dialect_name == "sqlite":
+            return self._sqlite_valid_follow_up_expression()
+        if dialect_name == "postgresql":
+            return self._postgresql_valid_follow_up_expression()
+        raise RuntimeError(
+            f"Dashboard metrics do not support the {dialect_name!r} SQL dialect"
+        )
+
+    async def dashboard_metrics(
+        self,
+        user_id: UUID,
+        *,
+        today_start_utc: datetime,
+        current_window_start_utc: datetime,
+        previous_window_start_utc: datetime,
+        now_utc: datetime,
+    ) -> DashboardMetricsAggregate:
+        current_window = and_(
+            Call.started_at >= current_window_start_utc,
+            Call.started_at <= now_utc,
+        )
+        previous_window = and_(
+            Call.started_at >= previous_window_start_utc,
+            Call.started_at < current_window_start_utc,
+        )
+        today_window = and_(
+            Call.started_at >= today_start_utc,
+            Call.started_at <= now_utc,
+        )
+        average_duration = and_(
+            current_window,
+            Call.status.in_(("completed", "failed")),
+            Call.duration_seconds.is_not(None),
+        )
+        row = (
+            await self.session.execute(
+                select(
+                    func.sum(case((today_window, 1), else_=0)),
+                    func.sum(case((current_window, 1), else_=0)),
+                    func.sum(case((previous_window, 1), else_=0)),
+                    func.sum(
+                        case(
+                            (
+                                and_(
+                                    current_window,
+                                    self._valid_follow_up_expression(),
+                                ),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    func.avg(
+                        case(
+                            (average_duration, Call.duration_seconds),
+                            else_=None,
+                        )
+                    ),
+                ).where(
+                    Call.user_id == user_id,
+                    Call.deleted_at.is_(None),
+                )
+            )
+        ).one()
+        average_value = row[4]
+        rounded_average = (
+            None
+            if average_value is None
+            else int(
+                Decimal(str(average_value)).quantize(
+                    Decimal("1"),
+                    rounding=ROUND_HALF_UP,
+                )
+            )
+        )
+        return DashboardMetricsAggregate(
+            calls_today=int(row[0] or 0),
+            calls_last_7_days=int(row[1] or 0),
+            calls_previous_7_days=int(row[2] or 0),
+            follow_up_flagged_last_7_days=int(row[3] or 0),
+            average_duration_seconds_last_7_days=rounded_average,
+        )
 
     async def has_active_by_user_id(self, user_id: UUID) -> bool:
         active_call_id = await self.session.scalar(
