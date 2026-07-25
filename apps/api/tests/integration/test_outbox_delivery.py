@@ -23,6 +23,7 @@ from app.models.outbox_event import OutboxEvent
 from app.models.agent_config import AgentConfig
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
+from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.usage_ledger import UsageLedger
@@ -1649,6 +1650,181 @@ async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_rout
         assert phone_number is not None
         assert phone_number.provider_connection_name == "app-disabled"
         assert phone_number.is_active is False
+
+
+@pytest.mark.anyio
+async def test_reclaimed_crashed_provision_recovers_reference_only_cleanup(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers.jobs import outbox_delivery
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    class SimulatedWorkerCrash(BaseException):
+        pass
+
+    operation_key = "outbox:phone-provision:stale-recovery"
+    async with outbox_session_factory() as session:
+        user = User(
+            clerk_user_id=f"provision_stale_recovery_{uuid4().hex}",
+            email=f"provision_stale_recovery_{uuid4().hex}@example.com",
+            country_code="FR",
+        )
+        session.add(user)
+        await session.flush()
+        session.add(
+            PhoneNumberProvisioning(
+                user_id=user.id,
+                target_country_code="FR",
+                status="queued",
+                attempt_count=0,
+                can_retry=False,
+                provider_operation_key=operation_key,
+            )
+        )
+        await session.commit()
+        user_id = user.id
+    event = await _add_event(
+        outbox_session_factory,
+        topic="phone.provision",
+        aggregate_id=user_id,
+        idempotency_key=operation_key,
+        payload={"user_id": str(user_id), "lifecycle_generation": 1},
+    )
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+
+    class AcceptedThenRecoveredProvider:
+        def __init__(self) -> None:
+            self.provision_keys: list[str | None] = []
+            self.recovery_keys: list[str] = []
+            self.disabled_ids: list[str] = []
+            self.released_ids: list[str] = []
+            self.accepted = {
+                "e164": "+33123456784",
+                "provider_number_id": f"pn_stale_recovery_{user_id.hex}",
+                "provider_connection_name": "app-disabled",
+            }
+
+        async def provision_number(
+            self,
+            *,
+            country_code: str,
+            operation_key: str | None = None,
+        ) -> dict:
+            assert country_code == "FR"
+            self.provision_keys.append(operation_key)
+            raise SimulatedWorkerCrash
+
+        async def recover_provisioned_number(
+            self,
+            *,
+            country_code: str,
+            operation_key: str,
+        ) -> dict | None:
+            assert country_code == "FR"
+            self.recovery_keys.append(operation_key)
+            return self.accepted
+
+        async def enable_number(self, *, provider_number_id: str) -> str:
+            raise AssertionError("stale recovery must not enable a number")
+
+        async def disable_number(self, *, provider_number_id: str) -> str:
+            self.disabled_ids.append(provider_number_id)
+            return "app-disabled"
+
+        async def release_number(self, *, provider_number_id: str) -> None:
+            self.released_ids.append(provider_number_id)
+
+    provider = AcceptedThenRecoveredProvider()
+    ctx = {
+        "session_factory": outbox_session_factory,
+        "telephony_provider": provider,
+        "outbox_now": lambda: current_time,
+    }
+    monkeypatch.setattr(outbox_delivery, "OUTBOX_BATCH_SIZE", 1)
+
+    with pytest.raises(SimulatedWorkerCrash):
+        await outbox_delivery_job(ctx)
+
+    async with outbox_session_factory() as session:
+        stored_event = await session.get(OutboxEvent, event.id)
+        provisioning = await PhoneNumberProvisioningRepository(
+            session
+        ).get_by_user_id(user_id)
+        assert stored_event is not None
+        assert stored_event.status == "processing"
+        assert provisioning is not None
+        assert provisioning.status == "running"
+        assert provisioning.provider_operation_key == operation_key
+        assert await PhoneNumberRepository(session).get_by_user_id(user_id) is None
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ProviderCleanupOperation)
+            )
+            == 0
+        )
+        user = await session.get(User, user_id)
+        assert user is not None
+        user.status = "inactive"
+        user.lifecycle_generation = 2
+        current_time = stored_event.next_attempt_at + timedelta(seconds=1)
+        await session.commit()
+
+    recovered = await outbox_delivery_job(ctx)
+
+    assert recovered == {
+        "claimed": 1,
+        "delivered": 1,
+        "retried": 0,
+        "failed": 0,
+    }
+    assert provider.provision_keys == [operation_key]
+    assert provider.recovery_keys == [operation_key]
+    async with outbox_session_factory() as session:
+        stored_event = await session.get(OutboxEvent, event.id)
+        cleanup = await session.scalar(
+            select(ProviderCleanupOperation).where(
+                ProviderCleanupOperation.user_id == user_id
+            )
+        )
+        assert stored_event is not None
+        assert stored_event.status == "delivered"
+        assert cleanup is not None
+        assert cleanup.status == "pending"
+        assert cleanup.provider_resource_id == provider.accepted["provider_number_id"]
+        cleanup_event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.aggregate_id == cleanup.id,
+                OutboxEvent.topic == "provider.cleanup",
+            )
+        )
+        assert cleanup_event is not None
+        assert cleanup_event.payload == {"cleanup_operation_id": str(cleanup.id)}
+
+    cleaned = await outbox_delivery_job(ctx)
+
+    assert cleaned == {
+        "claimed": 1,
+        "delivered": 1,
+        "retried": 0,
+        "failed": 0,
+    }
+    assert provider.disabled_ids == [provider.accepted["provider_number_id"]]
+    assert provider.released_ids == [provider.accepted["provider_number_id"]]
+    async with outbox_session_factory() as session:
+        cleanup = await session.scalar(
+            select(ProviderCleanupOperation).where(
+                ProviderCleanupOperation.user_id == user_id
+            )
+        )
+        assert cleanup is not None
+        assert cleanup.status == "completed"
+        assert cleanup.completed_at is not None
+        assert (
+            await PhoneNumberProvisioningRepository(session).get_by_user_id(user_id)
+            is None
+        )
+        assert await PhoneNumberRepository(session).get_by_user_id(user_id) is None
 
 
 @pytest.mark.anyio

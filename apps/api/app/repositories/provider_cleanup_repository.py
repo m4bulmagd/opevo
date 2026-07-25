@@ -11,6 +11,12 @@ class ProviderCleanupRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def get_by_id(
+        self,
+        operation_id: UUID,
+    ) -> ProviderCleanupOperation | None:
+        return await self.session.get(ProviderCleanupOperation, operation_id)
+
     async def get_by_id_for_update(
         self,
         operation_id: UUID,

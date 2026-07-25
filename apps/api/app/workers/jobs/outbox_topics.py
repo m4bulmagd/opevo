@@ -107,6 +107,12 @@ class _VerificationDispatchSnapshot:
     persisted_dispatch_id: str | None
 
 
+@dataclass(frozen=True)
+class _PhoneProvisionAdmission:
+    provider_operation_key: str | None
+    recovery_only: bool
+
+
 async def deliver_phone_provision(
     ctx: dict[str, Any],
     event: OutboxEvent,
@@ -114,19 +120,13 @@ async def deliver_phone_provision(
     user_id = UUID(event.payload["user_id"])
     lifecycle_generation = _validated_lifecycle_generation(event)
     session_factory = ctx.get("session_factory") or get_session_factory()
-    await _require_current_worker_account(
+    admission = await _phone_provision_admission(
         session_factory,
         user_id,
+        event=event,
         lifecycle_generation=lifecycle_generation,
     )
-    async with session_factory() as session:
-        provisioning = await PhoneNumberProvisioningRepository(session).get_by_user_id(
-            user_id
-        )
-        provider_operation_key = (
-            provisioning.provider_operation_key if provisioning is not None else None
-        )
-        await session.commit()
+    provider_operation_key = admission.provider_operation_key
     if not provider_operation_key:
         raise OutboxDeliveryError("provider_terminal", retryable=False)
     try:
@@ -136,6 +136,8 @@ async def deliver_phone_provision(
             provider_operation_key=provider_operation_key,
         )
     except (AccountStateBlockedError, AccountLifecycleGenerationMismatchError):
+        if admission.recovery_only:
+            return
         raise OutboxDeliveryError(
             "dispatch_ineligible",
             retryable=False,
@@ -170,6 +172,85 @@ async def deliver_phone_provision(
             retryable=retryable,
         )
     await deliver_phone_routing(ctx, event)
+
+
+async def _phone_provision_admission(
+    session_factory,
+    user_id: UUID,
+    *,
+    event: OutboxEvent,
+    lifecycle_generation: int,
+) -> _PhoneProvisionAdmission:
+    async with session_factory() as session:
+        user = await UserRepository(session).get_by_id_for_update(user_id)
+        if user is None:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_ineligible",
+                retryable=False,
+            )
+        provisioning = await PhoneNumberProvisioningRepository(
+            session
+        ).get_by_user_id_for_update(user_id)
+        provider_operation_key = (
+            provisioning.provider_operation_key if provisioning is not None else None
+        )
+        try:
+            require_current_account_lifecycle(
+                user,
+                lifecycle_generation=lifecycle_generation,
+            )
+        except (AccountStateBlockedError, AccountLifecycleGenerationMismatchError):
+            recovery_only = bool(
+                provisioning is not None
+                and provisioning.status == "running"
+                and provider_operation_key is not None
+                and _event_matches_provider_operation(
+                    event,
+                    user_id=user_id,
+                    provider_operation_key=provider_operation_key,
+                )
+            )
+            if not recovery_only:
+                await session.rollback()
+                raise OutboxDeliveryError(
+                    "dispatch_ineligible",
+                    retryable=False,
+                ) from None
+            await session.commit()
+            return _PhoneProvisionAdmission(
+                provider_operation_key=provider_operation_key,
+                recovery_only=True,
+            )
+        await session.commit()
+        return _PhoneProvisionAdmission(
+            provider_operation_key=provider_operation_key,
+            recovery_only=False,
+        )
+
+
+def _event_matches_provider_operation(
+    event: OutboxEvent,
+    *,
+    user_id: UUID,
+    provider_operation_key: str,
+) -> bool:
+    if (
+        event.topic != "phone.provision"
+        or event.aggregate_type != "user"
+        or event.aggregate_id != user_id
+    ):
+        return False
+    if event.idempotency_key == provider_operation_key:
+        return True
+    attempt_prefix = f"{provider_operation_key}:attempt:"
+    attempt = event.idempotency_key.removeprefix(attempt_prefix)
+    return (
+        event.idempotency_key.startswith(attempt_prefix)
+        and attempt.isascii()
+        and attempt.isdecimal()
+        and int(attempt) >= 1
+    )
 
 
 async def deliver_phone_routing(
