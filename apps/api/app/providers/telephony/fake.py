@@ -37,6 +37,9 @@ class FakeTelephonyProvider(TelephonyProvider):
         self._require_fake_id(provider_number_id)
         return "app-disabled"
 
+    async def release_number(self, *, provider_number_id: str) -> None:
+        self._require_fake_id(provider_number_id)
+
     @staticmethod
     def _require_fake_id(provider_number_id: str) -> None:
         if not isinstance(provider_number_id, str) or _FAKE_PROVIDER_ID.fullmatch(

@@ -70,18 +70,43 @@ async def test_fake_telephony_rejects_invalid_provisioning_inputs_safely(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("operation", ["enable_number", "disable_number"])
+@pytest.mark.parametrize(
+    ("operation", "provider_number_id"),
+    [
+        ("enable_number", "pn_real_provider_id"),
+        ("disable_number", "pn_real_provider_id"),
+        ("release_number", "pn_real_provider_id"),
+        ("release_number", ""),
+    ],
+)
 async def test_fake_telephony_rejects_non_fake_provider_ids_safely(
     operation: str,
+    provider_number_id: str,
 ) -> None:
     provider = FakeTelephonyProvider()
 
     with pytest.raises(TelephonyProviderError) as exc_info:
-        await getattr(provider, operation)(provider_number_id="pn_real_provider_id")
+        await getattr(provider, operation)(provider_number_id=provider_number_id)
 
     assert exc_info.value.category == "provider_terminal"
     assert exc_info.value.error_class == "validation"
     assert str(exc_info.value) == "provider_terminal"
+
+
+@pytest.mark.anyio
+async def test_fake_telephony_releases_its_deterministic_number_id_idempotently() -> None:
+    provider = FakeTelephonyProvider()
+    provisioned = await provider.provision_number(
+        country_code="FR",
+        operation_key="deactivation-release",
+    )
+
+    await provider.release_number(
+        provider_number_id=provisioned["provider_number_id"],
+    )
+    await provider.release_number(
+        provider_number_id=provisioned["provider_number_id"],
+    )
 
 
 @pytest.mark.anyio

@@ -53,3 +53,7 @@ class TelephonyProvider(ABC):
     @abstractmethod
     async def disable_number(self, *, provider_number_id: str) -> str:
         raise NotImplementedError
+
+    @abstractmethod
+    async def release_number(self, *, provider_number_id: str) -> None:
+        raise NotImplementedError

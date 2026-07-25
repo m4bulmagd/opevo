@@ -49,7 +49,9 @@ _UNSAFE_OTLP_HTTP_LOG_TEMPLATES = frozenset(
 )
 
 _PROVIDER_OPERATIONS = {
-    "telnyx": frozenset({"provision_number", "enable_number", "disable_number"}),
+    "telnyx": frozenset(
+        {"provision_number", "enable_number", "disable_number", "release_number"}
+    ),
     "s3": frozenset(
         {"upload_bytes", "get_download_url", "delete_object", "get_bucket_lifecycle"}
     ),
