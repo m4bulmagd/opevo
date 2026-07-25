@@ -9,20 +9,25 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.models import Base
-from app.models.activation_event import ActivationEvent
-from app.models.account_deactivation_operation import AccountDeactivationOperation
-from app.models.agent_config import AgentConfig
-from app.models.business_profile import BusinessProfile
-from app.models.call import Call
-from app.models.call_message import CallMessage
-from app.models.customer_activation import CustomerActivation
-from app.models.notification import Notification
-from app.models.phone_number import PhoneNumber
-from app.models.recording_egress_operation import RecordingEgressOperation
-from app.models.subscription import Subscription
-from app.models.usage_ledger import UsageLedger
-from app.models.user import User
-from app.models.webhook_event import WebhookEvent
+# Import every model for its SQLAlchemy metadata-registration side effect.
+from app.models.activation_event import ActivationEvent  # noqa: F401
+from app.models.account_deactivation_operation import (  # noqa: F401
+    AccountDeactivationOperation,
+)
+from app.models.agent_config import AgentConfig  # noqa: F401
+from app.models.business_profile import BusinessProfile  # noqa: F401
+from app.models.call import Call  # noqa: F401
+from app.models.call_message import CallMessage  # noqa: F401
+from app.models.customer_activation import CustomerActivation  # noqa: F401
+from app.models.notification import Notification  # noqa: F401
+from app.models.phone_number import PhoneNumber  # noqa: F401
+from app.models.recording_egress_operation import (  # noqa: F401
+    RecordingEgressOperation,
+)
+from app.models.subscription import Subscription  # noqa: F401
+from app.models.usage_ledger import UsageLedger  # noqa: F401
+from app.models.user import User  # noqa: F401
+from app.models.webhook_event import WebhookEvent  # noqa: F401
 
 
 config = context.config
