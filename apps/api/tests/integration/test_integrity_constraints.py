@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.models import Base
+from app.models.account_deactivation_operation import AccountDeactivationOperation
 from app.models.activation_event import ActivationEvent
 from app.models.business_profile import BusinessProfile
 from app.models.call import Call
@@ -507,6 +508,53 @@ async def test_activation_event_append_race_returns_first_durable_event_to_both_
         )
     assert len(durable_events) == 1
     assert durable_events[0].id == returned_events[0][0]
+
+
+@pytest.mark.anyio
+async def test_incomplete_deactivation_generation_race_allows_one_durable_operation(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    user = await _create_user(
+        postgres_session_factory,
+        suffix="deactivation_generation",
+    )
+    barrier = asyncio.Barrier(2)
+
+    async def create(generation: int) -> bool:
+        async with postgres_session_factory() as session:
+            session.add(
+                AccountDeactivationOperation(
+                    user_id=user.id,
+                    lifecycle_generation=generation,
+                    trigger="owner_request",
+                    status="pending",
+                    requested_at=datetime(2026, 7, 25, generation, tzinfo=UTC),
+                )
+            )
+            await barrier.wait()
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                return False
+            return True
+
+    committed = await asyncio.gather(create(2), create(3))
+
+    assert sorted(committed) == [False, True]
+    async with postgres_session_factory() as session:
+        operations = list(
+            (
+                await session.scalars(
+                    select(AccountDeactivationOperation).where(
+                        AccountDeactivationOperation.user_id == user.id
+                    )
+                )
+            ).all()
+        )
+    assert len(operations) == 1
+    assert operations[0].lifecycle_generation in {2, 3}
+    assert operations[0].completed_at is None
 
 
 @pytest.mark.anyio

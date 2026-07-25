@@ -212,12 +212,13 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     now = datetime.now(UTC)
-    activation, _phone = await _seed_provisioned_customer(
+    activation, phone = await _seed_provisioned_customer(
         db_session,
         active_user,
         now=now,
     )
     activation_id = activation.id
+    phone_id = phone.id
     user_id = active_user.id
     before = await _privacy_counts(db_session)
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -314,6 +315,7 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
     db_session.expire_all()
     after = await _privacy_counts(db_session)
     stored_activation = await db_session.get(CustomerActivation, activation_id)
+    stored_phone = await db_session.get(PhoneNumber, phone_id)
     stored_event = await db_session.get(OutboxEvent, verification_event_id)
     activation_event_types = list(
         (
@@ -339,6 +341,9 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
     assert completed.json() == {"status": "verified", "session_id": session_id}
     assert replay_result.status == "denied"
     assert stored_activation is not None
+    assert stored_phone is not None
+    assert stored_phone.id == phone_id
+    assert stored_phone.user_id == user_id
     assert stored_activation.verification_status == "succeeded"
     assert stored_event is not None
     assert stored_event.status == "delivered"

@@ -238,17 +238,18 @@ async def test_account_lock_orders_admission_against_deactivation_commit(
         )
         session.add(user)
         await session.flush()
+        phone = PhoneNumber(
+            user_id=user.id,
+            e164="+33999888778",
+            country_code="FR",
+            provider="telnyx",
+            provider_number_id=f"number-account-{first_commit}",
+            provider_connection_name="app-active",
+            is_active=True,
+        )
         session.add_all(
             [
-                PhoneNumber(
-                    user_id=user.id,
-                    e164="+33999888778",
-                    country_code="FR",
-                    provider="telnyx",
-                    provider_number_id=f"number-account-{first_commit}",
-                    provider_connection_name="app-active",
-                    is_active=True,
-                ),
+                phone,
                 AgentConfig(
                     user_id=user.id,
                     agent_name="Ava",
@@ -279,6 +280,7 @@ async def test_account_lock_orders_admission_against_deactivation_commit(
         )
         await session.commit()
         user_id = user.id
+        phone_id = phone.id
 
     sip_join = {
         "event": "participant_joined",
@@ -365,6 +367,8 @@ async def test_account_lock_orders_admission_against_deactivation_commit(
     if first_commit == "admission":
         assert admission.status == "accepted"
         assert len(calls) == 1
+        assert calls[0].user_id == user_id
+        assert calls[0].phone_number_id == phone_id
         dispatch_events = [event for event in events if event.topic == "livekit.dispatch"]
         assert len(dispatch_events) == 1
         assert dispatch_events[0].payload == {

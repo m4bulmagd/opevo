@@ -311,6 +311,11 @@ async def test_inactive_owner_can_list_get_and_play_back_historical_call(
         recording_object_key="calls/inactive-owner/call.mp3",
         user_status="inactive",
     )
+    await seed_user(
+        client_database_url,
+        clerk_user_id="inactive_call_history_other",
+        email="inactive-call-history-other@example.invalid",
+    )
 
     async def fake_get_access_url(
         self,
@@ -333,11 +338,21 @@ async def test_inactive_owner_can_list_get_and_play_back_historical_call(
 
     listed = await async_client.get("/api/calls", headers=headers)
     detail = await async_client.get(f"/api/calls/{call_id}", headers=headers)
+    foreign_detail = await async_client.get(
+        f"/api/calls/{call_id}",
+        headers={
+            "Authorization": (
+                "Bearer "
+                f"{rs256_clerk_token_for('inactive_call_history_other')}"
+            )
+        },
+    )
 
     assert listed.status_code == 200
     assert [UUID(item["id"]) for item in listed.json()["calls"]] == [call_id]
     assert detail.status_code == 200
     assert UUID(detail.json()["id"]) == call_id
+    assert foreign_detail.status_code == 404
     assert (
         detail.json()["recording_url"]
         == "https://signed.example.invalid/playback"
