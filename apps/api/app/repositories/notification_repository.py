@@ -12,6 +12,14 @@ class NotificationRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def list_by_user_id(self, user_id: UUID) -> list[Notification]:
+        result = await self.session.scalars(
+            select(Notification)
+            .where(Notification.user_id == user_id)
+            .order_by(Notification.created_at.desc(), Notification.id.desc())
+        )
+        return list(result)
+
     async def create(
         self,
         *,

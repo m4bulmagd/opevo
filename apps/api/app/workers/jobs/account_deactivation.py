@@ -335,6 +335,9 @@ async def _cancel_subscription(
 
     mismatch = False
     async with session_factory() as session:
+        subscription = await SubscriptionRepository(
+            session
+        ).get_by_user_id_for_update(operation.user_id)
         stored = await AccountDeactivationRepository(session).get_by_id_for_update(
             operation.operation_id
         )
@@ -344,9 +347,6 @@ async def _cancel_subscription(
         if stored.subscription_canceled_at is not None:
             await session.commit()
             return
-        subscription = await SubscriptionRepository(
-            session
-        ).get_by_user_id_for_update(stored.user_id)
         if (
             subscription is not None
             and subscription.stripe_subscription_id != stored_subscription_id
@@ -511,6 +511,22 @@ async def _reset_activation(
             telemetry=telemetry,
         )
 
+    await _detach_call_history_phone(
+        session_factory,
+        user_id=user_id,
+    )
+
+    if await _has_active_call(
+        session_factory,
+        user_id=user_id,
+    ):
+        await _mark_call_draining(
+            session_factory,
+            operation=operation,
+            now=now_provider(),
+            telemetry=telemetry,
+        )
+
     async with session_factory() as session:
         user = await UserRepository(session).get_by_id_for_update(user_id)
         if user is None:
@@ -526,8 +542,6 @@ async def _reset_activation(
         if stored.activation_reset_at is not None:
             await session.commit()
             return None
-        if phone is not None:
-            await CallRepository(session).detach_phone_number(phone.id)
         await PhoneNumberProvisioningRepository(session).delete_for_user_id(user_id)
         if phone is not None:
             await PhoneNumberRepository(session).delete_for_deactivation(phone)
@@ -547,6 +561,18 @@ async def _reset_activation(
         error_class="unknown",
     )
     return completed_at
+
+
+async def _detach_call_history_phone(
+    session_factory,
+    *,
+    user_id: UUID,
+) -> None:
+    async with session_factory() as session:
+        phone = await PhoneNumberRepository(session).get_by_user_id(user_id)
+        if phone is not None:
+            await CallRepository(session).detach_phone_number(phone.id)
+        await session.commit()
 
 
 async def _has_active_call(

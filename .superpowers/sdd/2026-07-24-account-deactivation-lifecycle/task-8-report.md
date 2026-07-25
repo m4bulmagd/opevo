@@ -182,3 +182,99 @@ containers, networks, and named volumes were all reported removed.
   authorized the minimal literal correction; production behavior was not
   changed for it.
 - Remaining concerns: none.
+
+## Fix round 1/5
+
+Rejected base commit:
+`ebd570c749ff0a41e8e5195dfd74df27b56c83e7`.
+
+All seven Important review findings were reproduced or converted into
+authoritative regression coverage and resolved within Task 8 scope.
+
+### Lock-order corrections
+
+The post-provider subscription-cancellation commit previously acquired the
+operation row before the subscription row, while lifecycle entry acquired the
+same pair in the opposite order. A two-session PostgreSQL race reproduced the
+cycle with `DeadlockDetectedError` before the fix:
+
+```text
+lifecycle entry: user -> subscription ---------------------> operation
+worker commit:                   operation -> subscription
+                                 ^                    |
+                                 +--------------------+
+```
+
+The worker now uses the compatible order:
+
+```text
+lifecycle entry: user -> subscription -> phone -> operation
+worker commit:          subscription ----------> operation
+```
+
+The deterministic regression changed from `1 failed in 2.19s` with the
+PostgreSQL deadlock to `1 passed in 1.19s`.
+
+Projection reset also previously held user, phone, and operation row locks
+while detaching historical call foreign keys. PostgreSQL `pg_locks`
+instrumentation observed `RowShareLock` on all three business tables during
+the detach before the fix. Call-history detachment now commits in its own
+short transaction without locking those lifecycle rows. The reset then
+rechecks active-call drainage before entering the business-row transaction.
+The instrumentation plus the authoritative post-release active-call matrix
+passed: `5 passed in 2.12s`.
+
+### Strengthened boundary evidence
+
+- The authoritative pre-reset drainage test starts after
+  `number_released_at` is durable and calls the real reset boundary for
+  `pending`, `connected`, `ending`, and `finalizing`; every state fails
+  retryably with `account_call_draining`.
+- Generation-2 blocking now uses an inactive account, an incomplete
+  deactivation operation, an old phone projection, and no local subscription
+  row. Checkout fails closed with `local_subscription_unavailable`,
+  provisioning fails with `account_inactive`, and neither a subscription nor
+  provisioning row is created.
+- The stale go-live test invokes the real `ActivationGoLiveService.go_live`
+  command after deactivation. It fails with `account_deactivating`, preserves
+  activation/configuration state, and creates no `phone.enable` outbox intent,
+  proving the provider boundary is not reached.
+- Cleanup assertions cover every number-cycle field and every
+  number-specific carrier field. They also compare exact structured and
+  legacy summaries, recording object/egress/url metadata, and recording
+  operation timestamps before and after cleanup.
+- Owner-scoped PostgreSQL reads cover profile, agent configuration,
+  activation, subscription, call, recording operation, notification, usage,
+  and call-history service paths. Real authenticated call-history list/detail
+  routes return the retained stable IDs and transcript to the owner, while a
+  second owner receives an empty list and `404`.
+
+Two repository interfaces were added to make owner scope explicit at the
+query boundary:
+
+- `NotificationRepository.list_by_user_id(user_id)`
+- `RecordingEgressOperationRepository.get_by_call_id_for_user(call_id, user_id)`
+
+The strengthened preservation test initially failed because the recording
+operation owner-scoped method did not exist; after the interface additions it
+passed in PostgreSQL (`1 passed in 1.39s`).
+
+### Fix-round verification
+
+- Full focused affected suite: `120 passed in 31.12s`.
+- Full PostgreSQL integration suite: `110 passed in 34.49s`; output contained
+  no skips.
+- Changed-scope Ruff: `All checks passed!`.
+- Changed production-scope mypy:
+  `Success: no issues found in 3 source files`.
+- `git diff --check`: exit `0`.
+
+One pre-existing billing-query test fixture omitted the current cancellation
+fields and one expectation contradicted the service's existing fail-closed
+behavior when account repositories are absent. The test-only fixture and
+expectation were aligned; no billing production behavior changed.
+
+The disposable `presvo-task8-fix1` PostgreSQL and Redis containers, network,
+and named volumes were removed with `down --volumes --remove-orphans`.
+No plan, design, ledger, migration, unrelated documentation, or web file was
+changed. Remaining concerns: none.
