@@ -594,11 +594,19 @@ async def test_phone_provision_outbox_missing_provider_identity_is_terminal_befo
         async def __aexit__(self, exc_type, exc, traceback) -> None:
             return None
 
+    class Users:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def get_by_id_for_update(self, requested_user_id):
+            assert requested_user_id == user_id
+            return SimpleNamespace(status="active", lifecycle_generation=1)
+
     class Provisionings:
         def __init__(self, _session) -> None:
             pass
 
-        async def get_by_user_id(self, requested_user_id):
+        async def get_by_user_id_for_update(self, requested_user_id):
             assert requested_user_id == user_id
             if case == "missing_row":
                 return None
@@ -608,16 +616,9 @@ async def test_phone_provision_outbox_missing_provider_identity_is_terminal_befo
         nonlocal job_called
         job_called = True
 
-    async def allow_current_account(*_args, **_kwargs) -> None:
-        return None
-
+    monkeypatch.setattr(outbox_topics, "UserRepository", Users)
     monkeypatch.setattr(outbox_topics, "PhoneNumberProvisioningRepository", Provisionings)
     monkeypatch.setattr(outbox_topics, "phone_provisioning_job", capture)
-    monkeypatch.setattr(
-        outbox_topics,
-        "_require_current_worker_account",
-        allow_current_account,
-    )
     event = SimpleNamespace(
         payload={
             "user_id": str(user_id),
@@ -660,9 +661,20 @@ async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key
         async def __aexit__(self, exc_type, exc, traceback) -> None:
             return None
 
+    class Users:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def get_by_id_for_update(self, requested_user_id):
+            assert requested_user_id == user_id
+            return SimpleNamespace(status="active", lifecycle_generation=1)
+
     class Provisionings:
         def __init__(self, _session) -> None:
             pass
+
+        async def get_by_user_id_for_update(self, requested_user_id):
+            return await self.get_by_user_id(requested_user_id)
 
         async def get_by_user_id(self, requested_user_id):
             assert requested_user_id == user_id
@@ -683,17 +695,10 @@ async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key
     async def capture(_ctx, payload, *, provider_operation_key):
         captured.append((payload, provider_operation_key))
 
-    async def allow_current_account(*_args, **_kwargs) -> None:
-        return None
-
+    monkeypatch.setattr(outbox_topics, "UserRepository", Users)
     monkeypatch.setattr(outbox_topics, "PhoneNumberProvisioningRepository", Provisionings)
     monkeypatch.setattr(outbox_topics, "PhoneNumberRepository", Phones)
     monkeypatch.setattr(outbox_topics, "phone_provisioning_job", capture)
-    monkeypatch.setattr(
-        outbox_topics,
-        "_require_current_worker_account",
-        allow_current_account,
-    )
     event = SimpleNamespace(
         payload={
             "user_id": str(user_id),

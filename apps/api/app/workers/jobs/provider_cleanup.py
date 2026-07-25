@@ -209,7 +209,7 @@ async def _lock_operation_with_owner(
     operation_id: UUID,
 ) -> ProviderCleanupOperation | None:
     repository = ProviderCleanupRepository(session)
-    observed = await session.get(ProviderCleanupOperation, operation_id)
+    observed = await repository.get_by_id(operation_id)
     if observed is None:
         return None
     owner = await UserRepository(session).get_by_id_for_update(observed.user_id)

@@ -426,7 +426,10 @@ async def phone_provisioning_job(
                     operation_key=provider_operation_key,
                 )
                 if recovered is None:
-                    raise recovery_lifecycle_error
+                    raise TelephonyProviderError(
+                        "provider_retryable",
+                        error_class="unavailable",
+                    )
                 current_user = await user_repo.get_by_id_for_update(user_id)
                 if current_user is None:
                     await session.rollback()
