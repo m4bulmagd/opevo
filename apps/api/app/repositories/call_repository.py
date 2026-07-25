@@ -38,6 +38,14 @@ CALL_FAILURE_CODES = frozenset(
 
 PHONE_QUERY_PATTERN = re.compile(r"^[0-9\s()+.\-]+$")
 
+SUMMARY_WHITESPACE_CHARACTERS = (
+    " \t\n\r\v\f"
+    "\x1c\x1d\x1e\x1f\x85"
+    "\u00a0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
+
 
 @dataclass(frozen=True)
 class CallHistoryPage:
@@ -88,8 +96,15 @@ class CallRepository:
             .where(
                 or_(
                     action_items.c.type != "text",
-                    func.length(func.trim(action_items.c.value)) == 0,
+                    func.length(action_items.c.value) == 0,
                     func.length(action_items.c.value) > 300,
+                    func.length(
+                        func.trim(
+                            action_items.c.value,
+                            SUMMARY_WHITESPACE_CHARACTERS,
+                        )
+                    )
+                    == 0,
                 )
             )
             .correlate(Call)
@@ -97,8 +112,15 @@ class CallRepository:
         return and_(
             func.json_type(Call.summary_data, "$.caller_intent") == "text",
             func.length(
-                func.trim(func.json_extract(Call.summary_data, "$.caller_intent"))
+                func.json_extract(Call.summary_data, "$.caller_intent")
             ).between(1, 200),
+            func.length(
+                func.trim(
+                    func.json_extract(Call.summary_data, "$.caller_intent"),
+                    SUMMARY_WHITESPACE_CHARACTERS,
+                )
+            )
+            > 0,
             func.json_type(Call.summary_data, "$.action_items") == "array",
             func.json_array_length(
                 func.json_extract(Call.summary_data, "$.action_items")
@@ -107,8 +129,15 @@ class CallRepository:
             ~invalid_action_item,
             func.json_type(Call.summary_data, "$.sentiment") == "text",
             func.length(
-                func.trim(func.json_extract(Call.summary_data, "$.sentiment"))
+                func.json_extract(Call.summary_data, "$.sentiment")
             ).between(1, 32),
+            func.length(
+                func.trim(
+                    func.json_extract(Call.summary_data, "$.sentiment"),
+                    SUMMARY_WHITESPACE_CHARACTERS,
+                )
+            )
+            > 0,
             func.json_type(Call.summary_data, "$.follow_up_required") == "true",
         )
 
@@ -139,8 +168,15 @@ class CallRepository:
             .where(
                 or_(
                     func.json_typeof(action_items.c.value) != "string",
-                    func.length(func.trim(action_item_text)) == 0,
+                    func.length(action_item_text) == 0,
                     func.length(action_item_text) > 300,
+                    func.length(
+                        func.btrim(
+                            action_item_text,
+                            SUMMARY_WHITESPACE_CHARACTERS,
+                        )
+                    )
+                    == 0,
                 )
             )
             .correlate(Call)
@@ -148,8 +184,15 @@ class CallRepository:
         return and_(
             func.json_typeof(caller_intent_json) == "string",
             func.length(
-                func.trim(Call.summary_data.op("->>")("caller_intent"))
+                Call.summary_data.op("->>")("caller_intent")
             ).between(1, 200),
+            func.length(
+                func.btrim(
+                    Call.summary_data.op("->>")("caller_intent"),
+                    SUMMARY_WHITESPACE_CHARACTERS,
+                )
+            )
+            > 0,
             func.json_typeof(action_items_json) == "array",
             case(
                 (
@@ -162,8 +205,15 @@ class CallRepository:
             ~invalid_action_item,
             func.json_typeof(sentiment_json) == "string",
             func.length(
-                func.trim(Call.summary_data.op("->>")("sentiment"))
+                Call.summary_data.op("->>")("sentiment")
             ).between(1, 32),
+            func.length(
+                func.btrim(
+                    Call.summary_data.op("->>")("sentiment"),
+                    SUMMARY_WHITESPACE_CHARACTERS,
+                )
+            )
+            > 0,
             func.json_typeof(follow_up_json) == "boolean",
             Call.summary_data.op("->>")("follow_up_required") == "true",
         )

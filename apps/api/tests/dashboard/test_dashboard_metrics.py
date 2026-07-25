@@ -383,6 +383,111 @@ async def test_metrics_count_only_valid_true_follow_up_summaries(
 
 
 @pytest.mark.anyio
+async def test_metrics_apply_follow_up_string_limits_before_trimming(
+    client_database_url: str,
+) -> None:
+    started_at = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
+    exact_boundary_summary = {
+        "caller_intent": "i" * 200,
+        "action_items": ["a" * 300],
+        "sentiment": "s" * 32,
+        "follow_up_required": True,
+    }
+    owners = await _seed_dashboard(
+        client_database_url,
+        calls=[
+            _call(
+                started_at=started_at,
+                summary_data=exact_boundary_summary,
+            ),
+            _call(
+                started_at=started_at,
+                summary_data={
+                    **exact_boundary_summary,
+                    "caller_intent": f"{'i' * 200} ",
+                },
+            ),
+            _call(
+                started_at=started_at,
+                summary_data={
+                    **exact_boundary_summary,
+                    "action_items": [f"{'a' * 300} "],
+                },
+            ),
+            _call(
+                started_at=started_at,
+                summary_data={
+                    **exact_boundary_summary,
+                    "sentiment": f"{'s' * 32} ",
+                },
+            ),
+        ],
+    )
+
+    metrics = await _get_metrics(
+        client_database_url,
+        user_id=owners.owner_id,
+        now=datetime.fromisoformat("2026-07-25T00:30:00+02:00"),
+    )
+
+    assert metrics.follow_up_flagged_last_7_days == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "whitespace",
+    ["\t\n", "\u00a0\u2003"],
+    ids=["ascii-control-whitespace", "non-ascii-whitespace"],
+)
+async def test_metrics_reject_follow_up_whitespace_only_strings(
+    client_database_url: str,
+    whitespace: str,
+) -> None:
+    started_at = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
+    valid_summary = {
+        "caller_intent": "Book a table",
+        "action_items": ["Call the guest"],
+        "sentiment": "positive",
+        "follow_up_required": True,
+    }
+    owners = await _seed_dashboard(
+        client_database_url,
+        calls=[
+            _call(started_at=started_at, summary_data=valid_summary),
+            _call(
+                started_at=started_at,
+                summary_data={
+                    **valid_summary,
+                    "caller_intent": whitespace,
+                },
+            ),
+            _call(
+                started_at=started_at,
+                summary_data={
+                    **valid_summary,
+                    "action_items": [whitespace],
+                },
+            ),
+            _call(
+                started_at=started_at,
+                summary_data={
+                    **valid_summary,
+                    "sentiment": whitespace,
+                },
+            ),
+        ],
+    )
+
+    metrics = await _get_metrics(
+        client_database_url,
+        user_id=owners.owner_id,
+        now=datetime.fromisoformat("2026-07-25T00:30:00+02:00"),
+    )
+
+    assert metrics.follow_up_flagged_last_7_days == 1
+
+
+@pytest.mark.anyio
 async def test_metrics_average_only_terminal_calls_with_durations(
     client_database_url: str,
 ) -> None:
