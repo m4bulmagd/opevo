@@ -1,6 +1,108 @@
 # Integration Endpoints
 
-This document describes the non-product-facing backend endpoints used by internal workers, provider webhooks, health checks, and realtime clients.
+This document describes account-lifecycle APIs plus the non-product-facing
+backend endpoints used by local fixtures, internal workers, provider webhooks,
+health checks, and realtime clients.
+
+## Account lifecycle
+
+### `GET /api/account`
+
+Authenticated owner read returning only customer-safe lifecycle state:
+
+```json
+{
+  "status": "deactivating",
+  "serving": false,
+  "deactivation": {
+    "state": "draining_call",
+    "requested_at": "2026-07-25T00:00:00Z"
+  },
+  "reactivation_allowed": false,
+  "blocker": "account_deactivating"
+}
+```
+
+`status` is `active`, `deactivating`, or `inactive`. Active accounts derive
+`serving` from central readiness. Deactivating and inactive accounts are always
+non-serving. Progress is bounded to `requested`, `disabling_routing`,
+`canceling_subscription`, `draining_call`, `releasing_number`, `finalizing`, or
+`attention_required`. The response never contains Stripe/Telnyx IDs, retry
+counts, raw errors, provider bodies, or credentials.
+
+### `POST /api/account/deactivate`
+
+Authenticated owner command, rate-limited to five requests per minute:
+
+```json
+{"confirmation":"DEACTIVATE"}
+```
+
+The exact confirmation is schema-enforced. A valid first or repeated request
+returns `202 Accepted` with the same safe account shape as `GET /api/account`.
+The short entry transaction increments the lifecycle generation, makes the
+account and local phone non-serving, disables the agent, and records a single
+reference-only `account.deactivate` event. It does not wait for Stripe, Telnyx,
+Redis, or an admitted call.
+
+Owner deactivation requests immediate Stripe cancellation with no automatic
+proration or refund. The worker disables Telnyx routing, verifies or performs
+subscription cancellation, waits for every admitted call to become terminal,
+then releases the exact stored number and resets number-cycle activation state.
+Only the reconciler sets a phase timestamp after the corresponding provider
+success or authoritative verification; request and webhook transactions do not
+pre-populate those timestamps.
+
+Identity, confirmed profile/carrier, receptionist content, calls, recordings,
+usage, notifications, and billing are retained. Inactive owners keep
+authenticated read-only historical access. Reactivation needs a new
+generation-matched subscription and resumes at fresh provisioning consent for a
+new number, forwarding verification, and explicit go-live.
+
+The private outbox contract is:
+
+```json
+{"operation_id":"<deactivation-operation-uuid>"}
+```
+
+Its topic is `account.deactivate`, aggregate type is
+`account-deactivation-operation`, and aggregate ID equals `operation_id`.
+Authentication, provider-contract, or identity-conflict failures leave the
+account `deactivating`, expose only bounded attention progress, and require the
+operator recovery procedure in `docs/runbooks/deploy.md`.
+
+There is no `DELETE /api/account`: permanent deletion and export are not part
+of this lifecycle.
+
+## Development-only call-drain fixtures
+
+These routes are registered only when `APP_ENV=development`. They also require
+`AUTH_MODE=local`, `TELEPHONY_MODE=fake`, and the authenticated local owner.
+They return the same bounded `local_telephony_disabled` conflict for a
+Clerk-authenticated development configuration or non-fake telephony. They are
+absent outside development.
+
+### `POST /api/development/call-drain-fixture/start`
+
+Creates and connects one owner-scoped call through the real call repository,
+without LiveKit dispatch or Telnyx I/O. The response contains only:
+
+```json
+{"call_id":"<call-uuid>"}
+```
+
+### `POST /api/development/call-drain-fixture/finish`
+
+Request:
+
+```json
+{"call_id":"<call-uuid>"}
+```
+
+The route hides foreign call IDs with `404`, then exercises the real agent-end,
+finalization-claim, usage, notification, summary-intent, and completion path.
+It does not mutate account lifecycle state directly and returns only `call_id`.
+These fixtures exist solely for provider-free local acceptance.
 
 ## Health
 
@@ -204,12 +306,20 @@ Requirements:
 Currently handled events:
 
 - `customer.subscription.created`
+- `customer.subscription.updated`
+- `customer.subscription.deleted`
 - `invoice.paid`
+- `invoice.payment_failed`
 
 Behavior:
 
 - verifies the Stripe signature
 - persists subscription and usage state through the billing service
+- records period-end cancellation and its effective date without stopping
+  service; reversal clears that scheduled state
+- starts account deactivation only when the current, generation-matched
+  subscription reaches final cancellation; the webhook entry transaction leaves
+  routing/subscription phase timestamps for the reconciler to set truthfully
 - returns `202 Accepted`
 
 ### `POST /webhooks/livekit`
@@ -238,7 +348,8 @@ Behavior:
 
 ## Notes
 
-- These endpoints are operational/integration surfaces, not frontend product APIs.
+- Except for the authenticated account lifecycle routes, these endpoints are
+  operational/integration surfaces rather than frontend product APIs.
 - Live call recordings are started through LiveKit egress and written directly
   to the recordings bucket. Raw audio blobs are rejected by the completion
   schema, are never placed in Redis, and have no legacy recording-upload worker.

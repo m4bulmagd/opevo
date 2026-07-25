@@ -51,6 +51,8 @@ previous_web_new_api_contract_evidence: <CI/staging evidence id>
 other_cross_service_contract_evidence: <evidence id or not-applicable with review>
 dashboard_url_or_id: <non-secret reference>
 incident_channel: <value-free reference>
+stripe_portal_configuration_review: <evidence id>
+account_deactivation_alert_review: <evidence id>
 ```
 
 Images must use immutable repository digests. Tags, including a Git SHA tag,
@@ -92,6 +94,19 @@ Before the change window, the release commander must confirm:
   API. Do not use an ordinary rolling release to discover compatibility.
 - Provider status pages, database capacity, Redis capacity, queue age, API error
   rate, call-finalization latency, and recording failures are normal.
+- Production API configuration sets `BILLING_MODE=stripe` and supplies
+  `STRIPE_SECRET_KEY` and `STRIPE_BILLING_PORTAL_CONFIGURATION_ID`; the worker
+  also receives `STRIPE_SECRET_KEY` whenever its `BILLING_MODE` is `stripe`.
+  Secret values must remain in the managed secret store.
+- The object referenced by `STRIPE_BILLING_PORTAL_CONFIGURATION_ID` has current
+  Stripe-side review evidence proving subscription cancellation is scheduled
+  for the paid-period end and proration is disabled. A repository test or
+  nonblank ID is not evidence of the external configuration.
+- Monitoring pages on every increment of
+  `presvo.account_deactivation.attention` and alerts when
+  `presvo.account_deactivation.oldest_incomplete_age` exceeds
+  `MAX_CALL_DURATION_SECONDS + 900` seconds. Both rules must be active for the
+  configured `MAX_CALL_DURATION_SECONDS`, not a copied default.
 - There is no active incident, credential rotation, data repair, provider
   maintenance, or overlapping deployment in the environment.
 - The previous immutable image digests and current configuration revision are
@@ -110,6 +125,9 @@ Stop immediately and open or update an incident if any of these occur:
 - more than one gate is being changed at once, leaving the failing component
   ambiguous;
 - the defined rollback or forward-fix path is no longer available.
+- the reviewed Stripe Portal configuration or either account-deactivation alert
+  is missing, disabled, points at the wrong environment, or cannot page the
+  recorded on-call owner.
 
 ## Operator command convention
 
@@ -239,6 +257,13 @@ as available. Then make the previous revision **stop accepting new dispatches**
 and wait until its **active job count reaches zero** before terminating it. Do
 not place a real customer call at this gate.
 
+For a Stripe-mode worker, startup must fail closed without
+`STRIPE_SECRET_KEY`. Confirm the value is supplied by secret reference without
+printing it. Observe the account-deactivation operation, oldest-incomplete,
+reconciliation-result, attention, and completion-duration metrics after worker
+startup; zero attention is expected, but do not manufacture a real provider
+deactivation as a deployment probe.
+
 The agent worker sets a 3,900-second drain timeout, covering the current
 3,600-second maximum call plus cleanup. Compose grants a 66-minute termination
 grace so its stop signal can drain instead of escalating to `SIGKILL`. A managed
@@ -351,6 +376,11 @@ use a real customer's data, transcript, or recording. Execute in this order:
    provider and readiness alerts remain clear, and no sensitive content appears
    in application/telemetry logs.
 
+Do not deactivate the synthetic account in this generic smoke test. Immediate
+Stripe cancellation and Telnyx number release are real provider mutations and
+require a separately approved disposable-number certification procedure. No
+such provider certification is claimed by this runbook or the local test suite.
+
 Stop, prevent further rollout, and open an incident for cross-tenant access,
 incorrect billing, lost/duplicated finalization, recording-policy violation,
 unredacted sensitive data, or an unexplained provider error. For lesser failures,
@@ -360,6 +390,78 @@ calls repeatedly.
 Required evidence: synthetic account reference, opaque call/test IDs, each
 step's pass/fail and UTC time, dashboard/trace references containing no content,
 queue/error snapshots, and both owners' sign-off.
+
+## Account-deactivation observation and recovery
+
+Account deactivation is reversible service shutdown, not deletion. Its account
+states are `active -> deactivating -> inactive -> active`. The `deactivating`
+commit immediately blocks new-call admission and service-restoring mutations.
+An already-admitted call may finish; Telnyx release must wait until it reaches a
+terminal state. Owner-triggered cancellation is immediate with no automatic
+proration or refund. Stripe Portal subscription-only cancellation remains
+active until the paid-period end and starts deactivation only on final
+cancellation.
+
+Use only value-free operation evidence. For an incomplete operation, observe:
+
+- the opaque operation ID, trigger, safe operation status, lifecycle generation,
+  request time, last reconciliation time, and bounded error code;
+- which reconciler-owned phase timestamps are present: routing disabled,
+  subscription cancellation verified, active call drained, number released,
+  activation reset, and completed;
+- the one `account.deactivate` outbox row for aggregate type
+  `account-deactivation-operation`, whose aggregate ID and only payload value
+  are the same operation ID;
+- whether an owner-scoped call is still in a nonterminal state; and
+- the five low-cardinality metrics
+  `presvo.account_deactivation.operations`,
+  `presvo.account_deactivation.oldest_incomplete_age`,
+  `presvo.account_deactivation.reconciliation_results`,
+  `presvo.account_deactivation.attention`, and
+  `presvo.account_deactivation.completion_duration`.
+
+Do not infer provider completion from the request/webhook time. The entry path
+leaves routing and subscription phase timestamps unset; only the reconciler
+writes a timestamp after provider success or authoritative verification.
+
+Telnyx timeout, rate-limit, connection, and availability failures remain
+non-exhausting retries while the account stays non-serving. A successful
+release or an exact already-absent/not-found result satisfies release.
+Authentication failures commit `telephony_authentication`; release identity
+conflicts commit `telephony_release_conflict`; other bounded adapter-contract
+failures commit `provider_contract`. These states require operator attention
+and never expose raw Telnyx errors or provider identities to the customer.
+
+On every increment of `presvo.account_deactivation.attention`:
+
+1. Open an incident and record the opaque operation ID, trigger, current safe
+   phase, bounded code, alert time, and owners. Do not copy raw provider
+   payloads, credentials, phone numbers, or customer content.
+2. Confirm the account remains `deactivating` and `serving=false`. If it does
+   not, stop and escalate as an authorization/routing incident.
+3. Remediate the underlying credential, provider-contract, or identity fault
+   through the approved secret/provider administration procedure.
+4. Requeue **only** the failed reference-only `account.deactivate` outbox event
+   for the recorded operation ID through the approved datastore/queue
+   administration path. Its payload must remain exactly `operation_id`; do not
+   create a second operation, broaden the payload, or replay unrelated failed
+   events.
+5. Observe reconciler-owned timestamps and verify the durable operation reaches
+   `completed`, the account reaches `inactive`, the old phone projection is
+   absent, and the attention gauge returns to its expected value before closing
+   the incident.
+
+The same recovery boundary applies when
+`presvo.account_deactivation.oldest_incomplete_age` exceeds
+`MAX_CALL_DURATION_SECONDS + 900`: determine whether a call is legitimately
+draining or a provider phase is stalled, remediate the exact fault, and requeue
+only the matching failed reference-only event when necessary.
+
+Deactivation preserves identity, confirmed profile/carrier, receptionist
+configuration, calls, recordings, notifications, usage, and billing history.
+It does not implement or prove export, permanent deletion, retention,
+backup/historical-copy erasure, legal approval, cloud deployment, or real
+Stripe/Telnyx certification.
 
 ## Close or abort the release
 
