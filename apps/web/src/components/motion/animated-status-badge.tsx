@@ -5,9 +5,10 @@
 
 import type { ReactNode } from "react";
 
-import { AnimatePresence, motion, useReducedMotion, type Variants } from "motion/react";
+import { AnimatePresence, motion, type Variants } from "motion/react";
 
 import { EASE_OUT } from "@/lib/motion/tokens";
+import { useHydrationSafeReducedMotion } from "@/lib/motion/use-hydration-safe-reduced-motion";
 import { cn } from "@/lib/utils";
 
 export type StatusTone = "neutral" | "live" | "ready" | "processing" | "paused" | "warning" | "attention" | "inactive";
@@ -57,7 +58,7 @@ const REDUCED_MOTION_VARIANTS: Variants = {
 };
 
 export function AnimatedStatusBadge({ tone, label, icon, className }: AnimatedStatusBadgeProps) {
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = useHydrationSafeReducedMotion();
   const variants = reduceMotion ? REDUCED_MOTION_VARIANTS : MOTION_VARIANTS;
 
   return (

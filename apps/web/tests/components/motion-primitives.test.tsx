@@ -1,6 +1,7 @@
 import { createElement, Fragment, type HTMLAttributes, type ReactNode } from "react";
 
 import { cleanup, render, screen } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ActionState } from "@/components/motion/action-state";
@@ -77,6 +78,15 @@ function containsInfiniteRepeat(value: unknown): boolean {
 }
 
 describe("Presvo motion primitives", () => {
+  it("server-renders transform-free status motion before the client preference hydrates", () => {
+    motionMocks.reduced = false;
+
+    renderToString(<AnimatedStatusBadge tone="live" label="Live" />);
+
+    const selectedVariants = motionMocks.motionProps.findLast(({ variants }) => variants)?.variants;
+    expect(JSON.stringify(selectedVariants)).not.toContain('"y":');
+  });
+
   it("configures user reduced-motion preferences once for authenticated motion islands", () => {
     render(
       <PresvoMotionProvider>
