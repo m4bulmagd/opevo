@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listCallsMock = vi.fn();
@@ -62,6 +62,12 @@ describe("calls pages", () => {
   );
 
   beforeEach(() => {
+    listCallsMock.mockReset();
+    getCallDetailMock.mockReset();
+    deleteCallMock.mockReset();
+    revalidatePathMock.mockClear();
+    notFoundMock.mockClear();
+    redirectMock.mockClear();
     getAccountMock.mockReset().mockResolvedValue({
       status: "active",
       serving: true,
@@ -93,6 +99,15 @@ describe("calls pages", () => {
       query: "opening",
     });
     expect(screen.getByLabelText("Search calls")).toHaveValue("opening");
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1, name: "Calls" })).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="page-intro"]')).not.toBeNull();
+    const search = screen.getByRole("search");
+    expect(search).toHaveAttribute("method", "get");
+    expect(search).toHaveAttribute("action", "/dashboard/calls");
+    const searchInput = within(search).getByRole("searchbox", { name: "Search calls" });
+    expect(searchInput).toHaveAttribute("name", "q");
+    expect(searchInput).toHaveValue("opening");
     expect(screen.getByText("Showing 21–40 of 47 calls")).toBeInTheDocument();
     expect(screen.getByText("Page 2 of 3")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/dashboard/calls?q=opening");
@@ -102,7 +117,26 @@ describe("calls pages", () => {
     expect(screen.getByText(/Caller asked about opening hours/i)).toBeInTheDocument();
     expect(screen.getByText(/Check opening hours/i)).toBeInTheDocument();
     expect(screen.getByText("Follow-up needed", { exact: true })).toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: /Open call/i })[0]).toHaveAttribute("href", "/dashboard/calls/call-1");
+    const callLedger = screen.getByRole("table", { name: "Call history" });
+    const firstRow = callLedger.querySelector<HTMLElement>('[data-slot="data-ledger-row"]');
+    expect(firstRow).not.toBeNull();
+    if (!firstRow) {
+      throw new Error("The first call ledger row is missing");
+    }
+    for (const label of ["Caller", "Intent", "Follow-up", "Duration", "Started"]) {
+      expect(within(firstRow).getByText(label)).toBeInTheDocument();
+    }
+    expect(firstRow.querySelector('[data-slot="data-ledger-cell"][data-hide-at="sm"]')).not.toBeNull();
+    expect(firstRow.querySelector('[data-slot="data-ledger-cell"][data-hide-at="md"]')).not.toBeNull();
+    expect(
+      within(firstRow).getByRole("link", {
+        name: /Open call from \+33123456789, status Completed, intent Check opening hours, Follow-up needed, duration 1m, started Mar 28, 11:00/i,
+      }),
+    ).toHaveAttribute("href", "/dashboard/calls/call-1");
+    expect(firstRow.querySelectorAll("a")).toHaveLength(1);
+    expect(firstRow.querySelector("a")).toHaveClass("min-h-11");
+    expect(screen.queryByRole("button", { name: /filter|tag|note|export|refresh/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /filter|tag|note|export|refresh/i })).not.toBeInTheDocument();
   });
 
   it("distinguishes no history from no search matches", async () => {
@@ -133,8 +167,47 @@ describe("calls pages", () => {
       }),
     );
     expect(screen.getByText("No calls match “opening”")).toBeInTheDocument();
-    expect(screen.getByText("Try another caller number or summary phrase.")).toBeInTheDocument();
+    expect(screen.getByText(/No stored call matches your search for “opening”/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Search calls")).toHaveValue("opening");
+    expect(screen.getByRole("link", { name: "Clear search" })).toHaveAttribute("href", "/dashboard/calls");
     expect(screen.getByRole("link", { name: "Clear" })).toHaveAttribute("href", "/dashboard/calls");
+  });
+
+  it("keeps privacy-safe caller, intent, and follow-up states explicit in ledger rows", async () => {
+    listCallsMock.mockResolvedValueOnce({
+      calls: [
+        {
+          ...callItem,
+          id: "call-private",
+          caller_number: null,
+          summary_status: "processing",
+          summary_text: null,
+          caller_intent: null,
+          follow_up_required: null,
+        },
+        {
+          ...callItem,
+          id: "call-unavailable",
+          summary_status: "unavailable",
+          summary_text: null,
+          caller_intent: null,
+          follow_up_required: false,
+        },
+      ],
+      total: 2,
+      limit: 20,
+      offset: 0,
+      has_more: false,
+    });
+    const { default: Page } = await import("@/app/(app)/dashboard/calls/page");
+
+    render(await Page({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText("Private caller")).toBeInTheDocument();
+    expect(screen.getByText("Summary processing")).toBeInTheDocument();
+    expect(screen.getByText("Intent unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Follow-up unknown")).toBeInTheDocument();
+    expect(screen.getByText("No follow-up needed")).toBeInTheDocument();
   });
 
   it("shows disabled first and final page controls", async () => {
@@ -224,16 +297,90 @@ describe("calls pages", () => {
           sequence_number: 1,
           created_at: "2026-03-28T10:00:10Z",
         },
+        {
+          speaker: "ASSISTANT",
+          text: "We are open on weekdays from nine.",
+          sequence_number: 2,
+          created_at: "2026-03-28T10:00:20Z",
+        },
       ],
     });
 
     const { default: DetailPage } = await import("@/app/(app)/dashboard/calls/[callId]/page");
     render(await DetailPage({ params: Promise.resolve({ callId: "call-1" }) }));
 
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1, name: "+33123456789" })).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="page-intro"]')).not.toBeNull();
+    const callStatus = screen.getByRole("region", { name: "Call status: Completed" });
+    expect(within(callStatus).getByText("Completed")).toBeInTheDocument();
+    expect(callStatus.querySelector("svg")).not.toBeNull();
+    const summary = screen.getByRole("region", { name: "Summary" });
+    const recording = screen.getByRole("region", { name: "Recording" });
+    const transcript = screen.getByRole("region", { name: "Transcript" });
+    const metadata = screen.getByRole("region", { name: "Metadata" });
+    for (const section of [summary, recording, transcript, metadata]) {
+      expect(section).toHaveAttribute("data-slot", "product-surface");
+    }
     expect(screen.getByText(/What are your opening hours\?/i)).toBeInTheDocument();
+    const transcriptLines = within(transcript).getAllByRole("listitem");
+    expect(transcriptLines).toHaveLength(2);
+    expect(transcriptLines[0]).toHaveTextContent("CALLER");
+    expect(transcriptLines[0]).toHaveTextContent("What are your opening hours?");
+    expect(transcriptLines[1]).toHaveTextContent("ASSISTANT");
+    expect(transcriptLines[1]).toHaveTextContent("We are open on weekdays from nine.");
     expect(screen.getByText(/Check opening hours/i)).toBeInTheDocument();
     expect(screen.getByText(/Send weekday hours/i)).toBeInTheDocument();
     expect(screen.getByText(/Recording unavailable/i)).toBeInTheDocument();
+    expect(within(metadata).getByText("Mar 28, 11:00")).toBeInTheDocument();
+    expect(within(metadata).getByText("Mar 28, 11:01")).toBeInTheDocument();
+    expect(within(metadata).getByText("1m")).toBeInTheDocument();
+    expect(within(metadata).getByText("1 min")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove call" })).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      summary_status: "processing",
+      expected: "Summary is still processing.",
+    },
+    {
+      summary_status: "unavailable",
+      expected: "Summary unavailable.",
+    },
+    {
+      summary_status: "ready",
+      expected: "No summary was provided.",
+    },
+  ] as const)("renders the stored $summary_status summary state without inventing content", async ({
+    summary_status,
+    expected,
+  }) => {
+    getCallDetailMock.mockResolvedValueOnce({
+      id: `call-${summary_status}`,
+      status: "connected",
+      caller_number: null,
+      started_at: "2026-03-28T10:00:00Z",
+      ended_at: null,
+      duration_seconds: null,
+      minutes_charged: null,
+      summary_text: null,
+      summary_status,
+      caller_intent: null,
+      action_items: null,
+      sentiment: null,
+      follow_up_required: null,
+      recording_url: null,
+      transcript: [],
+    });
+
+    const { default: DetailPage } = await import("@/app/(app)/dashboard/calls/[callId]/page");
+    render(await DetailPage({ params: Promise.resolve({ callId: `call-${summary_status}` }) }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "Private caller" })).toBeInTheDocument();
+    expect(screen.getByText(expected)).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Call status: Connected" })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Metadata" })).getByText("Not available")).toBeInTheDocument();
   });
 
   it("defers call removal until an active call completes", async () => {
@@ -315,5 +462,28 @@ describe("calls pages", () => {
     expect(revalidatePathMock).toHaveBeenCalledWith("/dashboard/calls");
     expect(revalidatePathMock).toHaveBeenCalledWith("/dashboard");
     expect(redirectMock).toHaveBeenCalledWith("/dashboard/calls");
+  });
+
+  it("maps only backend 404 call detail failures to the not-found boundary", async () => {
+    const { BackendApiError } = await import("@/lib/api/backend-client");
+    getCallDetailMock.mockRejectedValueOnce(new BackendApiError("missing", 404));
+
+    const { default: DetailPage } = await import("@/app/(app)/dashboard/calls/[callId]/page");
+    await expect(DetailPage({ params: Promise.resolve({ callId: "missing" }) })).rejects.toThrow("missing");
+
+    expect(notFoundMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates non-404 call detail failures", async () => {
+    const { BackendApiError } = await import("@/lib/api/backend-client");
+    getCallDetailMock.mockRejectedValueOnce(new BackendApiError("upstream unavailable", 503));
+
+    const { default: DetailPage } = await import("@/app/(app)/dashboard/calls/[callId]/page");
+    await expect(DetailPage({ params: Promise.resolve({ callId: "call-1" }) })).rejects.toMatchObject({
+      message: "upstream unavailable",
+      status: 503,
+    });
+
+    expect(notFoundMock).not.toHaveBeenCalled();
   });
 });

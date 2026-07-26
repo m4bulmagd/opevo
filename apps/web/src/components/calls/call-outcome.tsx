@@ -12,7 +12,7 @@ function summaryCopy(summaryStatus: CallSummaryFields["summary_status"], summary
   if (summaryStatus === "unavailable") {
     return "Summary unavailable.";
   }
-  return summaryText ?? "Summary ready.";
+  return summaryText ?? "No summary was provided.";
 }
 
 function keyedActions(actions: string[]) {
@@ -37,11 +37,11 @@ export function CallOutcome({
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="line-clamp-2 text-muted-foreground text-sm">{summaryCopy(summary_status, summaryText)}</p>
+      <p className="text-sm text-text-secondary leading-relaxed">{summaryCopy(summary_status, summaryText)}</p>
       {caller_intent ? (
         <div className="flex flex-col gap-1">
-          <span className="text-muted-foreground text-xs">Outcome</span>
-          <span className="font-medium text-sm">{caller_intent}</span>
+          <span className="font-medium text-text-tertiary text-xs">Intent</span>
+          <span className="font-medium text-sm text-text-primary">{caller_intent}</span>
         </div>
       ) : null}
       {follow_up_required === null ? null : (
@@ -51,19 +51,17 @@ export function CallOutcome({
       )}
       {visibleActions.length > 0 ? (
         <div className="flex flex-col gap-1">
-          <span className="text-muted-foreground text-xs">Next actions</span>
+          <span className="font-medium text-text-tertiary text-xs">Next actions</span>
           <ul className="flex list-disc flex-col gap-1 pl-4 text-sm">
             {visibleActionEntries.map((action) => (
               <li key={action.key}>{action.label}</li>
             ))}
           </ul>
-          {remainingActions > 0 ? (
-            <span className="text-muted-foreground text-xs">+{remainingActions} more</span>
-          ) : null}
+          {remainingActions > 0 ? <span className="text-text-tertiary text-xs">+{remainingActions} more</span> : null}
         </div>
       ) : null}
       {action_items?.length === 0 ? (
-        <span className="text-muted-foreground text-xs">No action items suggested.</span>
+        <span className="text-text-tertiary text-xs">No action items suggested.</span>
       ) : null}
     </div>
   );

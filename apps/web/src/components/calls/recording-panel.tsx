@@ -1,31 +1,17 @@
 import { AudioLines } from "lucide-react";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-
 export function RecordingPanel({ recordingUrl }: { recordingUrl: string | null }) {
+  if (recordingUrl) {
+    return (
+      // biome-ignore lint/a11y/useMediaCaption: The adjacent call transcript provides the text alternative.
+      <audio aria-label="Original call recording" className="w-full" controls preload="metadata" src={recordingUrl} />
+    );
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Recording</CardTitle>
-        <CardDescription>Play the original call audio through a fresh private link.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {recordingUrl ? (
-          // biome-ignore lint/a11y/useMediaCaption: The adjacent call transcript provides the text alternative.
-          <audio
-            aria-label="Original call recording"
-            className="w-full"
-            controls
-            preload="metadata"
-            src={recordingUrl}
-          />
-        ) : (
-          <div className="flex items-center gap-2 rounded-lg border border-dashed px-4 py-4 text-muted-foreground text-sm">
-            <AudioLines className="size-4" />
-            <span>Recording unavailable</span>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+    <div className="flex items-center gap-3 rounded-md border border-border/70 border-dashed bg-surface-subtle/50 px-4 py-5 text-sm text-text-secondary">
+      <AudioLines aria-hidden className="size-4 shrink-0" />
+      <span>Recording unavailable</span>
+    </div>
   );
 }

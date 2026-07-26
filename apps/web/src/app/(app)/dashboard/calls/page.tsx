@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { CallHistoryPagination, CallHistorySearch } from "@/components/calls/call-history-controls";
 import { CallsTable } from "@/components/calls/calls-table";
+import { PageIntro } from "@/components/product/page-intro";
 import { listCalls } from "@/lib/api/calls";
 import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 import {
@@ -39,7 +40,12 @@ export default async function CallsPage({ searchParams }: CallsPageProps) {
   }
 
   return (
-    <div className="flex flex-col gap-4 md:gap-6">
+    <div className="flex flex-col gap-6 md:gap-8">
+      <PageIntro
+        description="Search stored conversations and review the context your receptionist captured."
+        eyebrow="Call workspace"
+        title="Calls"
+      />
       <CallHistorySearch query={navigation.query} />
       <CallsTable calls={result.calls} query={navigation.query} />
       <CallHistoryPagination
