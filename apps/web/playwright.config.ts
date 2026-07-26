@@ -11,6 +11,7 @@ export default defineConfig({
   },
   reporter: "list",
   outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? "/tmp/presvo-playwright-results",
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}{ext}",
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://127.0.0.1:3300",
     screenshot: "only-on-failure",

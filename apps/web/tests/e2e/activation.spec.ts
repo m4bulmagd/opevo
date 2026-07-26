@@ -89,7 +89,7 @@ test("local owner activates Presvo without external providers", async ({ page })
   await page.getByRole("button", { name: "Go live" }).click();
 
   await expect(page).toHaveURL(/\/dashboard$/, { timeout: 60_000 });
-  await expect(page.getByText("Presvo is answering")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Lea is answering calls" })).toBeVisible();
 
   await writeFile(stateFilePath(), `${JSON.stringify({ oldNumber })}\n`, {
     encoding: "utf8",
