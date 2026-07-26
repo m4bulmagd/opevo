@@ -15,6 +15,16 @@ type WorkspaceShellProps = {
   children: ReactNode;
 };
 
+function commandRailRuntimeState(account: AccountStatus, agentEnabled: boolean) {
+  if (account.deactivation?.state === "attention_required" || account.blocker === "deactivation_attention_required") {
+    return "Attention required" as const;
+  }
+  if (account.status === "deactivating") return "Deactivating" as const;
+  if (account.status === "inactive") return "Inactive" as const;
+  if (!agentEnabled || !account.serving) return "Paused" as const;
+  return "Enabled" as const;
+}
+
 export function WorkspaceShell({ account, accountControl, agentEnabled, agentName, children }: WorkspaceShellProps) {
   return (
     <div
@@ -27,7 +37,7 @@ export function WorkspaceShell({ account, accountControl, agentEnabled, agentNam
       >
         Skip to workspace
       </a>
-      <CommandRail agentEnabled={agentEnabled} agentName={agentName} />
+      <CommandRail agentName={agentName} runtimeState={commandRailRuntimeState(account, agentEnabled)} />
       <div
         className="min-h-svh pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0 md:pl-18 lg:pl-64"
         data-slot="workspace-content"

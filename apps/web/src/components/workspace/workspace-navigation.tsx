@@ -5,11 +5,12 @@ import { useId } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { motion, useReducedMotion } from "motion/react";
+import { motion } from "motion/react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MobileMoreSheet } from "@/components/workspace/mobile-more-sheet";
 import { SPRING_LAYOUT } from "@/lib/motion/tokens";
+import { useHydrationSafeReducedMotion } from "@/lib/motion/use-hydration-safe-reduced-motion";
 import { dashboardItems, isDashboardItemActive, type NavItem } from "@/navigation/dashboard-items";
 
 type NavigationVariant = "rail" | "mobile";
@@ -30,7 +31,7 @@ type NavigationLinkProps = {
 // https://beui.dev/components/motion/shared-layout-bg
 // The shared marker represents authoritative route state, never hover.
 function ActiveNavigationMarker({ layoutId }: { layoutId: string }) {
-  const shouldReduceMotion = useReducedMotion();
+  const shouldReduceMotion = useHydrationSafeReducedMotion();
   const className = "absolute inset-1 rounded-md bg-sidebar-active";
 
   if (shouldReduceMotion) {

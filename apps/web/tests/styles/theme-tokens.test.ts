@@ -30,4 +30,19 @@ describe("Presvo Tailwind theme tokens", () => {
       expect(transitionDuration?.value).toBe(`var(--motion-duration-${duration})`);
     }
   });
+
+  it("fully removes animation and transition duration for reduced motion", async () => {
+    const globalsPath = path.resolve(process.cwd(), "src/app/globals.css");
+    const root = postcss.parse(await readFile(globalsPath, "utf8"), { from: globalsPath });
+    const reducedMotionDurations: string[] = [];
+
+    root.walkAtRules("media", (media) => {
+      if (!media.params.includes("prefers-reduced-motion: reduce")) return;
+      media.walkDecls(/^(animation|transition)-duration$/, (declaration) => {
+        reducedMotionDurations.push(declaration.value);
+      });
+    });
+
+    expect(reducedMotionDurations).toEqual(["0s", "0s"]);
+  });
 });

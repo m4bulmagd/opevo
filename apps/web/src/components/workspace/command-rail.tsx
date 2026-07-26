@@ -6,13 +6,11 @@ import { PresvoMotionProvider } from "@/components/motion/presvo-motion-provider
 import { WorkspaceNavigation } from "@/components/workspace/workspace-navigation";
 
 type CommandRailProps = {
-  agentEnabled: boolean;
   agentName: string;
+  runtimeState: "Attention required" | "Deactivating" | "Enabled" | "Inactive" | "Paused";
 };
 
-export function CommandRail({ agentEnabled, agentName }: CommandRailProps) {
-  const runtimeState = agentEnabled ? "Enabled" : "Paused";
-
+export function CommandRail({ agentName, runtimeState }: CommandRailProps) {
   return (
     <aside
       aria-label="Workspace command rail"

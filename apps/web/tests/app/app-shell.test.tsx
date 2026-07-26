@@ -3,6 +3,7 @@ import type { AnchorHTMLAttributes } from "react";
 import type { LinkProps } from "next/link";
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AccountStatus } from "@/lib/types/account";
@@ -153,6 +154,22 @@ afterAll(() => {
 });
 
 describe("app shell", () => {
+  it("server-renders a static active marker before the client motion preference hydrates", async () => {
+    testState.reducedMotion = false;
+    const { WorkspaceNavigation } = await import("@/components/workspace/workspace-navigation");
+    const { TooltipProvider } = await import("@/components/ui/tooltip");
+
+    const markup = renderToString(
+      <TooltipProvider>
+        <WorkspaceNavigation agentName="Ava" variant="rail" />
+      </TooltipProvider>,
+    );
+
+    expect(markup).toContain('data-motion="static"');
+    expect(markup).not.toContain('data-motion="layout"');
+    expect(markup).not.toContain("data-layout-id");
+  });
+
   it("uses the configured agent name in the complete desktop destination set", async () => {
     await renderDashboardLayout({ agentName: "Ava" });
 
@@ -193,6 +210,62 @@ describe("app shell", () => {
     expect(visibleAgentName).toHaveClass("truncate");
     expect(visibleAgentName).toHaveAttribute("title", longAgentName);
     expect(within(runtime).getByText(state)).toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      "a non-serving active account",
+      {
+        ...activeAccount,
+        serving: false,
+        blocker: "customer_not_ready",
+      },
+      "Paused",
+    ],
+    [
+      "a deactivating account",
+      {
+        status: "deactivating",
+        serving: false,
+        deactivation: { state: "draining_call", requested_at: "2026-07-24T10:00:00Z" },
+        reactivation_allowed: false,
+        blocker: "account_deactivating",
+      },
+      "Deactivating",
+    ],
+    [
+      "a deactivation needing attention with a stale general blocker",
+      {
+        status: "deactivating",
+        serving: false,
+        deactivation: { state: "attention_required", requested_at: "2026-07-24T10:00:00Z" },
+        reactivation_allowed: false,
+        blocker: "account_deactivating",
+      },
+      "Attention required",
+    ],
+    [
+      "an inactive account",
+      {
+        status: "inactive",
+        serving: false,
+        deactivation: null,
+        reactivation_allowed: true,
+        blocker: "account_inactive",
+      },
+      "Inactive",
+    ],
+  ] satisfies ReadonlyArray<
+    readonly [string, AccountStatus, "Attention required" | "Deactivating" | "Inactive" | "Paused"]
+  >)("uses account state instead of saved routing alone for %s", async (_label, account, expectedState) => {
+    await renderDashboardLayout({ account, agentEnabled: true });
+
+    const rail = screen.getByRole("complementary", { name: "Workspace command rail" });
+    expect(
+      within(rail).getByRole("group", {
+        name: `Agent runtime: Ava, ${expectedState}`,
+      }),
+    ).toBeInTheDocument();
   });
 
   it("normalizes a blank configured agent name to Receptionist in desktop and mobile navigation", async () => {
