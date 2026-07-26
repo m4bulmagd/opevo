@@ -36,6 +36,7 @@ export function AgentSettingsForm({
       return;
     }
 
+    setResult(null);
     startTransition(async () => {
       const nextResult = await saveAgentSettingsAction({
         ...formState,

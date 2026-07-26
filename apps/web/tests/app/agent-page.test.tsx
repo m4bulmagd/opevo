@@ -128,7 +128,34 @@ describe("agent page", () => {
     expect(intro).toBeInTheDocument();
     expect(runtime).toHaveAttribute("data-tone", "neutral");
     expect(runtime).toHaveTextContent("Call routing is enabled in the saved agent configuration");
+    expect(runtime).toHaveTextContent("Account readiness currently permits Presvo to serve calls");
     expect(runtime).not.toHaveTextContent(/answering|ready|live/i);
+    expect(runtime.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([
+    [true, "enabled"],
+    [false, "disabled"],
+  ] as const)("leads with incomplete account readiness while routing is saved as %s", async (isEnabled, routingState) => {
+    await renderAgentPage({
+      account: {
+        ...activeAccount,
+        serving: false,
+        blocker: "customer_not_ready",
+      },
+      config: {
+        ...configuredAgent,
+        is_enabled: isEnabled,
+      },
+    });
+
+    const runtime = screen.getByRole("region", { name: "Setup incomplete" });
+    const firstControl = screen.getByRole("textbox", { name: "Agent name" });
+
+    expect(runtime).toHaveTextContent(`Call routing is ${routingState} in the saved agent configuration`);
+    expect(runtime).toHaveTextContent(/account readiness does not currently permit serving/i);
+    expect(runtime).toHaveTextContent(/review activation/i);
+    expect(runtime).not.toHaveTextContent("customer_not_ready");
     expect(runtime.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -164,6 +191,101 @@ describe("agent page", () => {
     expect(runtime).toHaveTextContent(copy);
     expect(runtime).toHaveTextContent(/read-only/i);
     expect(runtime.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([
+    ["requested", "Request accepted"],
+    ["disabling_routing", "Stopping new calls"],
+    ["canceling_subscription", "Canceling subscription"],
+    ["draining_call", "Waiting for an active call to finish"],
+    ["releasing_number", "Releasing your Presvo number"],
+    ["finalizing", "Finalizing your account"],
+  ] as const)("maps the bounded %s deactivation progress to human copy", async (state, progressCopy) => {
+    await renderAgentPage({
+      account: {
+        status: "deactivating",
+        serving: false,
+        deactivation: {
+          state,
+          requested_at: "2026-07-24T10:00:00Z",
+        },
+        reactivation_allowed: false,
+        blocker: "account_deactivating",
+      },
+    });
+
+    const runtime = screen.getByRole("region", { name: "Deactivating" });
+    expect(runtime).toHaveTextContent(/settings are read-only/i);
+    expect(runtime).toHaveTextContent(progressCopy);
+    expect(runtime).not.toHaveTextContent(state);
+  });
+
+  it.each([
+    ["attention_required", "account_deactivating"],
+    ["draining_call", "deactivation_attention_required"],
+  ] as const)("presents %s / %s deactivation cleanup as attention required", async (state, blocker) => {
+    await renderAgentPage({
+      account: {
+        status: "deactivating",
+        serving: false,
+        deactivation: {
+          state,
+          requested_at: "2026-07-24T10:00:00Z",
+        },
+        reactivation_allowed: false,
+        blocker,
+      },
+    });
+
+    const runtime = screen.getByRole("region", { name: "Attention required" });
+    expect(runtime).toHaveAttribute("data-tone", "attention");
+    expect(runtime).toHaveTextContent(/account cleanup needs attention/i);
+    expect(runtime).toHaveTextContent(/settings are read-only/i);
+    expect(runtime).not.toHaveTextContent(/attention_required|deactivation_attention_required/);
+  });
+
+  it.each([
+    ["reactivation_not_ready", false, "Reactivation unavailable", "Reactivation is not ready"],
+    ["deactivation_attention_required", false, "Attention required", "Account cleanup needs attention"],
+    ["account_inactive", true, "Inactive", "This agent configuration is read-only"],
+  ] as const)("maps inactive account blocker %s without exposing internal state", async (blocker, reactivationAllowed, label, title) => {
+    await renderAgentPage({
+      account: {
+        status: "inactive",
+        serving: false,
+        deactivation: null,
+        reactivation_allowed: reactivationAllowed,
+        blocker,
+      },
+    });
+
+    const runtime = screen.getByRole("region", { name: label });
+    expect(runtime).toHaveTextContent(title);
+    expect(runtime).toHaveTextContent(/settings are read-only/i);
+    expect(runtime).not.toHaveTextContent(blocker);
+  });
+
+  it.each([
+    ["reactivation_not_ready", "releasing_number", "Reactivation unavailable", "Releasing your Presvo number"],
+    ["deactivation_attention_required", "finalizing", "Attention required", "Finalizing your account"],
+  ] as const)("retains mapped inactive cleanup progress for %s", async (blocker, deactivationState, label, progressCopy) => {
+    await renderAgentPage({
+      account: {
+        status: "inactive",
+        serving: false,
+        deactivation: {
+          state: deactivationState,
+          requested_at: "2026-07-24T10:00:00Z",
+        },
+        reactivation_allowed: false,
+        blocker,
+      },
+    });
+
+    const runtime = screen.getByRole("region", { name: label });
+    expect(runtime).toHaveTextContent(progressCopy);
+    expect(runtime).not.toHaveTextContent(blocker);
+    expect(runtime).not.toHaveTextContent(deactivationState);
   });
 
   it("groups the preserved controls into exactly four named settings regions", async () => {
@@ -275,6 +397,47 @@ describe("agent page", () => {
 
     expect(document.querySelector('[data-phase="idle"]')).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Save feedback" })).toBeEmptyDOMElement();
+  });
+
+  it("clears prior feedback throughout a direct retry and replaces it with the new result", async () => {
+    const retry = deferred<AgentConfig>();
+    patchAgentConfigMock
+      .mockRejectedValueOnce(new BackendApiError("Provider unavailable", 502))
+      .mockReturnValueOnce(retry.promise);
+    await renderAgentPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save agent settings" }));
+
+    const errorPhase = await waitFor(() => {
+      const phase = document.querySelector('[data-phase="error"]');
+      expect(phase).toBeInTheDocument();
+      return phase as HTMLElement;
+    });
+    expect(screen.getByRole("status", { name: "Save feedback" })).toHaveTextContent(
+      "Failed to update telephony state. Try again in a moment.",
+    );
+
+    fireEvent.click(errorPhase.closest("button") as HTMLButtonElement);
+
+    const pendingPhase = await waitFor(() => {
+      const phase = document.querySelector('[data-phase="pending"]');
+      expect(phase).toBeInTheDocument();
+      return phase as HTMLElement;
+    });
+    expect(pendingPhase.closest("button")).toBeDisabled();
+    expect(screen.getByRole("status", { name: "Save feedback" })).toBeEmptyDOMElement();
+    expect(screen.queryByText("Failed to update telephony state. Try again in a moment.")).not.toBeInTheDocument();
+
+    await act(async () => {
+      retry.resolve({
+        ...configuredAgent,
+        agent_name: "Ava refreshed",
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('[data-phase="success"]')).toBeInTheDocument());
+    expect(screen.getByLabelText("Agent name")).toHaveValue("Ava refreshed");
+    expect(screen.getByRole("status", { name: "Save feedback" })).toHaveTextContent("Agent settings saved.");
   });
 
   it.each([
