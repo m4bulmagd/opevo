@@ -1,32 +1,47 @@
+import { CircleAlert, CircleCheck, PhoneCall } from "lucide-react";
+
 import { CallOutcome } from "@/components/calls/call-outcome";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatCallTime, formatDuration, formatMinutes, formatPhoneNumber } from "@/lib/formatters";
+import { ProductSurface } from "@/components/product/product-surface";
+import { StatusSurface, type StatusSurfaceTone } from "@/components/product/status-surface";
+import { formatCallTime, formatDuration, formatMinutes, formatPhoneNumber, toTitleCase } from "@/lib/formatters";
 import type { CallDetail } from "@/lib/types/calls";
 
+function statusPresentation(status: string): {
+  icon: typeof PhoneCall;
+  tone: StatusSurfaceTone;
+} {
+  if (status === "completed") {
+    return { icon: CircleCheck, tone: "ready" };
+  }
+  if (status === "failed") {
+    return { icon: CircleAlert, tone: "warning" };
+  }
+  return { icon: PhoneCall, tone: "processing" };
+}
+
 export function CallDetailCard({ call }: { call: CallDetail }) {
+  const status = toTitleCase(call.status);
+  const presentation = statusPresentation(call.status);
+  const StatusIcon = presentation.icon;
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{formatPhoneNumber(call.caller_number)}</CardTitle>
-        <CardDescription>Call detail and summary state for this conversation.</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex items-center gap-2">
-          <Badge variant={call.status === "completed" ? "secondary" : "outline"}>{call.status}</Badge>
-          <span className="text-muted-foreground text-xs">{formatCallTime(call.started_at)}</span>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-lg border px-3 py-3">
-            <p className="text-muted-foreground text-xs">Duration</p>
-            <p className="mt-1 font-medium">{formatDuration(call.duration_seconds)}</p>
-          </div>
-          <div className="rounded-lg border px-3 py-3">
-            <p className="text-muted-foreground text-xs">Charged</p>
-            <p className="mt-1 font-medium">{formatMinutes(call.minutes_charged)}</p>
-          </div>
-        </div>
-        <div className="rounded-lg border px-3 py-3">
+    <div className="flex flex-col gap-6">
+      <StatusSurface
+        description={
+          call.ended_at
+            ? `Started ${formatCallTime(call.started_at)} · Ended ${formatCallTime(call.ended_at)}`
+            : `Started ${formatCallTime(call.started_at)}`
+        }
+        icon={<StatusIcon />}
+        label={`Call status: ${status}`}
+        title={status}
+        tone={presentation.tone}
+      />
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(18rem,0.75fr)]">
+        <ProductSurface
+          description="Stored summary, intent, and next-step signals for this conversation."
+          title="Summary"
+        >
           <CallOutcome
             summaryText={call.summary_text}
             summary_status={call.summary_status}
@@ -35,8 +50,38 @@ export function CallDetailCard({ call }: { call: CallDetail }) {
             sentiment={call.sentiment}
             follow_up_required={call.follow_up_required}
           />
-        </div>
-      </CardContent>
-    </Card>
+        </ProductSurface>
+        <ProductSurface description="Timing and usage recorded for this call." title="Metadata" tone="subtle">
+          <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-1">
+            <div className="space-y-1">
+              <dt className="font-medium text-text-tertiary text-xs">Caller</dt>
+              <dd className="text-sm text-text-primary">{formatPhoneNumber(call.caller_number)}</dd>
+            </div>
+            <div className="space-y-1">
+              <dt className="font-medium text-text-tertiary text-xs">Started</dt>
+              <dd className="text-sm text-text-primary">
+                <time dateTime={call.started_at ?? undefined}>{formatCallTime(call.started_at)}</time>
+              </dd>
+            </div>
+            <div className="space-y-1">
+              <dt className="font-medium text-text-tertiary text-xs">Ended</dt>
+              <dd className="text-sm text-text-primary">
+                <time dateTime={call.ended_at ?? undefined}>{formatCallTime(call.ended_at)}</time>
+              </dd>
+            </div>
+            <div className="space-y-1">
+              <dt className="font-medium text-text-tertiary text-xs">Duration</dt>
+              <dd className="text-sm text-text-primary">{formatDuration(call.duration_seconds)}</dd>
+            </div>
+            <div className="space-y-1">
+              <dt className="font-medium text-text-tertiary text-xs">Charged</dt>
+              <dd className="text-sm text-text-primary">
+                {call.minutes_charged === null ? "Not available" : formatMinutes(call.minutes_charged)}
+              </dd>
+            </div>
+          </dl>
+        </ProductSurface>
+      </div>
+    </div>
   );
 }

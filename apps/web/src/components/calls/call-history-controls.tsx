@@ -6,7 +6,13 @@ import { buildCallHistoryHref, callHistoryPageCount } from "@/lib/calls/call-his
 
 export function CallHistorySearch({ query }: { query: string }) {
   return (
-    <form action="/dashboard/calls" method="get" className="flex flex-col gap-3 sm:flex-row sm:items-end">
+    // biome-ignore lint/a11y/useSemanticElements: A form with role=search supports the project's browser and test matrix.
+    <form
+      action="/dashboard/calls"
+      method="get"
+      className="flex flex-col gap-3 rounded-lg border border-border/70 bg-surface-subtle/50 p-4 sm:flex-row sm:items-end sm:p-5"
+      role="search"
+    >
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <label htmlFor="call-search" className="font-medium text-sm">
           Search calls
@@ -18,12 +24,15 @@ export function CallHistorySearch({ query }: { query: string }) {
           maxLength={100}
           defaultValue={query}
           placeholder="Caller number or summary"
+          className="min-h-11"
         />
       </div>
       <div className="flex items-center gap-2">
-        <Button type="submit">Search</Button>
+        <Button className="min-h-11" type="submit">
+          Search
+        </Button>
         {query ? (
-          <Button asChild variant="ghost">
+          <Button asChild className="min-h-11" variant="ghost">
             <Link href="/dashboard/calls">Clear</Link>
           </Button>
         ) : null}
@@ -61,20 +70,20 @@ export function CallHistoryPagination({ query, page, pageSize, total, returnedCo
       </div>
       <div className="flex items-center gap-2">
         {page > 1 ? (
-          <Button asChild variant="outline">
+          <Button asChild className="min-h-11" variant="outline">
             <Link href={buildCallHistoryHref(query, page - 1)}>Previous</Link>
           </Button>
         ) : (
-          <Button type="button" variant="outline" disabled>
+          <Button className="min-h-11" type="button" variant="outline" disabled>
             Previous
           </Button>
         )}
         {page < totalPages ? (
-          <Button asChild variant="outline">
+          <Button asChild className="min-h-11" variant="outline">
             <Link href={buildCallHistoryHref(query, page + 1)}>Next</Link>
           </Button>
         ) : (
-          <Button type="button" variant="outline" disabled>
+          <Button className="min-h-11" type="button" variant="outline" disabled>
             Next
           </Button>
         )}
