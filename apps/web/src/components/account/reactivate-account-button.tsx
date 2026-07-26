@@ -31,6 +31,7 @@ export function ReactivateAccountButton({ reactivationAllowed }: { reactivationA
   return (
     <>
       <Button
+        className="min-h-11"
         onClick={handleReactivation}
         disabled={isPending || !reactivationAllowed}
         aria-describedby={!reactivationAllowed ? "reactivation-unavailable" : undefined}

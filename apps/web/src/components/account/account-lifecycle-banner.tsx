@@ -11,6 +11,27 @@ export function AccountLifecycleBanner({ account }: { account: AccountStatus }) 
     return null;
   }
 
+  const needsAttention =
+    account.deactivation?.state === "attention_required" || account.blocker === "deactivation_attention_required";
+
+  if (needsAttention) {
+    return (
+      <Alert aria-live="polite">
+        <CircleAlert />
+        <AlertTitle>Account cleanup needs attention</AlertTitle>
+        <AlertDescription>
+          <p className="font-medium text-foreground">Presvo is no longer accepting new calls</p>
+          <p>Your retained data remains available. Open Account for the latest cleanup guidance.</p>
+        </AlertDescription>
+        <AlertAction>
+          <Button asChild className="min-h-11" size="sm" variant="outline">
+            <Link href="/dashboard/account">View account</Link>
+          </Button>
+        </AlertAction>
+      </Alert>
+    );
+  }
+
   if (account.status === "deactivating") {
     return (
       <Alert aria-live="polite">
@@ -21,7 +42,7 @@ export function AccountLifecycleBanner({ account }: { account: AccountStatus }) 
           <p>Your history remains available while subscription and number cleanup completes.</p>
         </AlertDescription>
         <AlertAction>
-          <Button asChild size="sm" variant="outline">
+          <Button asChild className="min-h-11" size="sm" variant="outline">
             <Link href="/dashboard/account">View account</Link>
           </Button>
         </AlertAction>
@@ -37,7 +58,7 @@ export function AccountLifecycleBanner({ account }: { account: AccountStatus }) 
         Historical calls, recordings, billing, and saved configuration remain available.
       </AlertDescription>
       <AlertAction>
-        <Button asChild size="sm" variant="outline">
+        <Button asChild className="min-h-11" size="sm" variant="outline">
           <Link href="/dashboard/account">View account</Link>
         </Button>
       </AlertAction>
