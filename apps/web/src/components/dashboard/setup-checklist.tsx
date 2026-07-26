@@ -2,9 +2,9 @@ import Link from "next/link";
 
 import { CheckCircle2, CircleDashed, Sparkles } from "lucide-react";
 
+import { ProductSurface } from "@/components/product/product-surface";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import type { AgentConfig } from "@/lib/types/agent";
 import type { OnboardingStatus } from "@/lib/types/onboarding";
 
@@ -52,21 +52,25 @@ export function SetupChecklist({
   const completeCount = steps.filter((step) => step.complete).length;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+    <ProductSurface
+      description="Move through the self-serve launch steps before switching your number routing live."
+      footer={
+        <Button asChild className="min-h-11">
+          <Link href="/activate">Review activation</Link>
+        </Button>
+      }
+      title={
+        <span className="flex items-center gap-2">
           <Sparkles className="size-4 text-muted-foreground" />
           Setup checklist
-        </CardTitle>
-        <CardDescription>
-          Move through the self-serve launch steps before switching your number routing live.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+        </span>
+      }
+    >
+      <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between rounded-lg border border-dashed px-4 py-3">
           <div className="flex flex-col gap-1">
             <span className="font-medium text-sm">Progress</span>
-            <span className="text-muted-foreground text-xs">
+            <span className="text-text-secondary text-xs">
               {completeCount} of {steps.length} tasks complete
             </span>
           </div>
@@ -84,17 +88,12 @@ export function SetupChecklist({
               )}
               <div className="flex flex-col gap-1">
                 <span className="font-medium text-sm">{step.title}</span>
-                <span className="text-muted-foreground text-xs">{step.description}</span>
+                <span className="text-text-secondary text-xs">{step.description}</span>
               </div>
             </div>
           ))}
         </div>
-      </CardContent>
-      <CardFooter>
-        <Button asChild>
-          <Link href="/activate">Review activation</Link>
-        </Button>
-      </CardFooter>
-    </Card>
+      </div>
+    </ProductSurface>
   );
 }

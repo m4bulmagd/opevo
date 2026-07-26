@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { CirclePause, PhoneCall } from "lucide-react";
 
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { StatusSurface } from "@/components/product/status-surface";
 import { Button } from "@/components/ui/button";
 import type { OnboardingStatus, ReadinessBlocker } from "@/lib/types/onboarding";
 
@@ -40,27 +40,37 @@ function pausedReason(onboardingStatus: OnboardingStatus) {
   return "Account readiness needs attention before Presvo can answer calls.";
 }
 
-export function AnsweringStatusBanner({ onboardingStatus }: { onboardingStatus: OnboardingStatus }) {
+export function AnsweringStatusBanner({
+  agentName,
+  onboardingStatus,
+}: {
+  agentName: string;
+  onboardingStatus: OnboardingStatus;
+}) {
   if (onboardingStatus.can_route) {
     return (
-      <Alert>
-        <PhoneCall />
-        <AlertTitle>Presvo is answering</AlertTitle>
-        <AlertDescription>Forwarded calls can be answered by Presvo.</AlertDescription>
-      </Alert>
+      <StatusSurface
+        description={`Forwarded calls can be answered by ${agentName}.`}
+        icon={<PhoneCall />}
+        label="Live"
+        title={`${agentName} is answering calls`}
+        tone="live"
+      />
     );
   }
 
   return (
-    <Alert>
-      <CirclePause />
-      <AlertTitle>Presvo is paused</AlertTitle>
-      <AlertDescription>{pausedReason(onboardingStatus)}</AlertDescription>
-      <AlertAction>
-        <Button asChild size="sm" variant="outline">
+    <StatusSurface
+      action={
+        <Button asChild className="min-h-11" variant="outline">
           <Link href="/activate">Review activation</Link>
         </Button>
-      </AlertAction>
-    </Alert>
+      }
+      description={pausedReason(onboardingStatus)}
+      icon={<CirclePause />}
+      label="Paused"
+      title={`${agentName} is paused`}
+      tone="paused"
+    />
   );
 }

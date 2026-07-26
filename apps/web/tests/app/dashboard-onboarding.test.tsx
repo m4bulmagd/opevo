@@ -2,10 +2,11 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getActivationSnapshotMock = vi.fn();
-const getAgentConfigMock = vi.fn();
+const getAgentConfigForRequestMock = vi.fn();
 const getOnboardingStatusMock = vi.fn();
 const listCallsMock = vi.fn();
 const getUsageSnapshotMock = vi.fn();
+const getDashboardMetricsMock = vi.fn();
 const redirectMock = vi.fn(() => {
   throw new Error("NEXT_REDIRECT");
 });
@@ -18,8 +19,8 @@ vi.mock("@/lib/api/activation", () => ({
   getActivationSnapshot: getActivationSnapshotMock,
 }));
 
-vi.mock("@/lib/api/agent", () => ({
-  getAgentConfig: getAgentConfigMock,
+vi.mock("@/lib/api/request-data", () => ({
+  getAgentConfigForRequest: getAgentConfigForRequestMock,
 }));
 
 vi.mock("@/lib/api/onboarding", () => ({
@@ -33,6 +34,10 @@ vi.mock("@/lib/api/calls", () => ({
 
 vi.mock("@/lib/api/billing", () => ({
   getUsageSnapshot: getUsageSnapshotMock,
+}));
+
+vi.mock("@/lib/api/dashboard", () => ({
+  getDashboardMetrics: getDashboardMetricsMock,
 }));
 
 function buildAgentConfig(overrides: Record<string, unknown> = {}) {
@@ -92,10 +97,19 @@ function buildActivationSnapshot(overrides: Record<string, unknown> = {}) {
 describe("dashboard onboarding", () => {
   beforeEach(() => {
     getActivationSnapshotMock.mockReset().mockResolvedValue(buildActivationSnapshot());
-    getAgentConfigMock.mockReset();
+    getAgentConfigForRequestMock.mockReset();
     getOnboardingStatusMock.mockReset();
     listCallsMock.mockReset();
     getUsageSnapshotMock.mockReset();
+    getDashboardMetricsMock.mockReset().mockResolvedValue({
+      timezone: "Europe/Paris",
+      calls_today: 0,
+      calls_last_7_days: 0,
+      calls_previous_7_days: 0,
+      calls_change_from_previous_7_days: 0,
+      follow_up_flagged_last_7_days: 0,
+      average_duration_seconds_last_7_days: null,
+    });
     redirectMock.mockClear();
   });
 
@@ -106,10 +120,11 @@ describe("dashboard onboarding", () => {
 
     await expect(Page()).rejects.toThrow("NEXT_REDIRECT");
     expect(redirectMock).toHaveBeenCalledWith("/activate");
-    expect(getAgentConfigMock).not.toHaveBeenCalled();
+    expect(getAgentConfigForRequestMock).not.toHaveBeenCalled();
     expect(getOnboardingStatusMock).not.toHaveBeenCalled();
     expect(listCallsMock).not.toHaveBeenCalled();
     expect(getUsageSnapshotMock).not.toHaveBeenCalled();
+    expect(getDashboardMetricsMock).not.toHaveBeenCalled();
   });
 
   it("allows a previously activated runtime-paused customer into the dashboard", async () => {
@@ -119,7 +134,7 @@ describe("dashboard onboarding", () => {
         activation: { activated_at: "2026-07-16T11:00:00Z" },
       }),
     );
-    getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
+    getAgentConfigForRequestMock.mockResolvedValueOnce(buildAgentConfig());
     getOnboardingStatusMock.mockResolvedValueOnce(buildOnboardingStatus());
     listCallsMock.mockResolvedValueOnce({
       calls: [],
@@ -134,11 +149,11 @@ describe("dashboard onboarding", () => {
     render(await Page());
 
     expect(redirectMock).not.toHaveBeenCalled();
-    expect(getAgentConfigMock).toHaveBeenCalledTimes(1);
+    expect(getAgentConfigForRequestMock).toHaveBeenCalledTimes(1);
   });
 
   it("renders provisioning progress clearly", async () => {
-    getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
+    getAgentConfigForRequestMock.mockResolvedValueOnce(buildAgentConfig());
     getOnboardingStatusMock.mockResolvedValueOnce(buildOnboardingStatus());
     listCallsMock.mockResolvedValueOnce({
       calls: [],
@@ -158,7 +173,7 @@ describe("dashboard onboarding", () => {
   });
 
   it("shows retry and self-service guidance when provisioning fails", async () => {
-    getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
+    getAgentConfigForRequestMock.mockResolvedValueOnce(buildAgentConfig());
     getOnboardingStatusMock.mockResolvedValueOnce(
       buildOnboardingStatus({
         phone_number_status: "failed",
@@ -185,7 +200,7 @@ describe("dashboard onboarding", () => {
   });
 
   it("shows the assigned number when routing is ready to enable", async () => {
-    getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig());
+    getAgentConfigForRequestMock.mockResolvedValueOnce(buildAgentConfig());
     getOnboardingStatusMock.mockResolvedValueOnce(
       buildOnboardingStatus({
         phone_number: "+3315551234",
@@ -215,7 +230,7 @@ describe("dashboard onboarding", () => {
   });
 
   it("keeps live status distinct from ready-to-enable", async () => {
-    getAgentConfigMock.mockResolvedValueOnce(buildAgentConfig({ is_enabled: true }));
+    getAgentConfigForRequestMock.mockResolvedValueOnce(buildAgentConfig({ is_enabled: true }));
     getOnboardingStatusMock.mockResolvedValueOnce(
       buildOnboardingStatus({
         phone_number: "+3315551234",
@@ -239,7 +254,7 @@ describe("dashboard onboarding", () => {
     const { default: Page } = await import("@/app/(app)/dashboard/page");
     render(await Page());
 
-    expect(screen.getByText(/Your receptionist is live/i)).toBeInTheDocument();
+    expect(screen.getByText(/Presvo Front Desk is answering calls/i)).toBeInTheDocument();
     expect(screen.queryByText(/Ready to go live/i)).not.toBeInTheDocument();
   });
 });

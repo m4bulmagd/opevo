@@ -18,9 +18,9 @@ import {
 import { toast } from "sonner";
 
 import { type RetryProvisioningActionResult, retryProvisioningAction } from "@/app/(app)/dashboard/onboarding-actions";
+import { ProductSurface } from "@/components/product/product-surface";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import type { OnboardingStatus, ReadinessBlocker } from "@/lib/types/onboarding";
 
@@ -154,7 +154,7 @@ function getStatusPresentation(onboardingStatus: OnboardingStatus) {
 function StatusActionLink({ action }: { action: StatusAction }) {
   if (action === "billing") {
     return (
-      <Button asChild>
+      <Button asChild className="min-h-11">
         <Link href="/dashboard/billing">Manage billing</Link>
       </Button>
     );
@@ -162,7 +162,7 @@ function StatusActionLink({ action }: { action: StatusAction }) {
 
   if (action === "activation") {
     return (
-      <Button asChild variant="secondary">
+      <Button asChild className="min-h-11" variant="secondary">
         <Link href="/activate">Review activation</Link>
       </Button>
     );
@@ -193,52 +193,51 @@ export function OnboardingStatusCard({ onboardingStatus, retryHandler }: Onboard
   const hasFooter = action !== null || onboardingStatus.can_retry_provisioning || feedback !== null;
 
   return (
-    <Card>
-      <CardHeader className="gap-3">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <CardTitle className="flex items-center gap-2">
-              <Icon className="size-4 text-muted-foreground" />
-              {title}
-            </CardTitle>
-            <CardDescription>{description}</CardDescription>
+    <ProductSurface
+      action={<Badge variant={badgeVariant}>{badgeLabel}</Badge>}
+      description={description}
+      footer={
+        hasFooter ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusActionLink action={action} />
+            {onboardingStatus.can_retry_provisioning ? (
+              <Button className="min-h-11" onClick={onRetry} disabled={isPending}>
+                {isPending ? <Spinner data-icon="inline-start" /> : null}
+                {!isPending ? <RefreshCw data-icon="inline-start" /> : null}
+                Retry provisioning
+              </Button>
+            ) : null}
+            {feedback ? (
+              <p aria-live="polite" className="text-sm text-text-secondary">
+                {feedback}
+              </p>
+            ) : null}
           </div>
-          <Badge variant={badgeVariant}>{badgeLabel}</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="grid gap-3 sm:grid-cols-2">
+        ) : undefined
+      }
+      title={
+        <span className="flex items-center gap-2">
+          <Icon className="size-4 text-text-tertiary" />
+          {title}
+        </span>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-lg border border-border/70 bg-muted/20 px-4 py-3">
-          <div className="text-muted-foreground text-xs uppercase tracking-[0.14em]">Assigned number</div>
+          <div className="text-text-tertiary text-xs uppercase tracking-widest">Assigned number</div>
           <div className="mt-1 font-medium">
             {onboardingStatus.phone_number ?? "We’ll show your number here once provisioning succeeds."}
           </div>
         </div>
         <div className="rounded-lg border border-border/70 bg-muted/20 px-4 py-3">
-          <div className="text-muted-foreground text-xs uppercase tracking-[0.14em]">Plan status</div>
+          <div className="text-text-tertiary text-xs uppercase tracking-widest">Plan status</div>
           <div className="mt-1 font-medium">
             {onboardingStatus.plan_tier
               ? `${onboardingStatus.plan_tier} · ${onboardingStatus.subscription_status ?? "pending"}`
               : "No active plan"}
           </div>
         </div>
-      </CardContent>
-      {hasFooter ? (
-        <CardFooter className="flex flex-wrap gap-2">
-          <StatusActionLink action={action} />
-          {onboardingStatus.can_retry_provisioning ? (
-            <Button onClick={onRetry} disabled={isPending}>
-              {isPending ? <Spinner data-icon="inline-start" /> : null}
-              {!isPending ? <RefreshCw data-icon="inline-start" /> : null}
-              Retry provisioning
-            </Button>
-          ) : null}
-          {feedback ? (
-            <p aria-live="polite" className="text-muted-foreground text-sm">
-              {feedback}
-            </p>
-          ) : null}
-        </CardFooter>
-      ) : null}
-    </Card>
+      </div>
+    </ProductSurface>
   );
 }
