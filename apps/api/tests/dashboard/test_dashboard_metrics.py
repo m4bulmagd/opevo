@@ -138,10 +138,26 @@ async def test_dashboard_metrics_resolve_owner_and_return_exact_contract(
     async_client,
     client_database_url: str,
     rs256_clerk_token_for,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clerk_user_id = "dashboard-api-owner"
-    current = datetime.now(UTC)
+    current = datetime(2026, 7, 15, 12, tzinfo=UTC)
     previous = current - timedelta(days=8)
+    original_get_metrics = DashboardMetricsService.get_metrics
+
+    async def get_metrics_at_fixed_time(
+        service: DashboardMetricsService,
+        user_id: UUID,
+        *,
+        now: datetime | None = None,
+    ):
+        return await original_get_metrics(service, user_id, now=current)
+
+    monkeypatch.setattr(
+        DashboardMetricsService,
+        "get_metrics",
+        get_metrics_at_fixed_time,
+    )
     await _seed_dashboard(
         client_database_url,
         owner_clerk_user_id=clerk_user_id,
