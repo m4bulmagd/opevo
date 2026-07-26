@@ -133,10 +133,27 @@ describe("agent page", () => {
     expect(runtime.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it.each([
-    [true, "enabled"],
-    [false, "disabled"],
-  ] as const)("leads with incomplete account readiness while routing is saved as %s", async (isEnabled, routingState) => {
+  it("shows a general account-requirements warning when enabled routing cannot serve", async () => {
+    await renderAgentPage({
+      account: {
+        ...activeAccount,
+        serving: false,
+        blocker: "customer_not_ready",
+      },
+    });
+
+    const runtime = screen.getByRole("region", { name: "Action needed" });
+    const firstControl = screen.getByRole("textbox", { name: "Agent name" });
+
+    expect(runtime).toHaveTextContent("Call routing is enabled in the saved agent configuration");
+    expect(runtime).toHaveTextContent(/account requirements do not currently permit serving/i);
+    expect(runtime).toHaveTextContent(/review overview for the next step/i);
+    expect(runtime).not.toHaveTextContent(/setup incomplete|review activation/i);
+    expect(runtime).not.toHaveTextContent("customer_not_ready");
+    expect(runtime.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps an intentionally disabled agent paused before evaluating readiness", async () => {
     await renderAgentPage({
       account: {
         ...activeAccount,
@@ -145,31 +162,15 @@ describe("agent page", () => {
       },
       config: {
         ...configuredAgent,
-        is_enabled: isEnabled,
-      },
-    });
-
-    const runtime = screen.getByRole("region", { name: "Setup incomplete" });
-    const firstControl = screen.getByRole("textbox", { name: "Agent name" });
-
-    expect(runtime).toHaveTextContent(`Call routing is ${routingState} in the saved agent configuration`);
-    expect(runtime).toHaveTextContent(/account readiness does not currently permit serving/i);
-    expect(runtime).toHaveTextContent(/review activation/i);
-    expect(runtime).not.toHaveTextContent("customer_not_ready");
-    expect(runtime.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it("describes disabled routing as paused without overstating runtime readiness", async () => {
-    await renderAgentPage({
-      config: {
-        ...configuredAgent,
         is_enabled: false,
       },
     });
 
     const runtime = screen.getByRole("region", { name: "Paused" });
     expect(runtime).toHaveTextContent("Call routing is disabled in the saved agent configuration");
-    expect(runtime).not.toHaveTextContent(/answering|ready|live/i);
+    expect(runtime).toHaveTextContent(/readiness.*after you enable/i);
+    expect(runtime).not.toHaveTextContent(/action needed|setup incomplete|review activation|customer_not_ready/i);
+    expect(runtime).not.toHaveTextContent(/permits serving|answering|ready|live/i);
   });
 
   it.each([

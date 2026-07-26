@@ -17,35 +17,35 @@ const DEACTIVATION_PROGRESS_COPY: Record<DeactivationState, string> = {
 };
 
 function activeRuntimeStatus(account: AccountStatus, agentName: string, isEnabled: boolean): RuntimeStatus {
-  if (!account.serving || account.blocker === "customer_not_ready") {
-    const routingState = isEnabled ? "enabled" : "disabled";
-
+  if (!isEnabled) {
     return {
-      description: `Call routing is ${routingState} in the saved agent configuration. Account readiness does not currently permit serving. Review activation to complete setup.`,
+      description:
+        "Call routing is disabled in the saved agent configuration. Presvo will evaluate serving readiness after you enable call routing.",
+      icon: <CirclePause />,
+      label: "Paused",
+      title: `${agentName} is paused`,
+      tone: "paused",
+    };
+  }
+
+  if (!account.serving || account.blocker === "customer_not_ready") {
+    return {
+      description:
+        "Call routing is enabled in the saved agent configuration. Account requirements do not currently permit serving. Review Overview for the next step.",
       icon: <CircleAlert />,
-      label: "Setup incomplete",
-      title: `${agentName} is ${isEnabled ? "enabled" : "paused"} in settings`,
+      label: "Action needed",
+      title: `${agentName} needs account attention`,
       tone: "warning",
     };
   }
 
-  if (isEnabled) {
-    return {
-      description:
-        "Call routing is enabled in the saved agent configuration. Account readiness currently permits Presvo to serve calls. This does not indicate that a call is in progress.",
-      icon: <CircleCheck />,
-      label: "Enabled",
-      title: `${agentName} is enabled`,
-      tone: "neutral",
-    };
-  }
-
   return {
-    description: "Call routing is disabled in the saved agent configuration. Settings remain available to edit.",
-    icon: <CirclePause />,
-    label: "Paused",
-    title: `${agentName} is paused`,
-    tone: "paused",
+    description:
+      "Call routing is enabled in the saved agent configuration. Account readiness currently permits Presvo to serve calls. This does not indicate that a call is in progress.",
+    icon: <CircleCheck />,
+    label: "Enabled",
+    title: `${agentName} is enabled`,
+    tone: "neutral",
   };
 }
 
