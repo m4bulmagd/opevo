@@ -27,7 +27,7 @@ export default async function AgentPage() {
         eyebrow="Agent configuration"
         title={agentName}
       />
-      <AgentRuntimeCard accountStatus={account.status} agentName={agentName} isEnabled={agentConfig.is_enabled} />
+      <AgentRuntimeCard account={account} agentName={agentName} isEnabled={agentConfig.is_enabled} />
       <AgentSettingsForm initialConfig={agentConfig} readOnly={account.status !== "active"} />
     </div>
   );
