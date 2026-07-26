@@ -61,7 +61,7 @@ export function DeactivateAccountDialog() {
   return (
     <AlertDialog onOpenChange={handleOpenChange}>
       <AlertDialogTrigger asChild>
-        <Button variant="destructive">
+        <Button className="min-h-11" variant="destructive">
           <TriangleAlert data-icon="inline-start" />
           Deactivate Presvo
         </Button>
@@ -111,8 +111,15 @@ export function DeactivateAccountDialog() {
         </div>
 
         <AlertDialogFooter className="shrink-0 border-t bg-popover px-6 py-4">
-          <AlertDialogCancel disabled={isPending}>Keep Presvo active</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" disabled={!isConfirmed || isPending} onClick={handleDeactivate}>
+          <AlertDialogCancel className="min-h-11" disabled={isPending}>
+            Keep Presvo active
+          </AlertDialogCancel>
+          <AlertDialogAction
+            className="min-h-11"
+            variant="destructive"
+            disabled={!isConfirmed || isPending}
+            onClick={handleDeactivate}
+          >
             {isPending ? <Spinner data-icon="inline-start" /> : <TriangleAlert data-icon="inline-start" />}
             Deactivate account
           </AlertDialogAction>
