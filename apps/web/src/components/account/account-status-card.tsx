@@ -15,6 +15,9 @@ const DEACTIVATION_PROGRESS_COPY: Record<NonNullable<AccountStatus["deactivation
   attention_required: "Cleanup needs additional time",
 };
 
+const INACTIVE_CYCLE_COPY =
+  "Your calls, recordings, billing history, and saved configuration remain available. Reactivation starts a new subscription and requires a newly provisioned number.";
+
 type AccountLifecyclePresentation = {
   label: "Active" | "Action needed" | "Deactivating" | "Attention required" | "Inactive";
   tone: StatusSurfaceTone;
@@ -35,7 +38,7 @@ export function getAccountLifecyclePresentation(account: AccountStatus): Account
       label: "Attention required",
       tone: "attention",
       title: "Account cleanup needs attention",
-      description: "Presvo is no longer accepting new calls",
+      description: account.status === "inactive" ? "Presvo is inactive" : "Presvo is no longer accepting new calls",
       progress,
     };
   }
@@ -74,8 +77,7 @@ export function getAccountLifecyclePresentation(account: AccountStatus): Account
     label: "Inactive",
     tone: "inactive",
     title: "Presvo is inactive",
-    description:
-      "Your calls, recordings, billing history, and saved configuration remain available. Reactivation starts a new subscription and requires a newly provisioned number.",
+    description: INACTIVE_CYCLE_COPY,
     progress,
   };
 }
@@ -83,7 +85,7 @@ export function getAccountLifecyclePresentation(account: AccountStatus): Account
 export function AccountStatusCard({ account }: { account: AccountStatus }) {
   const lifecycle = getAccountLifecyclePresentation(account);
   const action =
-    account.status === "inactive" && lifecycle.label !== "Attention required" ? (
+    account.status === "inactive" ? (
       <div className="flex max-w-sm flex-col items-start gap-2" data-slot="reactivation-action">
         <ReactivateAccountButton reactivationAllowed={account.reactivation_allowed} />
       </div>
@@ -103,7 +105,11 @@ export function AccountStatusCard({ account }: { account: AccountStatus }) {
     >
       {lifecycle.label === "Attention required" ? (
         <div className="flex flex-col gap-3">
-          <p>Your retained data remains available while account cleanup finishes.</p>
+          <p>
+            {account.status === "inactive"
+              ? INACTIVE_CYCLE_COPY
+              : "Your retained data remains available while account cleanup finishes."}
+          </p>
           <p className="font-medium text-text-primary">
             Refresh this page. If cleanup still needs attention, contact Presvo support.
           </p>

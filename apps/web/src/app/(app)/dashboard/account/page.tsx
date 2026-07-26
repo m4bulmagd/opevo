@@ -45,6 +45,7 @@ export default async function AccountPage() {
             </Button>
           }
           description="Update the name, greeting, call handling, and business context your receptionist uses."
+          headingLevel={3}
           title="Receptionist profile"
         >
           <p className="text-sm text-text-secondary">Keep customer-facing receptionist details accurate and current.</p>
@@ -57,6 +58,7 @@ export default async function AccountPage() {
             </Button>
           }
           description="Review your subscription, minute usage, and billing history."
+          headingLevel={3}
           title="Billing and subscription"
         >
           <p className="text-sm text-text-secondary">
@@ -66,6 +68,7 @@ export default async function AccountPage() {
 
         <SettingsSection
           description="Authentication and session controls follow the active sign-in mode. For hosted accounts, use the workspace header account control to sign out."
+          headingLevel={3}
           title="Session and security"
         >
           <p className="text-sm text-text-secondary">
@@ -75,6 +78,7 @@ export default async function AccountPage() {
 
         <SettingsSection
           description="This bounded lifecycle state reflects whether Presvo can accept new calls."
+          headingLevel={3}
           title="Account state"
         >
           <div className="flex items-center justify-between gap-4 rounded-md border border-border/70 bg-surface px-4 py-3">
