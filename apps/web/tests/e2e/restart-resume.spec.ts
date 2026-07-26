@@ -78,8 +78,9 @@ test("resumes deactivation after restart, preserves history, and provisions a ne
   await expect(page.getByRole("heading", { name: "Presvo is inactive" })).toBeVisible();
 
   await page.goto("/dashboard/calls");
-  await expect(page.locator(`a[href="/dashboard/calls/${state.historicalCallId}"]`)).toBeVisible();
-  await expect(page.getByText("completed", { exact: true })).toBeVisible();
+  const historicalCall = page.locator(`a[href="/dashboard/calls/${state.historicalCallId}"]`);
+  await expect(historicalCall).toBeVisible();
+  await expect(historicalCall).toHaveAccessibleName(/\bstatus Completed\b/);
 
   await page.goto("/dashboard/account");
   await page.getByRole("button", { name: "Reactivate Presvo" }).click();
