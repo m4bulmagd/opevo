@@ -363,4 +363,18 @@ describe("SettingsSection", () => {
     expect(sections[0]).toHaveAccessibleDescription("Primary identity settings.");
     expect(sections[1]).toHaveAccessibleDescription("Fallback identity settings.");
   });
+
+  it("supports a level-three heading when nested below a titled product surface", () => {
+    render(
+      <ProductSurface title="Account settings">
+        <SettingsSection headingLevel={3} title="Receptionist profile">
+          <p>Profile controls</p>
+        </SettingsSection>
+      </ProductSurface>,
+    );
+
+    expect(screen.getByRole("heading", { level: 2, name: "Account settings" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Receptionist profile" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Receptionist profile" })).toBeInTheDocument();
+  });
 });

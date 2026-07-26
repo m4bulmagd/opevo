@@ -2,6 +2,7 @@ import { type ReactNode, useId } from "react";
 
 export type SettingsSectionProps = {
   title: ReactNode;
+  headingLevel?: 2 | 3;
   description?: ReactNode;
   children: ReactNode;
   validation?: ReactNode;
@@ -9,9 +10,18 @@ export type SettingsSectionProps = {
   status?: ReactNode;
 };
 
-export function SettingsSection({ title, description, children, validation, action, status }: SettingsSectionProps) {
+export function SettingsSection({
+  title,
+  headingLevel = 2,
+  description,
+  children,
+  validation,
+  action,
+  status,
+}: SettingsSectionProps) {
   const titleId = useId();
   const supportingCopyId = useId();
+  const Heading = headingLevel === 3 ? "h3" : "h2";
 
   return (
     <section
@@ -21,9 +31,9 @@ export function SettingsSection({ title, description, children, validation, acti
       data-slot="settings-section"
     >
       <header className="flex max-w-2xl flex-col gap-2">
-        <h2 className="font-semibold text-lg text-text-primary tracking-tight" id={titleId}>
+        <Heading className="font-semibold text-lg text-text-primary tracking-tight" id={titleId}>
           {title}
-        </h2>
+        </Heading>
         {description !== undefined ? (
           <div className="text-sm text-text-secondary leading-relaxed" id={supportingCopyId}>
             {description}

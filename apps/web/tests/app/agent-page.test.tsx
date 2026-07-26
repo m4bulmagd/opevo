@@ -297,6 +297,7 @@ describe("agent page", () => {
 
     for (const name of ["Identity", "Call handling", "Business context", "Instructions"]) {
       expect(screen.getByRole("region", { name })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { level: 2, name })).toBeInTheDocument();
     }
 
     expect(screen.getByLabelText("Agent name")).toMatchObject({ id: "agent_name", name: "agent_name" });

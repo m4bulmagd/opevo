@@ -197,6 +197,10 @@ describe("account page", () => {
       "Session and security",
       "Account state",
     ]);
+    expect(within(settings).getByRole("heading", { level: 2, name: "Account settings" })).toBeInTheDocument();
+    for (const name of ["Receptionist profile", "Billing and subscription", "Session and security", "Account state"]) {
+      expect(within(settings).getByRole("heading", { level: 3, name })).toBeInTheDocument();
+    }
     expect(within(settings).getByRole("link", { name: "Manage receptionist" })).toHaveAttribute(
       "href",
       "/dashboard/agent",
@@ -309,6 +313,29 @@ describe("account page", () => {
     expect(container).not.toHaveTextContent(/(?:old|released|current).{0,24}(?:assigned|reserved)/i);
     expectNoInternalLifecycleDetails(container);
     expect(screen.queryByRole("heading", { name: "Danger zone" })).not.toBeInTheDocument();
+  });
+
+  it("keeps inactive meaning, new-cycle rules, and disabled reactivation visible when cleanup needs attention", async () => {
+    const { container } = await renderAccountPage({
+      status: "inactive",
+      serving: false,
+      deactivation: { state: "finalizing", requested_at: "2026-07-24T10:00:00Z" },
+      reactivation_allowed: false,
+      blocker: "deactivation_attention_required",
+    });
+
+    const status = screen.getByRole("region", { name: "Attention required" });
+    expect(within(status).getByRole("heading", { name: "Account cleanup needs attention" })).toBeInTheDocument();
+    expect(within(status).getByText("Presvo is inactive")).toBeInTheDocument();
+    expect(
+      within(status).getByText(/Your calls, recordings, billing history, and saved configuration remain available/i),
+    ).toBeInTheDocument();
+    expect(within(status).getByText(/new subscription.*newly provisioned number/i)).toBeInTheDocument();
+    expect(within(status).getByText("Finalizing your account")).toBeInTheDocument();
+    expect(within(status).getByText(/refresh this page.*contact Presvo support/i)).toBeInTheDocument();
+    expect(within(status).getByRole("button", { name: "Reactivate Presvo" })).toBeDisabled();
+    expect(within(status).getByText(/Reactivation will become available after cleanup finishes/i)).toBeInTheDocument();
+    expectNoInternalLifecycleDetails(container);
   });
 
   it("enables reactivation only when the inactive account is eligible", async () => {
