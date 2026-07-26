@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { CallOutcome } from "@/components/calls/call-outcome";
 import { DeleteCallDialog } from "@/components/calls/delete-call-dialog";
 import { RecordingPanel } from "@/components/calls/recording-panel";
 import { AnsweringStatusBanner } from "@/components/dashboard/answering-status-banner";
-import { RecentCallsList } from "@/components/dashboard/recent-calls-list";
+import { DashboardCallLedger } from "@/components/dashboard/dashboard-call-ledger";
 import type { CallHistoryListItem } from "@/lib/types/calls";
 import type { OnboardingStatus } from "@/lib/types/onboarding";
 
@@ -48,9 +49,22 @@ function onboardingStatus(overrides: Partial<OnboardingStatus> = {}): Onboarding
   };
 }
 
+function callOutcome(call: CallHistoryListItem) {
+  return (
+    <CallOutcome
+      action_items={call.action_items}
+      caller_intent={call.caller_intent}
+      follow_up_required={call.follow_up_required}
+      sentiment={call.sentiment}
+      summary_status={call.summary_status}
+      summaryText={call.summary_text}
+    />
+  );
+}
+
 describe("call handoff", () => {
   it("shows the call outcome and an obvious follow-up", () => {
-    render(<RecentCallsList calls={[structuredCall()]} />);
+    render(callOutcome(structuredCall()));
 
     expect(screen.getByText("Book a consultation")).toBeInTheDocument();
     expect(screen.getByText(/Follow-up needed/i)).toBeInTheDocument();
@@ -59,13 +73,11 @@ describe("call handoff", () => {
 
   it("shows bounded action items and the remaining count", () => {
     render(
-      <RecentCallsList
-        calls={[
-          structuredCall({
-            action_items: ["First action", "Second action", "Third action", "Fourth action"],
-          }),
-        ]}
-      />,
+      callOutcome(
+        structuredCall({
+          action_items: ["First action", "Second action", "Third action", "Fourth action"],
+        }),
+      ),
     );
 
     expect(screen.getByText("First action")).toBeInTheDocument();
@@ -79,13 +91,11 @@ describe("call handoff", () => {
 
     try {
       render(
-        <RecentCallsList
-          calls={[
-            structuredCall({
-              action_items: ["Return the call", "Return the call"],
-            }),
-          ]}
-        />,
+        callOutcome(
+          structuredCall({
+            action_items: ["Return the call", "Return the call"],
+          }),
+        ),
       );
 
       expect(screen.getAllByText("Return the call")).toHaveLength(2);
@@ -97,55 +107,50 @@ describe("call handoff", () => {
 
   it("shows processing, unavailable, and no-action states", () => {
     const { rerender } = render(
-      <RecentCallsList
-        calls={[
-          structuredCall({
-            summary_text: null,
-            summary_status: "processing",
-            caller_intent: null,
-            action_items: null,
-            sentiment: null,
-            follow_up_required: null,
-          }),
-        ]}
-      />,
+      callOutcome(
+        structuredCall({
+          summary_text: null,
+          summary_status: "processing",
+          caller_intent: null,
+          action_items: null,
+          sentiment: null,
+          follow_up_required: null,
+        }),
+      ),
     );
     expect(screen.getByText(/Summary is still processing/i)).toBeInTheDocument();
 
     rerender(
-      <RecentCallsList
-        calls={[
-          structuredCall({
-            summary_text: null,
-            summary_status: "unavailable",
-            caller_intent: null,
-            action_items: null,
-            sentiment: null,
-            follow_up_required: null,
-          }),
-        ]}
-      />,
+      callOutcome(
+        structuredCall({
+          summary_text: null,
+          summary_status: "unavailable",
+          caller_intent: null,
+          action_items: null,
+          sentiment: null,
+          follow_up_required: null,
+        }),
+      ),
     );
     expect(screen.getByText(/Summary unavailable/i)).toBeInTheDocument();
 
     rerender(
-      <RecentCallsList
-        calls={[
-          structuredCall({
-            action_items: [],
-            follow_up_required: false,
-          }),
-        ]}
-      />,
+      callOutcome(
+        structuredCall({
+          action_items: [],
+          follow_up_required: false,
+        }),
+      ),
     );
     expect(screen.getByText(/No follow-up needed/i)).toBeInTheDocument();
     expect(screen.getByText(/No action items suggested/i)).toBeInTheDocument();
   });
 
   it("uses a privacy-safe label when caller ID is withheld", () => {
-    render(<RecentCallsList calls={[structuredCall({ caller_number: null })]} />);
+    render(<DashboardCallLedger calls={[structuredCall({ caller_number: null, follow_up_required: null })]} />);
 
     expect(screen.getByText("Private caller")).toBeInTheDocument();
+    expect(screen.getByText("Follow-up unknown")).toBeInTheDocument();
   });
 
   it("renders original audio with native controls", () => {
@@ -156,14 +161,15 @@ describe("call handoff", () => {
   });
 
   it("makes active call answering the lead dashboard status", () => {
-    render(<AnsweringStatusBanner onboardingStatus={onboardingStatus()} />);
+    render(<AnsweringStatusBanner agentName="Ava" onboardingStatus={onboardingStatus()} />);
 
-    expect(screen.getByText("Presvo is answering")).toBeInTheDocument();
+    expect(screen.getByText("Ava is answering calls")).toBeInTheDocument();
   });
 
   it("explains why runtime answering is paused", () => {
     render(
       <AnsweringStatusBanner
+        agentName="Ava"
         onboardingStatus={onboardingStatus({
           minutes_remaining: 0,
           stage: "suspended",
@@ -173,7 +179,7 @@ describe("call handoff", () => {
       />,
     );
 
-    expect(screen.getByText("Presvo is paused")).toBeInTheDocument();
+    expect(screen.getByText("Ava is paused")).toBeInTheDocument();
     expect(screen.getByText(/No minutes remain/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Review activation/i })).toHaveAttribute("href", "/activate");
   });
