@@ -1,9 +1,11 @@
 import { AgentRuntimeCard } from "@/components/agent/agent-runtime-card";
 import { AgentSettingsForm } from "@/components/agent/agent-settings-form";
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
+import { PageIntro } from "@/components/product/page-intro";
 import { getAccount } from "@/lib/api/account";
 import { getAgentConfigForRequest } from "@/lib/api/request-data";
 import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
+import { normalizeAgentName } from "@/navigation/dashboard-items";
 
 export default async function AgentPage() {
   if (!isAppAuthConfigured) {
@@ -16,13 +18,17 @@ export default async function AgentPage() {
   }
 
   const [agentConfig, account] = await Promise.all([getAgentConfigForRequest(), getAccount()]);
+  const agentName = normalizeAgentName(agentConfig.agent_name);
 
   return (
-    <div className="@container/main grid gap-4 md:gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(320px,1fr)]">
+    <div className="@container/main flex flex-col gap-6 md:gap-8">
+      <PageIntro
+        description="Manage the identity, call handling, and operational knowledge saved for your receptionist."
+        eyebrow="Agent configuration"
+        title={agentName}
+      />
+      <AgentRuntimeCard accountStatus={account.status} agentName={agentName} isEnabled={agentConfig.is_enabled} />
       <AgentSettingsForm initialConfig={agentConfig} readOnly={account.status !== "active"} />
-      <aside className="flex flex-col gap-4 md:gap-6">
-        <AgentRuntimeCard agentConfig={agentConfig} />
-      </aside>
     </div>
   );
 }
