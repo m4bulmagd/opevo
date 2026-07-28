@@ -70,7 +70,7 @@
 - Modify: `apps/web/tests/app/app-shell.test.tsx`
 - Delete: `apps/web/src/lib/fonts/registry.ts`
 
-- [ ] **Step 1: Add failing exact-value token tests**
+- [x] **Step 1: Add failing exact-value token tests**
 
 Add a declaration collector to `theme-tokens.test.ts`:
 
@@ -103,7 +103,7 @@ expect(light.get("--shadow-raised")).toBe(
 
 Assert the template dark values for background, foreground, card, primary, border, shadow-card, and shadow-raised. Assert that `--font-sans` is the literal system stack and that reduced-motion durations remain `["0s", "0s"]`.
 
-- [ ] **Step 2: Run the token test and confirm it fails**
+- [x] **Step 2: Run the token test and confirm it fails**
 
 ```bash
 cd apps/web
@@ -112,7 +112,7 @@ npm run test:ci -- tests/styles/theme-tokens.test.ts
 
 Expected: failures show the current warm-canvas/cobalt values and font variables.
 
-- [ ] **Step 3: Port the template tokens without dropping production aliases**
+- [x] **Step 3: Port the template tokens without dropping production aliases**
 
 Replace the light and dark color, radius, and shadow values in `globals.css` with the exact values in `Presvo_frontend/src/styles.css`.
 
@@ -159,7 +159,7 @@ Register exact typography and utilities:
 
 Retain the existing semantic motion durations and the complete reduced-motion media query.
 
-- [ ] **Step 4: Remove active Google-font dependencies from layout code**
+- [x] **Step 4: Remove active Google-font dependencies from layout code**
 
 In `app/layout.tsx`, remove `publicFontVariables` and render:
 
@@ -186,7 +186,7 @@ expect(workspaceShell).not.toHaveClass(
 );
 ```
 
-- [ ] **Step 5: Run targeted verification**
+- [x] **Step 5: Run targeted verification**
 
 ```bash
 cd apps/web
@@ -197,7 +197,7 @@ npm run check
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web/src/app/globals.css apps/web/src/app/layout.tsx apps/web/src/components/workspace/workspace-shell.tsx apps/web/src/lib/fonts/registry.ts apps/web/tests/styles/theme-tokens.test.ts apps/web/tests/app/app-shell.test.tsx

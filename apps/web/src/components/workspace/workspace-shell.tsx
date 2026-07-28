@@ -4,7 +4,6 @@ import { AccountLifecycleBanner } from "@/components/account/account-lifecycle-b
 import { CommandRail } from "@/components/workspace/command-rail";
 import { MobileCommandBar } from "@/components/workspace/mobile-command-bar";
 import { WorkspaceHeader } from "@/components/workspace/workspace-header";
-import { authenticatedFontVariable } from "@/lib/fonts/registry";
 import type { AccountStatus } from "@/lib/types/account";
 
 type WorkspaceShellProps = {
@@ -27,10 +26,7 @@ function commandRailRuntimeState(account: AccountStatus, agentEnabled: boolean) 
 
 export function WorkspaceShell({ account, accountControl, agentEnabled, agentName, children }: WorkspaceShellProps) {
   return (
-    <div
-      className={`${authenticatedFontVariable} min-h-svh bg-background font-[family-name:var(--font-figtree)] text-foreground`}
-      data-slot="workspace-shell"
-    >
+    <div className="min-h-svh bg-background font-sans text-foreground" data-slot="workspace-shell">
       <a
         className="sr-only rounded-md bg-background px-3 py-2 focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:ring-3 focus:ring-ring/50"
         href="#workspace-main"
