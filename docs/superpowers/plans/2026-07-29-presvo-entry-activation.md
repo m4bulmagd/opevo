@@ -572,7 +572,7 @@ git commit -m "feat(web): polish activation route states"
 - Consumes: the disposable local E2E stack and serial activation state.
 - Produces: landing snapshots at 1440×1100 and 390×844, activation snapshots before mutation at both viewports, and overflow/semantic audits.
 
-- [ ] **Step 1: Add browser assertions before snapshots**
+- [x] **Step 1: Add browser assertions before snapshots**
 
 Create a serial visual spec that runs before `activation.spec.ts`:
 
@@ -589,7 +589,7 @@ For landing, assert the missed-call h1, France-first badge, product overview reg
 
 Capture viewport screenshots with animations disabled and caret hidden.
 
-- [ ] **Step 2: Prove responsive semantics**
+- [x] **Step 2: Prove responsive semantics**
 
 Add:
 
@@ -602,7 +602,7 @@ expect(await page.evaluate(() => ({
 
 At 390px assert every progress label remains present, the form controls fit, and the primary action has a bounding height of at least 44px.
 
-- [ ] **Step 3: Update the disposable runner order**
+- [x] **Step 3: Update the disposable runner order**
 
 Run:
 
@@ -616,7 +616,7 @@ entry-activation-visual.spec.ts
 
 When `E2E_UPDATE_SNAPSHOTS=1`, pass `--update-snapshots` to both visual specs. Keep the current isolated Compose project, ports, state file, cleanup trap, and lifecycle ordering.
 
-- [ ] **Step 4: Run with snapshot update**
+- [x] **Step 4: Run with snapshot update**
 
 ```bash
 PATH=/home/mo/.nvm/versions/node/v22.23.1/bin:$PATH \
@@ -624,7 +624,7 @@ E2E_UPDATE_SNAPSHOTS=1 \
 bash scripts/run-local-e2e.sh
 ```
 
-- [ ] **Step 5: Inspect all four new images**
+- [x] **Step 5: Inspect all four new images**
 
 Confirm:
 
@@ -636,7 +636,7 @@ Confirm:
 - card border/radius/shadow consistency;
 - no clipped mobile fields, labels, dialogs, or actions.
 
-- [ ] **Step 6: Run the visual specs without snapshot updates**
+- [x] **Step 6: Run the visual specs without snapshot updates**
 
 ```bash
 bash scripts/run-local-e2e.sh
@@ -644,7 +644,7 @@ bash scripts/run-local-e2e.sh
 
 Expected: the complete lifecycle and both visual suites pass against committed images.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/web/tests/e2e/entry-activation-visual.spec.ts apps/web/tests/e2e/entry-activation-visual.spec.ts-snapshots apps/web/tests/e2e/activation.spec.ts scripts/run-local-e2e.sh

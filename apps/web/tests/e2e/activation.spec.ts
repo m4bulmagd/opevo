@@ -20,6 +20,8 @@ function normalizeDisplayedNumber(value: string): string {
 
 async function completeBusinessMilestone(page: Page) {
   await expect(page.getByRole("heading", { name: "Tell us about your business" })).toBeVisible();
+  await expect(page.locator('[data-slot="activation-progress-segment"]')).toHaveCount(5);
+  await expect(page.getByText("Step 1 of 5")).toBeVisible();
   await page.getByLabel("Owner name").fill("Camille Martin");
   await page.getByLabel("Business name").fill("Atelier Martin");
   await page.getByLabel("Business type").fill("Plumbing service");
