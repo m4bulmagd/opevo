@@ -337,6 +337,59 @@ async def test_list_calls_applies_search_and_pagination_metadata(
 
 
 @pytest.mark.anyio
+async def test_list_calls_applies_status_and_date_range_query_contract(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = await seed_call_history(
+        client_database_url,
+        clerk_user_id="user_calls_filters",
+        email="calls-filters@example.invalid",
+    )
+    original_list_calls = CallHistoryService.list_calls
+
+    async def list_calls_at_fixed_time(
+        service: CallHistoryService,
+        user_id: UUID,
+        **kwargs,
+    ):
+        return await original_list_calls(
+            service,
+            user_id,
+            now=datetime(2026, 4, 1, tzinfo=UTC),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        CallHistoryService,
+        "list_calls",
+        list_calls_at_fixed_time,
+    )
+
+    response = await async_client.get(
+        "/api/calls",
+        params={
+            "q": "older",
+            "status": "completed",
+            "range": "7d",
+            "limit": 20,
+            "offset": 0,
+        },
+        headers={
+            "authorization": (
+                f"Bearer {rs256_clerk_token_for('user_calls_filters')}"
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert UUID(response.json()["calls"][0]["id"]) == ids["older_id"]
+
+
+@pytest.mark.anyio
 async def test_list_calls_phone_search_matches_domestic_trunk_prefix_to_e164_number(
     async_client,
     client_database_url,
@@ -379,6 +432,8 @@ async def test_list_calls_phone_search_matches_domestic_trunk_prefix_to_e164_num
         "limit=101",
         "offset=-1",
         f"q={'x' * 101}",
+        "status=connected",
+        "range=14d",
     ],
 )
 async def test_list_calls_rejects_invalid_query_bounds(

@@ -3,8 +3,17 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { buildCallHistoryHref, callHistoryPageCount } from "@/lib/calls/call-history-navigation";
+import type { CallHistoryDateRange, CallHistoryStatusFilter } from "@/lib/types/calls";
 
-export function CallHistorySearch({ query }: { query: string }) {
+export function CallHistorySearch({
+  query,
+  status,
+  range,
+}: {
+  query: string;
+  status: CallHistoryStatusFilter;
+  range: CallHistoryDateRange;
+}) {
   return (
     // biome-ignore lint/a11y/useSemanticElements: A form with role=search supports the project's browser and test matrix.
     <form
@@ -13,6 +22,8 @@ export function CallHistorySearch({ query }: { query: string }) {
       className="flex flex-col gap-3 rounded-lg border border-border/70 bg-surface-subtle/50 p-4 sm:flex-row sm:items-end sm:p-5"
       role="search"
     >
+      {status !== "all" ? <input name="status" type="hidden" value={status} /> : null}
+      {range !== "all" ? <input name="range" type="hidden" value={range} /> : null}
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <label htmlFor="call-search" className="font-medium text-sm">
           Search calls
@@ -47,9 +58,19 @@ type CallHistoryPaginationProps = {
   pageSize: number;
   total: number;
   returnedCount: number;
+  status: CallHistoryStatusFilter;
+  range: CallHistoryDateRange;
 };
 
-export function CallHistoryPagination({ query, page, pageSize, total, returnedCount }: CallHistoryPaginationProps) {
+export function CallHistoryPagination({
+  query,
+  status,
+  range,
+  page,
+  pageSize,
+  total,
+  returnedCount,
+}: CallHistoryPaginationProps) {
   if (total === 0) {
     return null;
   }
@@ -71,7 +92,7 @@ export function CallHistoryPagination({ query, page, pageSize, total, returnedCo
       <div className="flex items-center gap-2">
         {page > 1 ? (
           <Button asChild className="min-h-11" variant="outline">
-            <Link href={buildCallHistoryHref(query, page - 1)}>Previous</Link>
+            <Link href={buildCallHistoryHref({ query, status, range, page: page - 1 })}>Previous</Link>
           </Button>
         ) : (
           <Button className="min-h-11" type="button" variant="outline" disabled>
@@ -80,7 +101,7 @@ export function CallHistoryPagination({ query, page, pageSize, total, returnedCo
         )}
         {page < totalPages ? (
           <Button asChild className="min-h-11" variant="outline">
-            <Link href={buildCallHistoryHref(query, page + 1)}>Next</Link>
+            <Link href={buildCallHistoryHref({ query, status, range, page: page + 1 })}>Next</Link>
           </Button>
         ) : (
           <Button className="min-h-11" type="button" variant="outline" disabled>

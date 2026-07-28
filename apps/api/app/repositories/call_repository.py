@@ -520,11 +520,21 @@ class CallRepository:
     def _visible_call_predicates(
         user_id: UUID,
         query: str | None,
+        *,
+        statuses: frozenset[str] | None = None,
+        started_after: datetime | None = None,
+        started_before: datetime | None = None,
     ) -> tuple[ColumnElement[bool], ...]:
         predicates: list[ColumnElement[bool]] = [
             Call.user_id == user_id,
             Call.deleted_at.is_(None),
         ]
+        if statuses is not None:
+            predicates.append(Call.status.in_(statuses))
+        if started_after is not None:
+            predicates.append(Call.started_at >= started_after)
+        if started_before is not None:
+            predicates.append(Call.started_at <= started_before)
         if query is None:
             return tuple(predicates)
 
@@ -555,8 +565,17 @@ class CallRepository:
         limit: int = 100,
         offset: int = 0,
         query: str | None = None,
+        statuses: frozenset[str] | None = None,
+        started_after: datetime | None = None,
+        started_before: datetime | None = None,
     ) -> CallHistoryPage:
-        predicates = self._visible_call_predicates(user_id, query)
+        predicates = self._visible_call_predicates(
+            user_id,
+            query,
+            statuses=statuses,
+            started_after=started_after,
+            started_before=started_before,
+        )
         total = await self.session.scalar(
             select(func.count(Call.id)).where(*predicates)
         )

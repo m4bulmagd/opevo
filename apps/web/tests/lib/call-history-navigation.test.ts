@@ -11,10 +11,14 @@ describe("call history navigation", () => {
     expect(
       parseCallHistoryNavigation({
         q: [" opening hours ", "ignored"],
+        status: "in_progress",
+        range: "7d",
         page: "2",
       }),
     ).toEqual({
       query: "opening hours",
+      status: "in_progress",
+      range: "7d",
       page: 2,
       limit: 20,
       offset: 20,
@@ -34,6 +38,22 @@ describe("call history navigation", () => {
     expect(parseCallHistoryNavigation({ page }).offset).toBe(0);
   });
 
+  it("resolves unknown or repeated filters to all", () => {
+    expect(
+      parseCallHistoryNavigation({
+        status: ["completed", "failed"],
+        range: "14d",
+      }),
+    ).toEqual({
+      query: "",
+      status: "all",
+      range: "all",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+  });
+
   it("calculates at least one page", () => {
     expect(callHistoryPageCount(0)).toBe(1);
     expect(callHistoryPageCount(40)).toBe(2);
@@ -42,8 +62,29 @@ describe("call history navigation", () => {
   });
 
   it("builds canonical links that retain q and omit page one", () => {
-    expect(buildCallHistoryHref("opening hours", 2)).toBe("/dashboard/calls?q=opening+hours&page=2");
-    expect(buildCallHistoryHref("opening hours", 1)).toBe("/dashboard/calls?q=opening+hours");
-    expect(buildCallHistoryHref("", 1)).toBe("/dashboard/calls");
+    expect(
+      buildCallHistoryHref({
+        query: "opening hours",
+        status: "in_progress",
+        range: "7d",
+        page: 2,
+      }),
+    ).toBe("/dashboard/calls?q=opening+hours&status=in_progress&range=7d&page=2");
+    expect(
+      buildCallHistoryHref({
+        query: "opening hours",
+        status: "all",
+        range: "all",
+        page: 1,
+      }),
+    ).toBe("/dashboard/calls?q=opening+hours");
+    expect(
+      buildCallHistoryHref({
+        query: "",
+        status: "all",
+        range: "all",
+        page: 1,
+      }),
+    ).toBe("/dashboard/calls");
   });
 });
