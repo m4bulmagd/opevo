@@ -192,6 +192,15 @@ async def test_dashboard_metrics_resolve_owner_and_return_exact_contract(
         "calls_change_from_previous_7_days": 0,
         "follow_up_flagged_last_7_days": 1,
         "average_duration_seconds_last_7_days": 30,
+        "daily_activity": [
+            {"date": "2026-07-09", "label": "Thu", "calls": 0},
+            {"date": "2026-07-10", "label": "Fri", "calls": 0},
+            {"date": "2026-07-11", "label": "Sat", "calls": 0},
+            {"date": "2026-07-12", "label": "Sun", "calls": 0},
+            {"date": "2026-07-13", "label": "Mon", "calls": 0},
+            {"date": "2026-07-14", "label": "Tue", "calls": 0},
+            {"date": "2026-07-15", "label": "Wed", "calls": 1},
+        ],
     }
 
 
@@ -222,7 +231,11 @@ async def test_dashboard_metrics_exclude_calls_owned_by_another_user(
     )
 
     assert response.status_code == 200
-    assert response.json() == {
+    payload = response.json()
+    activity = payload.pop("daily_activity")
+    assert len(activity) == 7
+    assert all(point["calls"] == 0 for point in activity)
+    assert payload == {
         "timezone": "Europe/Paris",
         "calls_today": 0,
         "calls_last_7_days": 0,
@@ -317,6 +330,50 @@ async def test_metrics_use_confirmed_business_timezone_and_local_day_boundaries(
 
     assert metrics.timezone == "Europe/Paris"
     assert metrics.calls_today == 1
+
+
+@pytest.mark.anyio
+async def test_metrics_return_seven_ascending_local_day_activity_points(
+    client_database_url: str,
+) -> None:
+    owners = await _seed_dashboard(
+        client_database_url,
+        calls=[
+            _call(started_at=datetime(2026, 7, 18, 21, 59, 59, tzinfo=UTC)),
+            _call(started_at=datetime(2026, 7, 18, 22, 0, tzinfo=UTC)),
+            _call(started_at=datetime(2026, 7, 20, 10, 0, tzinfo=UTC)),
+            _call(started_at=datetime(2026, 7, 20, 12, 0, tzinfo=UTC)),
+            _call(started_at=datetime(2026, 7, 24, 22, 29, 59, tzinfo=UTC)),
+            _call(started_at=datetime(2026, 7, 24, 22, 30, 1, tzinfo=UTC)),
+            _call(
+                started_at=datetime(2026, 7, 20, 13, 0, tzinfo=UTC),
+                owner="other",
+            ),
+            _call(
+                started_at=datetime(2026, 7, 20, 14, 0, tzinfo=UTC),
+                deleted_at=datetime(2026, 7, 20, 15, 0, tzinfo=UTC),
+            ),
+        ],
+    )
+
+    metrics = await _get_metrics(
+        client_database_url,
+        user_id=owners.owner_id,
+        now=datetime.fromisoformat("2026-07-25T00:30:00+02:00"),
+    )
+
+    assert [
+        (point.date, point.label, point.calls)
+        for point in metrics.daily_activity
+    ] == [
+        ("2026-07-19", "Sun", 1),
+        ("2026-07-20", "Mon", 2),
+        ("2026-07-21", "Tue", 0),
+        ("2026-07-22", "Wed", 0),
+        ("2026-07-23", "Thu", 0),
+        ("2026-07-24", "Fri", 0),
+        ("2026-07-25", "Sat", 1),
+    ]
 
 
 @pytest.mark.anyio
@@ -421,6 +478,11 @@ async def test_metrics_handle_paris_dst_boundaries(
     )
 
     assert metrics.calls_last_7_days == 1
+    assert metrics.daily_activity[0].date == (
+        now.date() - timedelta(days=6)
+    ).isoformat()
+    assert metrics.daily_activity[0].calls == 1
+    assert len(metrics.daily_activity) == 7
 
 
 @pytest.mark.anyio

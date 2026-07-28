@@ -20,6 +20,15 @@ describe("dashboard API client", () => {
       calls_change_from_previous_7_days: 3,
       follow_up_flagged_last_7_days: 1,
       average_duration_seconds_last_7_days: 75,
+      daily_activity: [
+        { date: "2026-07-20", label: "Mon", calls: 0 },
+        { date: "2026-07-21", label: "Tue", calls: 1 },
+        { date: "2026-07-22", label: "Wed", calls: 0 },
+        { date: "2026-07-23", label: "Thu", calls: 2 },
+        { date: "2026-07-24", label: "Fri", calls: 1 },
+        { date: "2026-07-25", label: "Sat", calls: 1 },
+        { date: "2026-07-26", label: "Sun", calls: 3 },
+      ],
     };
     backendFetchMock.mockResolvedValueOnce(metrics);
     const { getDashboardMetrics } = await import("@/lib/api/dashboard");

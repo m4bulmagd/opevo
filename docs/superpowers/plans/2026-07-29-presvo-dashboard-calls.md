@@ -97,26 +97,26 @@ class DashboardActivityPoint:
 
 `DashboardMetrics.daily_activity` is always seven ascending local-calendar-day points ending today. Calls after `now`, soft-deleted calls, and calls owned by another user do not contribute.
 
-- [ ] **Step 1: Write failing repository/service/API tests**
+- [x] **Step 1: Write failing repository/service/API tests**
 
 Cover an empty seven-day window, calls on multiple local days, Europe/Paris offset handling, a DST boundary, tenant isolation, deleted calls, and the exact JSON contract.
 
-- [ ] **Step 2: Run focused API tests and confirm failure**
+- [x] **Step 2: Run focused API tests and confirm failure**
 
 ```bash
 cd apps/api
 uv run pytest tests/dashboard/test_dashboard_metrics.py -q
 ```
 
-- [ ] **Step 3: Implement cross-database bucket aggregation**
+- [x] **Step 3: Implement cross-database bucket aggregation**
 
 Build seven UTC boundary pairs in `DashboardMetricsService` from the resolved IANA timezone. Pass those pairs into a single repository aggregation query using conditional sums so SQLite and PostgreSQL share the same semantics. Map counts back to stable ISO dates and short English labels.
 
-- [ ] **Step 4: Add the response schema and frontend type**
+- [x] **Step 4: Add the response schema and frontend type**
 
 Add the nested Pydantic response model and the matching TypeScript type. Keep all existing fields unchanged.
 
-- [ ] **Step 5: Run focused API and web contract tests**
+- [x] **Step 5: Run focused API and web contract tests**
 
 ```bash
 cd apps/api
@@ -126,7 +126,7 @@ npm run test:ci -- tests/lib/dashboard-api.test.ts
 npm run typecheck
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git commit -m "feat(api): add dashboard activity buckets"
