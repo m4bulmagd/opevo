@@ -50,10 +50,6 @@ vi.mock("@/lib/api/request-data", () => ({
   getAgentConfigForRequest: testState.getAgentConfigForRequestMock,
 }));
 
-vi.mock("@/lib/fonts/registry", () => ({
-  authenticatedFontVariable: "font-figtree",
-}));
-
 vi.mock("motion/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("motion/react")>();
 
@@ -347,7 +343,8 @@ describe("app shell", () => {
 
     const workspaceShell = view.container.querySelector('[data-slot="workspace-shell"]');
     const workspaceContent = view.container.querySelector('[data-slot="workspace-content"]');
-    expect(workspaceShell).toHaveClass("font-figtree", "font-[family-name:var(--font-figtree)]");
+    expect(workspaceShell).toHaveClass("font-sans");
+    expect(workspaceShell).not.toHaveClass("font-[family-name:var(--font-figtree)]");
     expect(document.body).not.toHaveClass("font-figtree");
     expect(workspaceContent).toHaveClass(
       "pb-[calc(4rem+env(safe-area-inset-bottom))]",

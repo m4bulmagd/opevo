@@ -6,7 +6,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { APP_CONFIG } from "@/config/app-config";
 import { shouldWrapClerk } from "@/lib/auth/clerk-config";
-import { publicFontVariables } from "@/lib/fonts/registry";
 import { PREFERENCE_DEFAULTS } from "@/lib/preferences/preferences-config";
 import { ThemeBootScript } from "@/scripts/theme-boot";
 import { PreferencesStoreProvider } from "@/stores/preferences/preferences-provider";
@@ -42,7 +41,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         {/* Applies validated light/dark/system mode before first paint. */}
         <ThemeBootScript />
       </head>
-      <body className={`${publicFontVariables} min-h-screen antialiased`}>{bodyContent}</body>
+      <body className="min-h-screen font-sans antialiased">{bodyContent}</body>
     </html>
   );
 }
