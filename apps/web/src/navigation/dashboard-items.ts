@@ -43,17 +43,6 @@ export function dashboardGroups(agentName: string): NavGroup[] {
   ];
 }
 
-/** Legacy flat list retained for the mobile command bar until Phase 1 Task 5. */
-export function dashboardItems(agentName: string): NavItem[] {
-  return [
-    { title: "Overview", href: "/dashboard", icon: House, status: "live" },
-    { title: "Calls", href: "/dashboard/calls", icon: Phone, status: "live" },
-    { title: normalizeAgentName(agentName), href: "/dashboard/agent", icon: Bot, status: "live" },
-    { title: "Billing", href: "/dashboard/billing", icon: CreditCard, status: "live" },
-    { title: "Account", href: "/dashboard/account", icon: UserRound, status: "live" },
-  ];
-}
-
 export function isDashboardItemActive(pathname: string, href: string): boolean {
   return href === "/dashboard" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 }

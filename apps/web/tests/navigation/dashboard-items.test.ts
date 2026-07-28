@@ -35,16 +35,6 @@ describe("dashboard navigation model", () => {
     ]);
   });
 
-  it("keeps the existing five-item list stable until the mobile bar migrates", () => {
-    expect(dashboardNavigation.dashboardItems("Léa").map(({ href, title }) => ({ href, title }))).toEqual([
-      { href: "/dashboard", title: "Overview" },
-      { href: "/dashboard/calls", title: "Calls" },
-      { href: "/dashboard/agent", title: "Léa" },
-      { href: "/dashboard/billing", title: "Billing" },
-      { href: "/dashboard/account", title: "Account" },
-    ]);
-  });
-
   it("marks only exact overview and nested destination routes active", () => {
     expect(dashboardNavigation.isDashboardItemActive("/dashboard", "/dashboard")).toBe(true);
     expect(dashboardNavigation.isDashboardItemActive("/dashboard/calls", "/dashboard")).toBe(false);
