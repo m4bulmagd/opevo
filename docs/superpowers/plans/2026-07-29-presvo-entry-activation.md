@@ -513,7 +513,7 @@ git commit -m "feat(web): align activation milestone surfaces"
 - Consumes: Phase 1 `Skeleton`, `Alert`, and `Button`.
 - Produces: the same route-level loading/error exports.
 
-- [ ] **Step 1: Add failing state-contract tests**
+- [x] **Step 1: Add failing state-contract tests**
 
 Assert:
 
@@ -532,20 +532,20 @@ expect(screen.getByRole("main")).toHaveClass("max-w-3xl", "px-4");
 expect(screen.getByRole("button", { name: "Try again" })).toHaveClass("min-h-11");
 ```
 
-- [ ] **Step 2: Run the state tests and confirm failure**
+- [x] **Step 2: Run the state tests and confirm failure**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/activation-page.test.tsx
 ```
 
-- [ ] **Step 3: Implement geometry-matched loading and error surfaces**
+- [x] **Step 3: Implement geometry-matched loading and error surfaces**
 
 Loading uses the same five progress segments and a `data-slot="activation-loading-card"` card with header/content skeletons. Error uses a centered `rounded-2xl border bg-card p-5 shadow-card sm:p-7` surface, keeps the truthful stored-progress message, and provides the existing `reset` action.
 
 Both use `min-h-[calc(100svh-4rem)]`, `max-w-3xl`, `px-4 sm:px-6`, and safe vertical padding.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 cd apps/web

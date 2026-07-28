@@ -423,15 +423,24 @@ describe("activation route feedback", () => {
   it("renders an accessible loading status", () => {
     render(<ActivationLoading />);
 
-    expect(screen.getByRole("status", { name: /Loading activation/i })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /Loading activation/i })).toHaveClass("max-w-3xl", "px-4");
+    expect(document.querySelector('[data-slot="activation-loading-card"]')).toHaveClass(
+      "rounded-2xl",
+      "border",
+      "bg-card",
+      "shadow-card",
+    );
   });
 
   it("offers an accessible retry when the route fails", () => {
     const reset = vi.fn();
     render(<ActivationError error={new Error("private provider message")} reset={reset} />);
 
+    expect(screen.getByRole("main")).toHaveClass("max-w-3xl", "px-4");
     expect(screen.queryByText(/private provider message/i)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Try again/i }));
+    const retry = screen.getByRole("button", { name: /Try again/i });
+    expect(retry).toHaveClass("min-h-11");
+    fireEvent.click(retry);
     expect(reset).toHaveBeenCalledTimes(1);
   });
 });
