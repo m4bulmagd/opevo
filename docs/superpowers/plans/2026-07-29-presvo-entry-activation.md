@@ -420,7 +420,7 @@ git commit -m "feat(web): port activation progress hierarchy"
 - Consumes: existing milestone components and all existing action functions.
 - Produces: one `data-slot="activation-step-card"` presentation boundary around the selected milestone.
 
-- [ ] **Step 1: Add failing card and hierarchy tests**
+- [x] **Step 1: Add failing card and hierarchy tests**
 
 For business, number, forwarding, and launch snapshots, assert:
 
@@ -433,14 +433,14 @@ expect(document.querySelectorAll("h1")).toHaveLength(1);
 
 Assert the business autosave status and `Continue`, number consent, forwarding `Start 10-minute test`, and launch `Go live` remain inside this surface. Existing action tests continue to prove backend-confirmed state.
 
-- [ ] **Step 2: Run the activation tests and confirm failure**
+- [x] **Step 2: Run the activation tests and confirm failure**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/activation-page.test.tsx tests/app/profile-form.test.tsx tests/app/number-milestone.test.tsx tests/app/forwarding-milestone.test.tsx tests/app/launch-milestone.test.tsx
 ```
 
-- [ ] **Step 3: Add the shared step card in `page.tsx`**
+- [x] **Step 3: Add the shared step card in `page.tsx`**
 
 Render:
 
@@ -461,7 +461,7 @@ Render:
 </div>
 ```
 
-- [ ] **Step 4: Normalize milestone roots**
+- [x] **Step 4: Normalize milestone roots**
 
 Replace root `border-y py-6` wrappers inside profile, number, forwarding, and launch components with spacing-only classes such as `flex flex-col gap-5`. Keep intentional internal separators (`border-t`, list dividers, alert borders) and all semantic/status attributes.
 
@@ -475,7 +475,7 @@ Do not change:
 - route pushes/refreshes;
 - field names, validation, or autosave baselines.
 
-- [ ] **Step 5: Run all milestone behavior tests**
+- [x] **Step 5: Run all milestone behavior tests**
 
 ```bash
 cd apps/web
@@ -491,7 +491,7 @@ npm run typecheck
 npm run check
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web/src/app/'(activation)' apps/web/tests/app

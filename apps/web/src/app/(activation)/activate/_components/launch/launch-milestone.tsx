@@ -62,7 +62,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
   if (snapshot.stage === "verification_window_open") {
     const expiresAt = snapshot.activation.verification_window_expires_at;
     return (
-      <div className="flex flex-col gap-5 border-y py-6">
+      <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <p className="font-semibold text-lg">Verification window open</p>
@@ -73,7 +73,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
             conditionally forwarded call.
           </p>
         </div>
-        <div className="flex items-baseline justify-between gap-4 rounded-lg border bg-muted/30 p-4">
+        <div className="flex items-baseline justify-between gap-4 rounded-xl border border-border bg-muted/30 p-4">
           <span className="text-muted-foreground text-sm">Time remaining</span>
           {expiresAt ? (
             <VerificationCountdown key={expiresAt} evaluatedAt={snapshot.evaluated_at} expiresAt={expiresAt} />
@@ -90,7 +90,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
         {localVerification ? (
           <Button
             type="button"
-            className="self-start"
+            className="min-h-11 self-start"
             variant="outline"
             disabled={pending}
             onClick={() =>
@@ -115,7 +115,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
 
   if (snapshot.stage === "activating") {
     return (
-      <div className="flex items-start gap-3 border-y py-6" role="status" aria-live="polite">
+      <div className="flex items-start gap-3" role="status" aria-live="polite">
         <Spinner className="mt-1" aria-hidden="true" />
         <div>
           <p className="font-semibold text-lg">Bringing Presvo live</p>
@@ -129,7 +129,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
 
   if (snapshot.stage === "runtime_paused") {
     return (
-      <div className="flex flex-col gap-5 border-y py-6">
+      <div className="flex flex-col gap-5">
         <Alert variant="destructive">
           <AlertTitle>Presvo is not active</AlertTitle>
           <AlertDescription>
@@ -145,9 +145,9 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
   }
 
   return (
-    <div className="flex flex-col gap-5 border-y py-6">
+    <div className="flex flex-col gap-5">
       {verified ? (
-        <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-4">
+        <div className="flex items-start gap-3 rounded-xl border border-border bg-muted/30 p-4">
           <CheckCircle2 aria-hidden="true" className="mt-0.5 size-5 text-primary" />
           <div>
             <p className="font-semibold">Forwarding verified</p>
@@ -179,6 +179,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
             </Alert>
           ) : null}
           <Button
+            className="min-h-11"
             type="button"
             size="lg"
             disabled={pending}

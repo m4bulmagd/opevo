@@ -59,7 +59,7 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
 
   if (assignedNumber && snapshot.number.provider_ready) {
     return (
-      <div className="flex flex-col gap-5 border-y py-6">
+      <div className="flex flex-col gap-5">
         <Badge className="self-start" variant="secondary">
           Number ready
         </Badge>
@@ -72,7 +72,7 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
         <p className="max-w-2xl text-muted-foreground text-sm leading-6">
           Keep this number handy. Next, you will conditionally forward unanswered, busy, and unreachable calls to it.
         </p>
-        <Button className="self-start" asChild size="lg">
+        <Button className="min-h-11 self-start" asChild size="lg">
           <Link href="/activate?milestone=forwarding">Continue to forwarding</Link>
         </Button>
       </div>
@@ -81,7 +81,7 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
 
   if (snapshot.stage === "provisioning") {
     return (
-      <div className="flex flex-col gap-4 border-y py-6" role="status" aria-live="polite">
+      <div className="flex flex-col gap-4" role="status" aria-live="polite">
         <div className="flex items-center gap-3">
           <Spinner aria-hidden="true" />
           <p className="font-semibold text-lg">Provisioning your French number</p>
@@ -97,7 +97,7 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
   const retryable = snapshot.stage === "provisioning_failed" && snapshot.number.can_retry;
   if (retryable) {
     return (
-      <div className="flex flex-col gap-4 border-y py-6">
+      <div className="flex flex-col gap-4">
         <Alert variant="destructive">
           <AlertTitle>Your number is not ready yet</AlertTitle>
           <AlertDescription>
@@ -110,7 +110,7 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
-        <Button className="self-start" disabled={pending} onClick={() => void retry()}>
+        <Button className="min-h-11 self-start" disabled={pending} onClick={() => void retry()}>
           {pending ? <Spinner /> : null}
           Retry provisioning
         </Button>
@@ -119,7 +119,7 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
   }
 
   return (
-    <div className="flex flex-col gap-4 border-y py-6">
+    <div className="flex flex-col gap-4">
       <Alert variant="destructive">
         <AlertTitle>Review your business details</AlertTitle>
         <AlertDescription>
@@ -127,7 +127,7 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
         </AlertDescription>
       </Alert>
       <p className="font-mono text-muted-foreground text-xs">Reference: number_provisioning_failed</p>
-      <Button className="self-start" variant="outline" asChild>
+      <Button className="min-h-11 self-start" variant="outline" asChild>
         <Link href="/activate?milestone=business">Correct business profile</Link>
       </Button>
     </div>

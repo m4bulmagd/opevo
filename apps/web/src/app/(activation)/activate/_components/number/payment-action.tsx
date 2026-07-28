@@ -66,7 +66,7 @@ export function PaymentAction({ localBilling, navigate = defaultNavigate }: Paym
   };
 
   return (
-    <div className="flex flex-col gap-5 border-y py-6">
+    <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-2">
         <p className="font-semibold text-lg">Starter plan</p>
         <p className="max-w-2xl text-muted-foreground text-sm leading-6">
@@ -90,7 +90,7 @@ export function PaymentAction({ localBilling, navigate = defaultNavigate }: Paym
         </Alert>
       ) : null}
 
-      <Button className="self-start" size="lg" disabled={pending} onClick={() => void startPlan()}>
+      <Button className="min-h-11 self-start" size="lg" disabled={pending} onClick={() => void startPlan()}>
         {pending ? <Spinner /> : null}
         {localBilling ? "Activate local starter plan" : "Start starter plan"}
       </Button>

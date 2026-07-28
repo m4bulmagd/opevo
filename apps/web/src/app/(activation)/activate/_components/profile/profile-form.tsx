@@ -204,7 +204,7 @@ export function ProfileForm({ snapshot, milestone }: ProfileFormProps) {
   };
 
   return (
-    <form className="flex flex-col gap-8" onSubmit={form.handleSubmit(continueJourney)} noValidate>
+    <form className="flex flex-col gap-6" onSubmit={form.handleSubmit(continueJourney)} noValidate>
       <div className="flex flex-wrap items-center justify-between gap-3 border-y py-3">
         <p className="text-muted-foreground text-sm">Changes are saved as a complete draft.</p>
         <p className="font-medium text-sm" aria-live="polite" data-status={autosave.status}>
@@ -240,7 +240,7 @@ export function ProfileForm({ snapshot, milestone }: ProfileFormProps) {
             ? "Next, shape what your receptionist knows and says."
             : "Confirmation locks this exact saved revision before number setup."}
         </p>
-        <Button type="submit" size="lg" disabled={continuing}>
+        <Button className="min-h-11" type="submit" size="lg" disabled={continuing}>
           {continuing ? "Saving…" : "Continue"}
         </Button>
       </div>

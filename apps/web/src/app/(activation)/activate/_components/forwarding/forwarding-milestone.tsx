@@ -71,7 +71,7 @@ export function ForwardingMilestone({ snapshot }: { snapshot: ActivationSnapshot
   }
 
   return (
-    <div className="flex flex-col gap-7 border-y py-6">
+    <div className="flex flex-col gap-7">
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">
@@ -96,19 +96,19 @@ export function ForwardingMilestone({ snapshot }: { snapshot: ActivationSnapshot
       ) : null}
 
       {verified ? (
-        <div className="flex flex-col items-start gap-4 rounded-xl border bg-muted/20 p-5">
+        <div className="flex flex-col items-start gap-4 rounded-xl border border-border bg-muted/30 p-5">
           <div>
             <p className="font-semibold text-lg">Forwarding already verified</p>
             <p className="mt-1 max-w-2xl text-muted-foreground text-sm leading-6">
               These instructions remain available for reference. Your completed verification is unchanged.
             </p>
           </div>
-          <Button variant="outline" asChild>
+          <Button className="min-h-11" variant="outline" asChild>
             <Link href="/activate?milestone=launch">Continue to final checks</Link>
           </Button>
         </div>
       ) : (
-        <div className="flex flex-col items-start gap-4 rounded-xl border bg-muted/20 p-5">
+        <div className="flex flex-col items-start gap-4 rounded-xl border border-border bg-muted/30 p-5">
           <div className="flex flex-col gap-2">
             <p className="font-semibold text-lg">Test your missed-call forwarding</p>
             <p className="max-w-2xl text-muted-foreground text-sm leading-6">
@@ -122,7 +122,13 @@ export function ForwardingMilestone({ snapshot }: { snapshot: ActivationSnapshot
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
-          <Button type="button" size="lg" disabled={pending} onClick={() => void startVerification()}>
+          <Button
+            className="min-h-11"
+            type="button"
+            size="lg"
+            disabled={pending}
+            onClick={() => void startVerification()}
+          >
             {pending ? <Spinner /> : null}
             Start 10-minute test
           </Button>
