@@ -620,7 +620,7 @@ git commit -m "feat(web): add responsive Presvo navigation"
 - Modify: `apps/web/src/components/workspace/workspace-header.tsx`
 - Modify: `apps/web/tests/app/app-shell.test.tsx`
 
-- [ ] **Step 1: Add failing header interaction tests**
+- [x] **Step 1: Add failing header interaction tests**
 
 Assert the search contract:
 
@@ -645,14 +645,14 @@ expect(screen.getByRole("button", { name: "Notifications (0 unread)" })).toBeVis
 
 Mock `global.fetch` and assert no request occurs during notification interactions.
 
-- [ ] **Step 2: Run the shell test and confirm it fails**
+- [x] **Step 2: Run the shell test and confirm it fails**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/app-shell.test.tsx
 ```
 
-- [ ] **Step 3: Implement server-compatible search**
+- [x] **Step 3: Implement server-compatible search**
 
 In `WorkspaceHeader`, render a GET form:
 
@@ -668,7 +668,7 @@ In `WorkspaceHeader`, render a GET form:
 
 This phase establishes navigation only. Phase 3 binds the route query to backend filtering.
 
-- [ ] **Step 4: Implement local Preview notifications**
+- [x] **Step 4: Implement local Preview notifications**
 
 Create a client component using the existing Popover. Seed three stable France-first operational examples in the component module. Keep `useState` inside the component; marking one/all read changes only local state.
 
@@ -678,7 +678,7 @@ The popover heading must be `Notifications Preview`, render `CapabilityBadge sta
 
 Do not import an API client, server action, or billing/telephony module.
 
-- [ ] **Step 5: Complete the template header composition**
+- [x] **Step 5: Complete the template header composition**
 
 Header contract:
 
@@ -691,7 +691,7 @@ Header contract:
 - notification Preview, call-history outline action, and live-call primary action on the right;
 - icon-only mobile actions have explicit accessible labels.
 
-- [ ] **Step 6: Run targeted verification**
+- [x] **Step 6: Run targeted verification**
 
 ```bash
 cd apps/web
@@ -700,7 +700,7 @@ npm run typecheck
 npm run check
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/web/src/components/workspace/workspace-header.tsx apps/web/src/components/workspace/workspace-notifications-preview.tsx apps/web/tests/app/app-shell.test.tsx

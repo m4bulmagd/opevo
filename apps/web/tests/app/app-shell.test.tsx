@@ -393,6 +393,46 @@ describe("app shell", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Workspace navigation" })).toBeNull());
   });
 
+  it("routes shell search and header destinations to their production URLs", async () => {
+    await renderDashboardLayout();
+
+    const header = screen.getByRole("banner");
+    const search = within(header).getByRole("searchbox", { name: "Search calls" });
+    const form = search.closest("form");
+
+    expect(header).toHaveClass(
+      "grid",
+      "grid-cols-[auto_minmax(0,1fr)_auto]",
+      "bg-background/90",
+      "lg:rounded-2xl",
+      "lg:shadow-card",
+    );
+    expect(search).toHaveAttribute("name", "q");
+    expect(search).toHaveAttribute("placeholder", "Search calls, callers or notes");
+    expect(form).toHaveAttribute("action", "/dashboard/calls");
+    expect(form).toHaveAttribute("method", "get");
+    expect(within(header).getByRole("link", { name: "Call history" })).toHaveAttribute("href", "/dashboard/calls");
+    expect(within(header).getByRole("link", { name: "Live call" })).toHaveAttribute("href", "/dashboard/live-call");
+    expect(within(within(header).getByRole("link", { name: "Live call" })).getByText("Preview")).toBeVisible();
+  });
+
+  it("keeps notification Preview interactions local and resettable", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await renderDashboardLayout();
+
+    const trigger = screen.getByRole("button", { name: "Notifications (3 unread)" });
+    fireEvent.click(trigger);
+
+    const panel = await screen.findByRole("dialog", { name: "Notifications Preview" });
+    expect(within(panel).getByText("Preview")).toBeVisible();
+    expect(within(panel).getByText(/interactions are local and reset on reload/i)).toBeVisible();
+    expect(within(panel).getAllByRole("listitem")).toHaveLength(3);
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Mark all read" }));
+    expect(screen.getByRole("button", { name: "Notifications (0 unread)" })).toBeVisible();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("marks only the matching nested destination as the current page", async () => {
     testState.pathname = "/dashboard/calls/call-123";
     await renderDashboardLayout();
