@@ -89,7 +89,12 @@ describe("calls pages", () => {
 
     render(
       await Page({
-        searchParams: Promise.resolve({ q: " opening ", page: "2" }),
+        searchParams: Promise.resolve({
+          q: " opening ",
+          status: "in_progress",
+          range: "7d",
+          page: "2",
+        }),
       }),
     );
 
@@ -97,8 +102,8 @@ describe("calls pages", () => {
       limit: 20,
       offset: 20,
       query: "opening",
-      status: "all",
-      range: "all",
+      status: "in_progress",
+      range: "7d",
     });
     expect(screen.getByLabelText("Search calls")).toHaveValue("opening");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
@@ -110,26 +115,35 @@ describe("calls pages", () => {
     const searchInput = within(search).getByRole("searchbox", { name: "Search calls" });
     expect(searchInput).toHaveAttribute("name", "q");
     expect(searchInput).toHaveValue("opening");
+    expect(within(search).getByRole("combobox", { name: "Filter by status" })).toHaveValue("in_progress");
+    expect(within(search).getByRole("combobox", { name: "Filter by date" })).toHaveValue("7d");
+    expect(within(search).getByRole("button", { name: "Apply filters" })).toHaveClass("min-h-11");
+    expect(screen.getByText("47 matching calls")).toHaveAttribute("role", "status");
     expect(screen.getByText("Showing 21–40 of 47 calls")).toBeInTheDocument();
     expect(screen.getByText("Page 2 of 3")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/dashboard/calls?q=opening");
-    expect(screen.getByRole("link", { name: "Next" })).toHaveAttribute("href", "/dashboard/calls?q=opening&page=3");
-    expect(screen.getByRole("link", { name: "Clear" })).toHaveAttribute("href", "/dashboard/calls");
+    expect(screen.getByRole("link", { name: "Previous" })).toHaveAttribute(
+      "href",
+      "/dashboard/calls?q=opening&status=in_progress&range=7d",
+    );
+    expect(screen.getByRole("link", { name: "Next" })).toHaveAttribute(
+      "href",
+      "/dashboard/calls?q=opening&status=in_progress&range=7d&page=3",
+    );
+    expect(screen.getByRole("link", { name: "Clear filters" })).toHaveAttribute("href", "/dashboard/calls");
     expect(document.querySelector('form input[name="page"]')).not.toBeInTheDocument();
     expect(screen.getByText(/Caller asked about opening hours/i)).toBeInTheDocument();
     expect(screen.getByText(/Check opening hours/i)).toBeInTheDocument();
     expect(screen.getByText("Follow-up needed", { exact: true })).toBeInTheDocument();
     const callLedger = screen.getByRole("table", { name: "Call history" });
-    const firstRow = callLedger.querySelector<HTMLElement>('[data-slot="data-ledger-row"]');
+    const firstRow = callLedger.querySelector<HTMLElement>('[data-slot="call-history-row"]');
     expect(firstRow).not.toBeNull();
     if (!firstRow) {
       throw new Error("The first call ledger row is missing");
     }
-    for (const label of ["Caller", "Intent", "Follow-up", "Duration", "Started"]) {
+    for (const label of ["Caller", "Intent", "Follow-up", "Status", "Duration", "Started", "Recording"]) {
       expect(within(firstRow).getByText(label)).toBeInTheDocument();
     }
-    expect(firstRow.querySelector('[data-slot="data-ledger-cell"][data-hide-at="sm"]')).not.toBeNull();
-    expect(firstRow.querySelector('[data-slot="data-ledger-cell"][data-hide-at="md"]')).not.toBeNull();
+    expect(firstRow).toHaveClass("rounded-xl", "md:table-row");
     expect(
       within(firstRow).getByRole("link", {
         name: /Open call from \+33123456789, status Completed, intent Check opening hours, Follow-up needed, duration 1m, started Mar 28, 11:00/i,
@@ -137,8 +151,8 @@ describe("calls pages", () => {
     ).toHaveAttribute("href", "/dashboard/calls/call-1");
     expect(firstRow.querySelectorAll("a")).toHaveLength(1);
     expect(firstRow.querySelector("a")).toHaveClass("min-h-11");
-    expect(screen.queryByRole("button", { name: /filter|tag|note|export|refresh/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /filter|tag|note|export|refresh/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /tag|note|export|refresh/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /tag|note|export|refresh/i })).not.toBeInTheDocument();
   });
 
   it("distinguishes no history from no search matches", async () => {
@@ -165,14 +179,13 @@ describe("calls pages", () => {
 
     render(
       await Page({
-        searchParams: Promise.resolve({ q: "opening", page: "1" }),
+        searchParams: Promise.resolve({ status: "failed", range: "30d", page: "1" }),
       }),
     );
-    expect(screen.getByText("No calls match “opening”")).toBeInTheDocument();
-    expect(screen.getByText(/No stored call matches your search for “opening”/i)).toBeInTheDocument();
-    expect(screen.getByLabelText("Search calls")).toHaveValue("opening");
-    expect(screen.getByRole("link", { name: "Clear search" })).toHaveAttribute("href", "/dashboard/calls");
-    expect(screen.getByRole("link", { name: "Clear" })).toHaveAttribute("href", "/dashboard/calls");
+    expect(screen.getByText("No calls match your filters")).toBeInTheDocument();
+    expect(screen.getByText(/Try a different search term, status, or date range/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Search calls")).toHaveValue("");
+    expect(screen.getByRole("link", { name: "Clear filters" })).toHaveAttribute("href", "/dashboard/calls");
   });
 
   it("keeps privacy-safe caller, intent, and follow-up states explicit in ledger rows", async () => {
@@ -252,10 +265,15 @@ describe("calls pages", () => {
 
     await expect(
       Page({
-        searchParams: Promise.resolve({ q: "opening", page: "5" }),
+        searchParams: Promise.resolve({
+          q: "opening",
+          status: "completed",
+          range: "30d",
+          page: "5",
+        }),
       }),
     ).rejects.toThrow("NEXT_REDIRECT");
-    expect(redirectMock).toHaveBeenCalledWith("/dashboard/calls?q=opening&page=2");
+    expect(redirectMock).toHaveBeenCalledWith("/dashboard/calls?q=opening&status=completed&range=30d&page=2");
   });
 
   it("redirects a zero-result later page to filtered page one", async () => {

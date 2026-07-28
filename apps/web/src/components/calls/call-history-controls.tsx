@@ -1,7 +1,10 @@
 import Link from "next/link";
 
+import { SlidersHorizontal } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { buildCallHistoryHref, callHistoryPageCount } from "@/lib/calls/call-history-navigation";
 import type { CallHistoryDateRange, CallHistoryStatusFilter } from "@/lib/types/calls";
 
@@ -9,21 +12,23 @@ export function CallHistorySearch({
   query,
   status,
   range,
+  total,
 }: {
   query: string;
   status: CallHistoryStatusFilter;
   range: CallHistoryDateRange;
+  total: number;
 }) {
+  const hasFilters = Boolean(query) || status !== "all" || range !== "all";
+
   return (
     // biome-ignore lint/a11y/useSemanticElements: A form with role=search supports the project's browser and test matrix.
     <form
       action="/dashboard/calls"
       method="get"
-      className="flex flex-col gap-3 rounded-lg border border-border/70 bg-surface-subtle/50 p-4 sm:flex-row sm:items-end sm:p-5"
+      className="surface-card grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_11rem_11rem_auto] lg:items-end"
       role="search"
     >
-      {status !== "all" ? <input name="status" type="hidden" value={status} /> : null}
-      {range !== "all" ? <input name="range" type="hidden" value={range} /> : null}
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <label htmlFor="call-search" className="font-medium text-sm">
           Search calls
@@ -38,16 +43,53 @@ export function CallHistorySearch({
           className="min-h-11"
         />
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-col gap-2">
+        <label className="font-medium text-sm" htmlFor="call-status">
+          Status
+        </label>
+        <NativeSelect
+          aria-label="Filter by status"
+          className="w-full [&_select]:min-h-11"
+          defaultValue={status}
+          id="call-status"
+          name="status"
+        >
+          <NativeSelectOption value="all">All statuses</NativeSelectOption>
+          <NativeSelectOption value="completed">Completed</NativeSelectOption>
+          <NativeSelectOption value="in_progress">In progress</NativeSelectOption>
+          <NativeSelectOption value="failed">Failed</NativeSelectOption>
+        </NativeSelect>
+      </div>
+      <div className="flex min-w-0 flex-col gap-2">
+        <label className="font-medium text-sm" htmlFor="call-range">
+          Date
+        </label>
+        <NativeSelect
+          aria-label="Filter by date"
+          className="w-full [&_select]:min-h-11"
+          defaultValue={range}
+          id="call-range"
+          name="range"
+        >
+          <NativeSelectOption value="all">All time</NativeSelectOption>
+          <NativeSelectOption value="7d">Last 7 days</NativeSelectOption>
+          <NativeSelectOption value="30d">Last 30 days</NativeSelectOption>
+        </NativeSelect>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
         <Button className="min-h-11" type="submit">
-          Search
+          <SlidersHorizontal aria-hidden data-icon="inline-start" />
+          Apply filters
         </Button>
-        {query ? (
+        {hasFilters ? (
           <Button asChild className="min-h-11" variant="ghost">
-            <Link href="/dashboard/calls">Clear</Link>
+            <Link href="/dashboard/calls">Clear filters</Link>
           </Button>
         ) : null}
       </div>
+      <p className="text-muted-foreground text-sm lg:col-span-4" role="status">
+        {total} matching {total === 1 ? "call" : "calls"}
+      </p>
     </form>
   );
 }

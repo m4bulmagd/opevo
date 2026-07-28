@@ -233,26 +233,26 @@ git commit -m "feat(web): port Presvo operations overview"
 
 ## Task 4: Port Call History Filters, Table, and Mobile Cards
 
-- [ ] **Step 1: Add failing route/component tests**
+- [x] **Step 1: Add failing route/component tests**
 
 Require one GET filter surface with search, status, and date controls; visible result count; stable URL-owned values; clear-filters behavior; desktop table; mobile call cards; semantic empty state; and filter-preserving pagination.
 
-- [ ] **Step 2: Run calls-page tests and confirm failure**
+- [x] **Step 2: Run calls-page tests and confirm failure**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/calls-page.test.tsx
 ```
 
-- [ ] **Step 3: Implement the Presvo filter surface**
+- [x] **Step 3: Implement the Presvo filter surface**
 
 Use native GET controls so reload/back/forward behavior requires no duplicated client state. Keep labels and 44px targets. Pass all normalized filter fields to the backend and redirect out-of-range pages to the last canonical filtered page.
 
-- [ ] **Step 4: Split desktop and mobile call presentations**
+- [x] **Step 4: Split desktop and mobile call presentations**
 
 Render the template-aligned desktop table from `md` upward and linked, rounded card rows below `md`. Both versions expose caller, status, started time, duration, recording availability, summary/intent, and one unambiguous call-detail destination.
 
-- [ ] **Step 5: Run focused verification**
+- [x] **Step 5: Run focused verification**
 
 ```bash
 cd apps/web
@@ -261,7 +261,7 @@ npm run typecheck
 npm run check
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git commit -m "feat(web): port Presvo call history"
