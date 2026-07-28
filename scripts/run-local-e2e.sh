@@ -137,6 +137,14 @@ wait_for_health api
 wait_for_running worker
 wait_for_health web
 
+if [ "${E2E_UPDATE_SNAPSHOTS:-0}" = "1" ]; then
+  E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+    npm --prefix apps/web run test:e2e -- tests/e2e/entry-activation-visual.spec.ts --update-snapshots
+else
+  E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+    npm --prefix apps/web run test:e2e -- tests/e2e/entry-activation-visual.spec.ts
+fi
+
 E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
   npm --prefix apps/web run test:e2e -- tests/e2e/activation.spec.ts
 
