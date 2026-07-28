@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import { AuthEntryShell, PRESVO_CLERK_APPEARANCE } from "@/components/auth/auth-entry-shell";
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { authMode, isAppAuthConfigured } from "@/lib/auth/clerk-config";
 
@@ -20,8 +21,11 @@ export default async function SignUpPage() {
   const { SignUp } = await import("@clerk/nextjs");
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-6 py-10">
-      <SignUp forceRedirectUrl="/dashboard" signInUrl="/sign-in" />
-    </main>
+    <AuthEntryShell
+      description="Create your account, then configure your France-first missed-call receptionist."
+      title="Create your Presvo account"
+    >
+      <SignUp appearance={PRESVO_CLERK_APPEARANCE} forceRedirectUrl="/dashboard" signInUrl="/sign-in" />
+    </AuthEntryShell>
   );
 }
