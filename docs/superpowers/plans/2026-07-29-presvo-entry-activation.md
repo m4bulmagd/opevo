@@ -659,7 +659,7 @@ git commit -m "test(web): lock Presvo entry and activation visuals"
 
 - Modify: `docs/superpowers/plans/2026-07-29-presvo-entry-activation.md`
 
-- [ ] **Step 1: Scan for migration regressions**
+- [x] **Step 1: Scan for migration regressions**
 
 ```bash
 rg -n 'SonicWaveformCanvas|slate-|transition-all|TODO|FIXME|hardcoded.*date' \
@@ -671,7 +671,7 @@ rg -n 'SonicWaveformCanvas|slate-|transition-all|TODO|FIXME|hardcoded.*date' \
 
 Expected: no blue/slate legacy entry styles, no `transition-all`, and no new TODO/FIXME markers in the changed surfaces.
 
-- [ ] **Step 2: Run the full web verification**
+- [x] **Step 2: Run the full web verification**
 
 ```bash
 cd apps/web
@@ -687,7 +687,7 @@ NEXT_PUBLIC_REALTIME_ENABLED=false \
   npm run build
 ```
 
-- [ ] **Step 3: Verify the phase invariants**
+- [x] **Step 3: Verify the phase invariants**
 
 Confirm from tests and browser output:
 
@@ -700,7 +700,7 @@ Confirm from tests and browser output:
 - go-live redirects only after backend acknowledgement;
 - restart/resume still preserves durable state.
 
-- [ ] **Step 4: Mark this plan complete and commit**
+- [x] **Step 4: Mark this plan complete and commit**
 
 Mark every Phase 2 checkbox complete, then:
 
@@ -713,12 +713,12 @@ git commit -m "docs: complete Presvo entry and activation phase"
 
 ## Phase 2 Completion Checklist
 
-- [ ] Public entry uses the exact Presvo design system and France-first truth.
-- [ ] Signed-out and signed-in calls to action keep their correct production routes.
-- [ ] Hosted auth is visually contained without changing Clerk/local-mode gates.
-- [ ] Activation uses the centered template hierarchy and five visible milestones.
-- [ ] All milestones preserve server-authoritative state and existing mutation boundaries.
-- [ ] Loading, error, retry, provisioning, verification, and go-live states are responsive and truthful.
-- [ ] Landing and activation pass desktop/mobile visual and overflow checks.
-- [ ] The full activation, deactivation, and restart/resume browser proof passes.
-- [ ] Check, typecheck, all unit tests, production build, and Playwright pass.
+- [x] Public entry uses the exact Presvo design system and France-first truth.
+- [x] Signed-out and signed-in calls to action keep their correct production routes.
+- [x] Hosted auth is visually contained without changing Clerk/local-mode gates.
+- [x] Activation uses the centered template hierarchy and five visible milestones.
+- [x] All milestones preserve server-authoritative state and existing mutation boundaries.
+- [x] Loading, error, retry, provisioning, verification, and go-live states are responsive and truthful.
+- [x] Landing and activation pass desktop/mobile visual and overflow checks.
+- [x] The full activation, deactivation, and restart/resume browser proof passes.
+- [x] Check, typecheck, all unit tests, production build, and Playwright pass.
