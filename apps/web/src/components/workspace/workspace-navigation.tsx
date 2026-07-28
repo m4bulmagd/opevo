@@ -7,11 +7,13 @@ import { usePathname } from "next/navigation";
 
 import { motion } from "motion/react";
 
+import { CapabilityBadge } from "@/components/product/capability-badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MobileMoreSheet } from "@/components/workspace/mobile-more-sheet";
 import { SPRING_LAYOUT } from "@/lib/motion/tokens";
 import { useHydrationSafeReducedMotion } from "@/lib/motion/use-hydration-safe-reduced-motion";
-import { dashboardItems, isDashboardItemActive, type NavItem } from "@/navigation/dashboard-items";
+import { cn } from "@/lib/utils";
+import { dashboardGroups, dashboardItems, isDashboardItemActive, type NavItem } from "@/navigation/dashboard-items";
 
 type NavigationVariant = "rail" | "mobile";
 
@@ -101,7 +103,7 @@ export function WorkspaceNavigation({ agentName, variant }: WorkspaceNavigationP
     return (
       <nav
         aria-label="Mobile workspace navigation"
-        className="fixed inset-x-0 bottom-0 z-40 grid min-h-16 grid-cols-4 border-sidebar-border border-t bg-sidebar px-2 pt-1 pb-[env(safe-area-inset-bottom)] shadow-raised md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 grid min-h-16 grid-cols-4 border-sidebar-border border-t bg-sidebar px-2 pt-1 pb-[env(safe-area-inset-bottom)] shadow-raised lg:hidden"
       >
         {primaryItems.map((item) => (
           <NavigationLink
@@ -118,15 +120,34 @@ export function WorkspaceNavigation({ agentName, variant }: WorkspaceNavigationP
   }
 
   return (
-    <nav aria-label="Workspace navigation" className="flex min-w-0 flex-1 flex-col gap-1 px-2 lg:px-3">
-      {items.map((item) => (
-        <NavigationLink
-          active={isDashboardItemActive(pathname, item.href)}
-          item={item}
-          key={item.href}
-          layoutId={layoutId}
-          variant="rail"
-        />
+    <nav aria-label="Workspace navigation" className="flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto">
+      {dashboardGroups(agentName).map((group) => (
+        <div className="flex flex-col gap-1" key={group.id}>
+          <p className="px-3 pb-1 text-label">{group.label}</p>
+          {group.items.map((item) => {
+            const active = isDashboardItemActive(pathname, item.href);
+
+            return (
+              <Link
+                aria-current={active ? "page" : undefined}
+                aria-label={item.title}
+                className={cn(
+                  "flex min-h-11 items-center gap-3 rounded-lg px-3 text-sidebar-foreground text-sm outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-3 focus-visible:ring-sidebar-ring/50",
+                  active && "bg-sidebar-accent text-sidebar-accent-foreground",
+                )}
+                href={item.href}
+                key={item.href}
+                prefetch={false}
+              >
+                <item.icon aria-hidden="true" className="size-5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate" title={item.title}>
+                  {item.title}
+                </span>
+                {item.status === "preview" ? <CapabilityBadge status="preview" /> : null}
+              </Link>
+            );
+          })}
+        </div>
       ))}
     </nav>
   );

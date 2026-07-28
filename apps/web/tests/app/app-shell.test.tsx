@@ -110,8 +110,8 @@ async function renderDashboardLayout({
 }
 
 function desktopNavigation() {
-  const rail = screen.getByRole("complementary", { name: "Workspace command rail" });
-  return within(rail).getByRole("navigation", { name: "Workspace navigation" });
+  const sidebar = screen.getByRole("complementary", { name: "Workspace sidebar" });
+  return within(sidebar).getByRole("navigation", { name: "Workspace navigation" });
 }
 
 beforeAll(() => {
@@ -150,8 +150,7 @@ afterAll(() => {
 });
 
 describe("app shell", () => {
-  it("server-renders a static active marker before the client motion preference hydrates", async () => {
-    testState.reducedMotion = false;
+  it("server-renders grouped desktop navigation with visible preview status", async () => {
     const { WorkspaceNavigation } = await import("@/components/workspace/workspace-navigation");
     const { TooltipProvider } = await import("@/components/ui/tooltip");
 
@@ -161,9 +160,10 @@ describe("app shell", () => {
       </TooltipProvider>,
     );
 
-    expect(markup).toContain('data-motion="static"');
-    expect(markup).not.toContain('data-motion="layout"');
-    expect(markup).not.toContain("data-layout-id");
+    expect(markup).toContain("Main");
+    expect(markup).toContain("Account");
+    expect(markup).toContain("Preview");
+    expect(markup).not.toContain("data-motion");
   });
 
   it("uses the configured agent name in the complete desktop destination set", async () => {
@@ -172,9 +172,10 @@ describe("app shell", () => {
     const navigation = desktopNavigation();
     const destinations = within(navigation).getAllByRole("link");
 
-    expect(destinations).toHaveLength(5);
+    expect(destinations).toHaveLength(6);
     expect(destinations.map((link) => link.getAttribute("href"))).toEqual([
       "/dashboard",
+      "/dashboard/live-call",
       "/dashboard/calls",
       "/dashboard/agent",
       "/dashboard/billing",
@@ -182,27 +183,29 @@ describe("app shell", () => {
     ]);
     expect(destinations.map((link) => link.getAttribute("aria-label"))).toEqual([
       "Overview",
+      "Live call",
       "Calls",
       "Ava",
-      "Billing",
+      "Usage & Billing",
       "Account",
     ]);
+    expect(within(within(navigation).getByRole("link", { name: "Live call" })).getByText("Preview")).toBeVisible();
   });
 
   it.each([
     ["Enabled", true],
     ["Paused", false],
-  ] as const)("shows the configured agent and honest %s runtime state in the labelled rail", async (state, agentEnabled) => {
+  ] as const)("shows the configured agent and honest %s runtime state in the labelled sidebar", async (state, agentEnabled) => {
     const longAgentName = "Ava, North Clinic Evening Receptionist";
     await renderDashboardLayout({ agentEnabled, agentName: longAgentName });
 
-    const rail = screen.getByRole("complementary", { name: "Workspace command rail" });
-    const runtime = within(rail).getByRole("group", {
+    const sidebar = screen.getByRole("complementary", { name: "Workspace sidebar" });
+    const runtime = within(sidebar).getByRole("group", {
       name: `Agent runtime: ${longAgentName}, ${state}`,
     });
     const visibleAgentName = within(runtime).getByText(longAgentName);
 
-    expect(runtime).toHaveClass("hidden", "lg:block");
+    expect(runtime).toHaveClass("rounded-xl", "border", "bg-card");
     expect(visibleAgentName).toHaveClass("truncate");
     expect(visibleAgentName).toHaveAttribute("title", longAgentName);
     expect(within(runtime).getByText(state)).toBeInTheDocument();
@@ -256,9 +259,9 @@ describe("app shell", () => {
   >)("uses account state instead of saved routing alone for %s", async (_label, account, expectedState) => {
     await renderDashboardLayout({ account, agentEnabled: true });
 
-    const rail = screen.getByRole("complementary", { name: "Workspace command rail" });
+    const sidebar = screen.getByRole("complementary", { name: "Workspace sidebar" });
     expect(
-      within(rail).getByRole("group", {
+      within(sidebar).getByRole("group", {
         name: `Agent runtime: Ava, ${expectedState}`,
       }),
     ).toBeInTheDocument();
@@ -278,7 +281,7 @@ describe("app shell", () => {
     ).toHaveAttribute("href", "/dashboard/agent");
   });
 
-  it("truncates only the visible long agent label while preserving its accessible name and tooltip", async () => {
+  it("truncates only the visible long agent label while preserving its accessible name and title", async () => {
     const longAgentName = "Ava, North Clinic Evening Receptionist";
     await renderDashboardLayout({ agentName: `  ${longAgentName}  ` });
 
@@ -286,10 +289,8 @@ describe("app shell", () => {
     const visibleLabel = within(agentLink).getByText(longAgentName);
 
     expect(visibleLabel).toHaveClass("truncate");
+    expect(visibleLabel).toHaveAttribute("title", longAgentName);
     expect(agentLink).toHaveAccessibleName(longAgentName);
-
-    fireEvent.focus(agentLink);
-    expect(await screen.findByRole("tooltip", { name: longAgentName })).toBeInTheDocument();
   });
 
   it("reveals the complete long agent name from the mobile command tooltip", async () => {
@@ -309,20 +310,21 @@ describe("app shell", () => {
   it("exposes labelled desktop, compact tablet, and mobile shell compositions", async () => {
     const view = await renderDashboardLayout();
 
-    const rail = screen.getByRole("complementary", { name: "Workspace command rail" });
-    expect(rail).toHaveClass("hidden", "md:flex", "md:w-18", "lg:w-64");
+    const sidebar = screen.getByRole("complementary", { name: "Workspace sidebar" });
+    const sidebarPanel = sidebar.querySelector('[data-slot="workspace-sidebar-panel"]');
+    expect(sidebar).toHaveClass("hidden", "w-64", "shrink-0", "lg:block");
+    expect(sidebar).not.toHaveClass("md:flex", "md:w-18");
+    expect(sidebarPanel).toHaveClass("rounded-2xl", "border", "shadow-card");
 
     for (const link of within(desktopNavigation()).getAllByRole("link")) {
-      expect(link).toHaveClass("min-h-11", "min-w-11");
-      expect(within(link).getByText(link.getAttribute("aria-label") ?? "")).toHaveClass(
-        "hidden",
-        "truncate",
-        "lg:block",
-      );
+      expect(link).toHaveClass("min-h-11");
+      expect(within(link).getByText(link.getAttribute("aria-label") ?? "")).toHaveClass("truncate");
     }
+    expect(within(desktopNavigation()).getByText("Main")).toHaveClass("text-label");
+    expect(within(desktopNavigation()).getByText("Account", { selector: "p" })).toHaveClass("text-label");
 
     const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
-    expect(mobileNavigation).toHaveClass("md:hidden");
+    expect(mobileNavigation).toHaveClass("lg:hidden");
     expect(within(mobileNavigation).getAllByRole("link")).toHaveLength(3);
     for (const link of within(mobileNavigation).getAllByRole("link")) {
       expect(link).toHaveClass("min-h-11", "min-w-11");
@@ -348,18 +350,17 @@ describe("app shell", () => {
     expect(document.body).not.toHaveClass("font-figtree");
     expect(workspaceContent).toHaveClass(
       "pb-[calc(4rem+env(safe-area-inset-bottom))]",
-      "md:pb-0",
-      "md:pl-18",
-      "lg:pl-64",
+      "lg:flex",
+      "lg:gap-4",
+      "lg:p-4",
+      "lg:pb-4",
     );
+    expect(workspaceContent).not.toHaveClass("md:pl-18", "lg:pl-64");
 
     const activeMarkers = view.container.querySelectorAll('[data-slot="active-navigation-marker"]');
-    expect(activeMarkers).toHaveLength(2);
-    expect(new Set(Array.from(activeMarkers, (marker) => marker.getAttribute("data-layout-id"))).size).toBe(2);
-    for (const marker of activeMarkers) {
-      expect(marker).toHaveAttribute("data-motion", "layout");
-      expect(marker.getAttribute("data-layout-id")).toMatch(/^workspace-active-/);
-    }
+    expect(activeMarkers).toHaveLength(1);
+    expect(activeMarkers[0]).toHaveAttribute("data-motion", "layout");
+    expect(activeMarkers[0]?.getAttribute("data-layout-id")).toMatch(/^workspace-active-/);
   });
 
   it("uses static active markers when the user prefers reduced motion", async () => {
@@ -367,7 +368,7 @@ describe("app shell", () => {
     const view = await renderDashboardLayout();
 
     const activeMarkers = view.container.querySelectorAll('[data-slot="active-navigation-marker"]');
-    expect(activeMarkers).toHaveLength(2);
+    expect(activeMarkers).toHaveLength(1);
     for (const marker of activeMarkers) {
       expect(marker).toHaveAttribute("data-motion", "static");
       expect(marker).not.toHaveAttribute("data-layout-id");
@@ -479,7 +480,14 @@ describe("app shell", () => {
       within(desktopNavigation())
         .getAllByRole("link")
         .map((link) => link.getAttribute("href")),
-    ).toEqual(["/dashboard", "/dashboard/calls", "/dashboard/agent", "/dashboard/billing", "/dashboard/account"]);
+    ).toEqual([
+      "/dashboard",
+      "/dashboard/live-call",
+      "/dashboard/calls",
+      "/dashboard/agent",
+      "/dashboard/billing",
+      "/dashboard/account",
+    ]);
 
     const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
     fireEvent.click(within(mobileNavigation).getByRole("button", { name: "More" }));
@@ -501,7 +509,7 @@ describe("app shell", () => {
       "href",
       "/dashboard/calls",
     );
-    expect(within(desktopNavigation()).getByRole("link", { name: "Billing" })).toHaveAttribute(
+    expect(within(desktopNavigation()).getByRole("link", { name: "Usage & Billing" })).toHaveAttribute(
       "href",
       "/dashboard/billing",
     );
