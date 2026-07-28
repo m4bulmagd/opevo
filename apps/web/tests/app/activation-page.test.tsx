@@ -178,6 +178,20 @@ describe("activation page", () => {
     expect(screen.getByRole("heading", { name: /Choose your Presvo number/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Start starter plan/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Prepare to go live/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("main")).toHaveClass("max-w-3xl", "px-4", "sm:px-6");
+    expect(screen.getByText("Step 3 of 5")).toHaveClass("text-label");
+    expect(document.querySelectorAll('[data-slot="activation-progress-segment"]')).toHaveLength(5);
+  });
+
+  it("uses a minimal Presvo header before activation is complete", async () => {
+    const { default: ActivationLayout } = await import("@/app/(activation)/activate/layout");
+
+    render(await ActivationLayout({ children: <div>Activation content</div> }));
+
+    expect(screen.getByRole("banner")).toHaveClass("bg-background/90", "backdrop-blur");
+    expect(screen.getByRole("link", { name: "Presvo home" })).toHaveAttribute("href", "/");
+    expect(screen.getByText("Local development")).toBeVisible();
+    expect(screen.queryByRole("navigation", { name: "Account navigation" })).not.toBeInTheDocument();
   });
 
   it("integrates the shared profile form only for the business and receptionist branches", async () => {
@@ -370,17 +384,15 @@ describe("authoritative stage refresh", () => {
 });
 
 describe("activation route feedback", () => {
-  it("keeps account destinations and local context in the focused route layout", async () => {
+  it("keeps local context and skip navigation in the focused route layout", async () => {
     clerkConfigState.authMode = "local";
     clerkConfigState.shouldWrapClerk = false;
     const { default: ActivationLayout } = await import("@/app/(activation)/activate/layout");
 
     render(await ActivationLayout({ children: <div id="activation-content">Activation form</div> }));
 
-    expect(screen.getByRole("link", { name: /^Presvo$/i })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: /Account/i })).toHaveAttribute("href", "/dashboard");
-    expect(screen.getByRole("link", { name: /Billing/i })).toHaveAttribute("href", "/dashboard/billing");
-    expect(screen.getByRole("link", { name: /Calls/i })).toHaveAttribute("href", "/dashboard/calls");
+    expect(screen.getByRole("link", { name: "Presvo home" })).toHaveAttribute("href", "/");
+    expect(screen.queryByRole("navigation", { name: "Account navigation" })).not.toBeInTheDocument();
     expect(screen.getByText(/Local development/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Skip to activation/i })).toHaveAttribute("href", "#activation-content");
   });
