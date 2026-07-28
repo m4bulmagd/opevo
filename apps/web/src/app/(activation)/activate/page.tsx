@@ -67,27 +67,29 @@ export default async function ActivationPage({ searchParams }: ActivationPagePro
 
   return (
     <ActivationShell snapshot={snapshot} selectedMilestone={selectedMilestone}>
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="font-medium text-primary text-sm">{copy.eyebrow}</p>
-          {localJourney ? <Badge variant="secondary">Local development</Badge> : null}
-        </div>
-        <div className="flex flex-col gap-3">
-          <h1 id={`${selectedMilestone}-title`} className="max-w-2xl font-semibold text-3xl tracking-tight sm:text-4xl">
+      <div className="rounded-2xl border border-border bg-card p-5 shadow-card sm:p-7" data-slot="activation-step-card">
+        <div className="flex flex-col gap-2 border-border border-b pb-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-label">{copy.eyebrow}</p>
+            {localJourney ? <Badge variant="secondary">Local development</Badge> : null}
+          </div>
+          <h1 className="font-semibold text-2xl tracking-tight" id={`${selectedMilestone}-title`}>
             {copy.title}
           </h1>
-          <p className="max-w-2xl text-base text-muted-foreground leading-7">{copy.description}</p>
+          <p className="max-w-2xl text-muted-foreground text-sm leading-6">{copy.description}</p>
         </div>
-        {selectedMilestone === "business" || selectedMilestone === "receptionist" ? (
-          <ProfileForm snapshot={snapshot} milestone={selectedMilestone} />
-        ) : null}
-        {selectedMilestone === "number" ? (
-          <NumberMilestone snapshot={snapshot} localBilling={capabilities.localBilling} />
-        ) : null}
-        {selectedMilestone === "forwarding" ? <ForwardingMilestone snapshot={snapshot} /> : null}
-        {selectedMilestone === "launch" ? (
-          <LaunchMilestone snapshot={snapshot} localVerification={capabilities.localVerification} />
-        ) : null}
+        <div className="pt-5">
+          {selectedMilestone === "business" || selectedMilestone === "receptionist" ? (
+            <ProfileForm snapshot={snapshot} milestone={selectedMilestone} />
+          ) : null}
+          {selectedMilestone === "number" ? (
+            <NumberMilestone snapshot={snapshot} localBilling={capabilities.localBilling} />
+          ) : null}
+          {selectedMilestone === "forwarding" ? <ForwardingMilestone snapshot={snapshot} /> : null}
+          {selectedMilestone === "launch" ? (
+            <LaunchMilestone snapshot={snapshot} localVerification={capabilities.localVerification} />
+          ) : null}
+        </div>
       </div>
     </ActivationShell>
   );

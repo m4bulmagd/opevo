@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StageRefresh } from "@/app/(activation)/activate/_components/stage-refresh";
@@ -146,6 +146,16 @@ function buildSnapshot(overrides: Partial<ActivationSnapshot> = {}): ActivationS
   };
 }
 
+function activationStepCard() {
+  const card = document.querySelector('[data-slot="activation-step-card"]');
+
+  expect(card).toHaveClass("rounded-2xl", "border", "border-border", "bg-card", "shadow-card");
+  expect(within(card as HTMLElement).getByRole("heading", { level: 1 })).toBeVisible();
+  expect(document.querySelectorAll("h1")).toHaveLength(1);
+
+  return within(card as HTMLElement);
+}
+
 describe("activation page", () => {
   beforeEach(() => {
     getAccountMock.mockReset().mockResolvedValue({
@@ -181,6 +191,7 @@ describe("activation page", () => {
     expect(screen.getByRole("main")).toHaveClass("max-w-3xl", "px-4", "sm:px-6");
     expect(screen.getByText("Step 3 of 5")).toHaveClass("text-label");
     expect(document.querySelectorAll('[data-slot="activation-progress-segment"]')).toHaveLength(5);
+    expect(activationStepCard().getByRole("button", { name: /Start starter plan/i })).toBeVisible();
   });
 
   it("uses a minimal Presvo header before activation is complete", async () => {
@@ -200,6 +211,7 @@ describe("activation page", () => {
 
     expect(screen.getByLabelText(/Owner name/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/Receptionist name/i)).not.toBeInTheDocument();
+    expect(activationStepCard().getByRole("button", { name: "Continue" })).toBeVisible();
     businessView.unmount();
 
     const base = buildSnapshot();
@@ -301,7 +313,7 @@ describe("activation page", () => {
 
     expect(screen.getByRole("heading", { name: /Forward missed calls to Presvo/i })).toBeInTheDocument();
     expect(screen.getByText("+33 1 87 65 43 21")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Start 10-minute test/i })).toBeInTheDocument();
+    expect(activationStepCard().getByRole("button", { name: /Start 10-minute test/i })).toBeInTheDocument();
   });
 
   it("renders the server-owned verification window and guarded local simulator in launch", async () => {
@@ -324,7 +336,7 @@ describe("activation page", () => {
 
     expect(screen.getByRole("heading", { name: /Prepare to go live/i })).toBeInTheDocument();
     expect(screen.getByRole("timer")).toHaveTextContent("10:00");
-    expect(screen.getByRole("button", { name: /Simulate forwarded call/i })).toBeInTheDocument();
+    expect(activationStepCard().getByRole("button", { name: /Simulate forwarded call/i })).toBeInTheDocument();
   });
 });
 

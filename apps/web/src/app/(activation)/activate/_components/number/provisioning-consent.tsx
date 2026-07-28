@@ -49,7 +49,7 @@ export function ProvisioningConsent() {
   };
 
   return (
-    <div className="flex flex-col gap-4 border-y py-6">
+    <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
         <p className="font-semibold text-lg">Your plan is ready</p>
         <p className="max-w-2xl text-muted-foreground text-sm leading-6">
@@ -59,7 +59,7 @@ export function ProvisioningConsent() {
 
       <AlertDialog open={open} onOpenChange={(nextOpen) => (!pending ? setOpen(nextOpen) : undefined)}>
         <AlertDialogTrigger asChild>
-          <Button className="self-start" size="lg" disabled={pending}>
+          <Button className="min-h-11 self-start" size="lg" disabled={pending}>
             Review number provisioning
           </Button>
         </AlertDialogTrigger>
@@ -71,7 +71,7 @@ export function ProvisioningConsent() {
               carrier, and conditional forwarding is configured in the next step.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="rounded-lg border bg-muted/30 p-4 text-sm leading-6">
+          <div className="rounded-xl border border-border bg-muted/30 p-4 text-sm leading-6">
             <dl className="grid gap-2">
               <div className="flex justify-between gap-4">
                 <dt className="text-muted-foreground">Country</dt>
