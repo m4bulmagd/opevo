@@ -1,19 +1,17 @@
 import { ChangedNumber } from "@/components/motion/changed-number";
 import { MetricBand, MetricItem } from "@/components/product/metric-band";
-import { formatDuration, formatMinutes } from "@/lib/formatters";
-import type { UsageSnapshot } from "@/lib/types/billing";
+import { formatDuration } from "@/lib/formatters";
 import type { DashboardMetrics } from "@/lib/types/dashboard";
 
 type DashboardMetricsProps = {
   metrics: DashboardMetrics | null;
-  usageSnapshot: UsageSnapshot;
 };
 
 function signedInteger(value: number) {
   return value > 0 ? `+${value}` : String(value);
 }
 
-export function DashboardMetricsBand({ metrics, usageSnapshot }: DashboardMetricsProps) {
+export function DashboardMetricsBand({ metrics }: DashboardMetricsProps) {
   if (!metrics) {
     return (
       <MetricBand label="Operational metrics">
@@ -25,7 +23,6 @@ export function DashboardMetricsBand({ metrics, usageSnapshot }: DashboardMetric
         <MetricItem label="Last 7 days" value={null} />
         <MetricItem label="Follow-up flagged" value={null} />
         <MetricItem label="Avg duration" value={null} />
-        <MetricItem label="Minutes remaining" value={formatMinutes(usageSnapshot.minutes_remaining)} />
       </MetricBand>
     );
   }
@@ -56,7 +53,6 @@ export function DashboardMetricsBand({ metrics, usageSnapshot }: DashboardMetric
             : formatDuration(metrics.average_duration_seconds_last_7_days)
         }
       />
-      <MetricItem label="Minutes remaining" value={formatMinutes(usageSnapshot.minutes_remaining)} />
     </MetricBand>
   );
 }
