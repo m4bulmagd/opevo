@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 
 import { AccountLifecycleBanner } from "@/components/account/account-lifecycle-banner";
 import { CommandRail } from "@/components/workspace/command-rail";
-import { MobileCommandBar } from "@/components/workspace/mobile-command-bar";
 import { WorkspaceHeader } from "@/components/workspace/workspace-header";
 import type { AccountStatus } from "@/lib/types/account";
 
@@ -33,13 +32,10 @@ export function WorkspaceShell({ account, accountControl, agentEnabled, agentNam
       >
         Skip to workspace
       </a>
-      <div
-        className="min-h-svh pb-[calc(4rem+env(safe-area-inset-bottom))] lg:flex lg:gap-4 lg:p-4 lg:pb-4"
-        data-slot="workspace-content"
-      >
+      <div className="min-h-svh lg:flex lg:gap-4 lg:p-4" data-slot="workspace-content">
         <CommandRail agentName={agentName} runtimeState={commandRailRuntimeState(account, agentEnabled)} />
         <div className="flex min-w-0 flex-1 flex-col">
-          <WorkspaceHeader accountControl={accountControl} />
+          <WorkspaceHeader accountControl={accountControl} agentName={agentName} />
           <main
             className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 md:gap-7 md:px-8 md:py-8 lg:px-10"
             id="workspace-main"
@@ -49,7 +45,6 @@ export function WorkspaceShell({ account, accountControl, agentEnabled, agentNam
           </main>
         </div>
       </div>
-      <MobileCommandBar agentName={agentName} />
     </div>
   );
 }

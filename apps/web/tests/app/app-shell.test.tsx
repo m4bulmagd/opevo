@@ -26,8 +26,15 @@ type MockLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
 };
 
 vi.mock("next/link", () => ({
-  default: ({ children, href, prefetch: _prefetch, ...props }: MockLinkProps) => (
-    <a href={href} {...props}>
+  default: ({ children, href, onClick, prefetch: _prefetch, ...props }: MockLinkProps) => (
+    <a
+      href={href}
+      onClick={(event) => {
+        event.preventDefault();
+        onClick?.(event);
+      }}
+      {...props}
+    >
       {children}
     </a>
   ),
@@ -114,6 +121,16 @@ function desktopNavigation() {
   return within(sidebar).getByRole("navigation", { name: "Workspace navigation" });
 }
 
+async function openMobileNavigation() {
+  const trigger = screen.getByRole("button", { name: "Open navigation" });
+  fireEvent.click(trigger);
+
+  return {
+    dialog: await screen.findByRole("dialog", { name: "Workspace navigation" }),
+    trigger,
+  };
+}
+
 beforeAll(() => {
   vi.stubGlobal(
     "ResizeObserver",
@@ -156,7 +173,7 @@ describe("app shell", () => {
 
     const markup = renderToString(
       <TooltipProvider>
-        <WorkspaceNavigation agentName="Ava" variant="rail" />
+        <WorkspaceNavigation agentName="Ava" />
       </TooltipProvider>,
     );
 
@@ -274,11 +291,8 @@ describe("app shell", () => {
       "href",
       "/dashboard/agent",
     );
-    expect(
-      within(screen.getByRole("navigation", { name: "Mobile workspace navigation" })).getByRole("link", {
-        name: "Receptionist",
-      }),
-    ).toHaveAttribute("href", "/dashboard/agent");
+    const { dialog } = await openMobileNavigation();
+    expect(within(dialog).getByRole("link", { name: "Receptionist" })).toHaveAttribute("href", "/dashboard/agent");
   });
 
   it("truncates only the visible long agent label while preserving its accessible name and title", async () => {
@@ -293,21 +307,19 @@ describe("app shell", () => {
     expect(agentLink).toHaveAccessibleName(longAgentName);
   });
 
-  it("reveals the complete long agent name from the mobile command tooltip", async () => {
+  it("preserves the complete long agent name in mobile navigation", async () => {
     const longAgentName = "Ava, North Clinic Evening Receptionist";
     await renderDashboardLayout({ agentName: longAgentName });
 
-    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
-    const agentLink = within(mobileNavigation).getByRole("link", { name: longAgentName });
+    const { dialog } = await openMobileNavigation();
+    const agentLink = within(dialog).getByRole("link", { name: longAgentName });
 
-    expect(agentLink).toHaveClass("min-h-11", "min-w-11");
+    expect(agentLink).toHaveClass("min-h-11");
     expect(agentLink).toHaveAccessibleName(longAgentName);
-
-    fireEvent.focus(agentLink);
-    expect(await screen.findByRole("tooltip", { name: longAgentName })).toBeInTheDocument();
+    expect(within(agentLink).getByText(longAgentName)).toHaveAttribute("title", longAgentName);
   });
 
-  it("exposes labelled desktop, compact tablet, and mobile shell compositions", async () => {
+  it("exposes labelled desktop and mobile shell compositions", async () => {
     const view = await renderDashboardLayout();
 
     const sidebar = screen.getByRole("complementary", { name: "Workspace sidebar" });
@@ -323,97 +335,62 @@ describe("app shell", () => {
     expect(within(desktopNavigation()).getByText("Main")).toHaveClass("text-label");
     expect(within(desktopNavigation()).getByText("Account", { selector: "p" })).toHaveClass("text-label");
 
-    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
-    expect(mobileNavigation).toHaveClass("lg:hidden");
-    expect(within(mobileNavigation).getAllByRole("link")).toHaveLength(3);
-    for (const link of within(mobileNavigation).getAllByRole("link")) {
-      expect(link).toHaveClass("min-h-11", "min-w-11");
-    }
-    expect(
-      within(mobileNavigation)
-        .getAllByRole("link")
-        .map((link) => link.getAttribute("aria-label")),
-    ).toEqual(["Overview", "Calls", "Ava"]);
-    expect(within(mobileNavigation).getByRole("button", { name: "More" })).toHaveClass("min-h-11", "min-w-11");
-    expect(within(mobileNavigation).queryByRole("link", { name: "Billing" })).not.toBeInTheDocument();
-    expect(within(mobileNavigation).queryByRole("link", { name: "Account" })).not.toBeInTheDocument();
-
     const workspaceHeader = screen.getByRole("banner");
     expect(workspaceHeader).not.toHaveClass("hidden", "md:hidden");
     expect(within(workspaceHeader).getByText("Local development")).toBeInTheDocument();
     expect(within(workspaceHeader).getByRole("button", { name: /Current theme:/i })).toHaveClass("size-11");
+    expect(within(workspaceHeader).getByRole("button", { name: "Open navigation" })).toHaveClass(
+      "min-h-11",
+      "min-w-11",
+      "lg:hidden",
+    );
+    expect(screen.queryByRole("navigation", { name: "Mobile workspace navigation" })).not.toBeInTheDocument();
 
     const workspaceShell = view.container.querySelector('[data-slot="workspace-shell"]');
     const workspaceContent = view.container.querySelector('[data-slot="workspace-content"]');
     expect(workspaceShell).toHaveClass("font-sans");
     expect(workspaceShell).not.toHaveClass("font-[family-name:var(--font-figtree)]");
     expect(document.body).not.toHaveClass("font-figtree");
-    expect(workspaceContent).toHaveClass(
-      "pb-[calc(4rem+env(safe-area-inset-bottom))]",
-      "lg:flex",
-      "lg:gap-4",
-      "lg:p-4",
-      "lg:pb-4",
-    );
+    expect(workspaceContent).toHaveClass("lg:flex", "lg:gap-4", "lg:p-4");
     expect(workspaceContent).not.toHaveClass("md:pl-18", "lg:pl-64");
+    expect(workspaceContent).not.toHaveClass("pb-[calc(4rem+env(safe-area-inset-bottom))]");
 
     const activeMarkers = view.container.querySelectorAll('[data-slot="active-navigation-marker"]');
-    expect(activeMarkers).toHaveLength(1);
-    expect(activeMarkers[0]).toHaveAttribute("data-motion", "layout");
-    expect(activeMarkers[0]?.getAttribute("data-layout-id")).toMatch(/^workspace-active-/);
+    expect(activeMarkers).toHaveLength(0);
   });
 
-  it("uses static active markers when the user prefers reduced motion", async () => {
-    testState.reducedMotion = true;
-    const view = await renderDashboardLayout();
-
-    const activeMarkers = view.container.querySelectorAll('[data-slot="active-navigation-marker"]');
-    expect(activeMarkers).toHaveLength(1);
-    for (const marker of activeMarkers) {
-      expect(marker).toHaveAttribute("data-motion", "static");
-      expect(marker).not.toHaveAttribute("data-layout-id");
-    }
-  });
-
-  it("announces and traps the More sheet, closes it with Escape, and restores focus", async () => {
+  it("announces and traps mobile navigation, closes it with Escape, and restores focus", async () => {
     await renderDashboardLayout();
 
-    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
-    const moreTrigger = within(mobileNavigation).getByRole("button", { name: "More" });
     const backgroundControl = within(screen.getByRole("banner")).getByRole("button", {
       name: /Current theme:/i,
     });
-    fireEvent.click(moreTrigger);
+    const { dialog, trigger } = await openMobileNavigation();
+    const overviewLink = within(dialog).getByRole("link", { name: "Overview" });
+    const liveCallLink = within(dialog).getByRole("link", { name: "Live call" });
+    const billingLink = within(dialog).getByRole("link", { name: "Usage & Billing" });
+    const accountLink = within(dialog).getByRole("link", { name: "Account" });
 
-    const sheet = await screen.findByRole("dialog", { name: "More workspace destinations" });
-    const billingLink = within(sheet).getByRole("link", { name: "Billing" });
-    const accountLink = within(sheet).getByRole("link", { name: "Account" });
-
+    await waitFor(() => expect(overviewLink).toHaveFocus());
+    expect(within(liveCallLink).getByText("Preview")).toBeVisible();
     expect(billingLink).toHaveAttribute("href", "/dashboard/billing");
     expect(accountLink).toHaveAttribute("href", "/dashboard/account");
-    await waitFor(() => expect(sheet).toContainElement(document.activeElement as HTMLElement));
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
 
     backgroundControl.focus();
-    await waitFor(() => expect(sheet).toContainElement(document.activeElement as HTMLElement));
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
 
     fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "More workspace destinations" })).toBeNull());
-    await waitFor(() => expect(moreTrigger).toHaveFocus());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Workspace navigation" })).toBeNull());
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
-  it("leaves More sheet presentation to one reduced-motion opacity entrance", async () => {
-    testState.reducedMotion = true;
+  it("closes mobile navigation after selecting a destination", async () => {
     await renderDashboardLayout();
 
-    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
-    fireEvent.click(within(mobileNavigation).getByRole("button", { name: "More" }));
-
-    const sheet = await screen.findByRole("dialog", { name: "More workspace destinations" });
-    expect(sheet).toHaveClass("!animate-none", "!transform-none", "!transition-none");
-
-    const bottomSheet = sheet.querySelector('[data-slot="bottom-sheet-motion"]');
-    expect(bottomSheet).toHaveAttribute("data-motion", "opacity-only");
-    expect((bottomSheet as HTMLElement).style.transform).toBe("");
+    const { dialog } = await openMobileNavigation();
+    fireEvent.click(within(dialog).getByRole("link", { name: "Calls" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Workspace navigation" })).toBeNull());
   });
 
   it("marks only the matching nested destination as the current page", async () => {
@@ -489,11 +466,9 @@ describe("app shell", () => {
       "/dashboard/account",
     ]);
 
-    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile workspace navigation" });
-    fireEvent.click(within(mobileNavigation).getByRole("button", { name: "More" }));
-    const sheet = await screen.findByRole("dialog", { name: "More workspace destinations" });
-    expect(within(sheet).getByRole("link", { name: "Billing" })).toBeInTheDocument();
-    expect(within(sheet).getByRole("link", { name: "Account" })).toBeInTheDocument();
+    const { dialog } = await openMobileNavigation();
+    expect(within(dialog).getByRole("link", { name: "Usage & Billing" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Account" })).toBeInTheDocument();
   });
 
   it("omits the global lifecycle banner while active and retains navigation", async () => {

@@ -523,7 +523,7 @@ git commit -m "feat(web): port Presvo desktop sidebar"
 - Delete: `apps/web/src/components/workspace/mobile-command-bar.tsx`
 - Delete: `apps/web/src/components/workspace/mobile-more-sheet.tsx`
 
-- [ ] **Step 1: Add failing mobile navigation tests**
+- [x] **Step 1: Add failing mobile navigation tests**
 
 Use `userEvent` and assert:
 
@@ -542,14 +542,14 @@ expect(trigger).toHaveFocus();
 
 Mock route navigation and verify selecting a link calls the sheet close handler.
 
-- [ ] **Step 2: Run the mobile shell tests and confirm they fail**
+- [x] **Step 2: Run the mobile shell tests and confirm they fail**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/app-shell.test.tsx
 ```
 
-- [ ] **Step 3: Implement the mobile navigation island**
+- [x] **Step 3: Implement the mobile navigation island**
 
 `mobile-workspace-navigation.tsx` is a client component with controlled `open` state. Compose the existing `Sheet`, a 44px menu button, `SheetTitle`, and the same grouped route data used by the desktop sidebar.
 
@@ -563,7 +563,7 @@ Required behavior:
 - preview status remains visible;
 - bottom padding uses `max(1rem, env(safe-area-inset-bottom))`.
 
-- [ ] **Step 4: Compose it into the compact header and remove the bottom bar**
+- [x] **Step 4: Compose it into the compact header and remove the bottom bar**
 
 Add the mobile trigger to `WorkspaceHeader`. Remove `MobileCommandBar` from `WorkspaceShell` and remove bottom-navigation padding:
 
@@ -594,7 +594,7 @@ prop, and temporary `dashboardItems` compatibility helper from
 optional first-destination ref so desktop and sheet navigation render the same
 groups and status badges.
 
-- [ ] **Step 5: Run targeted verification**
+- [x] **Step 5: Run targeted verification**
 
 ```bash
 cd apps/web
@@ -603,7 +603,7 @@ npm run typecheck
 npm run check
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web/src/components/workspace apps/web/tests/app/app-shell.test.tsx

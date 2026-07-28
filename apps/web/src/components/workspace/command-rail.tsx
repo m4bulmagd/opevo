@@ -30,7 +30,7 @@ export function CommandRail({ agentName, runtimeState }: CommandRailProps) {
             <span className="block truncate text-muted-foreground text-xs">AI Call Assistant</span>
           </span>
         </Link>
-        <WorkspaceNavigation agentName={agentName} variant="rail" />
+        <WorkspaceNavigation agentName={agentName} />
         <fieldset
           aria-label={`Agent runtime: ${agentName}, ${runtimeState}`}
           className="min-w-0 rounded-xl border border-sidebar-border bg-card px-3 py-2.5"
