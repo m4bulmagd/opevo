@@ -1,7 +1,5 @@
 import Link from "next/link";
 
-import { Check, LockKeyhole } from "lucide-react";
-
 import type { ActivationSnapshot } from "@/lib/types/activation";
 import { cn } from "@/lib/utils";
 
@@ -22,34 +20,30 @@ type MilestoneNavProps = {
 
 export function MilestoneNav({ snapshot, selectedMilestone }: MilestoneNavProps) {
   return (
-    <nav aria-label="Activation progress" className="overflow-x-auto pb-1">
-      <ol className="flex min-w-max items-center gap-1 sm:min-w-0">
-        {ACTIVATION_MILESTONES.map((milestone, index) => {
+    <nav aria-label="Activation progress">
+      <ol className="grid grid-cols-5 gap-1.5 sm:gap-2">
+        {ACTIVATION_MILESTONES.map((milestone) => {
           const state = getMilestoneState(snapshot, milestone);
           const label = MILESTONE_LABELS[milestone];
           const isSelected = selectedMilestone === milestone;
           const content = (
             <span
               className={cn(
-                "inline-flex min-h-10 items-center gap-2 rounded-md px-2.5 text-sm outline-none transition-colors",
-                "focus-visible:ring-3 focus-visible:ring-ring/50",
+                "flex min-w-0 flex-col gap-2 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
                 state === "locked" && "text-muted-foreground",
-                state !== "locked" && !isSelected && "text-foreground hover:bg-muted",
-                isSelected && "bg-secondary font-medium text-secondary-foreground",
+                state !== "locked" && "text-foreground",
+                isSelected && "font-medium",
               )}
             >
               <span
                 aria-hidden="true"
+                data-slot="activation-progress-segment"
                 className={cn(
-                  "inline-flex size-5 items-center justify-center rounded-full border text-xs",
-                  state === "completed" && "border-primary bg-primary text-primary-foreground",
-                  state === "current" && "border-primary text-primary",
-                  state === "locked" && "border-border",
+                  "h-1.5 w-full rounded-full bg-muted transition-colors",
+                  (state === "completed" || isSelected) && "bg-primary",
                 )}
-              >
-                {state === "completed" ? <Check /> : state === "locked" ? <LockKeyhole /> : index + 1}
-              </span>
-              <span>{label}</span>
+              />
+              <span className="min-w-0 text-center text-[10px] leading-4 sm:text-xs">{label}</span>
               <span className="sr-only">
                 {state === "completed" ? "Complete" : state === "locked" ? "Locked" : "Current"}
               </span>
@@ -57,17 +51,14 @@ export function MilestoneNav({ snapshot, selectedMilestone }: MilestoneNavProps)
           );
 
           return (
-            <li key={milestone} aria-current={isSelected ? "step" : undefined} className="flex items-center gap-1">
+            <li aria-current={isSelected ? "step" : undefined} className="min-w-0" key={milestone}>
               {state === "locked" ? (
                 content
               ) : (
-                <Link href={`/activate?milestone=${milestone}`} className="rounded-md">
+                <Link className="block min-h-11 rounded-md py-1" href={`/activate?milestone=${milestone}`}>
                   {content}
                 </Link>
               )}
-              {index < ACTIVATION_MILESTONES.length - 1 ? (
-                <span aria-hidden="true" className="h-px w-3 bg-border sm:flex-1" />
-              ) : null}
             </li>
           );
         })}

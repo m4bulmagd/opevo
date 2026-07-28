@@ -176,6 +176,7 @@ describe("milestone navigator", () => {
 
     const navigation = screen.getByRole("navigation", { name: /Activation progress/i });
     expect(navigation.querySelectorAll("ol > li")).toHaveLength(5);
+    expect(navigation.querySelectorAll('[data-slot="activation-progress-segment"]')).toHaveLength(5);
     expect(screen.getByRole("link", { name: /Business.*Complete/i })).toHaveAttribute(
       "href",
       "/activate?milestone=business",

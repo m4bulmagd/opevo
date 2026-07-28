@@ -322,7 +322,7 @@ git commit -m "feat(web): style hosted auth entry"
 - Consumes: `ActivationSnapshot`, `ActivationMilestoneId`, `getMilestoneState`.
 - Produces: the same `ActivationShell` and `MilestoneNav` props; no state-router changes.
 
-- [ ] **Step 1: Add failing shell and progress assertions**
+- [x] **Step 1: Add failing shell and progress assertions**
 
 Assert:
 
@@ -339,14 +339,14 @@ expect(screen.getByText("Forwarding").closest("[aria-current='step']")).not.toBe
 
 For a locked milestone, assert it is not a link. For completed milestones, retain their canonical query URLs and accessible `Complete` suffixes.
 
-- [ ] **Step 2: Run the activation shell tests and confirm failure**
+- [x] **Step 2: Run the activation shell tests and confirm failure**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/activation-page.test.tsx tests/app/milestone-nav.test.tsx
 ```
 
-- [ ] **Step 3: Simplify the activation layout**
+- [x] **Step 3: Simplify the activation layout**
 
 Keep the skip link and account control, but replace the pre-activation dashboard links with a minimal header:
 
@@ -365,7 +365,7 @@ Keep the skip link and account control, but replace the pre-activation dashboard
 
 Local mode stays visibly `Local development`; Clerk mode retains sign out.
 
-- [ ] **Step 4: Recompose `ActivationShell`**
+- [x] **Step 4: Recompose `ActivationShell`**
 
 Use:
 
@@ -385,11 +385,11 @@ Use:
 </main>
 ```
 
-- [ ] **Step 5: Replace scrolling chips with template progress segments**
+- [x] **Step 5: Replace scrolling chips with template progress segments**
 
 Each list item contains a `h-1.5 rounded-full` segment plus a compact label beneath it. The selected/completed segment uses `bg-primary`; future segments use `bg-muted`. Completed/current labels remain links when canonical access is allowed. Use `data-slot="activation-progress-segment"` and `aria-hidden="true"` on the visual bar while keeping state text available to assistive technology.
 
-- [ ] **Step 6: Run verification and commit**
+- [x] **Step 6: Run verification and commit**
 
 ```bash
 cd apps/web
