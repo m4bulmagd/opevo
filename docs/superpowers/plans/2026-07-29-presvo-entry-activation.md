@@ -217,7 +217,7 @@ type AuthEntryShellProps = {
 };
 ```
 
-- [ ] **Step 1: Write failing auth-shell tests**
+- [x] **Step 1: Write failing auth-shell tests**
 
 Mock Clerk and the auth configuration for configured Clerk mode. Assert:
 
@@ -237,14 +237,14 @@ expect(signInMock).toHaveBeenCalledWith(
 
 Repeat for sign-up with title `Create your Presvo account`, `signInUrl="/sign-in"`, and the existing dashboard redirect. Keep local mode redirect assertions.
 
-- [ ] **Step 2: Run the auth test and confirm failure**
+- [x] **Step 2: Run the auth test and confirm failure**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/auth-entry.test.tsx
 ```
 
-- [ ] **Step 3: Implement `AuthEntryShell`**
+- [x] **Step 3: Implement `AuthEntryShell`**
 
 Render:
 
@@ -267,7 +267,7 @@ Render:
 </main>
 ```
 
-- [ ] **Step 4: Pass a shared Clerk appearance contract**
+- [x] **Step 4: Pass a shared Clerk appearance contract**
 
 Both routes pass:
 
@@ -294,7 +294,7 @@ const PRESVO_CLERK_APPEARANCE = {
 
 Do not change `authMode`, `isAppAuthConfigured`, redirect URLs, or dynamic imports.
 
-- [ ] **Step 5: Run verification and commit**
+- [x] **Step 5: Run verification and commit**
 
 ```bash
 cd apps/web
