@@ -2,8 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 
+import { retryProvisioning } from "@/lib/api/activation";
 import { BackendApiError } from "@/lib/api/backend-client";
-import { retryProvisioning } from "@/lib/api/onboarding";
 
 export type RetryProvisioningActionResult = {
   status: "success" | "error";

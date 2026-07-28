@@ -24,10 +24,7 @@ export function AgentSettingsForm({
   initialConfig: AgentConfig;
   readOnly?: boolean;
 }) {
-  const [formState, setFormState] = useState({
-    ...initialConfig,
-    pipeline_mode: "stt_llm_tts" as const,
-  });
+  const [formState, setFormState] = useState(initialConfig);
   const [result, setResult] = useState<AgentActionResult | null>(null);
   const [isPending, startTransition] = useTransition();
 

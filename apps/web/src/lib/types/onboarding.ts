@@ -43,8 +43,3 @@ export type OnboardingStatus = {
   evaluated_at: string;
   policy_version: string;
 };
-
-export type RetryProvisioningResponse = {
-  status: "accepted";
-  queued: boolean;
-};
