@@ -423,7 +423,7 @@ git commit -m "feat(web): model dashboard capability navigation"
 - Modify: `apps/web/src/components/workspace/command-rail.tsx`
 - Modify: `apps/web/src/components/workspace/workspace-navigation.tsx`
 
-- [ ] **Step 1: Replace rail-specific tests with template sidebar expectations**
+- [x] **Step 1: Replace rail-specific tests with template sidebar expectations**
 
 The desktop test must assert:
 
@@ -443,14 +443,14 @@ expect(within(navigation).getByRole("link", { name: "Overview" })).toHaveAttribu
 
 Retain tests for normalized agent names, nested active routes, account lifecycle banner, local auth badge, and sign-out rendering.
 
-- [ ] **Step 2: Run the shell test and confirm it fails**
+- [x] **Step 2: Run the shell test and confirm it fails**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/app-shell.test.tsx
 ```
 
-- [ ] **Step 3: Rebuild `CommandRail` as the template sidebar**
+- [x] **Step 3: Rebuild `CommandRail` as the template sidebar**
 
 Keep the exported component name during this phase to minimize unrelated churn. Render:
 
@@ -477,7 +477,7 @@ Runtime card geometry:
 - agent name and runtime state remain sourced from the existing server-owned props;
 - no fabricated email or customer identity is added.
 
-- [ ] **Step 4: Port the desktop branch of `WorkspaceNavigation`**
+- [x] **Step 4: Port the desktop branch of `WorkspaceNavigation`**
 
 Use `dashboardGroups` for the desktop branch and remove its rail tooltip and
 layout marker. Keep the existing mobile branch and its `dashboardItems` input
@@ -492,7 +492,7 @@ Each group renders its 11px `text-label` heading. Each link uses:
 
 Active links use `bg-sidebar-accent text-sidebar-accent-foreground`. Preview items render `CapabilityBadge` after the title.
 
-- [ ] **Step 5: Run targeted verification**
+- [x] **Step 5: Run targeted verification**
 
 ```bash
 cd apps/web
@@ -503,7 +503,7 @@ npm run check
 
 Expected: both new desktop assertions and the unchanged legacy mobile assertions pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web/src/components/workspace/command-rail.tsx apps/web/src/components/workspace/workspace-navigation.tsx apps/web/tests/app/app-shell.test.tsx

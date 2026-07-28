@@ -33,19 +33,21 @@ export function WorkspaceShell({ account, accountControl, agentEnabled, agentNam
       >
         Skip to workspace
       </a>
-      <CommandRail agentName={agentName} runtimeState={commandRailRuntimeState(account, agentEnabled)} />
       <div
-        className="min-h-svh pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0 md:pl-18 lg:pl-64"
+        className="min-h-svh pb-[calc(4rem+env(safe-area-inset-bottom))] lg:flex lg:gap-4 lg:p-4 lg:pb-4"
         data-slot="workspace-content"
       >
-        <WorkspaceHeader accountControl={accountControl} />
-        <main
-          className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 md:gap-7 md:px-8 md:py-8 lg:px-10"
-          id="workspace-main"
-        >
-          {account.status === "active" ? null : <AccountLifecycleBanner account={account} />}
-          {children}
-        </main>
+        <CommandRail agentName={agentName} runtimeState={commandRailRuntimeState(account, agentEnabled)} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <WorkspaceHeader accountControl={accountControl} />
+          <main
+            className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 md:gap-7 md:px-8 md:py-8 lg:px-10"
+            id="workspace-main"
+          >
+            {account.status === "active" ? null : <AccountLifecycleBanner account={account} />}
+            {children}
+          </main>
+        </div>
       </div>
       <MobileCommandBar agentName={agentName} />
     </div>
