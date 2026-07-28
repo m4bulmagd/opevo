@@ -220,7 +220,7 @@ git commit -m "feat(web): install Presvo visual tokens"
 - Modify: `apps/web/src/components/product/product-surface.tsx`
 - Modify: `apps/web/src/components/product/page-intro.tsx`
 
-- [ ] **Step 1: Add failing semantic and class-contract tests**
+- [x] **Step 1: Add failing semantic and class-contract tests**
 
 Cover:
 
@@ -247,14 +247,14 @@ Also assert:
 - `PageIntro` uses `text-xl sm:text-2xl`;
 - `ProductSurface` default tone uses `rounded-xl border border-border bg-card shadow-card`.
 
-- [ ] **Step 2: Run the primitive test and confirm it fails**
+- [x] **Step 2: Run the primitive test and confirm it fails**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/components/design-system-primitives.test.tsx
 ```
 
-- [ ] **Step 3: Add the capability interface and badge**
+- [x] **Step 3: Add the capability interface and badge**
 
 `lib/types/capability.ts`:
 
@@ -299,7 +299,7 @@ export function CapabilityBadge({
 }
 ```
 
-- [ ] **Step 4: Match the template's shared geometry**
+- [x] **Step 4: Match the template's shared geometry**
 
 Use scoped transitions on buttons and badges:
 
@@ -317,7 +317,7 @@ Update:
 
 Do not change public component props.
 
-- [ ] **Step 5: Run targeted verification**
+- [x] **Step 5: Run targeted verification**
 
 ```bash
 cd apps/web
@@ -326,7 +326,7 @@ npm run typecheck
 npm run check
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web/src/components/ui apps/web/src/components/product apps/web/src/lib/types/capability.ts apps/web/tests/components/design-system-primitives.test.tsx apps/web/tests/components/product-components.test.tsx

@@ -13,8 +13,8 @@ export type ProductSurfaceProps = {
 };
 
 const TONE_CLASS: Record<NonNullable<ProductSurfaceProps["tone"]>, string> = {
-  default: "border-border/80 bg-surface shadow-raised",
-  subtle: "border-border/70 bg-surface-subtle/50",
+  default: "border-border bg-card shadow-card",
+  subtle: "border-border bg-muted/50",
   danger: "border-destructive/30 bg-destructive-subtle",
 };
 
@@ -36,7 +36,7 @@ export function ProductSurface({
     <Component
       aria-describedby={description !== undefined ? descriptionId : undefined}
       aria-labelledby={title !== undefined ? titleId : undefined}
-      className={cn("overflow-hidden rounded-lg border text-text-primary", TONE_CLASS[tone])}
+      className={cn("overflow-hidden rounded-xl border text-text-primary", TONE_CLASS[tone])}
       data-slot="product-surface"
       data-tone={tone}
       role={as === "div" && title !== undefined ? "region" : undefined}
