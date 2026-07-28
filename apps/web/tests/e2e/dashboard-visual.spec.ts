@@ -76,33 +76,40 @@ async function expectDashboardReady(page: Page, viewportMode: ViewportMode) {
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Operational metrics" })).toBeVisible();
 
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   const desktopNavigation = page.getByRole("navigation", { exact: true, name: "Workspace navigation" });
-  const mobileNavigation = page.getByRole("navigation", { exact: true, name: "Mobile workspace navigation" });
-  const activeNavigation = viewportMode === "desktop" ? desktopNavigation : mobileNavigation;
-  const hiddenNavigation = viewportMode === "desktop" ? mobileNavigation : desktopNavigation;
+  const mobileTrigger = page.getByRole("button", { name: "Open navigation" });
 
-  await expect(activeNavigation).toBeVisible();
-  await expect(activeNavigation.getByRole("link", { name: AGENT_NAME })).toBeVisible();
-  await expect(hiddenNavigation).toBeHidden();
+  if (viewportMode === "desktop") {
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar).toHaveCSS("width", "256px");
+    await expect(desktopNavigation.getByRole("link", { name: AGENT_NAME })).toBeVisible();
+    await expect(mobileTrigger).toBeHidden();
+  } else {
+    await expect(sidebar).toBeHidden();
+    await expect(mobileTrigger).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Mobile workspace destinations" })).toBeHidden();
+  }
+
+  await expect(page.getByRole("navigation", { name: "Mobile workspace navigation" })).toHaveCount(0);
+  await expect(page.getByRole("banner").getByRole("link", { name: "Live call" })).toContainText("Preview");
+  await expect(page.getByRole("button", { name: "Notifications (3 unread)" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
 }
 
-async function openAndVerifyMobileMoreSheet(page: Page) {
-  const mobileNavigation = page.getByRole("navigation", { exact: true, name: "Mobile workspace navigation" });
-  const more = mobileNavigation.getByRole("button", { name: "More" });
+async function openAndVerifyMobileNavigation(page: Page) {
+  const trigger = page.getByRole("button", { name: "Open navigation" });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "Workspace navigation" });
+  const navigation = dialog.getByRole("navigation", { name: "Mobile workspace destinations" });
 
-  await more.click();
-  const dialog = page.getByRole("dialog", { name: "More workspace destinations" });
-  const billing = dialog.getByRole("link", { name: "Billing" });
-  const account = dialog.getByRole("link", { name: "Account" });
-
-  await expect(dialog).toBeVisible();
-  await expect(billing).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(account).toBeFocused();
+  await expect(navigation.getByRole("link", { name: "Overview" })).toBeFocused();
+  await expect(navigation.getByRole("link", { name: "Live call" })).toContainText("Preview");
+  await expect(navigation.getByRole("link", { name: "Usage & Billing" })).toBeVisible();
+  await expect(navigation.getByRole("link", { name: "Account" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
-  await expect(more).toBeFocused();
+  await expect(trigger).toBeFocused();
 }
 
 for (const visualCase of VISUAL_CASES) {
@@ -121,7 +128,7 @@ for (const visualCase of VISUAL_CASES) {
     });
 
     if (visualCase.name === "dashboard-mobile-dark.png") {
-      await openAndVerifyMobileMoreSheet(page);
+      await openAndVerifyMobileNavigation(page);
     }
   });
 }
@@ -239,7 +246,7 @@ test("reduced motion keeps workspace route changes static", async ({ page }) => 
     await expect(page.getByRole("heading", { level: 1, name: destination.heading })).toBeVisible();
     const current = navigation.getByRole("link", { name: destination.link });
     await expect(current).toHaveAttribute("aria-current", "page");
-    await expect(current.locator('[data-slot="active-navigation-marker"]')).toHaveAttribute("data-motion", "static");
+    await expect(current.locator('[data-slot="active-navigation-marker"]')).toHaveCount(0);
     await page.evaluate(() => document.fonts.ready);
 
     const violations = await visibleMotionViolations(page);
@@ -260,7 +267,7 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await setThemeBeforeNavigation(page, "light");
     await page.goto("/dashboard");
-    await expectDashboardReady(page, viewport.width < 768 ? "mobile" : "desktop");
+    await expectDashboardReady(page, viewport.width < 1024 ? "mobile" : "desktop");
 
     const overflow = await page.evaluate(() => ({
       bodyClientWidth: document.body.clientWidth,
@@ -275,14 +282,16 @@ for (const viewport of [
       rootScrollWidth: viewport.width,
     });
 
-    const mobileBar = page.locator('nav[aria-label="Mobile workspace navigation"]');
-    const commandRail = page.locator('aside[aria-label="Workspace command rail"]');
-    if (viewport.width < 768) {
-      await expect(mobileBar).toBeVisible();
-      await expect(commandRail).toBeHidden();
+    const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+    const mobileTrigger = page.getByRole("button", { name: "Open navigation" });
+    if (viewport.width < 1024) {
+      await expect(mobileTrigger).toBeVisible();
+      await expect(sidebar).toBeHidden();
     } else {
-      await expect(mobileBar).toBeHidden();
-      await expect(commandRail).toBeVisible();
+      await expect(mobileTrigger).toBeHidden();
+      await expect(sidebar).toBeVisible();
+      await expect(sidebar).toHaveCSS("width", "256px");
     }
+    await expect(page.locator('nav[aria-label="Mobile workspace navigation"]')).toHaveCount(0);
   });
 }
