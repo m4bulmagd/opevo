@@ -195,26 +195,26 @@ git commit -m "feat(calls): add production history filters"
 
 ## Task 3: Port the Presvo Operational Overview
 
-- [ ] **Step 1: Add failing dashboard and chart tests**
+- [x] **Step 1: Add failing dashboard and chart tests**
 
 Require the template hierarchy: compact header, four-stat band, `Call activity` surface, assistant/assigned-number surfaces, usage/setup row, and recent-call cards. For non-empty activity, require Recharts output plus a screen-reader text summary containing all seven dates and values. For unavailable metrics, render an honest unavailable chart state.
 
-- [ ] **Step 2: Run focused tests and confirm failure**
+- [x] **Step 2: Run focused tests and confirm failure**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/home-page.test.tsx tests/components/activity-chart.test.tsx
 ```
 
-- [ ] **Step 3: Implement the chart and overview composition**
+- [x] **Step 3: Implement the chart and overview composition**
 
 Port the template `ActivityChart` visual treatment using semantic CSS variables and Recharts. Give the visualization an accessible region name and include an ordered, visually hidden textual dataset. Recompose the dashboard into the template's `space-y-5`, `surface-card`, two-column activity/status, two-column usage/setup, and recent-calls hierarchy without inventing answer rate or missed-call metrics absent from the API.
 
-- [ ] **Step 4: Preserve authoritative status and first-run behavior**
+- [x] **Step 4: Preserve authoritative status and first-run behavior**
 
 Keep `AnsweringStatusBanner`, activation routing, provisioning retry, setup checklist truth, current usage, and metric-failure isolation. Do not add a fake enable switch or fake active call.
 
-- [ ] **Step 5: Verify focused behavior and quality**
+- [x] **Step 5: Verify focused behavior and quality**
 
 ```bash
 cd apps/web
@@ -223,7 +223,7 @@ npm run typecheck
 npm run check
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git commit -m "feat(web): port Presvo operations overview"

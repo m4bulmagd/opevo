@@ -179,23 +179,36 @@ describe("dashboard page", () => {
     expect(screen.getByText("Sunday, July 26 · Europe/Paris")).toHaveAttribute("data-visual-dynamic", "true");
     expect(container.querySelectorAll("[data-visual-dynamic]")).toHaveLength(1);
     expect(screen.getByText("Ava is answering calls")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Configure receptionist" })).toHaveAttribute("href", "/dashboard/agent");
+    const pageActions = container.querySelector<HTMLElement>('[data-slot="page-intro-action"]');
+    expect(pageActions).not.toBeNull();
+    expect(within(pageActions as HTMLElement).getByRole("link", { name: "Review billing" })).toHaveAttribute(
+      "href",
+      "/dashboard/billing",
+    );
 
     const metrics = screen.getByRole("region", { name: "Operational metrics" });
-    for (const label of ["Calls today", "Last 7 days", "Follow-up flagged", "Avg duration", "Minutes remaining"]) {
+    for (const label of ["Calls today", "Last 7 days", "Follow-up flagged", "Avg duration"]) {
       expect(within(metrics).getByText(label)).toBeInTheDocument();
     }
+    expect(within(metrics).queryByText("Minutes remaining")).not.toBeInTheDocument();
     expect(within(metrics).getByText("8")).toBeInTheDocument();
     expect(within(metrics).getByText("34")).toBeInTheDocument();
     expect(within(metrics).getByText("3")).toBeInTheDocument();
     expect(within(metrics).getByText("2m 42s")).toBeInTheDocument();
-    expect(within(metrics).getByText("183 min")).toBeInTheDocument();
     expect(within(metrics).getByText("+6 vs previous 7 days")).toBeInTheDocument();
     expect(within(metrics).getByText("Previous 7 days: 28 calls")).toHaveClass("sr-only");
     expect(within(metrics).queryByText(/\+?6%/)).not.toBeInTheDocument();
 
+    const activity = screen.getByRole("region", { name: "Call activity" });
+    expect(activity).toHaveAttribute("data-slot", "activity-surface");
+    expect(within(activity).getByRole("region", { name: "Call activity chart" })).toBeInTheDocument();
+    expect(within(activity).getByText("July 26, 2026: 8 calls")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Assigned number" })).toHaveTextContent("+3315551234");
+
     const recentCalls = screen.getByRole("list", { name: "Recent calls" });
     const flaggedLink = within(recentCalls).getByRole("link", { name: /^\+33123456789/i });
-    const flaggedRow = flaggedLink.closest("[data-slot='data-ledger-row']");
+    const flaggedRow = flaggedLink.closest("[data-slot='dashboard-call-card']");
     expect(flaggedLink).toHaveAccessibleName(/^\+33123456789, Book an appointment, Follow-up needed, 2m 42s, Mar 28/i);
     expect(within(flaggedRow as HTMLElement).getAllByRole("link")).toHaveLength(1);
     expect(flaggedRow).toHaveTextContent("Book an appointment");
@@ -205,7 +218,7 @@ describe("dashboard page", () => {
     expect(flaggedRow?.querySelector("time")).toHaveAttribute("datetime", "2026-03-28T10:00:00Z");
 
     const standardLink = within(recentCalls).getByRole("link", { name: /^\+33987654321/i });
-    const standardRow = standardLink.closest("[data-slot='data-ledger-row']");
+    const standardRow = standardLink.closest("[data-slot='dashboard-call-card']");
     expect(standardRow).toHaveTextContent("Check opening hours");
     expect(standardRow).toHaveTextContent("No follow-up needed");
     expect(standardRow).toHaveTextContent("45s");
@@ -313,6 +326,9 @@ describe("dashboard page", () => {
     render(await Page());
 
     expect(screen.getByText("Metrics temporarily unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Call activity" })).toHaveTextContent(
+      "Activity data is temporarily unavailable.",
+    );
     expect(screen.getByText("Date context unavailable")).toHaveAttribute("data-visual-dynamic", "true");
     expect(screen.queryByText("Europe/Paris")).not.toBeInTheDocument();
     expect(screen.getByText("Mina is paused")).toBeInTheDocument();
