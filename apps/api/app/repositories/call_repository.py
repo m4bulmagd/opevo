@@ -70,6 +70,7 @@ class DashboardMetricsAggregate:
     calls_previous_7_days: int
     follow_up_flagged_last_7_days: int
     average_duration_seconds_last_7_days: int | None
+    daily_call_counts: tuple[int, ...]
 
 
 class CallTransitionError(ValueError):
@@ -236,6 +237,7 @@ class CallRepository:
         current_window_start_utc: datetime,
         previous_window_start_utc: datetime,
         now_utc: datetime,
+        activity_windows_utc: tuple[tuple[datetime, datetime], ...],
     ) -> DashboardMetricsAggregate:
         current_window = and_(
             Call.started_at >= current_window_start_utc,
@@ -254,6 +256,22 @@ class CallRepository:
             Call.status.in_(("completed", "failed")),
             Call.duration_seconds.is_not(None),
         )
+        activity_expressions = [
+            func.sum(
+                case(
+                    (
+                        and_(
+                            Call.started_at >= window_start,
+                            Call.started_at < window_end,
+                            Call.started_at <= now_utc,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            )
+            for window_start, window_end in activity_windows_utc
+        ]
         row = (
             await self.session.execute(
                 select(
@@ -278,6 +296,7 @@ class CallRepository:
                             else_=None,
                         )
                     ),
+                    *activity_expressions,
                 ).where(
                     Call.user_id == user_id,
                     Call.deleted_at.is_(None),
@@ -301,6 +320,7 @@ class CallRepository:
             calls_previous_7_days=int(row[2] or 0),
             follow_up_flagged_last_7_days=int(row[3] or 0),
             average_duration_seconds_last_7_days=rounded_average,
+            daily_call_counts=tuple(int(value or 0) for value in row[5:]),
         )
 
     async def has_active_by_user_id(self, user_id: UUID) -> bool:

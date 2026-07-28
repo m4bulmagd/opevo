@@ -122,6 +122,15 @@ function buildMetrics(overrides: Partial<DashboardMetrics> = {}): DashboardMetri
     calls_change_from_previous_7_days: 6,
     follow_up_flagged_last_7_days: 3,
     average_duration_seconds_last_7_days: 162,
+    daily_activity: [
+      { date: "2026-07-20", label: "Mon", calls: 3 },
+      { date: "2026-07-21", label: "Tue", calls: 5 },
+      { date: "2026-07-22", label: "Wed", calls: 4 },
+      { date: "2026-07-23", label: "Thu", calls: 6 },
+      { date: "2026-07-24", label: "Fri", calls: 3 },
+      { date: "2026-07-25", label: "Sat", calls: 5 },
+      { date: "2026-07-26", label: "Sun", calls: 8 },
+    ],
     ...overrides,
   };
 }
