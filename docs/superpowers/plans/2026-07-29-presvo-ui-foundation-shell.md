@@ -716,7 +716,7 @@ git commit -m "feat(web): add shell search and notification preview"
 - Modify: `apps/web/tests/e2e/dashboard-visual.spec.ts`
 - Update after visual inspection: `apps/web/tests/e2e/dashboard-visual.spec.ts-snapshots/*`
 
-- [ ] **Step 1: Change the browser assertions before snapshots**
+- [x] **Step 1: Change the browser assertions before snapshots**
 
 Replace mobile bottom-bar helpers with:
 
@@ -743,7 +743,7 @@ Keep:
 - horizontal overflow audit;
 - existing live dashboard content assertions.
 
-- [ ] **Step 2: Run semantic Playwright assertions and confirm old assumptions fail**
+- [x] **Step 2: Run semantic Playwright assertions and confirm old assumptions fail**
 
 Use the repository's documented local E2E server command, then:
 
@@ -754,14 +754,14 @@ npx playwright test tests/e2e/dashboard-visual.spec.ts --grep-invert "matches"
 
 Expected before implementation is complete: old bottom-navigation or rail assertions fail. After Tasks 1–6: semantic tests pass.
 
-- [ ] **Step 3: Capture candidate snapshots**
+- [x] **Step 3: Capture candidate snapshots**
 
 ```bash
 cd apps/web
 npx playwright test tests/e2e/dashboard-visual.spec.ts --update-snapshots
 ```
 
-- [ ] **Step 4: Inspect all four images**
+- [x] **Step 4: Inspect all four images**
 
 Verify each rendered screenshot:
 
@@ -776,7 +776,7 @@ Verify each rendered screenshot:
 
 Reject and fix code if any discrepancy is visible; do not normalize it by masking stable UI.
 
-- [ ] **Step 5: Run the full Phase 1 verification**
+- [x] **Step 5: Run the full Phase 1 verification**
 
 ```bash
 cd apps/web
@@ -789,7 +789,7 @@ npx playwright test tests/e2e/dashboard-visual.spec.ts
 
 Expected: all commands exit 0.
 
-- [ ] **Step 6: Scan for obsolete shell code and placeholders**
+- [x] **Step 6: Scan for obsolete shell code and placeholders**
 
 ```bash
 rg -n "MobileCommandBar|MobileMoreSheet|variant=\"mobile\"|font-figtree|font-inter|transition-all|TODO|FIXME" apps/web/src apps/web/tests
@@ -797,7 +797,7 @@ rg -n "MobileCommandBar|MobileMoreSheet|variant=\"mobile\"|font-figtree|font-int
 
 Expected: no obsolete shell/font imports, no `transition-all` in the changed primitive files, and no new TODO/FIXME markers.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/web/tests/e2e/dashboard-visual.spec.ts apps/web/tests/e2e/dashboard-visual.spec.ts-snapshots
@@ -808,12 +808,12 @@ git commit -m "test(web): lock Presvo shell visuals"
 
 ## Phase 1 Completion Checklist
 
-- [ ] Exact light and dark template tokens are covered by tests.
-- [ ] The UI uses the approved system font stack.
-- [ ] Shared primitives use scoped transitions and exact card geometry.
-- [ ] Capability status is typed and Preview is visibly labeled.
-- [ ] Desktop sidebar, compact header, and mobile sheet match the template hierarchy.
-- [ ] Search routes to `/dashboard/calls?q=<term>`.
-- [ ] Notifications are local-only and visibly Preview.
-- [ ] Existing authentication and account lifecycle tests remain green.
-- [ ] Unit, type, lint/check, build, browser, overflow, reduced-motion, and visual tests pass.
+- [x] Exact light and dark template tokens are covered by tests.
+- [x] The UI uses the approved system font stack.
+- [x] Shared primitives use scoped transitions and exact card geometry.
+- [x] Capability status is typed and Preview is visibly labeled.
+- [x] Desktop sidebar, compact header, and mobile sheet match the template hierarchy.
+- [x] Search routes to `/dashboard/calls?q=<term>`.
+- [x] Notifications are local-only and visibly Preview.
+- [x] Existing authentication and account lifecycle tests remain green.
+- [x] Unit, type, lint/check, build, browser, overflow, reduced-motion, and visual tests pass.
