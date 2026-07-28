@@ -11,11 +11,11 @@ export type PageIntroProps = {
 export function PageIntro({ eyebrow, title, description, action, dynamicContext = false }: PageIntroProps) {
   return (
     <header
-      className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between md:gap-8"
+      className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
       data-dynamic-context={dynamicContext || undefined}
       data-slot="page-intro"
     >
-      <div className="flex min-w-0 flex-col gap-4">
+      <div className="flex min-w-0 flex-col gap-3">
         {eyebrow !== undefined ? (
           <div
             className="font-medium text-text-tertiary text-xs uppercase tracking-widest data-[dynamic-context=true]:normal-case data-[dynamic-context=true]:tracking-normal"
@@ -26,7 +26,7 @@ export function PageIntro({ eyebrow, title, description, action, dynamicContext 
           </div>
         ) : null}
         <div className="flex flex-col gap-2">
-          <h1 className="font-semibold text-2xl text-text-primary tracking-tight sm:text-3xl">{title}</h1>
+          <h1 className="font-semibold text-text-primary text-xl tracking-tight sm:text-2xl">{title}</h1>
           {description !== undefined ? (
             <div className="max-w-2xl text-sm text-text-secondary leading-relaxed sm:text-base">{description}</div>
           ) : null}
