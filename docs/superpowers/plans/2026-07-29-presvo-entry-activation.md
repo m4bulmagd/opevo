@@ -80,7 +80,7 @@
 - Consumes: `isAuthenticated: boolean`, Phase 1 `Button`, `Badge`, `Card`, `CapabilityBadge`, and landing motion primitives.
 - Produces: `PresvoLandingPage({ isAuthenticated }: { isAuthenticated: boolean })`.
 
-- [ ] **Step 1: Add failing semantic and visual-contract tests**
+- [x] **Step 1: Add failing semantic and visual-contract tests**
 
 Extend `root-page.test.tsx`:
 
@@ -105,7 +105,7 @@ expect(container.innerHTML).not.toContain("SonicWaveformCanvas");
 
 Keep the signed-out `Log in`/`Sign up` and signed-in `Dashboard` assertions.
 
-- [ ] **Step 2: Run the root-page tests and confirm failure**
+- [x] **Step 2: Run the root-page tests and confirm failure**
 
 ```bash
 cd apps/web
@@ -114,7 +114,7 @@ npm run test:ci -- tests/app/root-page.test.tsx
 
 Expected: the old blue/slate landing and missing Presvo surface contract fail.
 
-- [ ] **Step 3: Extract the presentation component**
+- [x] **Step 3: Extract the presentation component**
 
 Reduce `app/page.tsx` to session ownership:
 
@@ -177,7 +177,7 @@ The page structure is:
 
 Use only semantic Phase 1 colors (`background`, `card`, `muted`, `primary`, `border`, `success`) and `shadow-card`/`shadow-raised`. Preserve `LandingMotionGroup`, `LandingMotionItem`, and `LandingMotionFade`; do not use hover motion on informational cards.
 
-- [ ] **Step 4: Run focused verification**
+- [x] **Step 4: Run focused verification**
 
 ```bash
 cd apps/web
@@ -186,7 +186,7 @@ npm run typecheck
 npm run check
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/app/page.tsx apps/web/src/components/landing/presvo-landing-page.tsx apps/web/tests/app/root-page.test.tsx
