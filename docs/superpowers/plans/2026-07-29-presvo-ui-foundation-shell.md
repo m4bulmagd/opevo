@@ -342,7 +342,7 @@ git commit -m "feat(web): align Presvo design primitives"
 - Create: `apps/web/tests/navigation/dashboard-items.test.ts`
 - Modify: `apps/web/src/navigation/dashboard-items.ts`
 
-- [ ] **Step 1: Add failing navigation-model tests**
+- [x] **Step 1: Add failing navigation-model tests**
 
 Assert this exact production model:
 
@@ -364,14 +364,14 @@ expect(dashboardGroups("Léa").flatMap((group) => group.items.map((item) => ({
 
 Keep active-route assertions for exact `/dashboard`, nested call detail, and live-call isolation.
 
-- [ ] **Step 2: Run the model test and confirm it fails**
+- [x] **Step 2: Run the model test and confirm it fails**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/navigation/dashboard-items.test.ts
 ```
 
-- [ ] **Step 3: Implement the typed grouped model**
+- [x] **Step 3: Implement the typed grouped model**
 
 Use:
 
@@ -395,7 +395,7 @@ returning the current five-item legacy set, including the existing `Billing`
 label, so the old mobile bar remains green until Task 5. Mark it with a removal
 comment that names Task 5; do not use it in new code.
 
-- [ ] **Step 4: Run targeted verification**
+- [x] **Step 4: Run targeted verification**
 
 ```bash
 cd apps/web
@@ -406,7 +406,7 @@ npm run typecheck
 Expected: both commands pass and the unchanged shell remains compatible with
 `dashboardItems`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/navigation/dashboard-items.ts apps/web/tests/navigation/dashboard-items.test.ts
