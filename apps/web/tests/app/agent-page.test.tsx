@@ -372,6 +372,23 @@ describe("agent page", () => {
     expect(screen.getByRole("status", { name: "Save feedback" })).toBeEmptyDOMElement();
   });
 
+  it("preserves a backend-selected sts pipeline when saving unchanged settings", async () => {
+    const stsConfig = {
+      ...configuredAgent,
+      pipeline_mode: "sts",
+    } satisfies AgentConfig;
+    patchAgentConfigMock.mockResolvedValueOnce(stsConfig);
+    await renderAgentPage({ config: stsConfig });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save agent settings" }));
+
+    await waitFor(() =>
+      expect(patchAgentConfigMock).toHaveBeenCalledWith({
+        ...stsConfig,
+      }),
+    );
+  });
+
   it("presents an idle action and truthful error feedback outside the save control", async () => {
     patchAgentConfigMock.mockRejectedValueOnce(new BackendApiError("Provider unavailable", 502));
     await renderAgentPage();

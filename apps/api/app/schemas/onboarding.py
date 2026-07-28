@@ -28,8 +28,3 @@ class OnboardingStatusResponse(BaseModel):
     warnings: list[str]
     evaluated_at: datetime
     policy_version: str
-
-
-class RetryProvisioningResponse(BaseModel):
-    status: Literal["accepted"]
-    queued: bool

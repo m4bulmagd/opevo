@@ -41,7 +41,7 @@ vi.mock("@/lib/api/billing", () => ({
   createPortalSession: createPortalSessionMock,
 }));
 
-vi.mock("@/lib/api/onboarding", () => ({
+vi.mock("@/lib/api/activation", () => ({
   retryProvisioning: retryProvisioningMock,
 }));
 
