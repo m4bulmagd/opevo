@@ -32,11 +32,20 @@ export default async function CallsPage({ searchParams }: CallsPageProps) {
     limit: navigation.limit,
     offset: navigation.offset,
     query: navigation.query,
+    status: navigation.status,
+    range: navigation.range,
   });
   const lastPage = callHistoryPageCount(result.total, navigation.limit);
 
   if (navigation.page > lastPage) {
-    redirect(buildCallHistoryHref(navigation.query, lastPage));
+    redirect(
+      buildCallHistoryHref({
+        query: navigation.query,
+        status: navigation.status,
+        range: navigation.range,
+        page: lastPage,
+      }),
+    );
   }
 
   return (
@@ -46,10 +55,12 @@ export default async function CallsPage({ searchParams }: CallsPageProps) {
         eyebrow="Call workspace"
         title="Calls"
       />
-      <CallHistorySearch query={navigation.query} />
+      <CallHistorySearch query={navigation.query} status={navigation.status} range={navigation.range} />
       <CallsTable calls={result.calls} query={navigation.query} />
       <CallHistoryPagination
         query={navigation.query}
+        status={navigation.status}
+        range={navigation.range}
         page={navigation.page}
         pageSize={navigation.limit}
         total={result.total}

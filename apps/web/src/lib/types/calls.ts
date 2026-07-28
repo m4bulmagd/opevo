@@ -1,4 +1,6 @@
 export type CallSummaryStatus = "processing" | "ready" | "unavailable";
+export type CallHistoryStatusFilter = "all" | "completed" | "in_progress" | "failed";
+export type CallHistoryDateRange = "all" | "7d" | "30d";
 
 export type CallSummaryFields = {
   summary_status: CallSummaryStatus;

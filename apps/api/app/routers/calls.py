@@ -11,9 +11,11 @@ from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.core.database import get_session
 from app.schemas.calls import CallDetailResponse, CallHistoryListResponse
 from app.services.call_history_service import (
+    CallDateRange,
     CallDeleteActiveError,
     CallHistoryNotFoundError,
     CallHistoryService,
+    CallStatusFilter,
 )
 from app.services.account_access_policy import AccountStateBlockedError
 from app.services.recording_lifecycle_service import RecordingLifecycleService
@@ -52,6 +54,14 @@ async def list_calls(
     identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_history_service),
     q: Annotated[str | None, Query(max_length=100)] = None,
+    status_filter: Annotated[
+        CallStatusFilter | None,
+        Query(alias="status"),
+    ] = None,
+    date_range: Annotated[
+        CallDateRange | None,
+        Query(alias="range"),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> CallHistoryListResponse:
@@ -60,6 +70,8 @@ async def list_calls(
         limit=limit,
         offset=offset,
         query=q,
+        status_filter=status_filter,
+        date_range=date_range,
     )
     return CallHistoryListResponse(
         calls=page.calls,

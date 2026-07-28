@@ -154,11 +154,11 @@ type CallHistoryNavigation = {
 };
 ```
 
-- [ ] **Step 1: Write failing API and navigation tests**
+- [x] **Step 1: Write failing API and navigation tests**
 
 Assert terminal and grouped in-progress statuses, inclusive rolling date bounds, combinations with text search, matching totals, tenant isolation, deletion exclusion, invalid query validation, canonical URL parsing, and preservation of every active filter in pagination links.
 
-- [ ] **Step 2: Run focused tests and confirm failure**
+- [x] **Step 2: Run focused tests and confirm failure**
 
 ```bash
 cd apps/api
@@ -167,15 +167,15 @@ cd ../web
 npm run test:ci -- tests/lib/call-history-navigation.test.ts tests/lib/calls-api.test.ts
 ```
 
-- [ ] **Step 3: Implement backend filters**
+- [x] **Step 3: Implement backend filters**
 
 Accept optional `status` and aliased `range` query parameters. Normalize them in the service, compute the rolling UTC cutoff from an injectable `now`, and add predicates in the repository while retaining the owner and `deleted_at IS NULL` predicates for both results and count.
 
-- [ ] **Step 4: Extend frontend URL and API contracts**
+- [x] **Step 4: Extend frontend URL and API contracts**
 
 Parse only allow-listed single values, reset invalid values to `all`, keep `page` canonical, and serialize filters in stable `q`, `status`, `range`, `page` order. Pass the normalized fields through `listCalls`.
 
-- [ ] **Step 5: Run focused API/web verification**
+- [x] **Step 5: Run focused API/web verification**
 
 ```bash
 cd apps/api
@@ -185,7 +185,7 @@ npm run test:ci -- tests/lib/call-history-navigation.test.ts tests/lib/calls-api
 npm run typecheck
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git commit -m "feat(calls): add production history filters"

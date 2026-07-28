@@ -97,6 +97,8 @@ describe("calls pages", () => {
       limit: 20,
       offset: 20,
       query: "opening",
+      status: "all",
+      range: "all",
     });
     expect(screen.getByLabelText("Search calls")).toHaveValue("opening");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);

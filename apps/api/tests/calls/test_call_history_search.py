@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -20,14 +20,17 @@ def make_call(
     summary_text: str | None = None,
     summary_data: dict | None = None,
     deleted: bool = False,
+    started_at: datetime = NOW,
+    status: str = "completed",
 ) -> Call:
     return Call(
         id=UUID(call_id),
         user_id=user_id,
         caller_number=caller_number,
-        status="completed",
-        started_at=NOW,
-        ended_at=NOW,
+        status=status,
+        failure_code="legacy_failure" if status == "failed" else None,
+        started_at=started_at,
+        ended_at=started_at,
         duration_seconds=0,
         minutes_charged=0,
         summary_text=summary_text,
@@ -177,3 +180,134 @@ async def test_phone_search_normalizes_punctuation_and_requires_three_digits(
     assert [item.id for item in punctuated.calls] == [phone_call.id]
     assert [item.id for item in domestic.calls] == [phone_call.id]
     assert too_short.total == 0
+
+
+@pytest.mark.anyio
+async def test_status_and_date_filters_compose_with_search_and_scope(
+    db_session,
+    active_user,
+) -> None:
+    other_user = User(
+        clerk_user_id="call_filter_other",
+        email="call-filter-other@example.invalid",
+    )
+    db_session.add(other_user)
+    await db_session.flush()
+    matching = make_call(
+        call_id="00000000-0000-0000-0000-000000000031",
+        user_id=active_user.id,
+        summary_text="Appointment request",
+        started_at=NOW,
+        status="completed",
+    )
+    db_session.add_all(
+        [
+            matching,
+            make_call(
+                call_id="00000000-0000-0000-0000-000000000032",
+                user_id=active_user.id,
+                summary_text="Appointment request",
+                started_at=NOW,
+                status="failed",
+            ),
+            make_call(
+                call_id="00000000-0000-0000-0000-000000000033",
+                user_id=active_user.id,
+                summary_text="Appointment request",
+                started_at=NOW - timedelta(days=8),
+                status="completed",
+            ),
+            make_call(
+                call_id="00000000-0000-0000-0000-000000000034",
+                user_id=active_user.id,
+                summary_text="Appointment request",
+                started_at=NOW,
+                status="failed",
+            ),
+            make_call(
+                call_id="00000000-0000-0000-0000-000000000035",
+                user_id=other_user.id,
+                summary_text="Appointment request",
+                started_at=NOW,
+                status="completed",
+            ),
+            make_call(
+                call_id="00000000-0000-0000-0000-000000000036",
+                user_id=active_user.id,
+                summary_text="Appointment request",
+                started_at=NOW,
+                status="completed",
+                deleted=True,
+            ),
+            make_call(
+                call_id="00000000-0000-0000-0000-000000000037",
+                user_id=active_user.id,
+                summary_text="Different request",
+                started_at=NOW,
+                status="completed",
+            ),
+            make_call(
+                call_id="00000000-0000-0000-0000-000000000038",
+                user_id=active_user.id,
+                summary_text="Appointment request",
+                started_at=NOW + timedelta(seconds=1),
+                status="completed",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    service = CallHistoryService(db_session, recording_service=None)
+    result = await service.list_calls(
+        active_user.id,
+        query="appointment",
+        status_filter="completed",
+        date_range="7d",
+        now=NOW,
+    )
+
+    assert [item.id for item in result.calls] == [matching.id]
+    assert result.total == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("status_filter", "call_status", "included"),
+    [
+        ("completed", "completed", True),
+        ("completed", "failed", False),
+        ("failed", "failed", True),
+        ("failed", "completed", False),
+        ("in_progress", "pending", True),
+        ("in_progress", "connected", True),
+        ("in_progress", "ending", True),
+        ("in_progress", "finalizing", True),
+        ("in_progress", "completed", False),
+    ],
+)
+async def test_status_filters_map_to_allowed_call_states(
+    db_session,
+    active_user,
+    status_filter: str,
+    call_status: str,
+    included: bool,
+) -> None:
+    call = (
+        make_call(
+            call_id="00000000-0000-0000-0000-000000000041",
+            user_id=active_user.id,
+            status=call_status,
+        )
+    )
+    db_session.add(call)
+    await db_session.commit()
+
+    result = await CallHistoryService(
+        db_session,
+        recording_service=None,
+    ).list_calls(
+        active_user.id,
+        status_filter=status_filter,
+    )
+
+    assert [item.id for item in result.calls] == ([call.id] if included else [])

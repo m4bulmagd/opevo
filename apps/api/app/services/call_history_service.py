@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +30,17 @@ class CallDeleteActiveError(Exception):
 
 SUMMARY_PROCESSING_STATES = frozenset({"pending", "connected", "ending", "finalizing"})
 CALL_DELETE_TERMINAL_STATES = frozenset({"completed", "failed"})
+CallStatusFilter = Literal["completed", "in_progress", "failed"]
+CallDateRange = Literal["7d", "30d"]
+CALL_STATUS_FILTERS: dict[CallStatusFilter, frozenset[str]] = {
+    "completed": frozenset({"completed"}),
+    "in_progress": SUMMARY_PROCESSING_STATES,
+    "failed": frozenset({"failed"}),
+}
+CALL_DATE_RANGE_DAYS: dict[CallDateRange, int] = {
+    "7d": 7,
+    "30d": 30,
+}
 
 
 @dataclass(frozen=True)
@@ -62,15 +75,36 @@ class CallHistoryService:
         limit: int = 100,
         offset: int = 0,
         query: str | None = None,
+        status_filter: CallStatusFilter | None = None,
+        date_range: CallDateRange | None = None,
+        now: datetime | None = None,
     ) -> CallHistoryPageResult:
         normalized_query = query.strip() if query is not None else None
         if normalized_query == "":
             normalized_query = None
+        current_time = now or datetime.now(UTC)
+        now_utc = (
+            current_time.replace(tzinfo=UTC)
+            if current_time.tzinfo is None
+            else current_time.astimezone(UTC)
+        )
+        started_after = (
+            now_utc - timedelta(days=CALL_DATE_RANGE_DAYS[date_range])
+            if date_range is not None
+            else None
+        )
         page = await self.call_repository.list_visible_page_by_user_id(
             user_id,
             limit=limit,
             offset=offset,
             query=normalized_query,
+            statuses=(
+                CALL_STATUS_FILTERS[status_filter]
+                if status_filter is not None
+                else None
+            ),
+            started_after=started_after,
+            started_before=now_utc if date_range is not None else None,
         )
         calls = [self._list_item(call) for call in page.calls]
         return CallHistoryPageResult(

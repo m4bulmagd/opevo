@@ -22,11 +22,21 @@ describe("calls API client", () => {
     backendFetchMock.mockResolvedValueOnce(page);
     const { listCalls } = await import("@/lib/api/calls");
 
-    await expect(listCalls({ limit: 20, offset: 20, query: " opening hours " })).resolves.toEqual(page);
-    expect(backendFetchMock).toHaveBeenCalledWith("/api/calls?limit=20&offset=20&q=opening+hours");
+    await expect(
+      listCalls({
+        limit: 20,
+        offset: 20,
+        query: " opening hours ",
+        status: "in_progress",
+        range: "7d",
+      }),
+    ).resolves.toEqual(page);
+    expect(backendFetchMock).toHaveBeenCalledWith(
+      "/api/calls?limit=20&offset=20&q=opening+hours&status=in_progress&range=7d",
+    );
   });
 
-  it("omits q for an unfiltered request", async () => {
+  it("omits every inactive filter for an unfiltered request", async () => {
     backendFetchMock.mockResolvedValueOnce({
       calls: [],
       total: 0,
@@ -36,7 +46,7 @@ describe("calls API client", () => {
     });
     const { listCalls } = await import("@/lib/api/calls");
 
-    await listCalls({ limit: 5 });
+    await listCalls({ limit: 5, status: "all", range: "all" });
 
     expect(backendFetchMock).toHaveBeenCalledWith("/api/calls?limit=5&offset=0");
   });
