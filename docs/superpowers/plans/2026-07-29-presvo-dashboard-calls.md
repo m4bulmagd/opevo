@@ -309,26 +309,26 @@ git commit -m "feat(web): port Presvo call detail"
 
 ## Task 6: Add the Isolated Live-Call Preview
 
-- [ ] **Step 1: Write failing isolation and interaction tests**
+- [x] **Step 1: Write failing isolation and interaction tests**
 
 Require the page heading and persistent `Preview` badge, an explanatory local-only notice, caller/status/elapsed presentation, transcript, caller details, notes, state controls, reset, and end-preview behavior. Mock `fetch` and assert it is never called while using every control.
 
-- [ ] **Step 2: Run the preview test and confirm failure**
+- [x] **Step 2: Run the preview test and confirm failure**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/live-call-preview.test.tsx
 ```
 
-- [ ] **Step 3: Implement the local-only component**
+- [x] **Step 3: Implement the local-only component**
 
 Port the template layout and in-memory timer/transcript behavior with France-first fictional content. Keep stable initial data, clear timeouts/intervals, stop motion under reduced-motion preference, and label state-selector controls as Preview controls. Notes remain in memory and confirmation copy says `Saved in this preview only`.
 
-- [ ] **Step 4: Add the production route**
+- [x] **Step 4: Add the production route**
 
 Create `/dashboard/live-call` with route metadata and no data loader. The component must not import from `@/lib/api`, app actions, billing, account lifecycle, or telephony modules.
 
-- [ ] **Step 5: Verify isolation and shell routing**
+- [x] **Step 5: Verify isolation and shell routing**
 
 ```bash
 cd apps/web
@@ -340,7 +340,7 @@ npm run check
 
 Expected: tests pass and the import scan is empty.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git commit -m "feat(web): add live-call Preview"
