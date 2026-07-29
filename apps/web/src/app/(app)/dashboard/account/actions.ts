@@ -6,11 +6,14 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { deactivateAccount as requestAccountDeactivation } from "@/lib/api/account";
-import { activateDevelopmentStarter } from "@/lib/api/activation";
+import { activateDevelopmentStarter, getActivationSnapshot, saveBusinessProfile } from "@/lib/api/activation";
 import { BackendApiError } from "@/lib/api/backend-client";
 import { createCheckoutSession } from "@/lib/api/billing";
 import { requireServerSession, ServerSessionRequiredError } from "@/lib/auth/server-session";
 import { getDevelopmentCapabilities } from "@/lib/development/capabilities";
+import { normalizeFrenchNumber } from "@/lib/phone-numbers";
+import type { AccountProfileValues } from "@/lib/types/account-settings";
+import type { ActivationSnapshot, BusinessProfileDraft } from "@/lib/types/activation";
 
 export type ActionResult =
   | {
@@ -35,7 +38,28 @@ export type HostedActionResult =
       message: string;
     };
 
+export type AccountProfileActionResult =
+  | {
+      status: "success";
+      message: string;
+      profile: AccountProfileValues;
+    }
+  | {
+      status: "error";
+      code: string;
+      message: string;
+      fields?: Array<keyof AccountProfileValues>;
+    };
+
 const confirmationSchema = z.literal("DEACTIVATE");
+const accountProfileSchema = z
+  .object({
+    owner_name: z.string().trim().min(1),
+    business_name: z.string().trim().min(1),
+    existing_phone_e164: z.string().trim().min(1),
+    timezone: z.string().trim().min(1),
+  })
+  .strict();
 const STRIPE_CHECKOUT_ORIGIN = "https://checkout.stripe.com";
 const TEST_STRIPE_CHECKOUT_ORIGIN = "https://checkout.stripe.test";
 
@@ -129,6 +153,88 @@ function revalidateAccountPaths(): void {
   revalidatePath("/dashboard/agent");
   revalidatePath("/dashboard/billing");
   revalidatePath("/activate");
+}
+
+function invalidProfileInput(fields?: Array<keyof AccountProfileValues>): AccountProfileActionResult {
+  return {
+    status: "error",
+    code: "invalid_input",
+    message: "Review your profile details and try again.",
+    ...(fields ? { fields } : {}),
+  };
+}
+
+export async function saveAccountProfileAction(input: unknown): Promise<AccountProfileActionResult> {
+  try {
+    await requireServerSession();
+  } catch (error) {
+    return mapAccountActionError(error);
+  }
+
+  const parsed = accountProfileSchema.safeParse(input);
+  if (!parsed.success) {
+    return invalidProfileInput();
+  }
+
+  const normalizedPhone = normalizeFrenchNumber(parsed.data.existing_phone_e164);
+  if (!normalizedPhone) {
+    return invalidProfileInput(["existing_phone_e164"]);
+  }
+
+  let snapshot: ActivationSnapshot;
+  try {
+    snapshot = await getActivationSnapshot();
+  } catch {
+    return {
+      status: "error",
+      code: "profile_unavailable",
+      message: "Your profile is temporarily unavailable. Refresh and try again.",
+    };
+  }
+
+  const fields = (["owner_name", "business_name"] as const).filter(
+    (field) => parsed.data[field].length > snapshot.profile_constraints.name_max_length,
+  );
+  if (fields.length > 0) {
+    return invalidProfileInput(fields);
+  }
+
+  const completeDraft: BusinessProfileDraft = {
+    owner_name: parsed.data.owner_name,
+    business_name: parsed.data.business_name,
+    business_type: snapshot.profile.business_type,
+    public_description: snapshot.profile.public_description,
+    timezone: parsed.data.timezone,
+    business_hours: snapshot.profile.business_hours,
+    existing_phone_e164: normalizedPhone,
+    confirmed_carrier: snapshot.profile.confirmed_carrier,
+    receptionist_name: snapshot.profile.receptionist_name,
+    faqs: snapshot.profile.faqs.map((faq) => ({ ...faq })),
+    special_instructions: snapshot.profile.special_instructions,
+    escalation_notes: snapshot.profile.escalation_notes,
+  };
+
+  try {
+    await saveBusinessProfile(completeDraft);
+  } catch {
+    return {
+      status: "error",
+      code: "request_failed",
+      message: "We couldn't save your profile. Refresh and try again.",
+    };
+  }
+
+  revalidateAccountPaths();
+  return {
+    status: "success",
+    message: "Profile saved.",
+    profile: {
+      owner_name: parsed.data.owner_name,
+      business_name: parsed.data.business_name,
+      existing_phone_e164: normalizedPhone,
+      timezone: parsed.data.timezone,
+    },
+  };
 }
 
 function isTrustedStripeCheckoutUrl(value: string): boolean {

@@ -8,12 +8,12 @@ import { useForm } from "react-hook-form";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { normalizeFrenchNumber } from "@/lib/phone-numbers";
 import type { ActivationSnapshot, BusinessProfileDraft } from "@/lib/types/activation";
 
 import { confirmProfileAction } from "../../actions";
 import { BusinessFields } from "./business-fields";
 import { createDefaultBusinessHours, validateBusinessHours } from "./business-hours-editor";
-import { normalizeFrenchNumber } from "./carrier-confirmation";
 import { ReceptionistFields } from "./receptionist-fields";
 import { useProfileAutosave } from "./use-profile-autosave";
 

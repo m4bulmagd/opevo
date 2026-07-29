@@ -5,10 +5,11 @@ import { Controller, type UseFormReturn } from "react-hook-form";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption, NativeSelectOptGroup as SelectGroup } from "@/components/ui/native-select";
+import { normalizeFrenchNumber } from "@/lib/phone-numbers";
 import type { BusinessProfileConstraints, BusinessProfileDraft, CarrierCode } from "@/lib/types/activation";
 
 import { BusinessHoursEditor, createDefaultBusinessHours, validateBusinessHours } from "./business-hours-editor";
-import { CarrierConfirmation, normalizeFrenchNumber } from "./carrier-confirmation";
+import { CarrierConfirmation } from "./carrier-confirmation";
 
 type BusinessFieldsProps = {
   form: UseFormReturn<BusinessProfileDraft>;
