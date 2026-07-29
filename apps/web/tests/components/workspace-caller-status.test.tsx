@@ -26,21 +26,14 @@ describe("WorkspaceCallerStatus", () => {
   });
 
   it("falls back to the caller number without inventing initials", () => {
-    render(
-      <WorkspaceCallerStatus
-        agentName="Ava"
-        caller={{ contactName: null, phoneNumber: "+33612345678" }}
-      />,
-    );
+    render(<WorkspaceCallerStatus agentName="Ava" caller={{ contactName: null, phoneNumber: "+33612345678" }} />);
 
     expect(screen.getByText("+33612345678")).toBeVisible();
     expect(screen.getByTestId("caller-status-icon")).toBeInTheDocument();
   });
 
   it("uses Unknown caller when an active call has no usable identity", () => {
-    render(
-      <WorkspaceCallerStatus agentName="Ava" caller={{ contactName: "  ", phoneNumber: null }} />,
-    );
+    render(<WorkspaceCallerStatus agentName="Ava" caller={{ contactName: "  ", phoneNumber: null }} />);
 
     expect(screen.getByText("Unknown caller")).toBeVisible();
     expect(screen.getByText("Ava is answering this call")).toBeVisible();

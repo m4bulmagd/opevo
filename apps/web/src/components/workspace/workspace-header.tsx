@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { MobileWorkspaceNavigation } from "@/components/workspace/mobile-workspace-navigation";
+import { type WorkspaceCallerIdentity, WorkspaceCallerStatus } from "@/components/workspace/workspace-caller-status";
 import { WorkspaceNotificationsPreview } from "@/components/workspace/workspace-notifications-preview";
 import { authMode, shouldWrapClerk } from "@/lib/auth/clerk-config";
 
@@ -33,9 +34,15 @@ export async function resolveWorkspaceAccountControl(): Promise<ReactNode> {
   );
 }
 
-export function WorkspaceHeader({ accountControl, agentName }: { accountControl: ReactNode; agentName: string }) {
+type WorkspaceHeaderProps = {
+  accountControl: ReactNode;
+  activeCaller: WorkspaceCallerIdentity | null;
+  agentName: string;
+};
+
+export function WorkspaceHeader({ accountControl, activeCaller, agentName }: WorkspaceHeaderProps) {
   return (
-    <header className="sticky top-0 z-20 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-border border-b bg-background/90 px-4 py-3 backdrop-blur lg:rounded-2xl lg:border lg:bg-card lg:px-4 lg:shadow-card">
+    <header className="sticky top-0 z-20 flex items-center gap-2 border-border border-b bg-background/90 px-4 py-3 backdrop-blur lg:rounded-2xl lg:border lg:bg-card lg:shadow-card">
       <div className="flex min-w-0 items-center gap-2">
         <MobileWorkspaceNavigation />
         <Link
@@ -53,7 +60,8 @@ export function WorkspaceHeader({ accountControl, agentName }: { accountControl:
       <form
         action="/dashboard/calls"
         aria-label="Call search"
-        className="hidden min-w-0 justify-center md:flex"
+        className="hidden min-w-48 flex-1 md:flex"
+        data-header-item="search"
         method="get"
       >
         <InputGroup className="h-11 w-full max-w-sm bg-background">
@@ -72,25 +80,36 @@ export function WorkspaceHeader({ accountControl, agentName }: { accountControl:
           Search
         </button>
       </form>
-      <div className="flex min-w-0 items-center justify-end gap-2">
+
+      <WorkspaceCallerStatus agentName={agentName} caller={activeCaller} />
+
+      <Button asChild className="min-h-11 px-2.5">
+        <Link aria-label="Live call" data-header-item="live-call" href="/dashboard/live-call" prefetch={false}>
+          <PhoneCall aria-hidden="true" data-icon="inline-start" />
+          <span className="hidden xl:inline">Live call</span>
+          <CapabilityBadge
+            className="border-primary-foreground/25 bg-primary-foreground/15 text-primary-foreground"
+            status="preview"
+          />
+        </Link>
+      </Button>
+
+      <div data-header-item="notifications">
         <WorkspaceNotificationsPreview />
-        <Button asChild className="hidden min-h-11 md:inline-flex" variant="outline">
-          <Link href="/dashboard/calls" prefetch={false}>
-            <History aria-hidden="true" data-icon="inline-start" />
-            Call history
-          </Link>
-        </Button>
-        <Button asChild className="min-h-11 px-2.5">
-          <Link aria-label="Live call" href="/dashboard/live-call" prefetch={false}>
-            <PhoneCall aria-hidden="true" data-icon="inline-start" />
-            <span className="hidden xl:inline">Live call</span>
-            <CapabilityBadge
-              className="border-primary-foreground/25 bg-primary-foreground/15 text-primary-foreground"
-              status="preview"
-            />
-          </Link>
-        </Button>
-        <div className="hidden xl:block">{accountControl}</div>
+      </div>
+
+      <Button asChild className="hidden min-h-11 md:inline-flex" variant="outline">
+        <Link data-header-item="call-history" href="/dashboard/calls" prefetch={false}>
+          <History aria-hidden="true" data-icon="inline-start" />
+          Call history
+        </Link>
+      </Button>
+
+      <div className="hidden xl:block" data-header-item="account-control">
+        {accountControl}
+      </div>
+
+      <div data-header-item="theme-control">
         <ThemeSwitcher />
       </div>
     </header>
