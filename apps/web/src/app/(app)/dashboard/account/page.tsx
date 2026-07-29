@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { AccountSettingsPreview } from "@/components/account/account-settings-preview";
 import { AccountStatusCard, getAccountLifecyclePresentation } from "@/components/account/account-status-card";
 import { DeactivateAccountDialog } from "@/components/account/deactivate-account-dialog";
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
@@ -38,55 +39,65 @@ export default async function AccountPage() {
         title="Account settings"
         tone="subtle"
       >
-        <SettingsSection
-          action={
-            <Button asChild className="min-h-11" variant="outline">
-              <Link href="/dashboard/agent">Manage receptionist</Link>
-            </Button>
-          }
-          description="Update the name, greeting, call handling, and business context your receptionist uses."
-          headingLevel={3}
-          title="Receptionist profile"
-        >
-          <p className="text-sm text-text-secondary">Keep customer-facing receptionist details accurate and current.</p>
-        </SettingsSection>
+        <div className="grid gap-x-8 lg:grid-cols-[minmax(0,1.5fr)_minmax(280px,1fr)]">
+          <div>
+            <SettingsSection
+              action={
+                <Button asChild className="min-h-11" variant="outline">
+                  <Link href="/dashboard/agent">Manage receptionist</Link>
+                </Button>
+              }
+              description="Update the name, greeting, call handling, and business context your receptionist uses."
+              headingLevel={3}
+              title="Receptionist profile"
+            >
+              <p className="text-sm text-text-secondary">
+                Keep customer-facing receptionist details accurate and current.
+              </p>
+            </SettingsSection>
 
-        <SettingsSection
-          action={
-            <Button asChild className="min-h-11" variant="outline">
-              <Link href="/dashboard/billing">View billing</Link>
-            </Button>
-          }
-          description="Review your subscription, minute usage, and billing history."
-          headingLevel={3}
-          title="Billing and subscription"
-        >
-          <p className="text-sm text-text-secondary">
-            Billing controls remain separate from immediate account deactivation.
-          </p>
-        </SettingsSection>
-
-        <SettingsSection
-          description="Authentication and session controls follow the active sign-in mode. For hosted accounts, use the workspace header account control to sign out."
-          headingLevel={3}
-          title="Session and security"
-        >
-          <p className="text-sm text-text-secondary">
-            Your current authentication mode provides the available session controls.
-          </p>
-        </SettingsSection>
-
-        <SettingsSection
-          description="This bounded lifecycle state reflects whether Presvo can accept new calls."
-          headingLevel={3}
-          title="Account state"
-        >
-          <div className="flex items-center justify-between gap-4 rounded-md border border-border/70 bg-surface px-4 py-3">
-            <span className="text-sm text-text-secondary">Current state</span>
-            <span className="font-medium text-sm text-text-primary">{lifecycle.label}</span>
+            <SettingsSection
+              action={
+                <Button asChild className="min-h-11" variant="outline">
+                  <Link href="/dashboard/billing">View billing</Link>
+                </Button>
+              }
+              description="Review your subscription, minute usage, and billing history."
+              headingLevel={3}
+              title="Billing and subscription"
+            >
+              <p className="text-sm text-text-secondary">
+                Billing controls remain separate from immediate account deactivation.
+              </p>
+            </SettingsSection>
           </div>
-        </SettingsSection>
+
+          <aside className="rounded-xl border border-border bg-card px-4 sm:px-5">
+            <SettingsSection
+              description="Use the workspace header to change theme or open the active Clerk account menu. Presvo does not duplicate those controls here."
+              headingLevel={3}
+              title="Theme and session"
+            >
+              <p className="text-sm text-text-secondary">
+                Available controls follow the current browser preference and authentication mode.
+              </p>
+            </SettingsSection>
+
+            <SettingsSection
+              description="This bounded lifecycle state reflects whether Presvo can accept new calls."
+              headingLevel={3}
+              title="Account state"
+            >
+              <div className="flex items-center justify-between gap-4 rounded-md border border-border/70 bg-surface px-4 py-3">
+                <span className="text-sm text-text-secondary">Current state</span>
+                <span className="font-medium text-sm text-text-primary">{lifecycle.label}</span>
+              </div>
+            </SettingsSection>
+          </aside>
+        </div>
       </ProductSurface>
+
+      <AccountSettingsPreview />
 
       {account.status === "active" ? (
         <ProductSurface
