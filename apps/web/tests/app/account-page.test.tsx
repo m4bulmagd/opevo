@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AccountLifecycleBanner } from "@/components/account/account-lifecycle-banner";
+import { AccountSettingsPreview } from "@/components/account/account-settings-preview";
 import type { AccountStatus } from "@/lib/types/account";
 
 const { getAccountMock, deactivateAccountMock, reactivateAccountMock } = vi.hoisted(() => ({
@@ -96,6 +97,7 @@ describe("account page", () => {
     const intro = container.querySelector('[data-slot="page-intro"]');
     const status = screen.getByRole("region", { name: "Active" });
     const settings = screen.getByRole("region", { name: "Account settings" });
+    const preview = screen.getByRole("region", { name: "Account settings Preview" });
     const danger = screen.getByRole("region", { name: "Danger zone" });
 
     expect(container.querySelectorAll("h1")).toHaveLength(1);
@@ -103,7 +105,8 @@ describe("account page", () => {
     expect(intro).toBeInTheDocument();
     expectBefore(intro as Element, status);
     expectBefore(status, settings);
-    expectBefore(settings, danger);
+    expectBefore(settings, preview);
+    expectBefore(preview, danger);
   });
 
   it.each([
@@ -182,7 +185,7 @@ describe("account page", () => {
     expectNoInternalLifecycleDetails(container);
   });
 
-  it("groups real account destinations and header-based session guidance in calm settings rows", async () => {
+  it("groups real account destinations with truthful header-owned theme and session guidance", async () => {
     await renderAccountPage();
 
     const settings = screen.getByRole("region", { name: "Account settings" });
@@ -194,11 +197,11 @@ describe("account page", () => {
     expect(Array.from(sections, (section) => within(section as HTMLElement).getByRole("heading").textContent)).toEqual([
       "Receptionist profile",
       "Billing and subscription",
-      "Session and security",
+      "Theme and session",
       "Account state",
     ]);
     expect(within(settings).getByRole("heading", { level: 2, name: "Account settings" })).toBeInTheDocument();
-    for (const name of ["Receptionist profile", "Billing and subscription", "Session and security", "Account state"]) {
+    for (const name of ["Receptionist profile", "Billing and subscription", "Theme and session", "Account state"]) {
       expect(within(settings).getByRole("heading", { level: 3, name })).toBeInTheDocument();
     }
     expect(within(settings).getByRole("link", { name: "Manage receptionist" })).toHaveAttribute(
@@ -208,10 +211,48 @@ describe("account page", () => {
     expect(within(settings).getByRole("link", { name: "View billing" })).toHaveAttribute("href", "/dashboard/billing");
     expect(
       within(settings).getByText(
-        "Authentication and session controls follow the active sign-in mode. For hosted accounts, use the workspace header account control to sign out.",
+        "Use the workspace header to change theme or open the active Clerk account menu. Presvo does not duplicate those controls here.",
       ),
     ).toBeInTheDocument();
     expect(within(settings).queryByRole("link", { name: /profile|security/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps notification, privacy, retention, password, and MFA extensions in one local-only Preview", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    render(<AccountSettingsPreview />);
+
+    const preview = screen.getByRole("region", { name: "Account settings Preview" });
+    expect(
+      preview.querySelector('[data-slot="product-surface-action"] [data-capability-status="preview"]'),
+    ).toBeVisible();
+    expect(preview).toHaveTextContent(/reset on reload/i);
+
+    const summaries = within(preview).getByRole("switch", { name: "Call summaries" });
+    const recording = within(preview).getByRole("switch", { name: "Record calls" });
+    const mfa = within(preview).getByRole("switch", { name: "Two-factor authentication" });
+    expect(summaries).toBeChecked();
+    expect(recording).toBeChecked();
+    expect(mfa).not.toBeChecked();
+
+    fireEvent.click(summaries);
+    fireEvent.change(within(preview).getByRole("combobox", { name: "Preview recording retention" }), {
+      target: { value: "365" },
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Preview password flow" }));
+    fireEvent.click(mfa);
+
+    const status = within(preview).getByRole("status", { name: "Account settings Preview status" });
+    expect(status).toHaveTextContent(/changed locally in Preview/i);
+    expect(preview).toHaveTextContent(/no password email was sent/i);
+    expect(status).not.toHaveTextContent(/saved|enabled|updated successfully/i);
+
+    fireEvent.click(within(preview).getByRole("button", { name: "Reset settings Preview" }));
+    expect(summaries).toBeChecked();
+    expect(recording).toBeChecked();
+    expect(mfa).not.toBeChecked();
+    expect(within(preview).getByRole("combobox", { name: "Preview recording retention" })).toHaveValue("30");
+    expect(preview).not.toHaveTextContent(/no password email was sent/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("keeps the danger zone separate, destructive, and limited to active accounts", async () => {

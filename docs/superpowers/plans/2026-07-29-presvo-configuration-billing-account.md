@@ -227,7 +227,7 @@ git commit -m "feat(web): port Presvo billing workspace"
 - Create: `apps/web/src/components/account/account-settings-preview.tsx`
 - Modify: `apps/web/tests/app/account-page.test.tsx`
 
-- [ ] **Step 1: Add failing hierarchy and isolation tests**
+- [x] **Step 1: Add failing hierarchy and isolation tests**
 
 Require:
 
@@ -240,13 +240,13 @@ Require:
 - deactivation remains separate and exact;
 - inactive/reactivation presentations remain unchanged.
 
-- [ ] **Step 2: Implement the Presvo settings composition**
+- [x] **Step 2: Implement the Presvo settings composition**
 
 Use the template's two-column settings hierarchy where space permits, compact
 preference rows, right-side account context, and separate danger card. Keep
 real lifecycle controls outside the Preview region.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cd apps/web
