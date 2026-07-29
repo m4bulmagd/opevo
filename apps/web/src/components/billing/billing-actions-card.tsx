@@ -57,8 +57,12 @@ export function BillingActionsCard({ subscription, navigate = defaultNavigate }:
 
   return (
     <ProductSurface
-      description="France self-serve launch uses a single starter plan with hosted Stripe checkout."
-      title="Billing actions"
+      description={
+        canStartCheckout
+          ? "France self-serve launch uses a single Starter plan with hosted Stripe Checkout."
+          : "Open the secure Stripe Portal for invoices, receipts, and payment methods."
+      }
+      title="Invoices and payment"
     >
       <div className="flex flex-col items-start gap-4">
         <Button className="min-h-11 px-4" disabled={isPending} onClick={handleAction}>
