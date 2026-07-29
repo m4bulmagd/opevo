@@ -8,23 +8,13 @@ vi.mock("@/lib/auth/server-session", () => ({
   requireServerSession: requireServerSessionMock,
 }));
 
-import {
-  activateDevelopmentStarter,
-  confirmProfile,
-  confirmProvisioning,
-  getActivationSnapshot,
-  goLive,
-  lookupCarrier,
-  openVerificationWindow,
-  retryProvisioning,
-  saveBusinessProfile,
-  simulateDevelopmentForwardedCall,
-} from "@/lib/api/activation";
+const importActivationApi = () => import("@/lib/api/activation");
 
 describe("activation API commands", () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
+    vi.resetModules();
     requireServerSessionMock.mockReset().mockResolvedValue({ userId: "user_123", token: "session-token" });
     fetchMock.mockReset().mockResolvedValue({
       ok: true,
@@ -42,6 +32,8 @@ describe("activation API commands", () => {
   });
 
   it("reads the canonical activation snapshot", async () => {
+    const { getActivationSnapshot } = await importActivationApi();
+
     await getActivationSnapshot();
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -51,6 +43,7 @@ describe("activation API commands", () => {
   });
 
   it("saves the bounded business profile draft", async () => {
+    const { saveBusinessProfile } = await importActivationApi();
     const draft = { owner_name: "Maya", confirmed_carrier: "orange" as const };
 
     await saveBusinessProfile(draft);
@@ -62,20 +55,22 @@ describe("activation API commands", () => {
   });
 
   it.each([
-    ["carrier lookup", lookupCarrier, "/api/activation/lookup-carrier"],
-    ["profile confirmation", confirmProfile, "/api/activation/confirm-profile"],
-    ["explicit provisioning consent", confirmProvisioning, "/api/activation/confirm-provisioning"],
-    ["provisioning retry", retryProvisioning, "/api/activation/retry-provisioning"],
-    ["verification window", openVerificationWindow, "/api/activation/open-verification-window"],
-    ["go-live", goLive, "/api/activation/go-live"],
-    ["development starter", activateDevelopmentStarter, "/api/development/activate-starter"],
+    ["carrier lookup", "lookupCarrier", "/api/activation/lookup-carrier"],
+    ["profile confirmation", "confirmProfile", "/api/activation/confirm-profile"],
+    ["explicit provisioning consent", "confirmProvisioning", "/api/activation/confirm-provisioning"],
+    ["provisioning retry", "retryProvisioning", "/api/activation/retry-provisioning"],
+    ["verification window", "openVerificationWindow", "/api/activation/open-verification-window"],
+    ["go-live", "goLive", "/api/activation/go-live"],
+    ["development starter", "activateDevelopmentStarter", "/api/development/activate-starter"],
     [
       "development forwarded-call simulation",
-      simulateDevelopmentForwardedCall,
+      "simulateDevelopmentForwardedCall",
       "/api/development/simulate-forwarded-call",
     ],
-  ])("sends %s to its dedicated command", async (_label, command, path) => {
-    await command();
+  ] as const)("sends %s to its dedicated command", async (_label, commandName, path) => {
+    const activationApi = await importActivationApi();
+
+    await activationApi[commandName]();
 
     expect(fetchMock).toHaveBeenCalledWith(`http://localhost:8000${path}`, expect.objectContaining({ method: "POST" }));
   });
