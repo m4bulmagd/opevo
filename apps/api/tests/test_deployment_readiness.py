@@ -400,12 +400,12 @@ def test_api_startup_is_migration_free_but_release_image_keeps_alembic() -> None
     assert 'command: ["/app/.venv/bin/alembic", "-c", "/app/alembic.ini", "upgrade", "head"]' in migration_compose
 
 
-def test_account_deactivation_migration_is_the_only_alembic_head() -> None:
+def test_assistant_overrides_migration_is_the_only_alembic_head() -> None:
     config = Config(str(REPO_ROOT / "apps" / "api" / "alembic.ini"))
     config.set_main_option("path_separator", "os")
 
     assert ScriptDirectory.from_config(config).get_heads() == [
-        "0016_lifecycle_cleanup"
+        "0017_assistant_overrides"
     ]
 
 
@@ -864,14 +864,14 @@ def test_local_e2e_runner_proves_deactivation_survives_api_worker_restart() -> N
     deactivation_phase = "tests/e2e/deactivation-start.spec.ts"
     restart_marker = "E2E_AFTER_SERVICE_RESTART=true"
     resume_phase = "tests/e2e/restart-resume.spec.ts"
-    resume_command = (
-        'E2E_AFTER_SERVICE_RESTART=true E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \\\n'
-        "  npm --prefix apps/web run test:e2e -- tests/e2e/restart-resume.spec.ts"
+    resume_command = re.compile(
+        r'E2E_AFTER_SERVICE_RESTART=true E2E_BASE_URL="http://127\.0\.0\.1:\$\{WEB_PORT\}" \\\n'
+        r"\s+npm --prefix apps/web run test:e2e -- tests/e2e/restart-resume\.spec\.ts"
     )
     restart_commands = [
-        line.split()
+        line.strip().split()
         for line in runner.splitlines()
-        if line.startswith("compose restart")
+        if line.strip().startswith("compose restart")
     ]
     assert restart_commands == [["compose", "restart", "api", "worker"]]
     restart_command = " ".join(restart_commands[0])
@@ -881,7 +881,7 @@ def test_local_e2e_runner_proves_deactivation_survives_api_worker_restart() -> N
     assert restart_command in runner
     assert resume_phase in runner
     assert runner.count(restart_marker) == 1
-    assert runner.count(resume_command) == 1
+    assert len(resume_command.findall(runner)) == 1
     activation_index = runner.index(activation_phase)
     deactivation_index = runner.index(deactivation_phase)
     restart_index = runner.index(restart_command)

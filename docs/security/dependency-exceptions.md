@@ -11,7 +11,8 @@ take a fixed version.
 - **Status:** temporarily accepted for the beta
 - **Owner:** Presvo engineering
 - **Accepted:** 2026-07-14
-- **Review by:** 2026-07-28
+- **Last reviewed:** 2026-07-29
+- **Review by:** 2026-08-05
 - **Expires:** 2026-08-14
 - **Affected application:** `apps/agent` only
 - **Dependency paths:**
@@ -31,6 +32,13 @@ resolve a fixed `transformers` version:
 | `PYSEC-2026-2290` | `GHSA-fgcw-684q-jj6r` / `CVE-2026-5241` | LightGlue remote-code loading | The agent never loads LightGlue or an externally selected model repository. |
 | `PYSEC-2026-2288` | `GHSA-69w3-r845-3855` / `CVE-2026-1839` | `Trainer` checkpoint deserialization | The production agent does inference only and never imports or invokes `Trainer`. |
 | `PYSEC-2026-2289` | `GHSA-29pf-2h5f-8g72` / `CVE-2026-4372` | Malicious `AutoModel` configuration loading | The agent never calls an `AutoModel` API or accepts a model identifier from users or dispatch metadata. |
+
+As of the 2026-07-29 review, the advisory service returns
+`PYSEC-2026-2290` twice with the same `GHSA-fgcw-684q-jj6r` and
+`CVE-2026-5241` aliases: one row has no fix version and one names `5.5.0`.
+This is six scanner rows for the five distinct reviewed advisory IDs above,
+not a sixth exception. CI deliberately checks that exact row count so a new
+identifier still fails the audit.
 
 ### Compensating controls and invalidation conditions
 
@@ -73,6 +81,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pip-audit \
   --ignore-vuln PYSEC-2026-2289
 ```
 
-The expected result is zero unignored vulnerabilities plus five explicitly
-skipped findings. A new advisory or a different skipped count fails the audit
-and requires a new review; it must not be added to this list automatically.
+The expected result is zero unignored vulnerabilities plus six explicitly
+skipped rows representing the five distinct IDs above. A new advisory or a
+different skipped count fails the audit and requires a new review; it must not
+be added to this list automatically.
