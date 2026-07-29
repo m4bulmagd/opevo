@@ -37,7 +37,7 @@ export function WorkspaceShell({ account, accountControl, agentEnabled, agentNam
         <div className="flex min-w-0 flex-1 flex-col">
           <WorkspaceHeader accountControl={accountControl} agentName={agentName} />
           <main
-            className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 md:gap-7 md:px-8 md:py-8 lg:px-10"
+            className="flex w-full flex-col gap-5 px-4 py-5 sm:px-6 md:gap-7 md:px-8 md:py-8 lg:px-0"
             id="workspace-main"
           >
             {account.status === "active" ? null : <AccountLifecycleBanner account={account} />}

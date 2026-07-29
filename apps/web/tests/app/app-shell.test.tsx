@@ -358,6 +358,10 @@ describe("app shell", () => {
     expect(workspaceContent).not.toHaveClass("md:pl-18", "lg:pl-64");
     expect(workspaceContent).not.toHaveClass("pb-[calc(4rem+env(safe-area-inset-bottom))]");
 
+    const workspaceMain = view.container.querySelector("#workspace-main");
+    expect(workspaceMain).toHaveClass("flex", "w-full", "px-4", "sm:px-6", "md:px-8", "lg:px-0");
+    expect(workspaceMain).not.toHaveClass("mx-auto", "max-w-7xl", "lg:px-10");
+
     const activeMarkers = view.container.querySelectorAll('[data-slot="active-navigation-marker"]');
     expect(activeMarkers).toHaveLength(0);
   });
