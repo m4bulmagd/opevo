@@ -42,11 +42,11 @@ real-provider certification remain controlled-beta gates.
 | Area | Status | Current evidence and limitation |
 |---|---|---|
 | Public landing page and authentication shell | **Implemented** | Next.js landing page, Clerk sign-in/sign-up routes, and protected dashboard routing are present. |
-| Customer dashboard | **Implemented** | Dashboard, calls, agent settings, billing, onboarding status, empty states, and server actions are present. |
+| Customer dashboard | **Implemented** | The complete Presvo visual system is applied across the responsive dashboard, calls, live assistant settings, billing, account, onboarding status, empty states, and server actions. Exact colors, typography, spacing, borders, shadows, card hierarchy, and light/dark layouts are regression-protected. |
 | Guided onboarding | **Implemented** | A resumable five-milestone web journey covers business/receptionist content, local or Stripe billing, explicit number consent, provisioning, carrier-aware conditional forwarding, a timed test call, and explicit go-live. The disposable Playwright path proves local operation; real-provider certification remains a release gate. |
 | Starter billing | **Implemented** | Stripe Checkout, a pinned Billing Portal configuration, paid-invoice minute grants, subscription lifecycle handling, and PostgreSQL-backed usage accounting are present. Portal subscription-only cancellation remains active until the paid-period end; owner account deactivation cancels immediately without automatic proration or refund. The Portal configuration still requires deployment-time review and real Stripe certification. |
 | French number provisioning | **Implemented** | Queue-backed provisioning, persisted status, retry handling, assignment, and routing gates are present. Payment eligibility and explicit provisioning consent are separate. The fake local path is browser-proven; Telnyx still needs fresh staging certification. |
-| Agent configuration | **Implemented** | Customer-owned agent identity, owner context, system prompt, knowledge base, fixed launch pipeline, and guarded routing toggle are present. |
+| Agent configuration | **Implemented** | Customer-owned agent identity, owner context, system prompt, knowledge base, fixed launch pipeline, guarded routing toggle, persisted profile-owned content overrides, and unsaved-change protection are present. |
 | Inbound voice runtime | **Implemented** | LiveKit dispatch and a separate agent worker support Speechmatics or Deepgram STT, Gemini LLM, and Speechmatics or ElevenLabs TTS. |
 | Native-audio STS runtime | **Partial** | Gemini native-audio support exists in the worker and tests but is intentionally hidden from the customer-facing France launch. |
 | Durable call lifecycle | **Implemented** | Incremental transcript persistence, call-scoped agent JWTs, a state machine, reconciliation, duration limits, and idempotent finalization are present. |
@@ -57,8 +57,8 @@ real-provider certification remain controlled-beta gates.
 | Recording lifecycle | **Implemented** | A private recording operation and reference-only reconciliation intent commit before recording-start provider I/O. Completion requests stop reconciliation even without a provider ID; signed egress webhooks store sanitized facts and wake reconciliation after commit. Private object storage, signed playback, and asynchronous owner-removal cleanup are implemented; no automatic bucket lifecycle is configured. |
 | Transactional outbox | **Implemented** | Handlers cover `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, `recording.reconcile`, and `account.deactivate`. Recording and account-deactivation events use private operation aggregates and carry only `operation_id`. |
 | Call finalization effects | **Implemented** | Usage debit and the pending notification row are direct writes in the same call-finalization transaction. |
-| Live dashboard and intervention | **Partial** | An optional backend WebSocket observer exists but is disabled by default, has a documented identity-key mismatch, and has no live-call web interface. |
-| Push notifications | **Partial** | Notification records and provider boundaries exist, but private device-token delivery is not part of the launch path. |
+| Live dashboard and intervention | **Partial** | A complete, visibly labelled local-only live-call Preview exists. The optional backend WebSocket observer remains disabled by default, has a documented identity-key mismatch, and is not connected to the Preview; live monitoring and intervention remain unimplemented. |
+| Push notifications | **Partial** | A visibly labelled local notification Preview exists, and notification records/provider boundaries exist, but private device-token delivery is not part of the launch path. |
 | Production observability and CI | **Partial** | Readiness checks, safe logging, bounded recording and account-deactivation metrics, OpenTelemetry, pinned CI actions, dependency audits, secret scanning, and container scanning are configured and locally verified. Cloud monitoring, required alert routing, and operating evidence are absent. |
 | Production deployment | **Partial** | Hardened images, release migrations, deployment and rollback runbooks, and a provider comparison exist; a production platform and operating evidence are not yet approved. |
 | French localization and legal surfaces | **Planned** | The launch UI is still English and approved privacy, terms, legal notice, support, retention, and subprocessor surfaces are absent. |
@@ -81,14 +81,18 @@ real-provider certification remain controlled-beta gates.
   cancellation/Portal and Telnyx disable/release behavior has not been
   certified against real providers, and the required Portal and monitoring
   configuration are external deployment artifacts.
-- The optional realtime observer is not a supported customer feature.
+- The optional realtime observer is not a supported customer feature. The
+  live-call interface is explicitly local-only Preview UI and makes no
+  telephony or realtime mutation.
 - The application lacks French localization, approved legal pages,
   account-wide export/permanent-deletion orchestration, an approved retention
   and backup-erasure policy, and a complete account menu.
 - The repository contains four credential-gated LiveKit behavioral voice
   evaluations, but no completed credentialed run or evidence against an
-  approved production-equivalent model. Accessibility end-to-end tests, load
-  definitions, and completed recovery-drill evidence are also absent.
+  approved production-equivalent model. Browser-level accessibility regression
+  checks cover keyboard, focus, reduced motion, landmarks, and responsive
+  overflow, but formal accessibility conformance, load definitions, frontend
+  performance budgets, and completed recovery-drill evidence are absent.
 
 ## Production-readiness gates
 
@@ -175,3 +179,4 @@ This direction is inspired by [Retell AI's structured conversation flows](https:
 - [Local self-service activation](architecture/local-self-service-activation.md)
 - [Controlled deployment and account-deactivation recovery](runbooks/deploy.md)
 - [Production-readiness hardening design](superpowers/specs/2026-07-12-production-readiness-hardening-design.md)
+- [Presvo UI production handoff](engineering/2026-07-29-presvo-ui-production-handoff.md)

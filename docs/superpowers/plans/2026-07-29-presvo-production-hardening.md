@@ -18,20 +18,20 @@ required Clerk or API configuration is absent.
 
 ## Task 1: Audit the Completed Interface
 
-- [ ] **Step 1: Run repository-wide static UX scans**
+- [x] **Step 1: Run repository-wide static UX scans**
 
 Check production routes and components for unlabeled icon actions, controls
 without names, non-semantic click handlers, missing form metadata, broad
 transitions, unsafe focus suppression, hard-coded dates/numbers, stale
 placeholders, disabled zoom, and unbounded content.
 
-- [ ] **Step 2: Audit route landmarks and keyboard paths**
+- [x] **Step 2: Audit route landmarks and keyboard paths**
 
 Confirm skip-link/main targeting, one page heading, hierarchical section
 headings, dialog/drawer focus trap and restoration, tab semantics, visible
 focus, URL-owned live tabs/filters, and reduced-motion behavior.
 
-- [ ] **Step 3: Record and classify findings**
+- [x] **Step 3: Record and classify findings**
 
 Fix actionable production issues. Record deliberate exceptions only when an
 existing automated test proves the behavior is bounded and accessible.
@@ -40,17 +40,17 @@ existing automated test proves the behavior is bounded and accessible.
 
 ## Task 2: Apply Accessibility and Interaction Fixes
 
-- [ ] **Step 1: Add regression tests for every finding**
+- [x] **Step 1: Add regression tests for every finding**
 
 Use component tests for semantics and keyboard behavior, and Playwright only
 where browser layout, focus, or reduced-motion behavior is material.
 
-- [ ] **Step 2: Implement minimal Presvo-preserving corrections**
+- [x] **Step 2: Implement minimal Presvo-preserving corrections**
 
 Keep exact tokens, typography, spacing, borders, shadows, card hierarchy, and
 responsive composition. Use semantic elements and scoped transitions.
 
-- [ ] **Step 3: Re-run focused tests and inspect affected screenshots**
+- [x] **Step 3: Re-run focused tests and inspect affected screenshots**
 
 No screenshot may be updated unless the visual change is intentional and
 manually inspected.
@@ -59,18 +59,18 @@ manually inspected.
 
 ## Task 3: Audit Preview Isolation, Dead Code, and Bundles
 
-- [ ] **Step 1: Prove Preview mutation isolation**
+- [x] **Step 1: Prove Preview mutation isolation**
 
 Scan Preview components for API/action imports and retain browser request
 observers across assistant, live call, plan comparison, notifications, privacy,
 security, and shell notification previews.
 
-- [ ] **Step 2: Remove dead production controls and stale content**
+- [x] **Step 2: Remove dead production controls and stale content**
 
 Remove unreachable branches, duplicate presentation helpers, fake current
 dates, unsupported claims, dead links, and accidental internal metadata.
 
-- [ ] **Step 3: Inspect production route bundles**
+- [x] **Step 3: Inspect production route bundles**
 
 Use the production build output and source import graph to confirm future-use
 Preview modules are loaded only by routes that render them.
@@ -79,20 +79,20 @@ Preview modules are loaded only by routes that render them.
 
 ## Task 4: Dependency and Backend Release Gate
 
-- [ ] **Step 1: Audit JavaScript and Python dependencies**
+- [x] **Step 1: Audit JavaScript and Python dependencies**
 
 Run the lockfile-aware frontend audit and the repository’s Python dependency
 audit. Resolve actionable high-severity findings without broad dependency
 upgrades; document valid time-bounded exceptions already governed by the
 repository.
 
-- [ ] **Step 2: Run all changed-backend checks**
+- [x] **Step 2: Run all changed-backend checks**
 
 Run Ruff, mypy, the full API test suite, migration verification, and the agent
 suite because assistant persistence now spans profile projection and lifecycle
 confirmation.
 
-- [ ] **Step 3: Run all frontend checks**
+- [x] **Step 3: Run all frontend checks**
 
 Run Biome, TypeScript, all Vitest tests, and the production Next.js build with
 CI-safe configuration.
@@ -101,17 +101,17 @@ CI-safe configuration.
 
 ## Task 5: Integration and Operations Handoff
 
-- [ ] **Step 1: Document runtime configuration**
+- [x] **Step 1: Document runtime configuration**
 
 Document required web/API origins, Clerk keys, local-auth behavior, Stripe and
 telephony ownership, France-first defaults, and the database migration.
 
-- [ ] **Step 2: Document live and Preview seams**
+- [x] **Step 2: Document live and Preview seams**
 
 List every backend-backed route/action and every local-only Preview capability,
 including the modules to replace when backend contracts are added.
 
-- [ ] **Step 3: Document validation commands and evidence**
+- [x] **Step 3: Document validation commands and evidence**
 
 Record exact passing test counts, production build routes, browser matrices,
 visual baselines, dependency results, and any external deployment prerequisites.
@@ -145,4 +145,4 @@ fresh evidence.
 - [ ] Keyboard, focus, landmarks, labels, live regions, contrast, and reduced motion are verified.
 - [ ] No dead link, fake success, stale current date, or internal metadata remains in production UI.
 - [ ] Frontend and changed-backend checks, production build, and full browser lifecycle pass.
-- [ ] Integration and deployment prerequisites are documented without embedding secrets.
+- [x] Integration and deployment prerequisites are documented without embedding secrets.
