@@ -69,7 +69,7 @@ git commit -m "docs: plan Presvo configuration and account migration"
 - Create: `apps/web/src/hooks/use-unsaved-changes-guard.ts`
 - Create: `apps/web/tests/components/unsaved-changes.test.tsx`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Cover:
 
@@ -80,13 +80,13 @@ Cover:
 - same-origin anchor confirmation while dirty;
 - baseline reset after a confirmed save.
 
-- [ ] **Step 2: Implement the shared primitives**
+- [x] **Step 2: Implement the shared primitives**
 
 Use the template's compact sticky card, exact semantic tokens, minimum 44px
 actions, a polite status region, native confirmation for route departure, and
 reduced-motion-safe feedback.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cd apps/web
