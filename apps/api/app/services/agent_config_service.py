@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.models.agent_config import AgentConfig
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
+from app.repositories.customer_activation_repository import CustomerActivationRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_access_policy import (
     AccountStateBlockedError,
@@ -63,6 +64,7 @@ class AgentConfigService:
         self.session = session
         self.agent_config_repository = agent_config_repository
         self.business_profile_repository = BusinessProfileRepository(session)
+        self.customer_activation_repository = CustomerActivationRepository(session)
         self.user_repository = UserRepository(session)
         self.readiness_service = readiness_service
         self.outbox_service = OutboxService(session)
@@ -95,6 +97,11 @@ class AgentConfigService:
         profile = (
             await self.business_profile_repository.get_or_create_for_update(user_id)
             if activation_flow_enabled and PROFILE_MANAGED_CONTENT_FIELDS & requested
+            else None
+        )
+        activation = (
+            await self.customer_activation_repository.get_by_user_id_for_update(user_id)
+            if profile is not None
             else None
         )
         config = await self.agent_config_repository.get_or_create_default_for_update(
@@ -132,6 +139,11 @@ class AgentConfigService:
                     changed = True
             if changed:
                 profile.content_revision += 1
+                if (
+                    activation is not None
+                    and activation.profile_confirmed_at is not None
+                ):
+                    activation.profile_confirmed_revision = profile.content_revision
             self.projection_service.project(profile, config)
 
         requested_enabled = config_updates.get("is_enabled")

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.config import Settings, get_settings
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
+from app.models.customer_activation import CustomerActivation
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
@@ -228,6 +229,22 @@ async def fetch_business_profile(
     return profile
 
 
+async def fetch_customer_activation(
+    database_url: str, *, clerk_user_id: str
+) -> CustomerActivation:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        result = await session.execute(
+            select(CustomerActivation)
+            .join(User, CustomerActivation.user_id == User.id)
+            .where(User.clerk_user_id == clerk_user_id)
+        )
+        activation = result.scalar_one()
+    await engine.dispose()
+    return activation
+
+
 async def fetch_phone_number(database_url: str, *, clerk_user_id: str) -> PhoneNumber:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -414,6 +431,30 @@ async def test_activation_flow_accepts_idempotent_enabled_value_with_content_pat
         agent_name="Léa",
         is_enabled=True,
     )
+    engine = create_async_engine(client_database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user = (
+            await session.execute(
+                select(User).where(User.clerk_user_id == "user_active_content")
+            )
+        ).scalar_one()
+        session.add(
+            BusinessProfile(
+                user_id=user.id,
+                receptionist_name="Léa",
+                content_revision=3,
+            )
+        )
+        session.add(
+            CustomerActivation(
+                user_id=user.id,
+                profile_confirmed_revision=3,
+                profile_confirmed_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+    await engine.dispose()
     monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
     get_settings.cache_clear()
     try:
@@ -440,6 +481,15 @@ async def test_activation_flow_accepts_idempotent_enabled_value_with_content_pat
     assert response.json()["agent_name"] == "Léa Verified"
     assert response.json()["is_enabled"] is True
     assert await fetch_outbox_event_count(client_database_url) == 0
+    profile = await fetch_business_profile(
+        client_database_url,
+        clerk_user_id="user_active_content",
+    )
+    activation = await fetch_customer_activation(
+        client_database_url,
+        clerk_user_id="user_active_content",
+    )
+    assert activation.profile_confirmed_revision == profile.content_revision
 
 
 @pytest.mark.anyio
