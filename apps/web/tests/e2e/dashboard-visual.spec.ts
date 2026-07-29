@@ -124,7 +124,7 @@ for (const visualCase of VISUAL_CASES) {
       animations: "disabled",
       caret: "hide",
       fullPage: false,
-      mask: [page.locator('[data-visual-dynamic="true"]')],
+      mask: [page.locator('[data-visual-dynamic="true"]'), page.locator('[data-visual-phone-number="true"]')],
     });
 
     if (visualCase.name === "dashboard-mobile-dark.png") {
@@ -237,6 +237,7 @@ test("reduced motion keeps workspace route changes static", async ({ page }) => 
   const navigation = page.getByRole("navigation", { exact: true, name: "Workspace navigation" });
   const destinations = [
     { heading: "Operations overview", link: "Overview" },
+    { heading: "Live call", link: "Live call" },
     { heading: "Calls", link: "Calls" },
     { heading: AGENT_NAME, link: AGENT_NAME },
   ] as const;

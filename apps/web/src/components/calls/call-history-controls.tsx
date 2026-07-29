@@ -1,4 +1,9 @@
+"use client";
+
+import { type FormEvent, useState } from "react";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { SlidersHorizontal } from "lucide-react";
 
@@ -19,13 +24,30 @@ export function CallHistorySearch({
   range: CallHistoryDateRange;
   total: number;
 }) {
+  const router = useRouter();
+  const [draftQuery, setDraftQuery] = useState(query);
+  const [draftStatus, setDraftStatus] = useState(status);
+  const [draftRange, setDraftRange] = useState(range);
   const hasFilters = Boolean(query) || status !== "all" || range !== "all";
+
+  function applyFilters(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    router.push(
+      buildCallHistoryHref({
+        query: draftQuery.trim(),
+        status: draftStatus,
+        range: draftRange,
+        page: 1,
+      }),
+    );
+  }
 
   return (
     // biome-ignore lint/a11y/useSemanticElements: A form with role=search supports the project's browser and test matrix.
     <form
       action="/dashboard/calls"
       method="get"
+      onSubmit={applyFilters}
       className="surface-card grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_11rem_11rem_auto] lg:items-end"
       role="search"
     >
@@ -38,7 +60,8 @@ export function CallHistorySearch({
           name="q"
           type="search"
           maxLength={100}
-          defaultValue={query}
+          value={draftQuery}
+          onChange={(event) => setDraftQuery(event.target.value)}
           placeholder="Caller number or summary"
           className="min-h-11"
         />
@@ -50,7 +73,8 @@ export function CallHistorySearch({
         <NativeSelect
           aria-label="Filter by status"
           className="w-full [&_select]:min-h-11"
-          defaultValue={status}
+          value={draftStatus}
+          onChange={(event) => setDraftStatus(event.target.value as CallHistoryStatusFilter)}
           id="call-status"
           name="status"
         >
@@ -67,7 +91,8 @@ export function CallHistorySearch({
         <NativeSelect
           aria-label="Filter by date"
           className="w-full [&_select]:min-h-11"
-          defaultValue={range}
+          value={draftRange}
+          onChange={(event) => setDraftRange(event.target.value as CallHistoryDateRange)}
           id="call-range"
           name="range"
         >

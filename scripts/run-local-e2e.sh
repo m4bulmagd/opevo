@@ -55,6 +55,7 @@ e2e_state_dir=$(mktemp -d)
 export E2E_STATE_FILE="${e2e_state_dir}/account-lifecycle.json"
 export E2E_API_BASE_URL="http://127.0.0.1:${API_PORT}"
 export E2E_LOCAL_AUTH_TOKEN="presvo-local-development-token"
+update_snapshots=${E2E_UPDATE_SNAPSHOTS:-${UPDATE_SNAPSHOTS:-0}}
 
 wait_for_health() {
   service=$1
@@ -137,7 +138,7 @@ wait_for_health api
 wait_for_running worker
 wait_for_health web
 
-if [ "${E2E_UPDATE_SNAPSHOTS:-0}" = "1" ]; then
+if [ "$update_snapshots" = "1" ]; then
   E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
     npm --prefix apps/web run test:e2e -- tests/e2e/entry-activation-visual.spec.ts --update-snapshots
 else
@@ -148,12 +149,22 @@ fi
 E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
   npm --prefix apps/web run test:e2e -- tests/e2e/activation.spec.ts
 
-if [ "${E2E_UPDATE_SNAPSHOTS:-0}" = "1" ]; then
+compose exec -T postgres psql -U postgres -d ai_call < scripts/seed-local-e2e-calls.sql
+
+if [ "$update_snapshots" = "1" ]; then
   E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
     npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-visual.spec.ts --update-snapshots
 else
   E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
     npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-visual.spec.ts
+fi
+
+if [ "$update_snapshots" = "1" ]; then
+  E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+    npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-calls-visual.spec.ts --update-snapshots
+else
+  E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+    npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-calls-visual.spec.ts
 fi
 
 E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
