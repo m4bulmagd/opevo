@@ -59,6 +59,8 @@ describe("backendFetch base URL selection", () => {
 
   it("authenticates every backend request at the server boundary", async () => {
     vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("API_BASE_URL", "");
+    vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", "");
 
     const { backendFetch } = await import("@/lib/api/backend-client");
     await backendFetch("/api/first");
