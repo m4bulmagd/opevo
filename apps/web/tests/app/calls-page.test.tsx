@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listCallsMock = vi.fn();
@@ -331,13 +331,14 @@ describe("calls pages", () => {
 
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByRole("heading", { level: 1, name: "+33123456789" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to calls" })).toHaveAttribute("href", "/dashboard/calls");
     expect(document.querySelector('[data-slot="page-intro"]')).not.toBeNull();
     const callStatus = screen.getByRole("region", { name: "Call status: Completed" });
     expect(within(callStatus).getByText("Completed")).toBeInTheDocument();
     expect(callStatus.querySelector("svg")).not.toBeNull();
-    const summary = screen.getByRole("region", { name: "Summary" });
+    const summary = screen.getByRole("region", { name: "Generated summary" });
     const recording = screen.getByRole("region", { name: "Recording" });
-    const transcript = screen.getByRole("region", { name: "Transcript" });
+    const transcript = screen.getByRole("region", { name: "Full transcript" });
     const metadata = screen.getByRole("region", { name: "Metadata" });
     for (const section of [summary, recording, transcript, metadata]) {
       expect(section).toHaveAttribute("data-slot", "product-surface");
@@ -349,6 +350,14 @@ describe("calls pages", () => {
     expect(transcriptLines[0]).toHaveTextContent("What are your opening hours?");
     expect(transcriptLines[1]).toHaveTextContent("ASSISTANT");
     expect(transcriptLines[1]).toHaveTextContent("We are open on weekdays from nine.");
+    const transcriptSearch = within(transcript).getByRole("searchbox", { name: "Search transcript" });
+    expect(transcriptSearch).toHaveClass("min-h-11");
+    fireEvent.change(transcriptSearch, { target: { value: "weekdays" } });
+    expect(within(transcript).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(transcript).queryByText("What are your opening hours?")).not.toBeInTheDocument();
+    expect(within(transcript).getByText("weekdays")).toBeInTheDocument();
+    fireEvent.change(transcriptSearch, { target: { value: "unmatched phrase" } });
+    expect(within(transcript).getByText(/No transcript lines match/i)).toBeInTheDocument();
     expect(screen.getByText(/Check opening hours/i)).toBeInTheDocument();
     expect(screen.getByText(/Send weekday hours/i)).toBeInTheDocument();
     expect(screen.getByText(/Recording unavailable/i)).toBeInTheDocument();
@@ -356,6 +365,7 @@ describe("calls pages", () => {
     expect(within(metadata).getByText("Mar 28, 11:01")).toBeInTheDocument();
     expect(within(metadata).getByText("1m")).toBeInTheDocument();
     expect(within(metadata).getByText("1 min")).toBeInTheDocument();
+    expect(within(metadata).getByText("call-1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove call" })).toBeInTheDocument();
   });
 
