@@ -164,12 +164,13 @@ Fresh release-gate evidence on 2026-07-29:
 - dependencies: `npm audit` and the API Python audit reported zero known
   vulnerabilities; the agent audit reported zero unignored findings and six
   governed rows for five exact exception IDs;
-- browser lifecycle: pending the final immutable Docker run after this handoff
-  is committed.
+- browser lifecycle: 44 Playwright tests passed across entry/activation,
+  dashboard, calls, configuration, deactivation, and restart-resume suites in a
+  freshly built disposable Docker stack; the stack and test volumes were
+  removed after the run.
 
 The browser matrix covers 1440 × 1100 desktop and 390 × 844 mobile in light and
 dark themes, with route-specific interaction, keyboard, focus, reduced-motion,
 overflow, and visual regression checks. A passing local matrix does not replace
 formal accessibility, performance, real-provider, security, legal, or
 operational certification.
-
