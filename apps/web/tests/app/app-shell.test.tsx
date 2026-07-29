@@ -15,6 +15,7 @@ const testState = vi.hoisted(() => ({
   listCallsMock: vi.fn(),
   getAccountMock: vi.fn(),
   getAgentConfigForRequestMock: vi.fn(),
+  routerPushMock: vi.fn(),
   redirectMock: vi.fn(() => {
     throw new Error("NEXT_REDIRECT");
   }),
@@ -42,6 +43,7 @@ vi.mock("next/link", () => ({
 
 vi.mock("next/navigation", () => ({
   usePathname: () => testState.pathname,
+  useRouter: () => ({ push: testState.routerPushMock }),
   redirect: testState.redirectMock,
 }));
 
@@ -154,6 +156,7 @@ beforeEach(() => {
   testState.listCallsMock.mockReset();
   testState.getAccountMock.mockReset();
   testState.getAgentConfigForRequestMock.mockReset();
+  testState.routerPushMock.mockReset();
   testState.redirectMock.mockClear();
 });
 

@@ -390,7 +390,7 @@ git commit -m "test(web): lock Presvo dashboard and calls visuals"
 
 ## Task 8: Run the Phase 3 Production Gate
 
-- [ ] **Step 1: Scan for migration regressions**
+- [x] **Step 1: Scan for migration regressions**
 
 ```bash
 rg -n 'slate-|transition-all|TODO|FIXME|hardcoded.*date' \
@@ -402,7 +402,7 @@ rg -n 'slate-|transition-all|TODO|FIXME|hardcoded.*date' \
   apps/web/src/components/live-call
 ```
 
-- [ ] **Step 2: Run API verification**
+- [x] **Step 2: Run API verification**
 
 ```bash
 cd apps/api
@@ -411,7 +411,7 @@ uv run mypy app
 uv run pytest tests/dashboard/test_dashboard_metrics.py tests/calls/test_call_history_search.py tests/calls/test_call_history_api.py -q
 ```
 
-- [ ] **Step 3: Run web verification**
+- [x] **Step 3: Run web verification**
 
 ```bash
 cd apps/web
@@ -427,11 +427,11 @@ NEXT_PUBLIC_REALTIME_ENABLED=false \
   npm run build
 ```
 
-- [ ] **Step 4: Verify phase invariants**
+- [x] **Step 4: Verify phase invariants**
 
 Confirm dashboard chart truth/accessibility, URL-owned filters, tenant-safe result counts, signed recording access, confirmed deletion, explicit Preview labelling, local-only preview state, and no preview network mutation.
 
-- [ ] **Step 5: Mark this plan complete and commit**
+- [x] **Step 5: Mark this plan complete and commit**
 
 ```bash
 git commit -m "docs: complete Presvo dashboard and calls phase"
@@ -441,11 +441,11 @@ git commit -m "docs: complete Presvo dashboard and calls phase"
 
 ## Phase 3 Completion Checklist
 
-- [ ] Dashboard matches the Presvo overview hierarchy without invented production metrics.
-- [ ] Seven-day activity is backend-authoritative, tenant-safe, timezone-correct, and accessible as text.
-- [ ] Search/status/date/page state is URL-owned and survives reload/back/forward.
-- [ ] Call history uses desktop table and mobile cards with truthful empty states.
-- [ ] Call detail preserves private recording links, transcript order, status truth, and confirmed removal.
-- [ ] Live call is persistently labelled Preview and all its controls remain local-only.
-- [ ] Dashboard, history, detail, and Preview pass visual, dark-mode, reduced-motion, and overflow checks.
-- [ ] Focused API tests, full web tests, production build, and complete Playwright lifecycle pass.
+- [x] Dashboard matches the Presvo overview hierarchy without invented production metrics.
+- [x] Seven-day activity is backend-authoritative, tenant-safe, timezone-correct, and accessible as text.
+- [x] Search/status/date/page state is URL-owned and survives reload/back/forward.
+- [x] Call history uses desktop table and mobile cards with truthful empty states.
+- [x] Call detail preserves private recording links, transcript order, status truth, and confirmed removal.
+- [x] Live call is persistently labelled Preview and all its controls remain local-only.
+- [x] Dashboard, history, detail, and Preview pass visual, dark-mode, reduced-motion, and overflow checks.
+- [x] Focused API tests, full web tests, production build, and complete Playwright lifecycle pass.
