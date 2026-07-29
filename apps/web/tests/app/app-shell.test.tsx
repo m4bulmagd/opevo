@@ -76,6 +76,23 @@ const activeAccount: AccountStatus = {
   blocker: null,
 };
 
+const activeCall = {
+  id: "call-active",
+  status: "in_progress",
+  caller_number: "+33612345678",
+  started_at: "2026-07-29T10:00:00Z",
+  ended_at: null,
+  duration_seconds: null,
+  minutes_charged: null,
+  summary_status: "unavailable" as const,
+  summary_text: null,
+  caller_intent: null,
+  action_items: null,
+  sentiment: null,
+  follow_up_required: null,
+  has_recording: false,
+};
+
 function agentConfig(agentName: string, isEnabled = true): AgentConfig {
   return {
     agent_name: agentName,
@@ -154,6 +171,13 @@ beforeEach(() => {
   testState.pathname = "/dashboard";
   testState.reducedMotion = false;
   testState.listCallsMock.mockReset();
+  testState.listCallsMock.mockResolvedValue({
+    calls: [],
+    total: 0,
+    limit: 1,
+    offset: 0,
+    has_more: false,
+  });
   testState.getAccountMock.mockReset();
   testState.getAgentConfigForRequestMock.mockReset();
   testState.routerPushMock.mockReset();
@@ -382,6 +406,42 @@ describe("app shell", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Workspace navigation" })).toBeNull());
   });
 
+  it("loads the newest in-progress call and shows its number in the header", async () => {
+    testState.listCallsMock.mockResolvedValueOnce({
+      calls: [activeCall],
+      total: 1,
+      limit: 1,
+      offset: 0,
+      has_more: false,
+    });
+
+    await renderDashboardLayout({ agentName: "Ava" });
+
+    expect(testState.listCallsMock).toHaveBeenCalledWith({
+      limit: 1,
+      status: "in_progress",
+    });
+    expect(screen.getByText("+33612345678")).toBeVisible();
+    expect(screen.getByText("Ava is answering this call")).toBeVisible();
+  });
+
+  it("shows the ready state when no call is active", async () => {
+    await renderDashboardLayout({ agentName: "Ava" });
+
+    expect(screen.getByText("No active call")).toBeVisible();
+    expect(screen.getByText("Ava is ready")).toBeVisible();
+  });
+
+  it("degrades an active-call lookup failure to the ready state", async () => {
+    testState.listCallsMock.mockRejectedValueOnce(new Error("call lookup unavailable"));
+
+    await renderDashboardLayout({ agentName: "Ava" });
+
+    expect(screen.getByText("No active call")).toBeVisible();
+    expect(screen.getByText("Ava is ready")).toBeVisible();
+    expect(screen.getByText("Dashboard content")).toBeVisible();
+  });
+
   it("routes shell search and header destinations to their production URLs", async () => {
     await renderDashboardLayout();
 
@@ -389,13 +449,18 @@ describe("app shell", () => {
     const search = within(header).getByRole("searchbox", { name: "Search calls" });
     const form = search.closest("form");
 
-    expect(header).toHaveClass(
-      "grid",
-      "grid-cols-[auto_minmax(0,1fr)_auto]",
-      "bg-background/90",
-      "lg:rounded-2xl",
-      "lg:shadow-card",
-    );
+    expect(header).toHaveClass("flex", "bg-background/90", "lg:rounded-2xl", "lg:shadow-card");
+    expect(
+      Array.from(header.querySelectorAll("[data-header-item]")).map((item) => item.getAttribute("data-header-item")),
+    ).toEqual([
+      "search",
+      "caller-status",
+      "live-call",
+      "notifications",
+      "call-history",
+      "account-control",
+      "theme-control",
+    ]);
     expect(search).toHaveAttribute("name", "q");
     expect(search).toHaveAttribute("placeholder", "Search calls, callers or notes");
     expect(form).toHaveAttribute("action", "/dashboard/calls");

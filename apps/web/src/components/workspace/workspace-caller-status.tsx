@@ -25,7 +25,7 @@ export function WorkspaceCallerStatus({ agentName, caller }: WorkspaceCallerStat
   const contactName = caller?.contactName?.trim() || null;
   const phoneNumber = caller?.phoneNumber?.trim() || null;
   const primary = caller
-    ? contactName ?? (phoneNumber ? formatPhoneNumber(phoneNumber) : "Unknown caller")
+    ? (contactName ?? (phoneNumber ? formatPhoneNumber(phoneNumber) : "Unknown caller"))
     : "No active call";
   const secondary = caller ? `${agentName} is answering this call` : `${agentName} is ready`;
 
@@ -39,11 +39,7 @@ export function WorkspaceCallerStatus({ agentName, caller }: WorkspaceCallerStat
         aria-hidden
         className="grid size-10 shrink-0 place-items-center rounded-full bg-primary-soft font-semibold text-accent-foreground text-xs"
       >
-        {contactName ? (
-          initialsFor(contactName)
-        ) : (
-          <PhoneCall className="size-4" data-testid="caller-status-icon" />
-        )}
+        {contactName ? initialsFor(contactName) : <PhoneCall className="size-4" data-testid="caller-status-icon" />}
       </span>
       <span className="min-w-0 max-w-52">
         <span className="block truncate font-semibold text-sm" title={primary}>
