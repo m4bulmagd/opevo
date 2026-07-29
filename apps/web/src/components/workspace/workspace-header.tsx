@@ -37,7 +37,7 @@ export function WorkspaceHeader({ accountControl, agentName }: { accountControl:
   return (
     <header className="sticky top-0 z-20 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-border border-b bg-background/90 px-4 py-3 backdrop-blur lg:rounded-2xl lg:border lg:bg-card lg:px-4 lg:shadow-card">
       <div className="flex min-w-0 items-center gap-2">
-        <MobileWorkspaceNavigation agentName={agentName} />
+        <MobileWorkspaceNavigation />
         <Link
           aria-label="Presvo overview"
           className="hidden min-h-11 min-w-0 items-center gap-2 rounded-md font-semibold tracking-tight outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:inline-flex lg:hidden"
