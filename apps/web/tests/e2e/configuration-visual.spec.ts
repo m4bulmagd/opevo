@@ -48,14 +48,14 @@ const VISUAL_CASES: readonly VisualCase[] = [
     route: "/dashboard/account",
     theme: "light",
     viewport: { width: 1440, height: 1100 },
-    heading: "Account",
+    heading: "Settings",
   },
   {
     name: "account-mobile-dark.png",
     route: "/dashboard/account",
     theme: "dark",
     viewport: { width: 390, height: 844 },
-    heading: "Account",
+    heading: "Settings",
   },
 ];
 
@@ -110,10 +110,25 @@ function observeBackendRequests(page: Page) {
   return requests;
 }
 
+async function confirmAccountProfileSave(page: Page) {
+  const unsavedChanges = page.getByRole("status", { name: "Unsaved changes" });
+  await expect(unsavedChanges).toBeVisible();
+  const confirmedSaveResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "POST" && url.pathname === "/dashboard/account";
+  });
+
+  await unsavedChanges.getByRole("button", { name: "Save changes" }).click();
+
+  expect((await confirmedSaveResponse).ok()).toBe(true);
+  await expect(unsavedChanges).toHaveCount(0);
+}
+
 for (const visualCase of VISUAL_CASES) {
   test(`matches ${visualCase.name}`, async ({ page }) => {
     await prepareRoute(page, visualCase);
     await expectNoHorizontalOverflow(page, visualCase.viewport.width);
+    const screenshotMasks = [page.locator('[data-visual-billing-date="true"]')];
 
     if (visualCase.route.startsWith("/dashboard/agent")) {
       await expect(page.getByRole("tab", { name: "Advanced Preview" })).toBeVisible();
@@ -126,18 +141,74 @@ for (const visualCase of VISUAL_CASES) {
       await expect(page.getByRole("region", { name: "Plan comparison Preview" })).toBeVisible();
     }
     if (visualCase.route === "/dashboard/account") {
-      await expect(page.getByRole("region", { name: "Account settings Preview" })).toBeVisible();
-      await expect(page.getByRole("region", { name: "Danger zone" })).toBeVisible();
+      for (const regionName of [
+        "Profile",
+        "Assigned number",
+        "Account status",
+        "Notifications Preview",
+        "Privacy & recordings Preview",
+        "Security",
+        "Danger zone",
+      ]) {
+        await expect(page.getByRole("region", { name: regionName })).toBeVisible();
+      }
+      await expect(page.getByRole("status", { name: "Unsaved changes" })).toHaveCount(0);
+      screenshotMasks.push(page.getByRole("region", { name: "Assigned number" }).locator("p").first());
     }
 
     await expect(page).toHaveScreenshot(visualCase.name, {
       animations: "disabled",
       caret: "hide",
       fullPage: true,
-      mask: [page.locator('[data-visual-billing-date="true"]')],
+      mask: screenshotMasks,
     });
   });
 }
+
+test("discards, persists, and restores the live account Profile name", async ({ page }) => {
+  await page.goto("/dashboard/account");
+  await page.waitForLoadState("networkidle");
+  const fullName = page.getByRole("textbox", { name: "Full name" });
+  const initialFullName = await fullName.inputValue();
+  const temporaryFullName =
+    initialFullName === "Presvo Profile E2E" ? "Presvo Profile E2E alternate" : "Presvo Profile E2E";
+  let restorationConfirmed = false;
+
+  try {
+    await fullName.fill(temporaryFullName);
+    await expect(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
+    await page.getByRole("button", { name: "Discard" }).click();
+    await expect(fullName).toHaveValue(initialFullName);
+
+    await fullName.fill(temporaryFullName);
+    await confirmAccountProfileSave(page);
+    await expect(fullName).toHaveValue(temporaryFullName);
+    await page.reload();
+    await expect(page.getByRole("textbox", { name: "Full name" })).toHaveValue(temporaryFullName);
+
+    const persistedFullName = page.getByRole("textbox", { name: "Full name" });
+    await persistedFullName.fill(initialFullName);
+    await confirmAccountProfileSave(page);
+    await expect(persistedFullName).toHaveValue(initialFullName);
+    await page.reload();
+    await expect(page.getByRole("textbox", { name: "Full name" })).toHaveValue(initialFullName);
+    restorationConfirmed = true;
+  } finally {
+    if (!restorationConfirmed) {
+      const recoveryFullName = page.getByRole("textbox", { name: "Full name" });
+      if (!(await recoveryFullName.isVisible().catch(() => false))) {
+        await page.goto("/dashboard/account");
+        await page.waitForLoadState("networkidle");
+      }
+      await page.getByRole("textbox", { name: "Full name" }).fill(initialFullName);
+      if ((await page.getByRole("status", { name: "Unsaved changes" }).count()) > 0) {
+        await confirmAccountProfileSave(page);
+      }
+      await page.reload();
+      await expect(page.getByRole("textbox", { name: "Full name" })).toHaveValue(initialFullName);
+    }
+  }
+});
 
 test("guards, discards, persists, and restores live assistant settings", async ({ page }) => {
   await setThemeBeforeNavigation(page, "light");
@@ -232,26 +303,39 @@ test("resets account Preview and retains exact deactivation confirmation", async
   await page.goto("/dashboard/account");
   await page.waitForLoadState("networkidle");
   const backendRequests = observeBackendRequests(page);
-  const preview = page.getByRole("region", { name: "Account settings Preview" });
+  const notifications = page.getByRole("region", { name: "Notifications Preview" });
+  const privacy = page.getByRole("region", { name: "Privacy & recordings Preview" });
+  const security = page.getByRole("region", { name: "Security" });
+  const danger = page.getByRole("region", { name: "Danger zone" });
 
-  await preview.getByRole("switch", { name: "Call summaries" }).click();
-  await preview.getByRole("combobox", { name: "Preview recording retention" }).selectOption("365");
-  await preview.getByRole("switch", { name: "Two-factor authentication" }).click();
-  await preview.getByRole("button", { name: "Preview password flow" }).click();
-  await expect(preview).toContainText("no password email was sent");
-  await preview.getByRole("button", { name: "Reset settings Preview" }).click();
-  await expect(preview.getByRole("switch", { name: "Call summaries" })).toBeChecked();
-  await expect(preview.getByRole("combobox", { name: "Preview recording retention" })).toHaveValue("30");
-  await expect(preview.getByRole("switch", { name: "Two-factor authentication" })).not.toBeChecked();
+  await expect(security).toContainText("Password and sign-in methods are managed through Clerk in hosted accounts.");
+  await notifications.getByRole("switch", { name: "Call summaries" }).click();
+  await privacy.getByRole("combobox", { name: "Preview recording retention" }).selectOption("365");
+  await security.getByRole("switch", { name: "Two-factor authentication" }).click();
+  await expect(notifications.getByRole("status", { name: "Account settings Preview status" })).toContainText(
+    "No account setting was updated",
+  );
+  await notifications.getByRole("button", { name: "Reset settings Preview" }).click();
+  await expect(notifications.getByRole("switch", { name: "Call summaries" })).toBeChecked();
+  await expect(privacy.getByRole("combobox", { name: "Preview recording retention" })).toHaveValue("30");
+  await expect(security.getByRole("switch", { name: "Two-factor authentication" })).not.toBeChecked();
 
-  await page.getByRole("button", { name: "Deactivate Presvo" }).click();
-  const confirmation = page.getByLabel("Type DEACTIVATE to confirm");
-  const deactivate = page.getByRole("button", { name: "Deactivate account" });
+  await danger.getByRole("button", { name: "Deactivate Presvo" }).click();
+  const dialog = page.getByRole("alertdialog");
+  const confirmation = dialog.getByLabel("Type DEACTIVATE to confirm");
+  const deactivate = dialog.getByRole("button", { name: "Deactivate account" });
   await confirmation.fill("deactivate");
   await expect(deactivate).toBeDisabled();
   await confirmation.fill("DEACTIVATE");
   await expect(deactivate).toBeEnabled();
-  await page.getByRole("button", { name: "Keep Presvo active" }).click();
+  await dialog.getByRole("button", { name: "Keep Presvo active" }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await danger.getByRole("button", { name: "Deactivate Presvo" }).click();
+  const reopenedDialog = page.getByRole("alertdialog");
+  await expect(reopenedDialog.getByLabel("Type DEACTIVATE to confirm")).toHaveValue("");
+  await expect(reopenedDialog.getByRole("button", { name: "Deactivate account" })).toBeDisabled();
+  await reopenedDialog.getByRole("button", { name: "Keep Presvo active" }).click();
   expect(backendRequests).toEqual([]);
 });
 
