@@ -260,8 +260,8 @@ jobs:
             python -c 'from datetime import date; assert date.today() < date.fromisoformat("2026-08-14"), "agent dependency exceptions expired on 2026-08-14"'
             audit_output="$(uv run --frozen --no-sync pip-audit --disable-pip --require-hashes --no-deps --progress-spinner=off --requirement "$RUNNER_TEMP/agent-requirements.txt" --ignore-vuln PYSEC-2025-217 --ignore-vuln PYSEC-2025-218 --ignore-vuln PYSEC-2026-2290 --ignore-vuln PYSEC-2026-2288 --ignore-vuln PYSEC-2026-2289 2>&1)"
             printf '%s\n' "$audit_output"
-            if ! printf '%s\n' "$audit_output" | grep -Fxq "No known vulnerabilities found, 5 ignored"; then
-              echo "Expected exactly five reviewed agent advisories and no other findings." >&2
+            if ! printf '%s\n' "$audit_output" | grep -Fxq "No known vulnerabilities found, 6 ignored"; then
+              echo "Expected six audit rows for five reviewed agent advisory IDs and no other findings." >&2
               exit 1
             fi
           else
