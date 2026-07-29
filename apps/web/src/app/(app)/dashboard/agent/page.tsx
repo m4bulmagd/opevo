@@ -2,7 +2,9 @@ import Link from "next/link";
 
 import { AgentRuntimeCard } from "@/components/agent/agent-runtime-card";
 import { type AgentConfigurationTab, AgentSettingsForm } from "@/components/agent/agent-settings-form";
+import { AssistantPreview } from "@/components/agent/assistant-preview";
 import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
+import { CapabilityBadge } from "@/components/product/capability-badge";
 import { PageIntro } from "@/components/product/page-intro";
 import { getAccount } from "@/lib/api/account";
 import { getAgentConfigForRequest } from "@/lib/api/request-data";
@@ -14,18 +16,21 @@ type AgentPageProps = {
   searchParams?: Promise<{ tab?: string | string[] }>;
 };
 
-const TABS: ReadonlyArray<{ label: string; value: AgentConfigurationTab }> = [
+type AgentPageTab = AgentConfigurationTab | "preview";
+
+const TABS: ReadonlyArray<{ label: string; preview?: boolean; value: AgentPageTab }> = [
   { label: "General", value: "general" },
   { label: "Instructions", value: "instructions" },
   { label: "Knowledge", value: "knowledge" },
+  { label: "Advanced", preview: true, value: "preview" },
 ];
 
-function parseTab(value: string | string[] | undefined): AgentConfigurationTab {
+function parseTab(value: string | string[] | undefined): AgentPageTab {
   const selected = Array.isArray(value) ? value[0] : value;
-  return selected === "instructions" || selected === "knowledge" ? selected : "general";
+  return selected === "instructions" || selected === "knowledge" || selected === "preview" ? selected : "general";
 }
 
-function tabHref(tab: AgentConfigurationTab): string {
+function tabHref(tab: AgentPageTab): string {
   return tab === "general" ? "/dashboard/agent" : `/dashboard/agent?tab=${tab}`;
 }
 
@@ -59,6 +64,7 @@ export default async function AgentPage({ searchParams = Promise.resolve({}) }: 
             return (
               <Link
                 aria-controls={`agent-panel-${item.value}`}
+                aria-label={item.preview ? `${item.label} Preview` : undefined}
                 aria-selected={active}
                 className={cn(
                   "relative inline-flex min-h-11 items-center px-3 font-medium text-sm transition-colors",
@@ -71,13 +77,20 @@ export default async function AgentPage({ searchParams = Promise.resolve({}) }: 
                 key={item.value}
                 role="tab"
               >
-                {item.label}
+                <span>{item.label}</span>
+                {item.preview ? <CapabilityBadge className="ml-2" status="preview" /> : null}
               </Link>
             );
           })}
         </div>
       </nav>
-      <AgentSettingsForm initialConfig={agentConfig} readOnly={account.status !== "active"} tab={activeTab} />
+      {activeTab === "preview" ? (
+        <div aria-labelledby="agent-tab-preview" id="agent-panel-preview" role="tabpanel">
+          <AssistantPreview agentName={agentName} />
+        </div>
+      ) : (
+        <AgentSettingsForm initialConfig={agentConfig} readOnly={account.status !== "active"} tab={activeTab} />
+      )}
     </div>
   );
 }

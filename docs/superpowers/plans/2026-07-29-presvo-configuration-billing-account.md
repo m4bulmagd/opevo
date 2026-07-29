@@ -149,21 +149,21 @@ git commit -m "feat(web): port Presvo assistant configuration"
 - Create: `apps/web/tests/app/assistant-preview.test.tsx`
 - Modify: `apps/web/src/app/(app)/dashboard/agent/page.tsx`
 
-- [ ] **Step 1: Write failing Preview-isolation tests**
+- [x] **Step 1: Write failing Preview-isolation tests**
 
 Require persistent `Preview` labels, French fictional voice data, correct
 radiogroup keyboard behavior, local personality/language/speed/provider state,
 simulated voice status, a test-assistant drawer with a progressing finite state
 machine, reset controls, and zero production fetch/action calls.
 
-- [ ] **Step 2: Implement isolated local state**
+- [x] **Step 2: Implement isolated local state**
 
 Use the template's voice cards, advanced-control grid, waveform treatment,
 drawer hierarchy, transcript bubbles, and call controls. Copy no US business
 claims. Explicitly state that preview changes reset on reload and consume no
 minutes.
 
-- [ ] **Step 3: Verify isolation and commit**
+- [x] **Step 3: Verify isolation and commit**
 
 ```bash
 cd apps/web
