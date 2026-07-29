@@ -41,9 +41,7 @@ export function AccountProfileForm({ initialProfile, email, nameMaxLength, readO
   const fieldRefs = useRef<Partial<Record<ProfileField, HTMLInputElement | HTMLSelectElement>>>({});
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   const legacyTimezone =
-    initialProfile.timezone !== CANONICAL_TIMEZONE && isValidTimezone(initialProfile.timezone)
-      ? initialProfile.timezone
-      : null;
+    baseline.timezone !== CANONICAL_TIMEZONE && isValidTimezone(baseline.timezone) ? baseline.timezone : null;
 
   useUnsavedChangesGuard(dirty && !readOnly);
 
@@ -66,14 +64,14 @@ export function AccountProfileForm({ initialProfile, email, nameMaxLength, readO
     } else if (draft.owner_name.length > nameMaxLength) {
       nextErrors.owner_name = `Use ${nameMaxLength} characters or fewer.`;
     }
+    const normalizedPhone = normalizeFrenchNumber(draft.existing_phone_e164);
+    if (!normalizedPhone) {
+      nextErrors.existing_phone_e164 = "Enter a valid French number.";
+    }
     if (!draft.business_name.trim()) {
       nextErrors.business_name = "Enter your business name.";
     } else if (draft.business_name.length > nameMaxLength) {
       nextErrors.business_name = `Use ${nameMaxLength} characters or fewer.`;
-    }
-    const normalizedPhone = normalizeFrenchNumber(draft.existing_phone_e164);
-    if (!normalizedPhone) {
-      nextErrors.existing_phone_e164 = "Enter a valid French number.";
     }
     if (!draft.timezone.trim()) {
       nextErrors.timezone = "Choose a timezone.";

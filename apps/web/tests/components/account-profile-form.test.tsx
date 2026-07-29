@@ -125,6 +125,18 @@ describe("account profile form", () => {
     expect(saveAccountProfileMock).not.toHaveBeenCalled();
   });
 
+  it("focuses Personal phone before Business name when both rendered fields are invalid", () => {
+    renderProfile();
+    const phone = screen.getByLabelText("Personal phone");
+    fireEvent.change(phone, { target: { value: "not-a-french-number" } });
+    fireEvent.change(screen.getByLabelText("Business name"), { target: { value: "   " } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(phone).toHaveFocus();
+    expect(saveAccountProfileMock).not.toHaveBeenCalled();
+  });
+
   it("saves only the four supported profile fields with a normalized phone", async () => {
     renderProfile();
     fireEvent.change(screen.getByLabelText("Personal phone"), { target: { value: "06 98 76 54 32" } });
@@ -176,6 +188,22 @@ describe("account profile form", () => {
       expect(screen.getByLabelText("Business name")).toHaveValue("Atelier Confirmed");
     });
     expect(screen.queryByRole("status", { name: "Unsaved changes" })).not.toBeInTheDocument();
+  });
+
+  it("removes a legacy timezone option after Europe/Paris is confirmed", async () => {
+    const legacyProfile = { ...initialProfile, timezone: "Europe/London" };
+    saveAccountProfileMock.mockResolvedValueOnce({
+      status: "success",
+      message: "Profile saved.",
+      profile: { ...legacyProfile, timezone: "Europe/Paris" },
+    });
+    renderProfile({ initialProfile: legacyProfile });
+
+    fireEvent.change(screen.getByLabelText("Timezone"), { target: { value: "Europe/Paris" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("option", { name: "Europe/London" })).not.toBeInTheDocument());
+    expect(screen.getByRole("option", { name: "Europe/Paris" })).toBeInTheDocument();
   });
 
   it("keeps the draft and allows retry after a save error", async () => {
