@@ -120,18 +120,18 @@ visual baselines, dependency results, and any external deployment prerequisites.
 
 ## Task 6: Final Release Verification
 
-- [ ] **Step 1: Run the immutable Docker lifecycle**
+- [x] **Step 1: Run the immutable Docker lifecycle**
 
 Run landing, activation, dashboard, calls, configuration, deactivation, service
 restart, history retention, and fresh-number reactivation in one disposable
 stack.
 
-- [ ] **Step 2: Verify repository state**
+- [x] **Step 2: Verify repository state**
 
 Require a clean worktree, no uncommitted generated files, no accidental
 `Presvo_frontend` edits, and a reviewable commit sequence.
 
-- [ ] **Step 3: Complete roadmap and handoff**
+- [x] **Step 3: Complete roadmap and handoff**
 
 Mark all five migration phases complete only after every release criterion has
 fresh evidence.
@@ -140,9 +140,9 @@ fresh evidence.
 
 ## Completion Checklist
 
-- [ ] Presvo visual tokens and hierarchy remain regression-protected.
-- [ ] All live features are backend-confirmed and all Preview features are visibly local-only.
-- [ ] Keyboard, focus, landmarks, labels, live regions, contrast, and reduced motion are verified.
-- [ ] No dead link, fake success, stale current date, or internal metadata remains in production UI.
-- [ ] Frontend and changed-backend checks, production build, and full browser lifecycle pass.
+- [x] Presvo visual tokens and hierarchy remain regression-protected.
+- [x] All live features are backend-confirmed and all Preview features are visibly local-only.
+- [x] Keyboard, focus, landmarks, labels, live regions, contrast, and reduced motion are verified.
+- [x] No dead link, fake success, stale current date, or internal metadata remains in production UI.
+- [x] Frontend and changed-backend checks, production build, and full browser lifecycle pass.
 - [x] Integration and deployment prerequisites are documented without embedding secrets.

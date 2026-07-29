@@ -92,13 +92,13 @@ Run the phase-specific Playwright project or spec after starting the documented 
 Detailed plan:
 `docs/superpowers/plans/2026-07-29-presvo-ui-foundation-shell.md`
 
-- [ ] Install exact light/dark visual tokens and system typography.
-- [ ] Align shared controls, cards, surfaces, headings, and capability badges.
-- [ ] Introduce grouped route metadata with capability status.
-- [ ] replace the dark desktop command rail with the template sidebar.
-- [ ] Replace mobile bottom navigation with a focus-managed left sheet.
-- [ ] Add functional shell search and local Preview notifications.
-- [ ] Establish shell unit, accessibility, overflow, reduced-motion, and visual regression coverage.
+- [x] Install exact light/dark visual tokens and system typography.
+- [x] Align shared controls, cards, surfaces, headings, and capability badges.
+- [x] Introduce grouped route metadata with capability status.
+- [x] Replace the dark desktop command rail with the template sidebar.
+- [x] Replace mobile bottom navigation with a focus-managed left sheet.
+- [x] Add functional shell search and local Preview notifications.
+- [x] Establish shell unit, accessibility, overflow, reduced-motion, and visual regression coverage.
 
 Exit criteria:
 
@@ -115,13 +115,13 @@ Exit criteria:
 Plan filename:
 `docs/superpowers/plans/2026-07-29-presvo-entry-activation.md`
 
-- [ ] Inventory landing, Clerk handoff, activation route, actions, and current tests after Phase 1.
-- [ ] Write the phase plan against the Phase 1 token and primitive interfaces.
-- [ ] Restyle `/`, sign-in, and sign-up while keeping truthful France-first copy.
-- [ ] Recompose the existing five activation milestones in the template's centered onboarding hierarchy.
-- [ ] Preserve autosave, carrier confirmation, payment/provisioning consent, forwarding verification, go-live, restart, and resume.
-- [ ] Add responsive loading, error, retry, and unsupported-provider states.
-- [ ] Add landing and activation snapshots at the approved viewports.
+- [x] Inventory landing, Clerk handoff, activation route, actions, and current tests after Phase 1.
+- [x] Write the phase plan against the Phase 1 token and primitive interfaces.
+- [x] Restyle `/`, sign-in, and sign-up while keeping truthful France-first copy.
+- [x] Recompose the existing five activation milestones in the template's centered onboarding hierarchy.
+- [x] Preserve autosave, carrier confirmation, payment/provisioning consent, forwarding verification, go-live, restart, and resume.
+- [x] Add responsive loading, error, retry, and unsupported-provider states.
+- [x] Add landing and activation snapshots at the approved viewports.
 
 Exit criteria:
 
@@ -136,14 +136,14 @@ Exit criteria:
 Plan filename:
 `docs/superpowers/plans/2026-07-29-presvo-dashboard-calls.md`
 
-- [ ] Inventory current dashboard/call APIs, view models, actions, and test fixtures after Phase 2.
-- [ ] Write the phase plan against the established shell and surface interfaces.
-- [ ] Port overview metrics, answering state, usage, activity, and setup checklist.
-- [ ] Port call history filters, pagination, desktop table, and mobile cards.
-- [ ] Connect shell search and route-owned filters to the existing search contract.
-- [ ] Port call detail summary, transcript, recording presentation, and confirmed removal flow.
-- [ ] Add `/dashboard/live-call` as an isolated local-state Preview.
-- [ ] Add dashboard, call history, call detail, and live-call visual/interaction coverage.
+- [x] Inventory current dashboard/call APIs, view models, actions, and test fixtures after Phase 2.
+- [x] Write the phase plan against the established shell and surface interfaces.
+- [x] Port overview metrics, answering state, usage, activity, and setup checklist.
+- [x] Port call history filters, pagination, desktop table, and mobile cards.
+- [x] Connect shell search and route-owned filters to the existing search contract.
+- [x] Port call detail summary, transcript, recording presentation, and confirmed removal flow.
+- [x] Add `/dashboard/live-call` as an isolated local-state Preview.
+- [x] Add dashboard, call history, call detail, and live-call visual/interaction coverage.
 
 Exit criteria:
 
@@ -183,15 +183,15 @@ Exit criteria:
 Plan filename:
 `docs/superpowers/plans/2026-07-29-presvo-production-hardening.md`
 
-- [ ] Write the hardening plan from the accumulated route and component inventory.
-- [ ] Audit keyboard order, focus visibility/restoration, landmarks, labels, live regions, contrast, and screen-reader names.
-- [ ] Verify reduced motion and remove unbounded or decorative motion that obscures state.
-- [ ] Remove dead controls, stale mock dates, duplicate components, accidental metadata exposure, and unreachable branches.
-- [ ] Confirm route bundles exclude future-use components until imported.
-- [ ] Audit production dependencies and resolve high-severity actionable findings.
-- [ ] Run all frontend and changed-backend checks.
-- [ ] Run the complete Playwright flow and visual matrix.
-- [ ] Document environment variables, local integration, preview limitations, and backend replacement seams.
+- [x] Write the hardening plan from the accumulated route and component inventory.
+- [x] Audit keyboard order, focus visibility/restoration, landmarks, labels, live regions, contrast, and screen-reader names.
+- [x] Verify reduced motion and remove unbounded or decorative motion that obscures state.
+- [x] Remove dead controls, stale mock dates, duplicate components, accidental metadata exposure, and unreachable branches.
+- [x] Confirm route bundles exclude future-use components until imported.
+- [x] Audit production dependencies and resolve high-severity actionable findings.
+- [x] Run all frontend and changed-backend checks.
+- [x] Run the complete Playwright flow and visual matrix.
+- [x] Document environment variables, local integration, preview limitations, and backend replacement seams.
 
 Exit criteria:
 
@@ -203,9 +203,9 @@ Exit criteria:
 
 ## Roadmap Completion Checklist
 
-- [ ] All five phase plans have been executed and their checkboxes updated.
-- [ ] The route/capability map in the approved design matches the shipped UI.
-- [ ] Live features remain backend-backed and Preview features remain local-only.
-- [ ] Exact design tokens and representative layouts are regression-protected.
-- [ ] Frontend checks, type checks, tests, build, Playwright flows, and relevant backend checks pass.
-- [ ] Final verification evidence is recorded in the Phase 5 handoff.
+- [x] All five phase plans have been executed and their checkboxes updated.
+- [x] The route/capability map in the approved design matches the shipped UI.
+- [x] Live features remain backend-backed and Preview features remain local-only.
+- [x] Exact design tokens and representative layouts are regression-protected.
+- [x] Frontend checks, type checks, tests, build, Playwright flows, and relevant backend checks pass.
+- [x] Final verification evidence is recorded in the Phase 5 handoff.
