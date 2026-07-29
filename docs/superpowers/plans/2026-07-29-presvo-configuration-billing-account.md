@@ -299,7 +299,7 @@ git commit -m "test(web): lock Presvo configuration visuals"
 
 ## Task 8: Run the Phase 4 Production Gate
 
-- [ ] **Step 1: Scan production routes**
+- [x] **Step 1: Scan production routes**
 
 ```bash
 rg -n 'slate-|transition-all|TODO|FIXME|\\$[0-9]|America/Los_Angeles|San Francisco' \
@@ -311,7 +311,7 @@ rg -n 'slate-|transition-all|TODO|FIXME|\\$[0-9]|America/Los_Angeles|San Francis
   apps/web/src/components/account
 ```
 
-- [ ] **Step 2: Run full web verification**
+- [x] **Step 2: Run full web verification**
 
 ```bash
 cd apps/web
@@ -327,12 +327,12 @@ NEXT_PUBLIC_REALTIME_ENABLED=false \
   npm run build
 ```
 
-- [ ] **Step 3: Verify phase invariants**
+- [x] **Step 3: Verify phase invariants**
 
 Confirm real save baselines, lifecycle truth, hosted billing boundaries,
 explicit Preview labels, local reset behavior, and zero Preview mutation.
 
-- [ ] **Step 4: Complete and commit**
+- [x] **Step 4: Complete and commit**
 
 ```bash
 git commit -m "docs: complete Presvo configuration and account phase"
@@ -342,11 +342,11 @@ git commit -m "docs: complete Presvo configuration and account phase"
 
 ## Phase 4 Completion Checklist
 
-- [ ] Assistant live settings retain the exact backend payload and readiness rules.
-- [ ] Successful saves clear dirty state; failures remain retryable and dirty.
-- [ ] Advanced assistant and voice/test controls are explicit local-only Preview.
-- [ ] Billing presents only backend-authoritative plan, period, usage, and ledger data.
-- [ ] Unsupported plan comparison is non-purchasable Preview.
-- [ ] Account lifecycle actions preserve exact confirmation and backend truth.
-- [ ] Settings extensions are explicit local-only Preview.
-- [ ] Assistant, Billing, and Account pass visual, interaction, isolation, overflow, and production gates.
+- [x] Assistant live settings retain the exact backend payload and readiness rules.
+- [x] Successful saves clear dirty state; failures remain retryable and dirty.
+- [x] Advanced assistant and voice/test controls are explicit local-only Preview.
+- [x] Billing presents only backend-authoritative plan, period, usage, and ledger data.
+- [x] Unsupported plan comparison is non-purchasable Preview.
+- [x] Account lifecycle actions preserve exact confirmation and backend truth.
+- [x] Settings extensions are explicit local-only Preview.
+- [x] Assistant, Billing, and Account pass visual, interaction, isolation, overflow, and production gates.
