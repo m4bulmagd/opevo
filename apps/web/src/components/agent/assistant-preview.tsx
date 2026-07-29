@@ -109,6 +109,7 @@ export function AssistantPreview({ agentName }: { agentName: string }) {
               <NativeSelect
                 className="w-full [&_select]:min-h-11"
                 id="preview-response-style"
+                name="preview-response-style"
                 onChange={(event) => update({ responseStyle: event.target.value })}
                 value={settings.responseStyle}
               >
@@ -124,6 +125,7 @@ export function AssistantPreview({ agentName }: { agentName: string }) {
                 aria-label="Preview language"
                 className="w-full [&_select]:min-h-11"
                 id="preview-language"
+                name="preview-language"
                 onChange={(event) => update({ language: event.target.value })}
                 value={settings.language}
               >
@@ -138,6 +140,7 @@ export function AssistantPreview({ agentName }: { agentName: string }) {
               <NativeSelect
                 className="w-full [&_select]:min-h-11"
                 id="preview-provider"
+                name="preview-provider"
                 onChange={(event) => update({ provider: event.target.value })}
                 value={settings.provider}
               >
@@ -156,6 +159,7 @@ export function AssistantPreview({ agentName }: { agentName: string }) {
               id="preview-speed"
               max="1.4"
               min="0.8"
+              name="preview-speaking-speed"
               onChange={(event) => update({ speakingSpeed: Number(event.target.value) })}
               step="0.05"
               type="range"

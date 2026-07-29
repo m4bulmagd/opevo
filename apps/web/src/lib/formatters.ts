@@ -1,13 +1,17 @@
-import { format, formatDistanceToNowStrict } from "date-fns";
+const callTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Europe/Paris",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
 
 export function formatCallTime(value: string | null) {
   if (!value) return "No timestamp";
-  return format(new Date(value), "MMM d, HH:mm");
-}
-
-export function formatRelativeTime(value: string | null) {
-  if (!value) return "No recent activity";
-  return `${formatDistanceToNowStrict(new Date(value), { addSuffix: true })}`;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "No timestamp";
+  return callTimeFormatter.format(date);
 }
 
 export function formatDuration(seconds: number | null) {

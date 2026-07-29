@@ -28,6 +28,7 @@ export function ReceptionistFields({ form, constraints }: ReceptionistFieldsProp
         <Field data-invalid={Boolean(errors.receptionist_name)}>
           <FieldLabel htmlFor="receptionist-name">Receptionist name</FieldLabel>
           <Input
+            autoComplete="off"
             id="receptionist-name"
             maxLength={constraints.name_max_length}
             aria-invalid={Boolean(errors.receptionist_name)}
@@ -42,6 +43,7 @@ export function ReceptionistFields({ form, constraints }: ReceptionistFieldsProp
         <Field data-invalid={Boolean(errors.public_description)}>
           <FieldLabel htmlFor="public-description">Public description</FieldLabel>
           <Textarea
+            autoComplete="off"
             id="public-description"
             maxLength={constraints.public_description_max_length}
             rows={5}
@@ -73,6 +75,7 @@ export function ReceptionistFields({ form, constraints }: ReceptionistFieldsProp
               <Field data-invalid={Boolean(errors.faqs?.[index]?.question)}>
                 <FieldLabel htmlFor={`faq-${index}-question`}>FAQ question {index + 1}</FieldLabel>
                 <Input
+                  autoComplete="off"
                   id={`faq-${index}-question`}
                   maxLength={constraints.faq_question_max_length}
                   aria-invalid={Boolean(errors.faqs?.[index]?.question)}
@@ -86,6 +89,7 @@ export function ReceptionistFields({ form, constraints }: ReceptionistFieldsProp
               <Field data-invalid={Boolean(errors.faqs?.[index]?.answer)}>
                 <FieldLabel htmlFor={`faq-${index}-answer`}>FAQ answer {index + 1}</FieldLabel>
                 <Textarea
+                  autoComplete="off"
                   id={`faq-${index}-answer`}
                   maxLength={constraints.faq_answer_max_length}
                   aria-invalid={Boolean(errors.faqs?.[index]?.answer)}
@@ -106,6 +110,7 @@ export function ReceptionistFields({ form, constraints }: ReceptionistFieldsProp
         <Field data-invalid={Boolean(errors.special_instructions)}>
           <FieldLabel htmlFor="special-instructions">Special instructions</FieldLabel>
           <Textarea
+            autoComplete="off"
             id="special-instructions"
             maxLength={constraints.special_instructions_max_length}
             rows={4}
@@ -121,6 +126,7 @@ export function ReceptionistFields({ form, constraints }: ReceptionistFieldsProp
         <Field data-invalid={Boolean(errors.escalation_notes)}>
           <FieldLabel htmlFor="escalation-notes">Escalation notes</FieldLabel>
           <Textarea
+            autoComplete="off"
             id="escalation-notes"
             maxLength={constraints.escalation_notes_max_length}
             rows={4}

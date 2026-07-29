@@ -113,6 +113,7 @@ export function CarrierConfirmation({
         <FieldLabel htmlFor="existing-phone">Existing French number</FieldLabel>
         <Input
           id="existing-phone"
+          name="existing_phone_e164"
           ref={inputRef}
           type="tel"
           inputMode="tel"
@@ -176,6 +177,7 @@ export function CarrierConfirmation({
             <NativeSelect
               className="w-full"
               id="manual-carrier"
+              name="confirmed_carrier"
               value={confirmedCarrier ?? ""}
               onChange={(event) => {
                 const value = event.target.value as CarrierCode;

@@ -48,6 +48,8 @@ describe("live call preview", () => {
     expect(within(callerDetails).getByText("Camille")).toBeInTheDocument();
 
     const notes = screen.getByRole("textbox", { name: "Preview call notes" });
+    expect(notes).toHaveAttribute("name", "preview-call-notes");
+    expect(notes).toHaveAttribute("autocomplete", "off");
     const save = screen.getByRole("button", { name: "Save preview note" });
     expect(save).toBeDisabled();
     fireEvent.change(notes, { target: { value: "Confirm the Thursday afternoon appointment." } });

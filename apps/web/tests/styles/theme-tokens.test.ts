@@ -92,4 +92,13 @@ describe("Presvo Tailwind theme tokens", () => {
 
     expect(reducedMotionDurations).toEqual(["0s", "0s"]);
   });
+
+  it("publishes matching browser chrome colors for the approved light and dark themes", async () => {
+    const layoutPath = path.resolve(process.cwd(), "src/app/layout.tsx");
+    const layout = await readFile(layoutPath, "utf8");
+
+    expect(layout).toContain("export const viewport: Viewport");
+    expect(layout).toContain('media: "(prefers-color-scheme: light)", color: "#f8f9f6"');
+    expect(layout).toContain('media: "(prefers-color-scheme: dark)", color: "#101511"');
+  });
 });

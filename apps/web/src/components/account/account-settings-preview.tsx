@@ -122,6 +122,7 @@ export function AccountSettingsPreview() {
                     aria-label="Preview recording retention"
                     className="w-full [&_select]:min-h-11"
                     id="preview-retention"
+                    name="preview-retention"
                     onChange={(event) => updatePreference("retention", event.target.value)}
                     value={preferences.retention}
                   >

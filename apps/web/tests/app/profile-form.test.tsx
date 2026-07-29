@@ -164,6 +164,21 @@ describe("profile form", () => {
 
   afterEach(() => vi.useRealTimers());
 
+  it("gives activation fields explicit browser autofill behavior", () => {
+    const business = render(<ProfileForm milestone="business" snapshot={profileSnapshot()} />);
+
+    expect(screen.getByLabelText(/Owner name/i)).toHaveAttribute("autocomplete", "name");
+    expect(screen.getByLabelText(/Business name/i)).toHaveAttribute("autocomplete", "organization");
+    expect(screen.getByLabelText(/Business type/i)).toHaveAttribute("autocomplete", "off");
+    business.unmount();
+
+    render(<ProfileForm milestone="receptionist" snapshot={profileSnapshot()} />);
+    expect(screen.getByLabelText(/Receptionist name/i)).toHaveAttribute("autocomplete", "off");
+    expect(screen.getByLabelText(/Public description/i)).toHaveAttribute("autocomplete", "off");
+    expect(screen.getByLabelText(/Special instructions/i)).toHaveAttribute("autocomplete", "off");
+    expect(screen.getByLabelText(/Escalation notes/i)).toHaveAttribute("autocomplete", "off");
+  });
+
   it("shows saved only after the deterministic 700ms autosave succeeds", async () => {
     vi.useFakeTimers();
     render(<ProfileForm milestone="business" snapshot={profileSnapshot()} />);

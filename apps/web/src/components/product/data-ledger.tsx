@@ -69,7 +69,7 @@ function DataLedgerCell({ label, children, primary = false, hideAt, __mode = "li
       >
         {label}
       </span>
-      <span className="min-w-0">{children}</span>
+      <span className="min-w-0 break-words">{children}</span>
     </Component>
   );
 }

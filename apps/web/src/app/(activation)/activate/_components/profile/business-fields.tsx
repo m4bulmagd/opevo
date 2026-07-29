@@ -76,6 +76,7 @@ export function BusinessFields({
       <Field data-invalid={Boolean(errors.business_type)}>
         <FieldLabel htmlFor="business-type">Business type</FieldLabel>
         <Input
+          autoComplete="off"
           id="business-type"
           placeholder="For example, dental practice"
           maxLength={constraints.business_type_max_length}

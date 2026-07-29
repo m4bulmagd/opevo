@@ -320,11 +320,13 @@ describe("agent page", () => {
     expect(within(previewTab).getByText("Preview", { exact: true })).toBeVisible();
 
     expect(screen.getByLabelText("Agent name")).toMatchObject({ id: "agent_name", name: "agent_name" });
+    expect(screen.getByLabelText("Agent name")).toHaveAttribute("autocomplete", "off");
     expect(screen.getByRole("switch", { name: "Enable call routing" })).toHaveAttribute("id", "is_enabled");
     expect(screen.getByLabelText("Owner context")).toMatchObject({
       id: "owner_context",
       name: "owner_context",
     });
+    expect(screen.getByLabelText("Owner context")).toHaveAttribute("autocomplete", "off");
     expect(screen.queryByLabelText("System prompt")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Knowledge base")).not.toBeInTheDocument();
   });
@@ -333,12 +335,14 @@ describe("agent page", () => {
     const instructions = await renderAgentPage({ tab: "instructions" });
     expect(screen.getByRole("tab", { name: "Instructions" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByLabelText("System prompt")).toHaveValue("Be helpful.");
+    expect(screen.getByLabelText("System prompt")).toHaveAttribute("autocomplete", "off");
     expect(screen.queryByLabelText("Agent name")).not.toBeInTheDocument();
     instructions.unmount();
 
     await renderAgentPage({ tab: "knowledge" });
     expect(screen.getByRole("tab", { name: "Knowledge" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("textbox", { name: "Knowledge base" })).toHaveValue("Open weekdays");
+    expect(screen.getByRole("textbox", { name: "Knowledge base" })).toHaveAttribute("autocomplete", "off");
     expect(screen.queryByLabelText("System prompt")).not.toBeInTheDocument();
   });
 

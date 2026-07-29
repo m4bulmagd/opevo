@@ -45,7 +45,9 @@ export function TranscriptPanel({ transcript }: { transcript: CallTranscriptLine
         />
         <Input
           aria-label="Search transcript"
+          autoComplete="off"
           className="min-h-11 pl-9"
+          name="transcript-search"
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search transcript"
           type="search"
@@ -78,7 +80,7 @@ export function TranscriptPanel({ transcript }: { transcript: CallTranscriptLine
                   </p>
                   <p
                     className={cn(
-                      "inline-block rounded-xl px-3.5 py-2.5 text-sm leading-relaxed",
+                      "inline-block break-words rounded-xl px-3.5 py-2.5 text-sm leading-relaxed",
                       isAssistant
                         ? "rounded-tl-sm bg-primary-soft text-accent-foreground"
                         : "rounded-tr-sm bg-muted text-foreground",

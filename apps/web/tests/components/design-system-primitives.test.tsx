@@ -9,6 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
+
 describe("Presvo design-system primitives", () => {
   it("uses scoped feedback transitions instead of animating every property", () => {
     render(
@@ -25,6 +28,19 @@ describe("Presvo design-system primitives", () => {
     expect(button).not.toHaveClass("transition-all");
     expect(badge).toHaveClass("transition-[color,background-color,border-color,box-shadow]");
     expect(badge).not.toHaveClass("transition-all");
+  });
+
+  it("never animates every CSS property in the retained UI primitives", async () => {
+    const primitivesDirectory = path.resolve(process.cwd(), "src/components/ui");
+    const primitiveFiles = (await readdir(primitivesDirectory)).filter((file) => file.endsWith(".tsx"));
+    const sources = await Promise.all(
+      primitiveFiles.map(async (file) => ({
+        file,
+        source: await readFile(path.join(primitivesDirectory, file), "utf8"),
+      })),
+    );
+
+    expect(sources.filter(({ source }) => source.includes("transition-all")).map(({ file }) => file)).toEqual([]);
   });
 
   it("uses the approved compact control and card geometry", () => {
