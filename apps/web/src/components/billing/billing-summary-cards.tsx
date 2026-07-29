@@ -76,7 +76,13 @@ function SubscriptionStatus({ subscription }: { subscription: Subscription | nul
 function PeriodValue({ value }: { value: string | null }) {
   const formatted = formatUtcDate(value);
 
-  return formatted ? <time dateTime={value ?? undefined}>{formatted}</time> : "Not available";
+  return formatted ? (
+    <time data-visual-billing-date="true" dateTime={value ?? undefined}>
+      {formatted}
+    </time>
+  ) : (
+    "Not available"
+  );
 }
 
 export function BillingSummaryCards({

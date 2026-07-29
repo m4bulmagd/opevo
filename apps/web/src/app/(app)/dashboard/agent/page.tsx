@@ -57,8 +57,12 @@ export default async function AgentPage({ searchParams = Promise.resolve({}) }: 
         title="Assistant"
       />
       <AgentRuntimeCard account={account} agentName={agentName} isEnabled={agentConfig.is_enabled} />
-      <nav aria-label="Assistant sections" className="overflow-x-auto border-border border-b">
-        <div aria-label="Assistant configuration" className="flex min-w-max gap-1" role="tablist">
+      <nav aria-label="Assistant sections" className="border-border border-b sm:overflow-x-auto">
+        <div
+          aria-label="Assistant configuration"
+          className="grid grid-cols-2 gap-1 sm:flex sm:min-w-max"
+          role="tablist"
+        >
           {TABS.map((item) => {
             const active = item.value === activeTab;
             return (
@@ -67,7 +71,7 @@ export default async function AgentPage({ searchParams = Promise.resolve({}) }: 
                 aria-label={item.preview ? `${item.label} Preview` : undefined}
                 aria-selected={active}
                 className={cn(
-                  "relative inline-flex min-h-11 items-center px-3 font-medium text-sm transition-colors",
+                  "relative inline-flex min-h-11 items-center justify-center px-2 font-medium text-sm transition-colors sm:justify-start sm:px-3",
                   active ? "text-text-primary" : "text-text-secondary hover:text-text-primary",
                   active &&
                     "after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary",

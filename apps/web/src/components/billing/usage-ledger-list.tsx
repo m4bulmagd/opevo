@@ -31,7 +31,9 @@ export function UsageLedgerList({ entries }: { entries: UsageLedgerEntry[] }) {
               {toTitleCase(entry.event_type)}
             </DataLedger.Cell>
             <DataLedger.Cell label="Date">
-              <time dateTime={entry.created_at}>{formatCallTime(entry.created_at)}</time>
+              <time data-visual-billing-date="true" dateTime={entry.created_at}>
+                {formatCallTime(entry.created_at)}
+              </time>
             </DataLedger.Cell>
             <DataLedger.Cell label="Change">
               <Badge variant="outline">

@@ -239,7 +239,7 @@ test("reduced motion keeps workspace route changes static", async ({ page }) => 
     { heading: "Operations overview", link: "Overview" },
     { heading: "Live call", link: "Live call" },
     { heading: "Calls", link: "Calls" },
-    { heading: AGENT_NAME, link: AGENT_NAME },
+    { heading: "Assistant", link: AGENT_NAME },
   ] as const;
 
   for (const destination of destinations) {
