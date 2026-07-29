@@ -176,7 +176,7 @@ describe("app shell", () => {
 
     const markup = renderToString(
       <TooltipProvider>
-        <WorkspaceNavigation agentName="Ava" />
+        <WorkspaceNavigation />
       </TooltipProvider>,
     );
 
@@ -186,7 +186,7 @@ describe("app shell", () => {
     expect(markup).not.toContain("data-motion");
   });
 
-  it("uses the configured agent name in the complete desktop destination set", async () => {
+  it("uses the fixed Agent label in the complete desktop destination set", async () => {
     await renderDashboardLayout({ agentName: "Ava" });
 
     const navigation = desktopNavigation();
@@ -205,7 +205,7 @@ describe("app shell", () => {
       "Overview",
       "Live call",
       "Calls",
-      "Ava",
+      "Agent",
       "Usage & Billing",
       "Account",
     ]);
@@ -287,39 +287,21 @@ describe("app shell", () => {
     ).toBeInTheDocument();
   });
 
-  it("normalizes a blank configured agent name to Receptionist in desktop and mobile navigation", async () => {
+  it("keeps the fixed Agent destination separate from the normalized runtime name", async () => {
     await renderDashboardLayout({ agentName: " \n\t " });
 
-    expect(within(desktopNavigation()).getByRole("link", { name: "Receptionist" })).toHaveAttribute(
+    expect(within(desktopNavigation()).getByRole("link", { name: "Agent" })).toHaveAttribute(
       "href",
       "/dashboard/agent",
     );
-    const { dialog } = await openMobileNavigation();
-    expect(within(dialog).getByRole("link", { name: "Receptionist" })).toHaveAttribute("href", "/dashboard/agent");
-  });
-
-  it("truncates only the visible long agent label while preserving its accessible name and title", async () => {
-    const longAgentName = "Ava, North Clinic Evening Receptionist";
-    await renderDashboardLayout({ agentName: `  ${longAgentName}  ` });
-
-    const agentLink = within(desktopNavigation()).getByRole("link", { name: longAgentName });
-    const visibleLabel = within(agentLink).getByText(longAgentName);
-
-    expect(visibleLabel).toHaveClass("truncate");
-    expect(visibleLabel).toHaveAttribute("title", longAgentName);
-    expect(agentLink).toHaveAccessibleName(longAgentName);
-  });
-
-  it("preserves the complete long agent name in mobile navigation", async () => {
-    const longAgentName = "Ava, North Clinic Evening Receptionist";
-    await renderDashboardLayout({ agentName: longAgentName });
+    expect(
+      screen.getByRole("group", {
+        name: "Agent runtime: Receptionist, Enabled",
+      }),
+    ).toBeInTheDocument();
 
     const { dialog } = await openMobileNavigation();
-    const agentLink = within(dialog).getByRole("link", { name: longAgentName });
-
-    expect(agentLink).toHaveClass("min-h-11");
-    expect(agentLink).toHaveAccessibleName(longAgentName);
-    expect(within(agentLink).getByText(longAgentName)).toHaveAttribute("title", longAgentName);
+    expect(within(dialog).getByRole("link", { name: "Agent" })).toHaveAttribute("href", "/dashboard/agent");
   });
 
   it("exposes labelled desktop and mobile shell compositions", async () => {

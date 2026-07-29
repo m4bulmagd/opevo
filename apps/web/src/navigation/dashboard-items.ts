@@ -20,7 +20,7 @@ export function normalizeAgentName(agentName: string): string {
   return agentName.trim() || "Receptionist";
 }
 
-export function dashboardGroups(agentName: string): NavGroup[] {
+export function dashboardGroups(): NavGroup[] {
   return [
     {
       id: "main",
@@ -29,7 +29,7 @@ export function dashboardGroups(agentName: string): NavGroup[] {
         { title: "Overview", href: "/dashboard", icon: House, status: "live" },
         { title: "Live call", href: "/dashboard/live-call", icon: Radio, status: "preview" },
         { title: "Calls", href: "/dashboard/calls", icon: Phone, status: "live" },
-        { title: normalizeAgentName(agentName), href: "/dashboard/agent", icon: Bot, status: "live" },
+        { title: "Agent", href: "/dashboard/agent", icon: Bot, status: "live" },
       ],
     },
     {

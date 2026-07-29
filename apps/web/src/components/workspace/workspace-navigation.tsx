@@ -11,14 +11,12 @@ import { dashboardGroups, isDashboardItemActive } from "@/navigation/dashboard-i
 
 type WorkspaceNavigationProps = {
   ariaLabel?: string;
-  agentName: string;
   firstDestinationRef?: Ref<HTMLAnchorElement>;
   onNavigate?: () => void;
 };
 
 export function WorkspaceNavigation({
   ariaLabel = "Workspace navigation",
-  agentName,
   firstDestinationRef,
   onNavigate,
 }: WorkspaceNavigationProps) {
@@ -26,7 +24,7 @@ export function WorkspaceNavigation({
 
   return (
     <nav aria-label={ariaLabel} className="flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto">
-      {dashboardGroups(agentName).map((group, groupIndex) => (
+      {dashboardGroups().map((group, groupIndex) => (
         <div className="flex flex-col gap-1" key={group.id}>
           <p className="px-3 pb-1 text-label">{group.label}</p>
           {group.items.map((item, itemIndex) => {

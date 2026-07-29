@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { WorkspaceNavigation } from "@/components/workspace/workspace-navigation";
 
-export function MobileWorkspaceNavigation({ agentName }: { agentName: string }) {
+export function MobileWorkspaceNavigation() {
   const firstDestinationRef = useRef<HTMLAnchorElement>(null);
   const [open, setOpen] = useState(false);
 
@@ -56,7 +56,6 @@ export function MobileWorkspaceNavigation({ agentName }: { agentName: string }) 
             </SheetClose>
           </div>
           <WorkspaceNavigation
-            agentName={agentName}
             ariaLabel="Mobile workspace destinations"
             firstDestinationRef={firstDestinationRef}
             onNavigate={() => setOpen(false)}

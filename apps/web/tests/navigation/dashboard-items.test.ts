@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import * as dashboardNavigation from "@/navigation/dashboard-items";
 
-type DashboardGroupFactory = (agentName: string) => Array<{
+type DashboardGroupFactory = () => Array<{
   id: string;
   label: string;
   items: Array<{ href: string; status: string; title: string }>;
@@ -11,7 +11,7 @@ type DashboardGroupFactory = (agentName: string) => Array<{
 describe("dashboard navigation model", () => {
   it("groups the complete production route set with explicit capability status", () => {
     const dashboardGroups = Reflect.get(dashboardNavigation, "dashboardGroups") as DashboardGroupFactory | undefined;
-    const groups = dashboardGroups?.("Léa");
+    const groups = dashboardGroups?.();
 
     expect(groups?.map((group) => ({ id: group.id, label: group.label }))).toEqual([
       { id: "main", label: "Main" },
@@ -29,7 +29,7 @@ describe("dashboard navigation model", () => {
       { href: "/dashboard", status: "live", title: "Overview" },
       { href: "/dashboard/live-call", status: "preview", title: "Live call" },
       { href: "/dashboard/calls", status: "live", title: "Calls" },
-      { href: "/dashboard/agent", status: "live", title: "Léa" },
+      { href: "/dashboard/agent", status: "live", title: "Agent" },
       { href: "/dashboard/billing", status: "live", title: "Usage & Billing" },
       { href: "/dashboard/account", status: "live", title: "Account" },
     ]);
