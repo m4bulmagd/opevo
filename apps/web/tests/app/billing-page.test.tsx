@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BillingActionsCard } from "@/components/billing/billing-actions-card";
+import { PlanComparisonPreview } from "@/components/billing/plan-comparison-preview";
 import { BackendApiError } from "@/lib/api/backend-client";
 import type { Subscription, UsageLedgerEntry, UsageSnapshot } from "@/lib/types/billing";
 
@@ -114,16 +115,14 @@ describe("billing page", () => {
 
     const intro = container.querySelector('[data-slot="page-intro"]');
     const subscriptionStatus = screen.getByRole("region", { name: "Active" });
-    const metrics = screen.getByRole("region", { name: "Billing metrics" });
     const usage = screen.getByRole("region", { name: "Current period usage" });
-    const actions = screen.getByRole("region", { name: "Billing actions" });
+    const actions = screen.getByRole("region", { name: "Invoices and payment" });
     const history = screen.getByRole("region", { name: "Usage history" });
 
     expect(container.querySelectorAll("h1")).toHaveLength(1);
-    expect(screen.getByRole("heading", { level: 1, name: "Billing and usage" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Usage & billing" })).toBeInTheDocument();
     expect(intro).toBeInTheDocument();
     expectBefore(intro as Element, subscriptionStatus);
-    expectBefore(subscriptionStatus, metrics);
     expectBefore(subscriptionStatus, usage);
     expectBefore(subscriptionStatus, actions);
     expectBefore(subscriptionStatus, history);
@@ -149,21 +148,23 @@ describe("billing page", () => {
     expect(
       screen.getByText("Usage ledger events will appear here after the first plan or call event."),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/standard/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /start standard plan/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Plan comparison Preview" })).toHaveTextContent(
+      /Standard and Custom are not available for purchase/i,
+    );
   });
 
-  it("presents remaining, derived used minutes, and plan in one three-item metric band", async () => {
+  it("presents the backend-authoritative plan and minutes in a Presvo usage card", async () => {
     await renderBillingPage();
 
-    const metrics = screen.getByRole("region", { name: "Billing metrics" });
-    const metricItems = metrics.querySelectorAll('[data-slot="metric-item"]');
-
-    expect(metricItems).toHaveLength(3);
-    expect(within(metrics).getByText("Minutes remaining").closest('[data-slot="metric-item"]')).toHaveTextContent(
-      "183 min",
+    const usage = screen.getByRole("region", { name: "Current period usage" });
+    expect(within(usage).getByText("Starter")).toBeInTheDocument();
+    expect(within(usage).getByText("17 / 200 min")).toBeInTheDocument();
+    expect(within(usage).getByText("183 min remaining this period")).toBeInTheDocument();
+    expect(within(usage).getByRole("progressbar", { name: "17 of 200 minutes used" })).toHaveAttribute(
+      "aria-valuenow",
+      "9",
     );
-    expect(within(metrics).getByText("Minutes used").closest('[data-slot="metric-item"]')).toHaveTextContent("17 min");
-    expect(within(metrics).getByText("Plan").closest('[data-slot="metric-item"]')).toHaveTextContent("Starter");
   });
 
   it("clamps presentation-only used minutes at zero when remaining exceeds allocated", async () => {
@@ -175,8 +176,12 @@ describe("billing page", () => {
       },
     });
 
-    const metrics = screen.getByRole("region", { name: "Billing metrics" });
-    expect(within(metrics).getByText("Minutes used").closest('[data-slot="metric-item"]')).toHaveTextContent("0 min");
+    const usage = screen.getByRole("region", { name: "Current period usage" });
+    expect(within(usage).getByText("0 / 60 min")).toBeInTheDocument();
+    expect(within(usage).getByRole("progressbar", { name: "0 of 60 minutes used" })).toHaveAttribute(
+      "aria-valuenow",
+      "0",
+    );
   });
 
   it("keeps scheduled cancellation active through the paid-period end and renders its valid UTC date", async () => {
@@ -275,6 +280,47 @@ describe("billing page", () => {
     expect(screen.getByRole("button", { name: "Manage billing" })).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "Usage ledger" })).toBeInTheDocument();
     expect(screen.getByText("Call Charge")).toBeInTheDocument();
+  });
+
+  it("routes real invoices, receipts, and payment methods through the Stripe Portal boundary", async () => {
+    await renderBillingPage();
+
+    const actions = screen.getByRole("region", { name: "Invoices and payment" });
+    expect(actions).toHaveTextContent(/invoices, receipts, and payment methods/i);
+    expect(actions).toHaveTextContent(/secure Stripe Portal/i);
+    expect(within(actions).getByRole("button", { name: "Manage billing" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /download invoice/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps unsupported plan comparison visibly local-only and non-purchasable", () => {
+    render(<PlanComparisonPreview currentPlan="starter" />);
+
+    const preview = screen.getByRole("region", { name: "Plan comparison Preview" });
+    expect(
+      preview.querySelector('[data-slot="product-surface-action"] [data-capability-status="preview"]'),
+    ).toBeVisible();
+    expect(preview).toHaveTextContent(/not available for purchase/i);
+
+    const plans = within(preview).getByRole("radiogroup", { name: "Preview plan focus" });
+    expect(within(plans).getByRole("radio", { name: /Starter/i })).toBeChecked();
+    expect(within(plans).getByText("Live", { exact: true })).toBeVisible();
+    expect(within(plans).getAllByText("Preview", { exact: true })).toHaveLength(2);
+
+    fireEvent.click(within(plans).getByRole("radio", { name: /Standard/i }));
+    expect(within(preview).getByRole("status", { name: "Plan comparison status" })).toHaveTextContent(
+      "Standard selected for local comparison",
+    );
+    fireEvent.click(within(preview).getByRole("button", { name: "Compare capabilities" }));
+    expect(within(preview).getByRole("button", { name: "Compare capabilities" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    expect(within(preview).queryByRole("button", { name: /buy|purchase|switch|upgrade/i })).not.toBeInTheDocument();
+    fireEvent.click(within(preview).getByRole("button", { name: "Reset plan Preview" }));
+    expect(within(plans).getByRole("radio", { name: /Starter/i })).toBeChecked();
+    expect(createCheckoutSessionMock).not.toHaveBeenCalled();
+    expect(createPortalSessionMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -393,7 +439,7 @@ describe("billing page", () => {
     await renderBillingPage();
 
     const usage = screen.getByRole("region", { name: "Current period usage" });
-    const actions = screen.getByRole("region", { name: "Billing actions" });
+    const actions = screen.getByRole("region", { name: "Invoices and payment" });
     const history = screen.getByRole("region", { name: "Usage history" });
 
     expect(usage).toHaveAttribute("data-slot", "product-surface");

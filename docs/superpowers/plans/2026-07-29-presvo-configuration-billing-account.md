@@ -189,7 +189,7 @@ git commit -m "feat(web): add assistant configuration Preview"
 - Create: `apps/web/src/components/billing/plan-comparison-preview.tsx`
 - Modify: `apps/web/tests/app/billing-page.test.tsx`
 
-- [ ] **Step 1: Add failing hierarchy and Preview tests**
+- [x] **Step 1: Add failing hierarchy and Preview tests**
 
 Cover:
 
@@ -200,13 +200,13 @@ Cover:
 - extra plans are visibly Preview, non-purchasable, and local-only;
 - Preview comparison controls reset locally and make no billing request.
 
-- [ ] **Step 2: Implement the Presvo billing composition**
+- [x] **Step 2: Implement the Presvo billing composition**
 
 Use the template's current-plan card, usage progress, comparison-card rhythm,
 status treatment, and responsive ledger. Do not display invented prices,
 renewal claims, invoice rows, or downloadable files.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cd apps/web

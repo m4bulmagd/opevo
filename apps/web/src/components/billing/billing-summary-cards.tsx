@@ -1,4 +1,3 @@
-import { MetricBand, MetricItem } from "@/components/product/metric-band";
 import { ProductSurface } from "@/components/product/product-surface";
 import { StatusSurface, type StatusSurfaceTone } from "@/components/product/status-surface";
 import { formatMinutes, toTitleCase } from "@/lib/formatters";
@@ -89,63 +88,62 @@ export function BillingSummaryCards({
 }) {
   const minutesUsed = Math.max(usageSnapshot.allocated_minutes - usageSnapshot.minutes_remaining, 0);
   const planLabel = usageSnapshot.plan_tier ? toTitleCase(usageSnapshot.plan_tier) : "No active plan";
+  const usagePercent =
+    usageSnapshot.allocated_minutes > 0
+      ? Math.min(100, Math.round((minutesUsed / usageSnapshot.allocated_minutes) * 100))
+      : 0;
 
   return (
     <>
       <SubscriptionStatus subscription={subscription} />
 
-      <MetricBand label="Billing metrics">
-        <MetricItem
-          context="Available in the current billing period"
-          label="Minutes remaining"
-          value={formatMinutes(usageSnapshot.minutes_remaining)}
-        />
-        <MetricItem
-          context="Calculated from the current allocation"
-          label="Minutes used"
-          value={formatMinutes(minutesUsed)}
-        />
-        <MetricItem label="Plan" value={planLabel} />
-      </MetricBand>
-
       <ProductSurface
-        description="Stored allowance and dates for the current billing period."
+        description="Backend-authoritative allowance and dates for the current billing period."
         title="Current period usage"
       >
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-5 lg:grid-cols-4">
+        <div className="space-y-5">
           <div>
-            <dt className="text-text-tertiary text-xs">Allocated</dt>
-            <dd className="mt-1 font-medium text-sm text-text-primary">
-              {formatMinutes(usageSnapshot.allocated_minutes)}
-            </dd>
+            <p className="font-medium text-text-tertiary text-xs uppercase tracking-wide">Current plan</p>
+            <h3 className="mt-1 font-semibold text-xl tracking-tight">{planLabel}</h3>
           </div>
-          <div>
-            <dt className="text-text-tertiary text-xs">Remaining</dt>
-            <dd className="mt-1 font-medium text-sm text-text-primary">
-              {formatMinutes(usageSnapshot.minutes_remaining)}
-            </dd>
+
+          <div className="space-y-2">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="font-semibold text-2xl tracking-tight">
+                {minutesUsed} / {usageSnapshot.allocated_minutes} min
+              </p>
+              <span className="font-medium text-text-secondary text-xs">{usagePercent}% used</span>
+            </div>
+            <div
+              aria-label={`${minutesUsed} of ${usageSnapshot.allocated_minutes} minutes used`}
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={usagePercent}
+              className="h-2 overflow-hidden rounded-full bg-muted"
+              role="progressbar"
+            >
+              <div className="h-full rounded-full bg-primary" style={{ width: `${usagePercent}%` }} />
+            </div>
+            <p className="text-text-secondary text-xs">
+              {formatMinutes(usageSnapshot.minutes_remaining)} remaining this period
+            </p>
           </div>
-          <div>
-            <dt className="text-text-tertiary text-xs">Used</dt>
-            <dd className="mt-1 font-medium text-sm text-text-primary">{formatMinutes(minutesUsed)}</dd>
-          </div>
-          <div>
-            <dt className="text-text-tertiary text-xs">Plan</dt>
-            <dd className="mt-1 font-medium text-sm text-text-primary">{planLabel}</dd>
-          </div>
-          <div>
-            <dt className="text-text-tertiary text-xs">Period starts</dt>
-            <dd className="mt-1 font-medium text-sm text-text-primary">
-              <PeriodValue value={usageSnapshot.current_period_start} />
-            </dd>
-          </div>
-          <div>
-            <dt className="text-text-tertiary text-xs">Period ends</dt>
-            <dd className="mt-1 font-medium text-sm text-text-primary">
-              <PeriodValue value={usageSnapshot.current_period_end} />
-            </dd>
-          </div>
-        </dl>
+
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-5 border-border border-t pt-5">
+            <div>
+              <dt className="text-text-tertiary text-xs">Period starts</dt>
+              <dd className="mt-1 font-medium text-sm text-text-primary">
+                <PeriodValue value={usageSnapshot.current_period_start} />
+              </dd>
+            </div>
+            <div>
+              <dt className="text-text-tertiary text-xs">Period ends</dt>
+              <dd className="mt-1 font-medium text-sm text-text-primary">
+                <PeriodValue value={usageSnapshot.current_period_end} />
+              </dd>
+            </div>
+          </dl>
+        </div>
       </ProductSurface>
     </>
   );
