@@ -20,7 +20,9 @@ When the activation flow is enabled, assistant content remains profile-owned.
 context, system prompt, and knowledge-base edits are stored as profile
 overrides and projected to `agent_configs` in the same transaction. This keeps
 the profile content revision and runtime projection revision equal, including
-after later profile saves.
+after later profile saves. For an already-confirmed profile, the explicit save
+also advances its confirmed content revision so a later account reactivation
+does not treat the saved assistant edit as an unreviewed onboarding draft.
 
 ## Authentication
 
