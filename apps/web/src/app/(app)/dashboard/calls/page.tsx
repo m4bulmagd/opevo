@@ -57,6 +57,7 @@ export default async function CallsPage({ searchParams }: CallsPageProps) {
         title="Calls"
       />
       <CallHistorySearch
+        key={`${navigation.query}|${navigation.status}|${navigation.range}`}
         query={navigation.query}
         status={navigation.status}
         range={navigation.range}

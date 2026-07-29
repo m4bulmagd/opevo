@@ -7,6 +7,7 @@ const getAccountMock = vi.fn();
 const deleteCallMock = vi.fn();
 const revalidatePathMock = vi.fn();
 const notFoundMock = vi.fn();
+const routerPushMock = vi.fn();
 const redirectMock = vi.fn(() => {
   throw new Error("NEXT_REDIRECT");
 });
@@ -18,6 +19,7 @@ vi.mock("next/cache", () => ({
 vi.mock("next/navigation", () => ({
   notFound: notFoundMock,
   redirect: redirectMock,
+  useRouter: () => ({ push: routerPushMock }),
 }));
 
 vi.mock("@/lib/api/calls", () => ({
@@ -68,6 +70,7 @@ describe("calls pages", () => {
     revalidatePathMock.mockClear();
     notFoundMock.mockClear();
     redirectMock.mockClear();
+    routerPushMock.mockClear();
     getAccountMock.mockReset().mockResolvedValue({
       status: "active",
       serving: true,
@@ -153,6 +156,13 @@ describe("calls pages", () => {
     expect(firstRow.querySelector("a")).toHaveClass("min-h-11");
     expect(screen.queryByRole("button", { name: /tag|note|export|refresh/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /tag|note|export|refresh/i })).not.toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: "  new lead  " } });
+    fireEvent.change(within(search).getByRole("combobox", { name: "Filter by status" }), {
+      target: { value: "completed" },
+    });
+    fireEvent.submit(search);
+    expect(routerPushMock).toHaveBeenCalledWith("/dashboard/calls?q=new+lead&status=completed&range=7d");
   });
 
   it("distinguishes no history from no search matches", async () => {

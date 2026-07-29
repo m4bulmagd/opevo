@@ -75,7 +75,7 @@ export function CallMetadataCard({ call }: { call: CallDetail }) {
         </div>
         <div className="flex justify-between gap-3">
           <dt className="text-text-tertiary">Call ID</dt>
-          <dd className="break-all text-right font-mono text-xs">{call.id}</dd>
+          <dd className="whitespace-nowrap text-right font-mono text-[10px]">{call.id}</dd>
         </div>
         <div className="flex justify-between gap-3">
           <dt className="text-text-tertiary">Caller</dt>

@@ -350,7 +350,7 @@ git commit -m "feat(web): add live-call Preview"
 
 ## Task 7: Add Visual and Browser Regression Coverage
 
-- [ ] **Step 1: Add failing Playwright coverage**
+- [x] **Step 1: Add failing Playwright coverage**
 
 Cover:
 
@@ -364,23 +364,23 @@ Cover:
 - horizontal overflow at 390, 768, 1024, and 1440;
 - reduced-motion route transitions.
 
-- [ ] **Step 2: Run snapshots in update mode**
+- [x] **Step 2: Run snapshots in update mode**
 
 ```bash
 UPDATE_SNAPSHOTS=1 bash scripts/run-local-e2e.sh
 ```
 
-- [ ] **Step 3: Inspect every new screenshot**
+- [x] **Step 3: Inspect every new screenshot**
 
 Confirm exact tokens, typography, spacing, borders, shadows, hierarchy, table/card breakpoints, clipped text, chart legibility, Preview labelling, and dark-mode contrast.
 
-- [ ] **Step 4: Run the complete disposable browser lifecycle**
+- [x] **Step 4: Run the complete disposable browser lifecycle**
 
 ```bash
 bash scripts/run-local-e2e.sh
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "test(web): lock Presvo dashboard and calls visuals"

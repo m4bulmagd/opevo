@@ -141,7 +141,7 @@ export default async function DashboardPage() {
               </span>
             }
           >
-            <p className="truncate font-semibold text-xl tracking-tight">
+            <p className="truncate font-semibold text-xl tracking-tight" data-visual-phone-number="true">
               {formatPhoneNumber(onboardingStatus.phone_number)}
             </p>
           </ProductSurface>
