@@ -107,7 +107,7 @@ git commit -m "feat(web): add Presvo unsaved-change guard"
 - Modify: `apps/web/src/components/agent/agent-runtime-card.tsx`
 - Modify: `apps/web/tests/app/agent-page.test.tsx`
 
-- [ ] **Step 1: Add failing behavior and hierarchy tests**
+- [x] **Step 1: Add failing behavior and hierarchy tests**
 
 Require:
 
@@ -121,13 +121,13 @@ Require:
 - server errors remain visible and dirty for retry;
 - lifecycle read-only states disable live edits.
 
-- [ ] **Step 2: Recompose without changing the live payload**
+- [x] **Step 2: Recompose without changing the live payload**
 
 Preserve every existing backend field and action. Use the template card spacing,
 section labels, bordered selected state, compact control sizing, and responsive
 tab strip. Keep all live fields in the server-action path.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cd apps/web
