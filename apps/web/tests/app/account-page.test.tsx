@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AccountLifecycleBanner } from "@/components/account/account-lifecycle-banner";
 import { AccountSettingsPreview } from "@/components/account/account-settings-preview";
+import { CompactAccountStatusCard } from "@/components/account/account-status-card";
 import type { AccountStatus } from "@/lib/types/account";
 
 const { getAccountMock, deactivateAccountMock, reactivateAccountMock } = vi.hoisted(() => ({
@@ -134,6 +135,84 @@ describe("account page", () => {
       expect(within(status).getByRole("link", { name: "Review Overview" })).toHaveAttribute("href", "/dashboard");
     }
     expectNoInternalLifecycleDetails(container);
+  });
+
+  it.each([
+    {
+      account: activeAccount,
+      description: "Presvo can accept new calls.",
+      label: "Active",
+      progress: null,
+      title: "Presvo is active",
+    },
+    {
+      account: { ...activeAccount, serving: false, blocker: "customer_not_ready" } satisfies AccountStatus,
+      description: "Presvo is not accepting new calls yet.",
+      label: "Action needed",
+      progress: null,
+      title: "Presvo needs account attention",
+    },
+    ...(
+      [
+        ["requested", "Request accepted"],
+        ["disabling_routing", "Stopping new calls"],
+        ["canceling_subscription", "Canceling subscription"],
+        ["draining_call", "Waiting for an active call to finish"],
+        ["releasing_number", "Releasing your Presvo number"],
+        ["finalizing", "Finalizing your account"],
+      ] as const
+    ).map(([state, progress]) => ({
+      account: deactivatingAccount(state),
+      description: "Presvo is no longer accepting new calls",
+      label: "Deactivating",
+      progress,
+      title: "Finishing account deactivation",
+    })),
+    {
+      account: deactivatingAccount("attention_required"),
+      description: "Presvo is no longer accepting new calls",
+      label: "Attention required",
+      progress: "Cleanup needs additional time",
+      title: "Account cleanup needs attention",
+    },
+    {
+      account: inactiveAccount,
+      description:
+        "Your calls, recordings, billing history, and saved configuration remain available. Reactivation starts a new subscription and requires a newly provisioned number.",
+      label: "Inactive",
+      progress: null,
+      title: "Presvo is inactive",
+    },
+  ])("renders compact $label lifecycle context without internal details", ({
+    account,
+    description,
+    label,
+    progress,
+    title,
+  }) => {
+    const { container } = render(<CompactAccountStatusCard account={account} />);
+
+    const status = screen.getByRole("region", { name: "Account status" });
+    expect(within(status).getByRole("heading", { level: 2, name: "Account status" })).toBeInTheDocument();
+    expect(within(status).getByText(label)).toBeInTheDocument();
+    expect(within(status).getByText(title)).toBeInTheDocument();
+    expect(within(status).getByText(description)).toBeInTheDocument();
+    if (progress) {
+      expect(within(status).getByText(progress)).toBeInTheDocument();
+    }
+    expectNoInternalLifecycleDetails(container);
+  });
+
+  it("keeps the existing overview action in compact action-needed status", () => {
+    render(<CompactAccountStatusCard account={{ ...activeAccount, serving: false, blocker: "customer_not_ready" }} />);
+
+    expect(screen.getByRole("link", { name: "Review Overview" })).toHaveAttribute("href", "/dashboard");
+  });
+
+  it("keeps the existing reactivation action in compact inactive status", () => {
+    render(<CompactAccountStatusCard account={inactiveAccount} />);
+
+    expect(screen.getByRole("button", { name: "Reactivate Presvo" })).toBeEnabled();
   });
 
   it.each([
