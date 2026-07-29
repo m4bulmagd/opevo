@@ -37,11 +37,13 @@ export function CallOutcome({
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm text-text-secondary leading-relaxed">{summaryCopy(summary_status, summaryText)}</p>
+      <p className="break-words text-sm text-text-secondary leading-relaxed">
+        {summaryCopy(summary_status, summaryText)}
+      </p>
       {caller_intent ? (
         <div className="flex flex-col gap-1">
           <span className="font-medium text-text-tertiary text-xs">Intent</span>
-          <span className="font-medium text-sm text-text-primary">{caller_intent}</span>
+          <span className="break-words font-medium text-sm text-text-primary">{caller_intent}</span>
         </div>
       ) : null}
       {follow_up_required === null ? null : (
@@ -54,7 +56,9 @@ export function CallOutcome({
           <span className="font-medium text-text-tertiary text-xs">Next actions</span>
           <ul className="flex list-disc flex-col gap-1 pl-4 text-sm">
             {visibleActionEntries.map((action) => (
-              <li key={action.key}>{action.label}</li>
+              <li className="break-words" key={action.key}>
+                {action.label}
+              </li>
             ))}
           </ul>
           {remainingActions > 0 ? <span className="text-text-tertiary text-xs">+{remainingActions} more</span> : null}

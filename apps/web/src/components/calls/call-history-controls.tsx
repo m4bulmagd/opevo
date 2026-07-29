@@ -56,6 +56,7 @@ export function CallHistorySearch({
           Search calls
         </label>
         <Input
+          autoComplete="off"
           id="call-search"
           name="q"
           type="search"

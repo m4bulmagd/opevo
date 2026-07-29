@@ -20,6 +20,14 @@ function hoursWithOneMondayInterval(): BusinessHours {
 }
 
 describe("business hours editor", () => {
+  it("names its controls for predictable browser and assistive-technology behavior", () => {
+    render(<BusinessHoursEditor maxIntervalsPerDay={2} onChange={vi.fn()} value={hoursWithOneMondayInterval()} />);
+
+    expect(screen.getByRole("checkbox", { name: /Monday closed/i })).toHaveAttribute("name", "monday_closed");
+    expect(screen.getByLabelText(/Monday start 1/i)).toHaveAttribute("name", "monday_interval_0_start");
+    expect(screen.getByLabelText(/Monday end 1/i)).toHaveAttribute("name", "monday_interval_0_end");
+  });
+
   it("supports two non-overlapping intervals and no third interval", () => {
     render(<BusinessHoursEditor maxIntervalsPerDay={2} onChange={vi.fn()} value={hoursWithOneMondayInterval()} />);
 

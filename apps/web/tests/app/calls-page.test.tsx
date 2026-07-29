@@ -117,6 +117,7 @@ describe("calls pages", () => {
     expect(search).toHaveAttribute("action", "/dashboard/calls");
     const searchInput = within(search).getByRole("searchbox", { name: "Search calls" });
     expect(searchInput).toHaveAttribute("name", "q");
+    expect(searchInput).toHaveAttribute("autocomplete", "off");
     expect(searchInput).toHaveValue("opening");
     expect(within(search).getByRole("combobox", { name: "Filter by status" })).toHaveValue("in_progress");
     expect(within(search).getByRole("combobox", { name: "Filter by date" })).toHaveValue("7d");
@@ -362,6 +363,11 @@ describe("calls pages", () => {
     expect(transcriptLines[1]).toHaveTextContent("We are open on weekdays from nine.");
     const transcriptSearch = within(transcript).getByRole("searchbox", { name: "Search transcript" });
     expect(transcriptSearch).toHaveClass("min-h-11");
+    expect(transcriptSearch).toHaveAttribute("name", "transcript-search");
+    expect(transcriptSearch).toHaveAttribute("autocomplete", "off");
+    for (const content of within(transcript).getAllByRole("listitem")) {
+      expect(content.querySelector("p:last-child")).toHaveClass("break-words");
+    }
     fireEvent.change(transcriptSearch, { target: { value: "weekdays" } });
     expect(within(transcript).getAllByRole("listitem")).toHaveLength(1);
     expect(within(transcript).queryByText("What are your opening hours?")).not.toBeInTheDocument();

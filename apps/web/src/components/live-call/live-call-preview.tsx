@@ -302,7 +302,9 @@ export function LiveCallPreview() {
             </h2>
             <Textarea
               aria-label="Preview call notes"
+              autoComplete="off"
               className="mt-3 min-h-32 resize-none"
+              name="preview-call-notes"
               onChange={(event) => {
                 setNotes(event.target.value);
                 setNoteStatus("");

@@ -21,6 +21,14 @@ describe("assistant configuration Preview", () => {
     expect(within(preview).getByText("Preview", { exact: true })).toBeVisible();
     expect(preview).toHaveTextContent("reset on reload");
     expect(within(preview).getByRole("radio", { name: /Professional/i })).toBeChecked();
+    expect(within(preview).getByRole("combobox", { name: "Preview language" })).toHaveAttribute(
+      "name",
+      "preview-language",
+    );
+    expect(within(preview).getByRole("slider", { name: "Preview speaking speed" })).toHaveAttribute(
+      "name",
+      "preview-speaking-speed",
+    );
 
     fireEvent.click(within(preview).getByRole("radio", { name: /Warm/i }));
     fireEvent.change(within(preview).getByRole("combobox", { name: "Preview language" }), {

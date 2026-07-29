@@ -70,7 +70,7 @@ function CallHistoryCell({
       }`}
     >
       <span className="font-medium text-text-tertiary text-xs md:hidden">{label}</span>
-      <div className="min-w-0">{children}</div>
+      <div className="min-w-0 break-words">{children}</div>
     </td>
   );
 }
@@ -116,7 +116,7 @@ export function CallsTable({ calls, isFiltered = false }: { calls: CallHistoryLi
                         <ArrowRight aria-hidden className="ml-1.5 size-3.5 shrink-0" />
                       </Link>
                       {call.summary_text ? (
-                        <span className="line-clamp-2 max-w-md font-normal text-text-tertiary text-xs">
+                        <span className="line-clamp-2 max-w-md break-words font-normal text-text-tertiary text-xs">
                           {call.summary_text}
                         </span>
                       ) : null}

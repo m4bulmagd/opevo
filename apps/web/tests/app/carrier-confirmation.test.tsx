@@ -37,6 +37,7 @@ describe("carrier confirmation", () => {
         phoneNumber="06 12 34 56 78"
       />,
     );
+    expect(screen.getByLabelText(/Existing French number/i)).toHaveAttribute("name", "existing_phone_e164");
     fireEvent.blur(screen.getByLabelText(/Existing French number/i));
 
     await waitFor(() => expect(onSaveBeforeLookup).toHaveBeenCalledTimes(1));

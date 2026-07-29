@@ -59,6 +59,7 @@ export function WorkspaceHeader({ accountControl, agentName }: { accountControl:
         <InputGroup className="h-11 w-full max-w-sm bg-background">
           <InputGroupInput
             aria-label="Search calls"
+            autoComplete="off"
             name="q"
             placeholder="Search calls, callers or notes"
             type="search"

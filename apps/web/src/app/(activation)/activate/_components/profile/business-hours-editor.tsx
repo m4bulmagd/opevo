@@ -126,6 +126,7 @@ export function BusinessHoursEditor({ value, onChange, maxIntervalsPerDay, inval
                   <input
                     id={`${key}-closed`}
                     className="size-4 accent-primary"
+                    name={`${key}_closed`}
                     type="checkbox"
                     aria-label={`${label} closed`}
                     checked={day.closed}
@@ -155,6 +156,7 @@ export function BusinessHoursEditor({ value, onChange, maxIntervalsPerDay, inval
                         <Input
                           id={`${key}-${intervalIndex}-start`}
                           aria-invalid={error?.day === key && error.index === intervalIndex}
+                          name={`${key}_interval_${intervalIndex}_start`}
                           ref={(node) => {
                             if (node) inputRefs.current.set(`${key}-${intervalIndex}-start`, node);
                           }}
@@ -176,6 +178,7 @@ export function BusinessHoursEditor({ value, onChange, maxIntervalsPerDay, inval
                         <Input
                           id={`${key}-${intervalIndex}-end`}
                           aria-invalid={error?.day === key && error.index === intervalIndex}
+                          name={`${key}_interval_${intervalIndex}_end`}
                           type="time"
                           value={interval.end}
                           onBlur={validateAndFocus}

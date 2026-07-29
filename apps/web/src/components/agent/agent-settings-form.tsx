@@ -93,6 +93,7 @@ export function AgentSettingsForm({
                     <FieldLabel htmlFor="agent_name">Agent name</FieldLabel>
                     <FieldContent>
                       <Input
+                        autoComplete="off"
                         className="min-h-11"
                         disabled={readOnly}
                         id="agent_name"
@@ -139,6 +140,7 @@ export function AgentSettingsForm({
                     <FieldLabel htmlFor="owner_context">Owner context</FieldLabel>
                     <FieldContent>
                       <Textarea
+                        autoComplete="off"
                         className="min-h-28"
                         disabled={readOnly}
                         id="owner_context"
@@ -166,6 +168,7 @@ export function AgentSettingsForm({
                   <FieldLabel htmlFor="system_prompt">System prompt</FieldLabel>
                   <FieldContent>
                     <Textarea
+                      autoComplete="off"
                       className="min-h-64 font-mono text-xs leading-relaxed"
                       disabled={readOnly}
                       id="system_prompt"
@@ -192,6 +195,7 @@ export function AgentSettingsForm({
                   <FieldLabel htmlFor="knowledge_base">Knowledge base</FieldLabel>
                   <FieldContent>
                     <Textarea
+                      autoComplete="off"
                       className="min-h-72 text-sm leading-relaxed"
                       disabled={readOnly}
                       id="knowledge_base"
