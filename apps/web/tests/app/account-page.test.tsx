@@ -127,6 +127,30 @@ describe("account page", () => {
     expect(screen.getByRole("region", { name: "Danger zone" })).toBeVisible();
   });
 
+  it.each([
+    {
+      securityMode: "unavailable" as const,
+      expected: "Email unavailable in local development",
+      unexpected: "Email is temporarily unavailable.",
+    },
+    {
+      securityMode: "clerk" as const,
+      expected: "Email is temporarily unavailable.",
+      unexpected: "Email unavailable in local development",
+    },
+  ])("renders truthful missing-email copy for $securityMode identity mode", async ({
+    securityMode,
+    expected,
+    unexpected,
+  }) => {
+    resolveAccountIdentityMock.mockResolvedValueOnce({ email: null, securityMode });
+
+    await renderAccountPage();
+
+    expect(screen.getByText(expected)).toBeVisible();
+    expect(screen.queryByText(unexpected)).not.toBeInTheDocument();
+  });
+
   it("keeps unsupported notification, privacy, and MFA preferences visibly local-only and resets without fetching", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     render(<AccountSettingsPreview securityMode="unavailable" />);
@@ -174,12 +198,116 @@ describe("account page", () => {
     expect(mfaRow).toHaveTextContent("Preview only. This preference stays local and resets on reload.");
   });
 
-  it("renders compact lifecycle context in the service column", () => {
-    render(<CompactAccountStatusCard account={activeAccount} />);
+  it.each([
+    {
+      caseName: "serving active account",
+      account: activeAccount,
+      label: "Active",
+      title: "Presvo is active",
+      action: null,
+    },
+    {
+      caseName: "non-serving active account",
+      account: { ...activeAccount, serving: false, blocker: "customer_not_ready" as const },
+      label: "Action needed",
+      title: "Presvo needs account attention",
+      action: "Review Overview",
+    },
+  ])("renders the compact lifecycle summary for a $caseName", ({ account, label, title, action }) => {
+    render(<CompactAccountStatusCard account={account} />);
 
     const status = screen.getByRole("region", { name: "Account status" });
     expect(within(status).getByRole("heading", { level: 2, name: "Account status" })).toBeVisible();
-    expect(within(status).getByText("Active")).toBeVisible();
+    expect(within(status).getByText(label)).toBeVisible();
+    expect(within(status).getByText(title)).toBeVisible();
+    if (action) {
+      expect(within(status).getByRole("link", { name: action })).toHaveAttribute("href", "/dashboard");
+    } else {
+      expect(within(status).queryByRole("link")).not.toBeInTheDocument();
+      expect(within(status).queryByRole("button")).not.toBeInTheDocument();
+    }
+    expect(status).not.toHaveTextContent("customer_not_ready");
+  });
+
+  it.each([
+    ["requested", "Request accepted"],
+    ["disabling_routing", "Stopping new calls"],
+    ["canceling_subscription", "Canceling subscription"],
+    ["draining_call", "Waiting for an active call to finish"],
+    ["releasing_number", "Releasing your Presvo number"],
+    ["finalizing", "Finalizing your account"],
+  ] as const)("maps compact %s deactivation progress without exposing internal state", (state, progressCopy) => {
+    render(
+      <CompactAccountStatusCard
+        account={{
+          status: "deactivating",
+          serving: false,
+          deactivation: { state, requested_at: "2026-07-24T10:00:00Z" },
+          reactivation_allowed: false,
+          blocker: "account_deactivating",
+        }}
+      />,
+    );
+
+    const status = screen.getByRole("region", { name: "Account status" });
+    expect(within(status).getByText("Deactivating")).toBeVisible();
+    expect(within(status).getByText("Finishing account deactivation")).toBeVisible();
+    expect(within(status).getByText(progressCopy)).toBeVisible();
+    expect(status).not.toHaveTextContent(state);
+    expect(status).not.toHaveTextContent("account_deactivating");
+    expect(within(status).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(status).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["attention_required", "account_deactivating"],
+    ["draining_call", "deactivation_attention_required"],
+  ] as const)("maps compact %s / %s cleanup to customer-safe attention copy", (state, blocker) => {
+    render(
+      <CompactAccountStatusCard
+        account={{
+          status: "deactivating",
+          serving: false,
+          deactivation: { state, requested_at: "2026-07-24T10:00:00Z" },
+          reactivation_allowed: false,
+          blocker,
+        }}
+      />,
+    );
+
+    const status = screen.getByRole("region", { name: "Account status" });
+    expect(within(status).getByText("Attention required")).toBeVisible();
+    expect(within(status).getByText("Account cleanup needs attention")).toBeVisible();
+    expect(status).toHaveTextContent("contact Presvo support");
+    expect(status).not.toHaveTextContent(/attention_required|deactivation_attention_required|account_deactivating/);
+  });
+
+  it.each([
+    ["account_inactive", true],
+    ["reactivation_not_ready", false],
+  ] as const)("keeps compact inactive reactivation truthful for %s", (blocker, reactivationAllowed) => {
+    render(
+      <CompactAccountStatusCard
+        account={{
+          ...inactiveAccount,
+          blocker,
+          reactivation_allowed: reactivationAllowed,
+        }}
+      />,
+    );
+
+    const status = screen.getByRole("region", { name: "Account status" });
+    expect(within(status).getByText("Inactive")).toBeVisible();
+    expect(within(status).getByText("Presvo is inactive")).toBeVisible();
+    const reactivate = within(status).getByRole("button", { name: "Reactivate Presvo" });
+    expect(reactivate).toHaveClass("min-h-11");
+    if (reactivationAllowed) {
+      expect(reactivate).toBeEnabled();
+    } else {
+      expect(reactivate).toBeDisabled();
+      expect(status).toHaveTextContent("Reactivation will become available after cleanup finishes.");
+    }
+    expect(status).not.toHaveTextContent(blocker);
   });
 
   it("keeps the danger zone separate, destructive, and limited to active accounts", async () => {
