@@ -127,17 +127,18 @@ describe("account page", () => {
     expect(screen.getByRole("region", { name: "Danger zone" })).toBeVisible();
   });
 
-  it("keeps each unsupported preference surface visibly local-only and resets without fetching", () => {
+  it("keeps unsupported notification, privacy, and MFA preferences visibly local-only and resets without fetching", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     render(<AccountSettingsPreview securityMode="unavailable" />);
 
     const notifications = screen.getByRole("region", { name: "Notifications Preview" });
     const privacy = screen.getByRole("region", { name: "Privacy & recordings Preview" });
     const security = screen.getByRole("region", { name: "Security" });
-    for (const region of [notifications, privacy, security]) {
+    for (const region of [notifications, privacy]) {
       expect(region.querySelector('[data-capability-status="preview"]')).toBeVisible();
       expect(region).toHaveTextContent(/reset on reload/i);
     }
+    expect(security.querySelector('[data-capability-status="preview"]')).toBeVisible();
     expect(
       within(security).getByText("Password and sign-in methods are managed through Clerk in hosted accounts."),
     ).toBeVisible();
@@ -159,6 +160,18 @@ describe("account page", () => {
     expect(mfa).not.toBeChecked();
     expect(within(privacy).getByRole("combobox", { name: "Preview recording retention" })).toHaveValue("30");
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("limits Preview copy to MFA while Clerk password management remains live", () => {
+    render(<AccountSettingsPreview securityMode="clerk" />);
+
+    const security = screen.getByRole("region", { name: "Security" });
+    expect(security).toHaveAccessibleDescription("Manage password and sign-in through Clerk.");
+    expect(within(security).getByRole("button", { name: "Manage password and sign-in" })).toBeVisible();
+
+    const mfaRow = within(security).getByText("Two-factor authentication").closest(".grid");
+    expect(mfaRow).toHaveTextContent("Preview");
+    expect(mfaRow).toHaveTextContent("Preview only. This preference stays local and resets on reload.");
   });
 
   it("renders compact lifecycle context in the service column", () => {

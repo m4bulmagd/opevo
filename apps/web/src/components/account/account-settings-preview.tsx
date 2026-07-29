@@ -156,7 +156,7 @@ export function AccountSettingsPreview({ securityMode }: AccountSettingsPreviewP
         </label>
       </ProductSurface>
 
-      <ProductSurface description={PREVIEW_DESCRIPTION} title="Security">
+      <ProductSurface description="Manage password and sign-in through Clerk." title="Security">
         <div className="divide-y divide-border">
           <div className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -172,7 +172,7 @@ export function AccountSettingsPreview({ securityMode }: AccountSettingsPreviewP
           <PreferenceRow
             badge={<CapabilityBadge status="preview" />}
             checked={preferences.twoFactor}
-            hint="Preview an extra verification step during sign-in."
+            hint="Preview only. This preference stays local and resets on reload."
             label="Two-factor authentication"
             onCheckedChange={(checked) => updatePreference("twoFactor", checked)}
           />
