@@ -315,6 +315,9 @@ describe("agent page", () => {
       "href",
       "/dashboard/agent?tab=knowledge",
     );
+    const previewTab = within(tabs).getByRole("tab", { name: "Advanced Preview" });
+    expect(previewTab).toHaveAttribute("href", "/dashboard/agent?tab=preview");
+    expect(within(previewTab).getByText("Preview", { exact: true })).toBeVisible();
 
     expect(screen.getByLabelText("Agent name")).toMatchObject({ id: "agent_name", name: "agent_name" });
     expect(screen.getByRole("switch", { name: "Enable call routing" })).toHaveAttribute("id", "is_enabled");
@@ -337,6 +340,17 @@ describe("agent page", () => {
     expect(screen.getByRole("tab", { name: "Knowledge" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("textbox", { name: "Knowledge base" })).toHaveValue("Open weekdays");
     expect(screen.queryByLabelText("System prompt")).not.toBeInTheDocument();
+  });
+
+  it("renders the advanced controls as an explicit local-only Preview tab", async () => {
+    await renderAgentPage({ tab: "preview" });
+
+    expect(screen.getByRole("tab", { name: "Advanced Preview" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "Advanced Preview" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Advanced assistant Preview" })).toHaveTextContent(
+      "Changes remain in this browser tab and reset on reload.",
+    );
+    expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
   });
 
   it("shows the dirty bar, discards to baseline, and saves a complete fixed-pipeline payload", async () => {
