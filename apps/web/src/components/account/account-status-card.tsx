@@ -1,8 +1,12 @@
+import type { ReactNode } from "react";
+
 import Link from "next/link";
 
 import { ReactivateAccountButton } from "@/components/account/reactivate-account-button";
+import { AnimatedStatusBadge } from "@/components/motion/animated-status-badge";
 import { StatusSurface, type StatusSurfaceTone } from "@/components/product/status-surface";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import type { AccountStatus } from "@/lib/types/account";
 
 const DEACTIVATION_PROGRESS_COPY: Record<NonNullable<AccountStatus["deactivation"]>["state"], string> = {
@@ -82,27 +86,32 @@ export function getAccountLifecyclePresentation(account: AccountStatus): Account
   };
 }
 
-export function AccountStatusCard({ account }: { account: AccountStatus }) {
-  const lifecycle = getAccountLifecyclePresentation(account);
-  const action =
-    account.status === "inactive" ? (
+function getAccountLifecycleAction(account: AccountStatus): ReactNode {
+  if (account.status === "inactive") {
+    return (
       <div className="flex max-w-sm flex-col items-start gap-2" data-slot="reactivation-action">
         <ReactivateAccountButton reactivationAllowed={account.reactivation_allowed} />
       </div>
-    ) : account.status === "active" && !account.serving ? (
+    );
+  }
+
+  if (account.status === "active" && !account.serving) {
+    return (
       <Button asChild className="min-h-11" variant="outline">
         <Link href="/dashboard">Review Overview</Link>
       </Button>
-    ) : undefined;
+    );
+  }
 
+  return undefined;
+}
+
+function AccountLifecycleDetail({
+  account,
+  lifecycle,
+}: Readonly<{ account: AccountStatus; lifecycle: AccountLifecyclePresentation }>) {
   return (
-    <StatusSurface
-      action={action}
-      description={lifecycle.description}
-      label={lifecycle.label}
-      title={lifecycle.title}
-      tone={lifecycle.tone}
-    >
+    <>
       {lifecycle.label === "Attention required" ? (
         <div className="flex flex-col gap-3">
           <p>
@@ -126,6 +135,49 @@ export function AccountStatusCard({ account }: { account: AccountStatus }) {
           <span className="font-medium text-text-primary">{lifecycle.progress}</span>
         </div>
       ) : null}
+    </>
+  );
+}
+
+export function AccountStatusCard({ account }: Readonly<{ account: AccountStatus }>) {
+  const lifecycle = getAccountLifecyclePresentation(account);
+  const action = getAccountLifecycleAction(account);
+
+  return (
+    <StatusSurface
+      action={action}
+      description={lifecycle.description}
+      label={lifecycle.label}
+      title={lifecycle.title}
+      tone={lifecycle.tone}
+    >
+      <AccountLifecycleDetail account={account} lifecycle={lifecycle} />
     </StatusSurface>
+  );
+}
+
+export function CompactAccountStatusCard({ account }: Readonly<{ account: AccountStatus }>): ReactNode {
+  const lifecycle = getAccountLifecyclePresentation(account);
+  const action = getAccountLifecycleAction(account);
+
+  return (
+    <Card aria-label="Account status" role="region" size="sm">
+      <CardHeader>
+        <h2 className="font-medium text-base text-text-primary leading-normal">Account status</h2>
+      </CardHeader>
+
+      <CardContent className="flex flex-col gap-3">
+        <AnimatedStatusBadge label={lifecycle.label} tone={lifecycle.tone} />
+        <div className="flex flex-col gap-1.5">
+          <p className="font-medium text-text-primary">{lifecycle.title}</p>
+          <p className="text-sm text-text-secondary leading-relaxed">{lifecycle.description}</p>
+        </div>
+        <div className="text-sm text-text-secondary leading-relaxed">
+          <AccountLifecycleDetail account={account} lifecycle={lifecycle} />
+        </div>
+      </CardContent>
+
+      {action ? <CardFooter className="border-border/70 border-t pt-4">{action}</CardFooter> : null}
+    </Card>
   );
 }
