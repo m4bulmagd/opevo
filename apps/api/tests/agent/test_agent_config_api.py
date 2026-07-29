@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import Settings, get_settings
 from app.models.agent_config import AgentConfig
+from app.models.business_profile import BusinessProfile
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
@@ -211,6 +212,22 @@ async def fetch_agent_config(database_url: str, *, clerk_user_id: str) -> AgentC
     return config
 
 
+async def fetch_business_profile(
+    database_url: str, *, clerk_user_id: str
+) -> BusinessProfile:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        result = await session.execute(
+            select(BusinessProfile)
+            .join(User, BusinessProfile.user_id == User.id)
+            .where(User.clerk_user_id == clerk_user_id)
+        )
+        profile = result.scalar_one()
+    await engine.dispose()
+    return profile
+
+
 async def fetch_phone_number(database_url: str, *, clerk_user_id: str) -> PhoneNumber:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -335,7 +352,7 @@ async def test_patch_agent_config_updates_prompt_fields_without_toggle(
         ("knowledge_base", "Customer knowledge"),
     ],
 )
-async def test_activation_flow_rejects_profile_managed_content_patch(
+async def test_activation_flow_persists_profile_owned_assistant_content_patch(
     async_client,
     client_database_url,
     rs256_clerk_token_for,
@@ -365,8 +382,64 @@ async def test_activation_flow_rejects_profile_managed_content_patch(
     finally:
         get_settings.cache_clear()
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == {"code": "agent_content_managed_by_profile"}
+    config = await fetch_agent_config(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+    )
+    profile = await fetch_business_profile(
+        client_database_url,
+        clerk_user_id=clerk_user_id,
+    )
+
+    assert response.status_code == 200
+    assert getattr(config, field_name) == value
+    if field_name == "agent_name":
+        assert profile.receptionist_name == value
+    else:
+        assert getattr(profile, f"{field_name}_override") == value
+    assert config.profile_projection_revision == profile.content_revision
+
+
+@pytest.mark.anyio
+async def test_activation_flow_accepts_idempotent_enabled_value_with_content_patch(
+    async_client,
+    client_database_url,
+    rs256_clerk_token_for,
+    monkeypatch,
+) -> None:
+    await seed_agent_config(
+        client_database_url,
+        clerk_user_id="user_active_content",
+        email="active-content@example.com",
+        agent_name="Léa",
+        is_enabled=True,
+    )
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        response = await async_client.patch(
+            "/api/agent/config",
+            headers={
+                "authorization": (
+                    f"Bearer {rs256_clerk_token_for('user_active_content')}"
+                )
+            },
+            json={
+                "agent_name": "Léa Verified",
+                "owner_context": "Atelier Martin reception",
+                "system_prompt": "Handle calls professionally.",
+                "knowledge_base": "Open weekdays.",
+                "pipeline_mode": "stt_llm_tts",
+                "is_enabled": True,
+            },
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 200
+    assert response.json()["agent_name"] == "Léa Verified"
+    assert response.json()["is_enabled"] is True
+    assert await fetch_outbox_event_count(client_database_url) == 0
 
 
 @pytest.mark.anyio
@@ -423,9 +496,7 @@ async def test_activation_flow_rejects_direct_enable_without_mutation_or_outbox(
     try:
         response = await async_client.patch(
             "/api/agent/config",
-            headers={
-                "authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
-            },
+            headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
             json={"is_enabled": True},
         )
     finally:
@@ -436,9 +507,7 @@ async def test_activation_flow_rejects_direct_enable_without_mutation_or_outbox(
         clerk_user_id=clerk_user_id,
     )
     assert response.status_code == 409
-    assert response.json() == {
-        "detail": {"code": "agent_enable_managed_by_go_live"}
-    }
+    assert response.json() == {"detail": {"code": "agent_enable_managed_by_go_live"}}
     assert stored.is_enabled is False
     assert await fetch_outbox_event_count(client_database_url) == 0
 
@@ -466,9 +535,7 @@ async def test_activation_flow_still_allows_customer_to_disable_routing(
     try:
         response = await async_client.patch(
             "/api/agent/config",
-            headers={
-                "authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
-            },
+            headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
             json={"is_enabled": False},
         )
     finally:

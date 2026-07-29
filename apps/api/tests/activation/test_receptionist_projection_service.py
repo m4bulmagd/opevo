@@ -93,6 +93,28 @@ def test_projection_preserves_customer_text_as_labeled_data() -> None:
     assert projection.system_prompt == ""
 
 
+def test_projection_prefers_profile_owned_assistant_overrides() -> None:
+    profile = complete_profile(
+        owner_context_override="Custom owner context",
+        system_prompt_override="Custom operating instructions",
+        knowledge_base_override="Custom knowledge",
+    )
+
+    projection = build_receptionist_projection(profile, agent_config(profile))
+
+    assert projection.owner_context == "Custom owner context"
+    assert projection.system_prompt == "Custom operating instructions"
+    assert projection.knowledge_base == "Custom knowledge"
+
+
+def test_projection_treats_empty_owner_context_override_as_cleared() -> None:
+    profile = complete_profile(owner_context_override="")
+
+    projection = build_receptionist_projection(profile, agent_config(profile))
+
+    assert projection.owner_context is None
+
+
 def test_projection_of_valid_maximum_profile_stays_within_runtime_limits() -> None:
     profile = complete_profile(
         public_description="p" * 1_000,
