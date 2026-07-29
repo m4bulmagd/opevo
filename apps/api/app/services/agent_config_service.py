@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models.agent_config import AgentConfig
 from app.repositories.agent_config_repository import AgentConfigRepository
+from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_access_policy import (
     AccountStateBlockedError,
@@ -15,6 +16,7 @@ from app.services.account_access_policy import (
 from app.services.customer_readiness_policy import ReadinessBlocker
 from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.outbox_service import OutboxService
+from app.services.receptionist_projection_service import ReceptionistProjectionService
 
 
 class AgentConfigNotFoundError(Exception):
@@ -26,10 +28,6 @@ class AgentConfigPhoneNumberNotFoundError(Exception):
 
 
 class AgentConfigTelephonySyncError(Exception):
-    pass
-
-
-class AgentConfigContentManagedError(Exception):
     pass
 
 
@@ -47,6 +45,11 @@ logger = logging.getLogger(__name__)
 PROFILE_MANAGED_CONTENT_FIELDS = frozenset(
     {"agent_name", "owner_context", "system_prompt", "knowledge_base"}
 )
+PROFILE_OVERRIDE_FIELDS = {
+    "owner_context": "owner_context_override",
+    "system_prompt": "system_prompt_override",
+    "knowledge_base": "knowledge_base_override",
+}
 
 
 class AgentConfigService:
@@ -59,9 +62,11 @@ class AgentConfigService:
     ) -> None:
         self.session = session
         self.agent_config_repository = agent_config_repository
+        self.business_profile_repository = BusinessProfileRepository(session)
         self.user_repository = UserRepository(session)
         self.readiness_service = readiness_service
         self.outbox_service = OutboxService(session)
+        self.projection_service = ReceptionistProjectionService()
         self.arq_pool = arq_pool
 
     async def get_by_user_id(self, user_id: UUID) -> AgentConfig:
@@ -83,29 +88,63 @@ class AgentConfigService:
         except AccountStateBlockedError:
             await self.session.rollback()
             raise
+        requested = (
+            requested_fields if requested_fields is not None else set(updates.keys())
+        )
+        activation_flow_enabled = get_settings().activation_flow_enabled
+        profile = (
+            await self.business_profile_repository.get_or_create_for_update(user_id)
+            if activation_flow_enabled and PROFILE_MANAGED_CONTENT_FIELDS & requested
+            else None
+        )
+        config = await self.agent_config_repository.get_or_create_default_for_update(
+            user_id
+        )
         if (
-            get_settings().activation_flow_enabled
-            and "is_enabled"
-            in (requested_fields if requested_fields is not None else updates.keys())
+            activation_flow_enabled
+            and "is_enabled" in requested
             and updates.get("is_enabled") is True
+            and not config.is_enabled
         ):
             raise AgentConfigEnableManagedByActivationError
-        if get_settings().activation_flow_enabled and PROFILE_MANAGED_CONTENT_FIELDS & (
-            requested_fields if requested_fields is not None else updates.keys()
-        ):
-            raise AgentConfigContentManagedError
-        config = await self.get_by_user_id(user_id)
         if not updates:
             return config
 
-        requested_enabled = updates.get("is_enabled")
+        config_updates = dict(updates)
+        if profile is not None:
+            managed_updates = {
+                field: config_updates.pop(field)
+                for field in PROFILE_MANAGED_CONTENT_FIELDS & requested
+                if field in config_updates
+            }
+            changed = False
+            for field, value in managed_updates.items():
+                profile_field = (
+                    "receptionist_name"
+                    if field == "agent_name"
+                    else PROFILE_OVERRIDE_FIELDS[field]
+                )
+                profile_value = (
+                    "" if field == "owner_context" and value is None else value
+                )
+                if getattr(profile, profile_field) != profile_value:
+                    setattr(profile, profile_field, profile_value)
+                    changed = True
+            if changed:
+                profile.content_revision += 1
+            self.projection_service.project(profile, config)
+
+        requested_enabled = config_updates.get("is_enabled")
         should_toggle = (
             requested_enabled is not None
             and bool(requested_enabled) != config.is_enabled
         )
 
         try:
-            config = await self.agent_config_repository.update_fields(config, updates)
+            config = await self.agent_config_repository.update_fields(
+                config,
+                config_updates,
+            )
             if should_toggle:
                 if bool(requested_enabled):
                     await self._ensure_ready_to_enable(user_id, config)

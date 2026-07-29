@@ -22,7 +22,7 @@ class ReceptionistProjectionTooLargeError(Exception):
 class ReceptionistProjection:
     agent_name: str
     business_display_name: str | None
-    owner_context: str
+    owner_context: str | None
     system_prompt: str
     knowledge_base: str
     profile_projection_revision: int
@@ -89,7 +89,7 @@ def build_receptionist_projection(
     profile: BusinessProfile,
     config: AgentConfig,
 ) -> ReceptionistProjection:
-    owner_context = "\n".join(
+    generated_owner_context = "\n".join(
         (
             f"Owner name: {projection_value(profile.owner_name)}",
             f"Business name: {projection_value(profile.business_name)}",
@@ -98,8 +98,18 @@ def build_receptionist_projection(
             f"Timezone: {projection_value(profile.timezone)}",
         )
     )
-    knowledge_base = render_profile_knowledge(profile)
-    if len(owner_context) > OWNER_CONTEXT_MAX_LENGTH:
+    owner_context = (
+        (profile.owner_context_override or None)
+        if profile.owner_context_override is not None
+        else generated_owner_context
+    )
+    knowledge_base = (
+        profile.knowledge_base_override
+        if profile.knowledge_base_override is not None
+        else render_profile_knowledge(profile)
+    )
+    system_prompt = profile.system_prompt_override or ""
+    if owner_context is not None and len(owner_context) > OWNER_CONTEXT_MAX_LENGTH:
         raise ReceptionistProjectionTooLargeError("owner_context")
     if len(knowledge_base) > KNOWLEDGE_BASE_MAX_LENGTH:
         raise ReceptionistProjectionTooLargeError("knowledge_base")
@@ -107,7 +117,7 @@ def build_receptionist_projection(
         agent_name=profile.receptionist_name or config.agent_name,
         business_display_name=profile.business_name,
         owner_context=owner_context,
-        system_prompt="",
+        system_prompt=system_prompt,
         knowledge_base=knowledge_base,
         profile_projection_revision=profile.content_revision,
     )

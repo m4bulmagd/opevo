@@ -18,7 +18,6 @@ from app.schemas.agent_runtime import (
 from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionResponse
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.services.agent_config_service import (
-    AgentConfigContentManagedError,
     AgentConfigEnableManagedByActivationError,
     AgentConfigNotFoundError,
     AgentConfigPhoneNumberNotFoundError,
@@ -54,8 +53,7 @@ async def _best_effort_outbox_wakeup(request: Request) -> None:
         await arq_pool.enqueue_job("outbox_delivery_job", {})
     except Exception:
         logger.warning(
-            "outbox wakeup enqueue failed operation=complete_call "
-            "error_type=unknown"
+            "outbox wakeup enqueue failed operation=complete_call error_type=unknown"
         )
 
 
@@ -159,11 +157,6 @@ async def patch_agent_config(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": error.code},
-        ) from None
-    except AgentConfigContentManagedError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "agent_content_managed_by_profile"},
         ) from None
     except AgentConfigEnableManagedByActivationError:
         raise HTTPException(

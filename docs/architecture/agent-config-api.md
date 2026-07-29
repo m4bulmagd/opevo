@@ -15,6 +15,13 @@ These endpoints control the editable runtime fields in `agent_configs`:
 
 When `is_enabled` changes, the backend also switches the user's assigned Telnyx number between `app-active` and `app-disabled` in the same request.
 
+When the activation flow is enabled, assistant content remains profile-owned.
+`agent_name` is synchronized to the receptionist name, while explicit owner
+context, system prompt, and knowledge-base edits are stored as profile
+overrides and projected to `agent_configs` in the same transaction. This keeps
+the profile content revision and runtime projection revision equal, including
+after later profile saves.
+
 ## Authentication
 
 Both endpoints require a valid Clerk bearer token for a user that has already been synced into the local `users` table.
@@ -123,6 +130,12 @@ When it changes:
   - the backend updates the assigned number to the Telnyx `app-disabled` connection
 
 This happens synchronously inside the same request. If the telephony switch fails, the config change is rolled back and the response is an error.
+
+With the activation flow enabled, changing `is_enabled` from `false` to `true`
+is owned by the verified go-live workflow and direct PATCH requests are
+rejected. Sending the already-saved `true` value is idempotent and does not
+enqueue another routing operation. Customers may still disable routing
+directly.
 
 ## Error Responses
 

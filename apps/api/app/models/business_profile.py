@@ -1,7 +1,16 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, Uuid
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.schema import conv
 
@@ -56,5 +65,8 @@ class BusinessProfile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     special_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     escalation_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_context_override: Mapped[str | None] = mapped_column(Text, nullable=True)
+    system_prompt_override: Mapped[str | None] = mapped_column(Text, nullable=True)
+    knowledge_base_override: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     routing_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
