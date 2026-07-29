@@ -56,6 +56,12 @@ export E2E_STATE_FILE="${e2e_state_dir}/account-lifecycle.json"
 export E2E_API_BASE_URL="http://127.0.0.1:${API_PORT}"
 export E2E_LOCAL_AUTH_TOKEN="presvo-local-development-token"
 update_snapshots=${E2E_UPDATE_SNAPSHOTS:-${UPDATE_SNAPSHOTS:-0}}
+e2e_focus=${E2E_FOCUS:-all}
+
+if [ "$e2e_focus" != "all" ] && [ "$e2e_focus" != "configuration" ]; then
+  echo "E2E_FOCUS must be 'all' or 'configuration'." >&2
+  exit 2
+fi
 
 wait_for_health() {
   service=$1
@@ -138,41 +144,55 @@ wait_for_health api
 wait_for_running worker
 wait_for_health web
 
-if [ "$update_snapshots" = "1" ]; then
-  E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
-    npm --prefix apps/web run test:e2e -- tests/e2e/entry-activation-visual.spec.ts --update-snapshots
-else
-  E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
-    npm --prefix apps/web run test:e2e -- tests/e2e/entry-activation-visual.spec.ts
+if [ "$e2e_focus" = "all" ]; then
+  if [ "$update_snapshots" = "1" ]; then
+    E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+      npm --prefix apps/web run test:e2e -- tests/e2e/entry-activation-visual.spec.ts --update-snapshots
+  else
+    E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+      npm --prefix apps/web run test:e2e -- tests/e2e/entry-activation-visual.spec.ts
+  fi
 fi
 
 E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
   npm --prefix apps/web run test:e2e -- tests/e2e/activation.spec.ts
 
-compose exec -T postgres psql -U postgres -d ai_call < scripts/seed-local-e2e-calls.sql
+if [ "$e2e_focus" = "all" ]; then
+  compose exec -T postgres psql -U postgres -d ai_call < scripts/seed-local-e2e-calls.sql
 
-if [ "$update_snapshots" = "1" ]; then
-  E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
-    npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-visual.spec.ts --update-snapshots
-else
-  E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
-    npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-visual.spec.ts
+  if [ "$update_snapshots" = "1" ]; then
+    E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+      npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-visual.spec.ts --update-snapshots
+  else
+    E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+      npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-visual.spec.ts
+  fi
+
+  if [ "$update_snapshots" = "1" ]; then
+    E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+      npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-calls-visual.spec.ts --update-snapshots
+  else
+    E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+      npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-calls-visual.spec.ts
+  fi
 fi
 
 if [ "$update_snapshots" = "1" ]; then
   E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
-    npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-calls-visual.spec.ts --update-snapshots
+    npm --prefix apps/web run test:e2e -- tests/e2e/configuration-visual.spec.ts --update-snapshots
 else
   E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
-    npm --prefix apps/web run test:e2e -- tests/e2e/dashboard-calls-visual.spec.ts
+    npm --prefix apps/web run test:e2e -- tests/e2e/configuration-visual.spec.ts
 fi
 
-E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
-  npm --prefix apps/web run test:e2e -- tests/e2e/deactivation-start.spec.ts
+if [ "$e2e_focus" = "all" ]; then
+  E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+    npm --prefix apps/web run test:e2e -- tests/e2e/deactivation-start.spec.ts
 
-compose restart api worker
-wait_for_health api
-wait_for_running worker
+  compose restart api worker
+  wait_for_health api
+  wait_for_running worker
 
-E2E_AFTER_SERVICE_RESTART=true E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
-  npm --prefix apps/web run test:e2e -- tests/e2e/restart-resume.spec.ts
+  E2E_AFTER_SERVICE_RESTART=true E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
+    npm --prefix apps/web run test:e2e -- tests/e2e/restart-resume.spec.ts
+fi

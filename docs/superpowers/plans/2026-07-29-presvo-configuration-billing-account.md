@@ -266,7 +266,7 @@ git commit -m "feat(web): port Presvo account settings"
 - Create: `apps/web/tests/e2e/configuration-visual.spec.ts-snapshots/*`
 - Modify: `scripts/run-local-e2e.sh`
 
-- [ ] **Step 1: Add Playwright coverage**
+- [x] **Step 1: Add Playwright coverage**
 
 Cover:
 
@@ -278,7 +278,7 @@ Cover:
 - overflow at 390, 768, 1024, and 1440;
 - reduced-motion Preview interactions.
 
-- [ ] **Step 2: Update and inspect screenshots**
+- [x] **Step 2: Update and inspect screenshots**
 
 ```bash
 UPDATE_SNAPSHOTS=1 bash scripts/run-local-e2e.sh
@@ -288,7 +288,7 @@ Inspect every new image for exact tokens, typography, spacing, borders,
 shadows, card hierarchy, responsive stacking, Preview visibility, and dark
 contrast.
 
-- [ ] **Step 3: Run immutable lifecycle and commit**
+- [x] **Step 3: Run immutable lifecycle and commit**
 
 ```bash
 bash scripts/run-local-e2e.sh

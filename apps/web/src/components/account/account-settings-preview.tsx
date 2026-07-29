@@ -138,7 +138,7 @@ export function AccountSettingsPreview() {
                 Security
               </h3>
               <div className="mt-2 divide-y divide-border">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 py-3">
+                <div className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-4">
                   <div className="min-w-0">
                     <p className="font-medium text-sm">Password</p>
                     <p className="mt-0.5 text-text-secondary text-xs">
@@ -146,7 +146,7 @@ export function AccountSettingsPreview() {
                     </p>
                   </div>
                   <Button
-                    className="min-h-11"
+                    className="min-h-11 justify-self-start sm:justify-self-end"
                     onClick={() => {
                       setPasswordPreviewOpen(true);
                       setStatus("Password flow changed locally in Preview. No account setting was updated.");
