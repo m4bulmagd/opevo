@@ -159,15 +159,15 @@ Exit criteria:
 Plan filename:
 `docs/superpowers/plans/2026-07-29-presvo-configuration-billing-account.md`
 
-- [ ] Inventory the live agent, billing, account, and lifecycle contracts after Phase 3.
-- [ ] Write the phase plan against the established presentation/view-model boundaries.
-- [ ] Port live assistant configuration without weakening server validation.
-- [ ] Add isolated Preview-only advanced assistant controls and voice preview.
-- [ ] Port live plan, usage, invoices, and Stripe-hosted billing actions.
-- [ ] Add a non-purchasable Preview plan comparison.
-- [ ] Port account identity, theme, and lifecycle controls.
-- [ ] Add Preview settings extensions and finalize shell notification presentation.
-- [ ] Add unsaved-change warnings and truthful save baselines.
+- [x] Inventory the live agent, billing, account, and lifecycle contracts after Phase 3.
+- [x] Write the phase plan against the established presentation/view-model boundaries.
+- [x] Port live assistant configuration without weakening server validation.
+- [x] Add isolated Preview-only advanced assistant controls and voice preview.
+- [x] Port live plan, usage, invoices, and Stripe-hosted billing actions.
+- [x] Add a non-purchasable Preview plan comparison.
+- [x] Port account identity, theme, and lifecycle controls.
+- [x] Add Preview settings extensions and finalize shell notification presentation.
+- [x] Add unsaved-change warnings and truthful save baselines.
 
 Exit criteria:
 
