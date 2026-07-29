@@ -271,26 +271,26 @@ git commit -m "feat(web): port Presvo call history"
 
 ## Task 5: Port the Production Call Detail Experience
 
-- [ ] **Step 1: Add failing call-detail tests**
+- [x] **Step 1: Add failing call-detail tests**
 
 Require a back link, generated-summary surface, native recording surface, locally searchable speaker-labelled transcript, metadata card, truthful unavailable/processing states, and the existing confirmed removal rules.
 
-- [ ] **Step 2: Run focused tests and confirm failure**
+- [x] **Step 2: Run focused tests and confirm failure**
 
 ```bash
 cd apps/web
 npm run test:ci -- tests/app/calls-page.test.tsx tests/app/call-handoff.test.tsx
 ```
 
-- [ ] **Step 3: Implement the template composition**
+- [x] **Step 3: Implement the template composition**
 
 Use a two-column desktop layout with summary, recording, and transcript on the primary column and metadata/removal on the side. Style the native audio element rather than simulating playback. Add a client transcript viewer whose only state is its filter string.
 
-- [ ] **Step 4: Preserve deletion truth**
+- [x] **Step 4: Preserve deletion truth**
 
 Keep the existing server action untouched. Keep non-terminal and inactive-account blocks, retry feedback, 404 behavior, and redirect-after-success.
 
-- [ ] **Step 5: Run focused verification**
+- [x] **Step 5: Run focused verification**
 
 ```bash
 cd apps/web
@@ -299,7 +299,7 @@ npm run typecheck
 npm run check
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git commit -m "feat(web): port Presvo call detail"

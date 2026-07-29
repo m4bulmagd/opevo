@@ -45,7 +45,7 @@ export function DeleteCallDialog({
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>
-        <Button variant="destructive">
+        <Button className="min-h-11" variant="destructive">
           <Trash2 data-icon="inline-start" />
           Remove call
         </Button>
