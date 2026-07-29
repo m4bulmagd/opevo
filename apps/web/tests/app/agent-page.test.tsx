@@ -64,15 +64,17 @@ function deferred<T>() {
 async function renderAgentPage({
   account = activeAccount,
   config = configuredAgent,
+  tab,
 }: {
   account?: AccountStatus;
   config?: AgentConfig;
+  tab?: string;
 } = {}) {
   getAccountMock.mockResolvedValueOnce(account);
   getAgentConfigForRequestMock.mockResolvedValueOnce(config);
 
   const { default: Page } = await import("@/app/(app)/dashboard/agent/page");
-  return render(await Page());
+  return render(await Page({ searchParams: Promise.resolve({ tab }) }));
 }
 
 describe("agent page", () => {
@@ -80,7 +82,7 @@ describe("agent page", () => {
     vi.clearAllMocks();
   });
 
-  it("uses the whitespace-normalized configured name as the single page heading", async () => {
+  it("uses Assistant as the single heading and the normalized configured name as context", async () => {
     await renderAgentPage({
       config: {
         ...configuredAgent,
@@ -89,7 +91,8 @@ describe("agent page", () => {
     });
 
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    expect(screen.getByRole("heading", { level: 1, name: "Ava Stone" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Assistant" })).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="page-intro"]')).toHaveTextContent("Ava Stone");
   });
 
   it.each(["", "  \n  "])("falls back to Receptionist when the configured name is %j", async (agentName) => {
@@ -100,7 +103,8 @@ describe("agent page", () => {
       },
     });
 
-    expect(screen.getByRole("heading", { level: 1, name: "Receptionist" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Assistant" })).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="page-intro"]')).toHaveTextContent("Receptionist");
   });
 
   it("renders a long configured name completely in the page heading", async () => {
@@ -113,9 +117,10 @@ describe("agent page", () => {
       },
     });
 
-    const heading = screen.getByRole("heading", { level: 1, name: longName });
-    expect(heading).toHaveTextContent(longName);
-    expect(heading).not.toHaveClass("truncate");
+    expect(screen.getByRole("heading", { level: 1, name: "Assistant" })).toBeInTheDocument();
+    const context = document.querySelector('[data-slot="page-intro-eyebrow"]');
+    expect(context).toHaveTextContent(longName);
+    expect(context).not.toHaveClass("truncate");
   });
 
   it("leads with PageIntro and an honest enabled runtime status before the settings controls", async () => {
@@ -289,16 +294,27 @@ describe("agent page", () => {
     expect(runtime).not.toHaveTextContent(deactivationState);
   });
 
-  it("groups the preserved controls into exactly four named settings regions", async () => {
+  it("uses URL-owned Presvo tabs and groups the general controls into named settings regions", async () => {
     await renderAgentPage();
 
     const sections = document.querySelectorAll('[data-slot="settings-section"]');
-    expect(sections).toHaveLength(4);
+    expect(sections).toHaveLength(3);
 
-    for (const name of ["Identity", "Call handling", "Business context", "Instructions"]) {
+    for (const name of ["Identity", "Call handling", "Business context"]) {
       expect(screen.getByRole("region", { name })).toBeInTheDocument();
       expect(screen.getByRole("heading", { level: 2, name })).toBeInTheDocument();
     }
+
+    const tabs = screen.getByRole("tablist", { name: "Assistant configuration" });
+    expect(within(tabs).getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+    expect(within(tabs).getByRole("tab", { name: "Instructions" })).toHaveAttribute(
+      "href",
+      "/dashboard/agent?tab=instructions",
+    );
+    expect(within(tabs).getByRole("tab", { name: "Knowledge" })).toHaveAttribute(
+      "href",
+      "/dashboard/agent?tab=knowledge",
+    );
 
     expect(screen.getByLabelText("Agent name")).toMatchObject({ id: "agent_name", name: "agent_name" });
     expect(screen.getByRole("switch", { name: "Enable call routing" })).toHaveAttribute("id", "is_enabled");
@@ -306,41 +322,46 @@ describe("agent page", () => {
       id: "owner_context",
       name: "owner_context",
     });
-    expect(screen.getByLabelText("System prompt")).toMatchObject({
-      id: "system_prompt",
-      name: "system_prompt",
-    });
-    expect(screen.getByLabelText("Knowledge base")).toMatchObject({
-      id: "knowledge_base",
-      name: "knowledge_base",
-    });
+    expect(screen.queryByLabelText("System prompt")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Knowledge base")).not.toBeInTheDocument();
   });
 
-  it("saves every editable value with the complete fixed-pipeline payload and presents pending then success", async () => {
+  it("renders live instructions and knowledge controls from canonical URL tabs", async () => {
+    const instructions = await renderAgentPage({ tab: "instructions" });
+    expect(screen.getByRole("tab", { name: "Instructions" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText("System prompt")).toHaveValue("Be helpful.");
+    expect(screen.queryByLabelText("Agent name")).not.toBeInTheDocument();
+    instructions.unmount();
+
+    await renderAgentPage({ tab: "knowledge" });
+    expect(screen.getByRole("tab", { name: "Knowledge" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("textbox", { name: "Knowledge base" })).toHaveValue("Open weekdays");
+    expect(screen.queryByLabelText("System prompt")).not.toBeInTheDocument();
+  });
+
+  it("shows the dirty bar, discards to baseline, and saves a complete fixed-pipeline payload", async () => {
     const save = deferred<AgentConfig>();
     patchAgentConfigMock.mockReturnValueOnce(save.promise);
     await renderAgentPage();
 
+    expect(screen.queryByRole("status", { name: "Unsaved changes" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "Mina" } });
+    expect(screen.getByRole("status", { name: "Unsaved changes" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(screen.getByLabelText("Agent name")).toHaveValue("Ava");
+    expect(screen.queryByRole("status", { name: "Unsaved changes" })).not.toBeInTheDocument();
+
     fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "Mina" } });
     fireEvent.click(screen.getByRole("switch", { name: "Enable call routing" }));
     fireEvent.change(screen.getByLabelText("Owner context"), { target: { value: "   " } });
-    fireEvent.change(screen.getByLabelText("System prompt"), { target: { value: "Keep answers concise." } });
-    fireEvent.change(screen.getByLabelText("Knowledge base"), { target: { value: "Open Tuesday to Saturday." } });
-    fireEvent.click(screen.getByRole("button", { name: "Save agent settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-    const pendingPhase = await waitFor(() => {
-      const phase = document.querySelector('[data-phase="pending"]');
-      expect(phase).toBeInTheDocument();
-      return phase as HTMLElement;
-    });
-    const pendingButton = pendingPhase.closest("button");
-    expect(pendingButton).toBeDisabled();
-    expect(within(pendingPhase).getByText("Saving settings")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Saving changes" })).toBeDisabled();
     expect(patchAgentConfigMock).toHaveBeenCalledWith({
       agent_name: "Mina",
       owner_context: null,
-      system_prompt: "Keep answers concise.",
-      knowledge_base: "Open Tuesday to Saturday.",
+      system_prompt: "Be helpful.",
+      knowledge_base: "Open weekdays",
       pipeline_mode: "stt_llm_tts",
       is_enabled: false,
     });
@@ -349,26 +370,21 @@ describe("agent page", () => {
       save.resolve({
         agent_name: "Mina Server",
         owner_context: null,
-        system_prompt: "Keep answers concise.",
-        knowledge_base: "Open Tuesday to Saturday.",
+        system_prompt: "Be helpful.",
+        knowledge_base: "Open weekdays",
         pipeline_mode: "stt_llm_tts",
         is_enabled: false,
       });
     });
 
-    const successPhase = await waitFor(() => {
-      const phase = document.querySelector('[data-phase="success"]');
-      expect(phase).toBeInTheDocument();
-      return phase as HTMLElement;
-    });
-    expect(within(successPhase).getByText("Settings saved")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Unsaved changes" })).not.toBeInTheDocument());
     expect(screen.getByLabelText("Agent name")).toHaveValue("Mina Server");
     expect(screen.getByRole("status", { name: "Save feedback" })).toHaveTextContent("Agent settings saved.");
     expect(toast.success).toHaveBeenCalledWith("Agent settings saved.");
 
     fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "Unsaved Mina" } });
 
-    expect(document.querySelector('[data-phase="idle"]')).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Unsaved changes" })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Save feedback" })).toBeEmptyDOMElement();
   });
 
@@ -380,11 +396,13 @@ describe("agent page", () => {
     patchAgentConfigMock.mockResolvedValueOnce(stsConfig);
     await renderAgentPage({ config: stsConfig });
 
-    fireEvent.click(screen.getByRole("button", { name: "Save agent settings" }));
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "Ava STS" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() =>
       expect(patchAgentConfigMock).toHaveBeenCalledWith({
         ...stsConfig,
+        agent_name: "Ava STS",
       }),
     );
   });
@@ -393,29 +411,18 @@ describe("agent page", () => {
     patchAgentConfigMock.mockRejectedValueOnce(new BackendApiError("Provider unavailable", 502));
     await renderAgentPage();
 
-    const idleButton = screen.getByRole("button", { name: "Save agent settings" });
-    expect(within(idleButton).getByText("Save agent settings").closest("[data-phase]")).toHaveAttribute(
-      "data-phase",
-      "idle",
-    );
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "Ava updated" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-    fireEvent.click(idleButton);
-
-    const errorPhase = await waitFor(() => {
-      const phase = document.querySelector('[data-phase="error"]');
-      expect(phase).toBeInTheDocument();
-      return phase as HTMLElement;
-    });
-    expect(within(errorPhase).getByText("Try saving again")).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: "Save feedback" })).toHaveTextContent(
-      "Failed to update telephony state. Try again in a moment.",
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "Save feedback" })).toHaveTextContent(
+        "Failed to update telephony state. Try again in a moment.",
+      ),
     );
     expect(toast.error).toHaveBeenCalledWith("Failed to update telephony state. Try again in a moment.");
-
-    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "Ava updated" } });
-
-    expect(document.querySelector('[data-phase="idle"]')).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: "Save feedback" })).toBeEmptyDOMElement();
+    expect(screen.getByRole("status", { name: "Unsaved changes" })).toHaveTextContent(
+      "Failed to update telephony state. Try again in a moment.",
+    );
   });
 
   it("clears prior feedback throughout a direct retry and replaces it with the new result", async () => {
@@ -425,25 +432,19 @@ describe("agent page", () => {
       .mockReturnValueOnce(retry.promise);
     await renderAgentPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "Save agent settings" }));
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "Ava retry" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-    const errorPhase = await waitFor(() => {
-      const phase = document.querySelector('[data-phase="error"]');
-      expect(phase).toBeInTheDocument();
-      return phase as HTMLElement;
-    });
-    expect(screen.getByRole("status", { name: "Save feedback" })).toHaveTextContent(
-      "Failed to update telephony state. Try again in a moment.",
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "Save feedback" })).toHaveTextContent(
+        "Failed to update telephony state. Try again in a moment.",
+      ),
     );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
 
-    fireEvent.click(errorPhase.closest("button") as HTMLButtonElement);
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-    const pendingPhase = await waitFor(() => {
-      const phase = document.querySelector('[data-phase="pending"]');
-      expect(phase).toBeInTheDocument();
-      return phase as HTMLElement;
-    });
-    expect(pendingPhase.closest("button")).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Saving changes" })).toBeDisabled();
     expect(screen.getByRole("status", { name: "Save feedback" })).toBeEmptyDOMElement();
     expect(screen.queryByText("Failed to update telephony state. Try again in a moment.")).not.toBeInTheDocument();
 
@@ -454,7 +455,7 @@ describe("agent page", () => {
       });
     });
 
-    await waitFor(() => expect(document.querySelector('[data-phase="success"]')).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Unsaved changes" })).not.toBeInTheDocument());
     expect(screen.getByLabelText("Agent name")).toHaveValue("Ava refreshed");
     expect(screen.getByRole("status", { name: "Save feedback" })).toHaveTextContent("Agent settings saved.");
   });
@@ -484,10 +485,8 @@ describe("agent page", () => {
     ).toBeInTheDocument();
     expect(screen.getByDisplayValue("Ava")).toBeDisabled();
     expect(screen.getByDisplayValue("Reception for North Clinic")).toBeDisabled();
-    expect(screen.getByDisplayValue("Be helpful.")).toBeDisabled();
-    expect(screen.getByDisplayValue("Open weekdays")).toBeDisabled();
     expect(screen.getByRole("switch", { name: "Enable call routing" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Save agent settings" })).toBeDisabled();
+    expect(screen.queryByRole("status", { name: "Unsaved changes" })).not.toBeInTheDocument();
   });
 
   it("does not expose runtime architecture choices", async () => {
