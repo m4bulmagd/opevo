@@ -25,6 +25,7 @@ function renderProfile(overrides: Partial<React.ComponentProps<typeof AccountPro
       initialProfile={initialProfile}
       nameMaxLength={60}
       readOnly={false}
+      securityMode="clerk"
       {...overrides}
     />,
   );
@@ -58,17 +59,34 @@ describe("account profile form", () => {
     expect(screen.getByLabelText("Timezone")).toHaveValue("Europe/Paris");
   });
 
-  it("presents email as read-only identity data and names unavailable development email", () => {
+  it("presents email as read-only identity data and explains local-mode absence truthfully", () => {
     const { rerender } = renderProfile();
 
     expect(screen.getByLabelText("Email")).toHaveAttribute("type", "email");
     expect(screen.getByLabelText("Email")).toHaveAttribute("autocomplete", "email");
     expect(screen.getByLabelText("Email")).toHaveAttribute("readonly");
 
-    rerender(<AccountProfileForm email={null} initialProfile={initialProfile} nameMaxLength={60} readOnly={false} />);
+    rerender(
+      <AccountProfileForm
+        email={null}
+        initialProfile={initialProfile}
+        nameMaxLength={60}
+        readOnly={false}
+        securityMode="unavailable"
+      />,
+    );
 
     expect(screen.getByLabelText("Email")).toHaveValue("");
+    expect(screen.getByLabelText("Email")).toHaveAccessibleDescription("Email unavailable in local development");
     expect(screen.getByText("Email unavailable in local development")).toBeInTheDocument();
+  });
+
+  it("describes a missing hosted Clerk email as temporarily unavailable", () => {
+    renderProfile({ email: null, securityMode: "clerk" });
+
+    expect(screen.getByLabelText("Email")).toHaveAccessibleDescription("Email is temporarily unavailable.");
+    expect(screen.getByText("Email is temporarily unavailable.")).toBeInTheDocument();
+    expect(screen.queryByText("Email unavailable in local development")).not.toBeInTheDocument();
   });
 
   it("gives editable identity and phone fields browser-appropriate input semantics", () => {
@@ -82,6 +100,15 @@ describe("account profile form", () => {
     expect(
       screen.getByText("Changing this forwarding number may pause incoming calls until forwarding is verified again."),
     ).toBeInTheDocument();
+  });
+
+  it("keeps every Profile control at least 44px tall", () => {
+    renderProfile();
+
+    for (const name of ["Full name", "Email", "Personal phone", "Business name"]) {
+      expect(screen.getByLabelText(name)).toHaveClass("min-h-11");
+    }
+    expect(screen.getByLabelText("Timezone").parentElement).toHaveClass("[&_select]:min-h-11");
   });
 
   it("shows its existing unsaved changes status after a supported edit", () => {
@@ -122,6 +149,7 @@ describe("account profile form", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(phone).toHaveFocus();
+    expect(phone).toHaveAttribute("aria-describedby", "account-profile-phone-description account-profile-phone-error");
     expect(saveAccountProfileMock).not.toHaveBeenCalled();
   });
 
@@ -153,16 +181,25 @@ describe("account profile form", () => {
     });
   });
 
-  it("locks save and discard while the profile request is pending", async () => {
+  it("locks every editable control and prevents newer typing while the profile request is pending", async () => {
     const pending = deferred<{ status: "success"; message: string; profile: typeof initialProfile }>();
     saveAccountProfileMock.mockReturnValueOnce(pending.promise);
     renderProfile();
-    fireEvent.change(screen.getByLabelText("Business name"), { target: { value: "Atelier Presvo" } });
+    const businessName = screen.getByLabelText("Business name");
+    fireEvent.change(businessName, { target: { value: "Atelier Presvo" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
+    for (const name of ["Full name", "Personal phone", "Business name", "Timezone"]) {
+      expect(screen.getByLabelText(name)).toBeDisabled();
+    }
     expect(screen.getByRole("button", { name: "Saving changes" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Discard" })).toBeDisabled();
+
+    businessName.focus();
+    fireEvent.keyDown(businessName, { key: "x" });
+    expect(businessName).not.toHaveFocus();
+    expect(businessName).toHaveValue("Atelier Presvo");
 
     await act(async () => {
       pending.resolve({
@@ -188,6 +225,13 @@ describe("account profile form", () => {
       expect(screen.getByLabelText("Business name")).toHaveValue("Atelier Confirmed");
     });
     expect(screen.queryByRole("status", { name: "Unsaved changes" })).not.toBeInTheDocument();
+
+    const savedStatus = screen.getByRole("status");
+    expect(savedStatus).toHaveAttribute("aria-live", "polite");
+    expect(savedStatus).toHaveTextContent("Profile saved.");
+
+    fireEvent.change(screen.getByLabelText("Business name"), { target: { value: "Atelier next draft" } });
+    expect(screen.queryByText("Profile saved.")).not.toBeInTheDocument();
   });
 
   it("removes a legacy timezone option after Europe/Paris is confirmed", async () => {
@@ -225,6 +269,30 @@ describe("account profile form", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(saveAccountProfileMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("associates server-returned fields with errors and focuses the first affected rendered control", async () => {
+    saveAccountProfileMock.mockResolvedValueOnce({
+      status: "error",
+      code: "invalid_input",
+      message: "Review your profile details and try again.",
+      fields: ["business_name", "existing_phone_e164"],
+    });
+    renderProfile();
+    const phone = screen.getByLabelText("Personal phone");
+    const businessName = screen.getByLabelText("Business name");
+    fireEvent.change(businessName, { target: { value: "Atelier retained draft" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(phone).toHaveFocus());
+    expect(phone).toHaveAttribute("aria-invalid", "true");
+    expect(businessName).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Full name")).toHaveAttribute("aria-invalid", "false");
+    expect(phone.closest('[data-slot="field"]')).toHaveTextContent("Review this field and try again.");
+    expect(businessName.closest('[data-slot="field"]')).toHaveTextContent("Review this field and try again.");
+    expect(businessName).toHaveValue("Atelier retained draft");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
   });
 
   it("disables editable controls and omits the save bar in read-only mode", () => {

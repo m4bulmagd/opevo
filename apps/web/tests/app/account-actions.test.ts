@@ -283,6 +283,58 @@ describe("account server actions", () => {
   });
 
   it.each([
+    {
+      caseName: "canonical timezone",
+      currentTimezone: "Not/A-Timezone",
+      requestedTimezone: "Europe/Paris",
+      allowed: true,
+    },
+    {
+      caseName: "latest valid legacy timezone",
+      currentTimezone: "Europe/London",
+      requestedTimezone: "Europe/London",
+      allowed: true,
+    },
+    {
+      caseName: "invalid saved legacy timezone",
+      currentTimezone: "Not/A-Timezone",
+      requestedTimezone: "Not/A-Timezone",
+      allowed: false,
+    },
+    {
+      caseName: "unsupported valid IANA timezone",
+      currentTimezone: "Europe/London",
+      requestedTimezone: "America/New_York",
+      allowed: false,
+    },
+  ])("authorizes only the $caseName", async ({ currentTimezone, requestedTimezone, allowed }) => {
+    const currentSnapshot = activationSnapshot();
+    getActivationSnapshotMock.mockResolvedValueOnce(
+      activationSnapshot({
+        profile: { ...currentSnapshot.profile, timezone: currentTimezone },
+      }),
+    );
+
+    const result = await saveAccountProfileAction({
+      ...validAccountProfileInput,
+      timezone: requestedTimezone,
+    });
+
+    if (allowed) {
+      expect(result).toMatchObject({ status: "success", profile: { timezone: requestedTimezone } });
+      expect(saveBusinessProfileMock).toHaveBeenCalledWith(expect.objectContaining({ timezone: requestedTimezone }));
+    } else {
+      expect(result).toEqual({
+        status: "error",
+        code: "invalid_input",
+        message: "Review your profile details and try again.",
+        fields: ["timezone"],
+      });
+      expect(saveBusinessProfileMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
     {},
     {
       owner_name: "Maya",
@@ -340,9 +392,10 @@ describe("account server actions", () => {
       timezone: "Europe/Paris",
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       status: "error",
-      code: expect.stringMatching(/profile_unavailable|request_failed/),
+      code: "profile_unavailable",
+      message: "Your profile is temporarily unavailable. Try saving again.",
     });
     expect(JSON.stringify(result)).not.toContain("upstream snapshot details must not escape");
     expect(saveBusinessProfileMock).not.toHaveBeenCalled();
@@ -360,7 +413,11 @@ describe("account server actions", () => {
       timezone: "Europe/Paris",
     });
 
-    expect(result).toMatchObject({ status: "error", code: "request_failed" });
+    expect(result).toEqual({
+      status: "error",
+      code: "request_failed",
+      message: "We couldn't save your profile. Try saving again.",
+    });
     expect(JSON.stringify(result)).not.toContain("profile_secret");
     expect(JSON.stringify(result)).not.toContain("provider details");
   });

@@ -7,7 +7,7 @@ import Link from "next/link";
 import { Copy } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
 import { formatFrenchNumber } from "@/lib/phone-numbers";
 import type { ForwardingGuide } from "@/lib/types/activation";
 
@@ -34,16 +34,18 @@ export function AssignedNumberCard({
   return (
     <Card aria-labelledby="assigned-number-title" role="region" size="sm">
       <CardHeader>
-        <CardTitle
+        <h2
           className="font-medium text-text-tertiary text-xs uppercase tracking-widest"
+          data-slot="card-title"
           id="assigned-number-title"
         >
           Assigned number
-        </CardTitle>
+        </h2>
         {number ? (
           <CardAction>
             <Button
               aria-label="Copy assigned number"
+              className="min-h-11 min-w-11"
               onClick={() => void copyAssignedNumber()}
               size="icon-sm"
               type="button"
@@ -63,12 +65,12 @@ export function AssignedNumberCard({
         {forwarding ? (
           <div className="flex flex-col gap-1.5 border-border/70 border-t pt-3 text-sm text-text-secondary">
             <p>Forwarding setup is available for review.</p>
-            <Button asChild className="h-auto justify-start px-0" variant="link">
+            <Button asChild className="h-auto min-h-11 justify-start px-0" variant="link">
               <Link href="/activate?milestone=forwarding">Review forwarding setup</Link>
             </Button>
           </div>
         ) : (
-          <Button asChild className="h-auto justify-start px-0" variant="link">
+          <Button asChild className="h-auto min-h-11 justify-start px-0" variant="link">
             <Link href="/activate?milestone=number">Review number setup</Link>
           </Button>
         )}

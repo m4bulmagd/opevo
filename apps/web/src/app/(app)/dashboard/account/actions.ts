@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { z } from "zod";
 
+import { isAccountTimezoneAllowed } from "@/lib/account-timezone";
 import { deactivateAccount as requestAccountDeactivation } from "@/lib/api/account";
 import { activateDevelopmentStarter, getActivationSnapshot, saveBusinessProfile } from "@/lib/api/activation";
 import { BackendApiError } from "@/lib/api/backend-client";
@@ -188,8 +189,12 @@ export async function saveAccountProfileAction(input: unknown): Promise<AccountP
     return {
       status: "error",
       code: "profile_unavailable",
-      message: "Your profile is temporarily unavailable. Refresh and try again.",
+      message: "Your profile is temporarily unavailable. Try saving again.",
     };
+  }
+
+  if (!isAccountTimezoneAllowed(parsed.data.timezone, snapshot.profile.timezone)) {
+    return invalidProfileInput(["timezone"]);
   }
 
   const fields = (["owner_name", "business_name"] as const).filter(
@@ -220,7 +225,7 @@ export async function saveAccountProfileAction(input: unknown): Promise<AccountP
     return {
       status: "error",
       code: "request_failed",
-      message: "We couldn't save your profile. Refresh and try again.",
+      message: "We couldn't save your profile. Try saving again.",
     };
   }
 

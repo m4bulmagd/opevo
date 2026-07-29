@@ -21,12 +21,12 @@ describe("assigned number card", () => {
   it("formats a real number and links to the forwarding milestone", () => {
     render(<AssignedNumberCard forwarding={forwardingGuide()} number="+33612345678" />);
 
+    expect(screen.getByRole("heading", { level: 2, name: "Assigned number" })).toBeVisible();
     expect(screen.getByText("06 12 34 56 78")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Copy assigned number" })).toBeEnabled();
-    expect(screen.getByRole("link", { name: "Review forwarding setup" })).toHaveAttribute(
-      "href",
-      "/activate?milestone=forwarding",
-    );
+    expect(screen.getByRole("button", { name: "Copy assigned number" })).toHaveClass("min-h-11", "min-w-11");
+    const forwardingLink = screen.getByRole("link", { name: "Review forwarding setup" });
+    expect(forwardingLink).toHaveClass("min-h-11");
+    expect(forwardingLink).toHaveAttribute("href", "/activate?milestone=forwarding");
   });
 
   it("announces when the assigned number is copied", async () => {
@@ -52,9 +52,8 @@ describe("assigned number card", () => {
 
     expect(screen.getByText("No Presvo number is assigned yet.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Copy assigned number" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Review number setup" })).toHaveAttribute(
-      "href",
-      "/activate?milestone=number",
-    );
+    const setupLink = screen.getByRole("link", { name: "Review number setup" });
+    expect(setupLink).toHaveClass("min-h-11");
+    expect(setupLink).toHaveAttribute("href", "/activate?milestone=number");
   });
 });

@@ -81,6 +81,7 @@ export default async function AccountPage() {
             initialProfile={initialProfile}
             nameMaxLength={activation.profile_constraints.name_max_length}
             readOnly={account.status !== "active"}
+            securityMode={identity.securityMode}
           />
         ) : (
           <UnavailableProfile />

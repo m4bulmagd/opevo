@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 import { type AccountProfileActionResult, saveAccountProfileAction } from "@/app/(app)/dashboard/account/actions";
 import { UnsavedChangesBar } from "@/components/forms/unsaved-changes-bar";
@@ -8,42 +8,49 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/c
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { useUnsavedChangesGuard } from "@/hooks/use-unsaved-changes-guard";
+import { getAllowedAccountTimezones } from "@/lib/account-timezone";
 import { normalizeFrenchNumber } from "@/lib/phone-numbers";
-import type { AccountProfileValues } from "@/lib/types/account-settings";
+import type { AccountIdentity, AccountProfileValues } from "@/lib/types/account-settings";
 
 type AccountProfileFormProps = Readonly<{
   initialProfile: AccountProfileValues;
   email: string | null;
   nameMaxLength: number;
   readOnly: boolean;
+  securityMode: AccountIdentity["securityMode"];
 }>;
 
 type ProfileField = keyof AccountProfileValues;
 type ProfileErrors = Partial<Record<ProfileField, string>>;
 
-const CANONICAL_TIMEZONE = "Europe/Paris";
+const PROFILE_FIELD_ORDER: ProfileField[] = ["owner_name", "existing_phone_e164", "business_name", "timezone"];
+const SERVER_FIELD_ERROR = "Review this field and try again.";
 
-function isValidTimezone(value: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en", { timeZone: value });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function AccountProfileForm({ initialProfile, email, nameMaxLength, readOnly }: AccountProfileFormProps) {
+export function AccountProfileForm({
+  initialProfile,
+  email,
+  nameMaxLength,
+  readOnly,
+  securityMode,
+}: AccountProfileFormProps) {
   const [baseline, setBaseline] = useState(initialProfile);
   const [draft, setDraft] = useState(initialProfile);
   const [result, setResult] = useState<AccountProfileActionResult | null>(null);
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [isPending, startTransition] = useTransition();
   const fieldRefs = useRef<Partial<Record<ProfileField, HTMLInputElement | HTMLSelectElement>>>({});
+  const pendingFocusRef = useRef<ProfileField | null>(null);
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
-  const legacyTimezone =
-    baseline.timezone !== CANONICAL_TIMEZONE && isValidTimezone(baseline.timezone) ? baseline.timezone : null;
+  const allowedTimezones = getAllowedAccountTimezones(baseline.timezone);
 
   useUnsavedChangesGuard(dirty && !readOnly);
+
+  useEffect(() => {
+    if (!isPending && pendingFocusRef.current) {
+      fieldRefs.current[pendingFocusRef.current]?.focus();
+      pendingFocusRef.current = null;
+    }
+  }, [isPending]);
 
   const updateDraft = <FieldName extends ProfileField>(field: FieldName, value: AccountProfileValues[FieldName]) => {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -78,7 +85,7 @@ export function AccountProfileForm({ initialProfile, email, nameMaxLength, readO
     }
 
     setErrors(nextErrors);
-    const firstInvalid = (Object.keys(nextErrors) as ProfileField[])[0];
+    const firstInvalid = PROFILE_FIELD_ORDER.find((field) => nextErrors[field]);
     if (firstInvalid) {
       fieldRefs.current[firstInvalid]?.focus();
       return null;
@@ -104,6 +111,13 @@ export function AccountProfileForm({ initialProfile, email, nameMaxLength, readO
         setBaseline(nextResult.profile);
         setDraft(nextResult.profile);
         setErrors({});
+      } else if (nextResult.fields?.length) {
+        const nextErrors: ProfileErrors = {};
+        for (const field of nextResult.fields) {
+          nextErrors[field] = SERVER_FIELD_ERROR;
+        }
+        setErrors(nextErrors);
+        pendingFocusRef.current = PROFILE_FIELD_ORDER.find((field) => nextResult.fields?.includes(field)) ?? null;
       }
     });
   };
@@ -129,7 +143,8 @@ export function AccountProfileForm({ initialProfile, email, nameMaxLength, readO
               aria-describedby={errors.owner_name ? "account-profile-full-name-error" : undefined}
               aria-invalid={Boolean(errors.owner_name)}
               autoComplete="name"
-              disabled={readOnly}
+              className="min-h-11"
+              disabled={readOnly || isPending}
               id="account-profile-full-name"
               maxLength={nameMaxLength}
               onChange={(event) => updateDraft("owner_name", event.target.value)}
@@ -143,20 +158,35 @@ export function AccountProfileForm({ initialProfile, email, nameMaxLength, readO
 
           <Field>
             <FieldLabel htmlFor="account-profile-email">Email</FieldLabel>
-            <Input autoComplete="email" id="account-profile-email" readOnly type="email" value={email ?? ""} />
-            {email ? null : <FieldDescription>Email unavailable in local development</FieldDescription>}
+            <Input
+              aria-describedby={email ? undefined : "account-profile-email-description"}
+              autoComplete="email"
+              className="min-h-11"
+              id="account-profile-email"
+              readOnly
+              type="email"
+              value={email ?? ""}
+            />
+            {email ? null : (
+              <FieldDescription id="account-profile-email-description">
+                {securityMode === "unavailable"
+                  ? "Email unavailable in local development"
+                  : "Email is temporarily unavailable."}
+              </FieldDescription>
+            )}
           </Field>
         </div>
 
         <Field data-invalid={Boolean(errors.existing_phone_e164)}>
           <FieldLabel htmlFor="account-profile-phone">Personal phone</FieldLabel>
           <Input
-            aria-describedby={
-              errors.existing_phone_e164 ? "account-profile-phone-error" : "account-profile-phone-description"
-            }
+            aria-describedby={`account-profile-phone-description${
+              errors.existing_phone_e164 ? " account-profile-phone-error" : ""
+            }`}
             aria-invalid={Boolean(errors.existing_phone_e164)}
             autoComplete="tel"
-            disabled={readOnly}
+            className="min-h-11"
+            disabled={readOnly || isPending}
             id="account-profile-phone"
             inputMode="tel"
             onChange={(event) => updateDraft("existing_phone_e164", event.target.value)}
@@ -178,7 +208,8 @@ export function AccountProfileForm({ initialProfile, email, nameMaxLength, readO
             aria-describedby={errors.business_name ? "account-profile-business-name-error" : undefined}
             aria-invalid={Boolean(errors.business_name)}
             autoComplete="organization"
-            disabled={readOnly}
+            className="min-h-11"
+            disabled={readOnly || isPending}
             id="account-profile-business-name"
             maxLength={nameMaxLength}
             onChange={(event) => updateDraft("business_name", event.target.value)}
@@ -196,7 +227,7 @@ export function AccountProfileForm({ initialProfile, email, nameMaxLength, readO
             aria-describedby={errors.timezone ? "account-profile-timezone-error" : undefined}
             aria-invalid={Boolean(errors.timezone)}
             className="w-full [&_select]:min-h-11"
-            disabled={readOnly}
+            disabled={readOnly || isPending}
             id="account-profile-timezone"
             onChange={(event) => updateDraft("timezone", event.target.value)}
             ref={(element) => {
@@ -204,12 +235,21 @@ export function AccountProfileForm({ initialProfile, email, nameMaxLength, readO
             }}
             value={draft.timezone}
           >
-            {legacyTimezone ? <NativeSelectOption value={legacyTimezone}>{legacyTimezone}</NativeSelectOption> : null}
-            <NativeSelectOption value={CANONICAL_TIMEZONE}>{CANONICAL_TIMEZONE}</NativeSelectOption>
+            {allowedTimezones.map((timezone) => (
+              <NativeSelectOption key={timezone} value={timezone}>
+                {timezone}
+              </NativeSelectOption>
+            ))}
           </NativeSelect>
           <FieldError id="account-profile-timezone-error">{errors.timezone}</FieldError>
         </Field>
       </FieldGroup>
+
+      {result?.status === "success" ? (
+        <p aria-live="polite" className="mt-4 text-sm text-text-secondary" role="status">
+          {result.message}
+        </p>
+      ) : null}
 
       {readOnly ? null : (
         <UnsavedChangesBar dirty={dirty} feedback={feedback} onDiscard={discard} onSave={save} pending={isPending} />
