@@ -186,6 +186,7 @@ async def test_reinitialization_waits_for_timed_out_old_provider_action(
     assert len(adapters) == 2
 
 
+@pytest.mark.timeout(2)
 @pytest.mark.anyio
 async def test_cancelled_shutdown_finishes_cleanup_before_allowing_reinitialization(
     monkeypatch: pytest.MonkeyPatch,
@@ -217,8 +218,13 @@ async def test_cancelled_shutdown_finishes_cleanup_before_allowing_reinitializat
     shutdown_task = asyncio.create_task(
         observability.shutdown_observability(timeout_seconds=0.2)
     )
-    assert await asyncio.to_thread(flush_started.wait, 0.5)
+    for _ in range(50):
+        if flush_started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert flush_started.is_set()
     shutdown_task.cancel()
+    await asyncio.sleep(0)
     release_flush.set()
 
     with pytest.raises(asyncio.CancelledError):
