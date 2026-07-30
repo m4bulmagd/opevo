@@ -76,8 +76,18 @@ jobs:
         run: uv run --frozen --no-sync ruff check app tests
       - name: Mypy
         run: uv run --frozen --no-sync mypy app
-      - name: Tests on PostgreSQL
-        run: uv run --frozen --no-sync python -m pytest -q
+      - name: Tests and coverage on PostgreSQL
+        run: >-
+          uv run --frozen --no-sync python -m pytest -q
+          --cov=app
+          --cov-report=term-missing
+          --cov-report=json:coverage.json
+      - name: Enforce API line and branch coverage
+        run: >-
+          uv run --frozen --no-sync python
+          ../../scripts/check_python_coverage.py check
+          --report coverage.json
+          --baseline coverage-baseline.json
 
   agent:
     name: CI / Agent
@@ -106,8 +116,18 @@ jobs:
         run: uv run --frozen --no-sync ruff check agent tests
       - name: Mypy
         run: uv run --frozen --no-sync mypy agent
-      - name: Tests
-        run: uv run --frozen --no-sync python -m pytest -q
+      - name: Tests and coverage
+        run: >-
+          uv run --frozen --no-sync python -m pytest -q
+          --cov=agent
+          --cov-report=term-missing
+          --cov-report=json:coverage.json
+      - name: Enforce agent line and branch coverage
+        run: >-
+          uv run --frozen --no-sync python
+          ../../scripts/check_python_coverage.py check
+          --report coverage.json
+          --baseline coverage-baseline.json
 
   web:
     name: CI / Web

@@ -96,8 +96,19 @@ UV_CACHE_DIR=/tmp/uv-cache uv lock --check
 UV_CACHE_DIR=/tmp/uv-cache uv sync --frozen --all-groups
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check app tests
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
-UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
+uv run --frozen --no-sync python -m pytest -q \
+  --cov=app \
+  --cov-report=term-missing \
+  --cov-report=json:coverage.json
+uv run --frozen --no-sync python \
+  ../../scripts/check_python_coverage.py check \
+  --report coverage.json \
+  --baseline coverage-baseline.json
 ```
+
+For focused API pytest runs while iterating, omit the coverage flags and do not
+run the coverage checker. `pytest-timeout` gives every API test, including
+setup and teardown, a 60-second deadline.
 
 Remove the isolated services when verification is complete:
 
@@ -113,8 +124,25 @@ UV_CACHE_DIR=/tmp/uv-cache uv lock --check
 UV_CACHE_DIR=/tmp/uv-cache uv sync --frozen --all-groups
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check agent tests
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
-UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
+uv run --frozen --no-sync python -m pytest -q \
+  --cov=agent \
+  --cov-report=term-missing \
+  --cov-report=json:coverage.json
+uv run --frozen --no-sync python \
+  ../../scripts/check_python_coverage.py check \
+  --report coverage.json \
+  --baseline coverage-baseline.json
 ```
+
+For focused agent pytest runs while iterating, omit the coverage flags and do
+not run the coverage checker. `pytest-timeout` gives every ordinary agent
+test, including setup and teardown, a 30-second deadline; only credentialed,
+manual LiveKit evaluations use their explicit 180-second deadline.
+
+The committed `coverage-baseline.json` files are measured quality gates. A
+coverage decrease requires adding or improving tests, never lowering a
+baseline. When coverage increases, raise the relevant baseline in the same
+change to the new measured value, rounded down to two decimal places.
 
 ### Web
 

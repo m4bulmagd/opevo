@@ -17,13 +17,23 @@ contents permission, and checkout steps do not persist credentials.
 
 ## Current jobs
 
-- `CI / API` installs the frozen API dependency graph, checks the lockfile,
-  runs Ruff and mypy, and runs the complete pytest suite. It supplies
+- `CI / API` runs on Python 3.13, installs the frozen API dependency graph,
+  checks the lockfile, runs Ruff and mypy, and runs the complete PostgreSQL-
+  backed pytest suite. PostgreSQL-backed tests remain mandatory. It supplies
   PostgreSQL 17.8 and Redis 7.4.7 with explicit `DATABASE_URL`,
   `TEST_DATABASE_URL`, `REDIS_URL`, and `TEST_REDIS_URL` values so integration
-  tests cannot silently skip for lack of test services.
-- `CI / Agent` installs the frozen agent dependency graph, checks the lockfile,
-  runs Ruff and mypy, and runs the complete pytest suite.
+  tests cannot silently skip for lack of test services. Every API test has a
+  60-second deadline, including setup and teardown. The job collects
+  branch-aware coverage and independently checks line and branch results
+  against the committed measured `coverage-baseline.json`; it never rewrites
+  that baseline.
+- `CI / Agent` runs on Python 3.13, installs the frozen agent dependency graph,
+  checks the lockfile, runs Ruff and mypy, and runs the complete pytest suite.
+  Every ordinary agent test has a 30-second deadline, including setup and
+  teardown; credentialed manual LiveKit evaluations have an explicit
+  180-second deadline. The job collects branch-aware coverage and independently
+  checks line and branch results against the committed measured
+  `coverage-baseline.json`; it never rewrites that baseline.
 - `CI / Web` installs with `npm ci`, runs Biome, TypeScript, Vitest, and the
   Next.js production build. Its build uses explicit non-secret Clerk and local
   API/application placeholders; it does not use provider secrets.
@@ -80,6 +90,8 @@ not replace the individual migration, dependency, secret, or container checks:
 The ruleset is GitHub configuration, not repository state. Before saving it,
 select these exact check names from a successful remote workflow run; do not
 type guessed names or substitute job identifiers such as `ci-required`.
+Coverage enforcement remains within `CI / API` and `CI / Agent`, so it does not
+introduce additional required GitHub check names.
 
 ## Migration changes
 
