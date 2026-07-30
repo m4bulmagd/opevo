@@ -1,6 +1,9 @@
+import importlib.util
 import json
+import os
 import subprocess
 import sys
+from types import ModuleType
 from pathlib import Path
 
 import pytest
@@ -54,6 +57,19 @@ def _run(*arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _load_checker_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "_check_python_coverage_under_test",
+        CHECKER,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load coverage checker")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_initialize_writes_measured_line_and_branch_minimums(tmp_path: Path) -> None:
     report = tmp_path / "coverage.json"
     baseline = tmp_path / "baseline.json"
@@ -74,6 +90,34 @@ def test_initialize_writes_measured_line_and_branch_minimums(tmp_path: Path) -> 
     }
 
 
+def test_initialize_rounds_non_terminating_percentages_down(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "coverage.json"
+    baseline = tmp_path / "baseline.json"
+    _write_report(
+        report,
+        covered_lines=2,
+        num_statements=3,
+        covered_branches=1,
+        num_branches=6,
+    )
+
+    result = _run(
+        "initialize",
+        "--report",
+        str(report),
+        "--baseline",
+        str(baseline),
+    )
+
+    assert result.returncode == 0
+    assert json.loads(baseline.read_text(encoding="utf-8")) == {
+        "minimum_line_percent": "66.66",
+        "minimum_branch_percent": "16.66",
+    }
+
+
 def test_initialize_refuses_to_replace_a_reviewed_baseline(tmp_path: Path) -> None:
     report = tmp_path / "coverage.json"
     baseline = tmp_path / "baseline.json"
@@ -91,6 +135,30 @@ def test_initialize_refuses_to_replace_a_reviewed_baseline(tmp_path: Path) -> No
     assert result.returncode == 2
     assert json.loads(baseline.read_text(encoding="utf-8")) == {"reviewed": True}
     assert "already exists" in result.stderr
+
+
+def test_initialize_removes_staging_file_when_atomic_install_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checker = _load_checker_module()
+    report = tmp_path / "coverage.json"
+    baseline = tmp_path / "baseline.json"
+    _write_report(report)
+
+    def fail_install(*_args: object, **_kwargs: object) -> None:
+        raise OSError("injected install failure")
+
+    monkeypatch.setattr(os, "link", fail_install)
+
+    with pytest.raises(
+        checker.CoverageDataError,
+        match="cannot create coverage baseline: injected install failure",
+    ):
+        checker.initialize(report, baseline)
+
+    assert not baseline.exists()
+    assert [path.name for path in tmp_path.iterdir()] == ["coverage.json"]
 
 
 @pytest.mark.parametrize(
@@ -136,6 +204,30 @@ def test_check_rejects_each_independent_coverage_regression(
 
     assert result.returncode == 1
     assert expected_error in result.stderr
+
+
+def test_check_rejects_raw_regression_when_two_decimal_displays_match(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "coverage.json"
+    baseline = tmp_path / "baseline.json"
+    _write_report(
+        report,
+        covered_lines=17_907,
+        num_statements=20_000,
+    )
+    _write_baseline(baseline, line="89.54")
+
+    result = _run(
+        "check",
+        "--report",
+        str(report),
+        "--baseline",
+        str(baseline),
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == "line coverage 89.535% is below 89.540%\n"
 
 
 def test_check_accepts_coverage_at_the_reviewed_minimum(tmp_path: Path) -> None:
@@ -234,6 +326,27 @@ def test_check_rejects_a_missing_report(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "invalid coverage report" in result.stderr
+
+
+def test_check_rejects_a_missing_baseline_with_a_safe_data_error(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "coverage.json"
+    missing_baseline = tmp_path / "missing-baseline.json"
+    _write_report(report)
+
+    result = _run(
+        "check",
+        "--report",
+        str(report),
+        "--baseline",
+        str(missing_baseline),
+    )
+
+    assert result.returncode == 2
+    assert result.stderr.startswith("invalid coverage baseline:")
+    assert "missing-baseline.json" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_initialize_rejects_zero_branch_total_with_valid_line_total(
