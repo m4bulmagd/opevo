@@ -44,8 +44,8 @@ The recommendations use these agreed priorities:
 | 6 | Dependency construction | **6A** — explicit, thin composition roots with typed dependencies | Accepted |
 | 7 | Provider failures | **7A** — one typed provider-failure vocabulary; distinguish internal defects | Accepted |
 | 8 | LiveKit compatibility | **8A** — staged upgrade and removal of private SDK dependencies | Accepted |
-| 9 | Python/test reliability | **9A** — Python 3.13 contract, cancellation fix, per-test timeouts | Accepted; planned |
-| 10 | Coverage | **10A** — measured line and branch coverage ratchets | Accepted; planned |
+| 9 | Python/test reliability | **9A-1R** — Python 3.13 contract, test-only cancellation-regression stabilization, per-test timeouts | Accepted; implemented |
+| 10 | Coverage | **10A** — measured line and branch coverage ratchets | Accepted; implemented |
 | 11 | Voice behavior evaluation | **11C** — retain credential-gated manual evaluations | Accepted risk |
 | 12 | Agent-process E2E | **12C** — retain current provider-free E2E boundary | Accepted risk |
 | 13 | Authentication performance | **13A** — application-scoped, cached, nonblocking, bounded Clerk verifier | Accepted |
@@ -78,7 +78,7 @@ independent deployment and scaling.
 
 ```mermaid
 flowchart LR
-    T[9A + 10A<br/>test foundation] --> C[2A<br/>wire contracts]
+    T[9A-1R + 10A<br/>test foundation] --> C[2A<br/>wire contracts]
     C --> A[3A + 13A<br/>auth boundary]
     T --> E[7A<br/>failure vocabulary]
     E --> O[5A + 6A<br/>outbox and composition]
@@ -535,50 +535,61 @@ upgrades progressively harder.
 
 # 3. Test Review
 
-## Issue 9 — Python Runtime Drift Masks a Reproducible Cancellation Hang
+## Issue 9 — Python Runtime Drift and a Teardown-Induced Cancellation Test Hang
 
 ### Concrete problem and evidence
 
-- `apps/api/pyproject.toml:3` and `apps/agent/pyproject.toml:3` declare Python
-  `>=3.11`, while Docker, CI, Ruff, and mypy target Python 3.13.
-- The reviewed local virtual environments used Python 3.12.13.
-- `apps/agent/agent/observability.py:365-392` catches cancellation and awaits
-  cleanup again without consuming the pending cancellation request.
-- `apps/agent/tests/test_observability.py:189-229` reproduces an indefinitely
-  spinning shutdown path.
-- Neither app currently applies a per-test timeout plugin.
+- At review time, `apps/api/pyproject.toml` and `apps/agent/pyproject.toml`
+  declared Python `>=3.11`, while Docker, CI, Ruff, and mypy targeted Python
+  3.13. The reviewed local virtual environments used Python 3.12.13.
+- The focused observability cancellation test could hang until the CI job
+  timeout, and neither app applied a per-test timeout plugin.
+- Systematic diagnosis proved the apparent production cancellation RED was
+  caused by `asyncio.to_thread(threading.Event.wait)` interacting with
+  AnyIO/`asyncio.Runner` teardown. A proposed production `uncancel()` change
+  did not affect the failure and was rejected.
 
 A hanging test can consume the entire CI job timeout, and runtime drift means
-local success may not describe the production/CI interpreter.
+local success may not describe the production/CI interpreter. The diagnosis
+did not establish a production observability defect.
 
 ### Options and tradeoffs
 
 | Option | Effort | Risk | Impact on other code | Ongoing maintenance |
 |---|---:|---:|---|---|
-| **9A — Selected and recommended:** standardize Python 3.13, fix cancellation semantics test-first, and add per-test deadlines | Medium | Lock/environment churn; cancellation changes need care | Both app toolchains, CI, observability lifecycle, tests | Low–medium |
+| **9A-1R — Selected amendment:** standardize Python 3.13, stabilize the cancellation regression test without production changes, and add per-test deadlines | Medium | Lock/environment churn; async test scheduling needs care | Both app toolchains, CI, tests | Low–medium |
 | **9B:** support and test Python 3.11–3.13 | High | Larger compatibility surface and slower CI | Both app matrices and dependency policy | High; no current product requirement justifies it |
 | **9C:** retain `>=3.11` and job-level timeouts | None | Hidden hangs and runtime-specific regressions persist | None | High debugging cost |
 
-### Recorded decision and proposed solution — 9A
+### Recorded decision and implemented solution — 9A-1R
 
 The executable implementation plan is:
 [Python Test Foundation Implementation Plan](../superpowers/plans/2026-07-30-python-test-foundation.md).
 
-Its essential direction is:
+The approved **9A-1R** amendment is:
 
 1. Make Python 3.13 the explicit repository/API/agent contract.
-2. Write the failing cancellation regression first.
-3. Correctly complete shielded cleanup without swallowing or repeatedly
-   retriggering cancellation, then propagate cancellation after cleanup.
-4. Add bounded per-test timeouts with explicit longer markers for genuine
-   credentialed evaluations.
-5. Preserve job-level CI timeouts as the outer safety net.
+2. Leave production observability unchanged. The rejected production
+   cancellation patch did not affect the diagnosed teardown failure.
+3. Keep `@pytest.mark.timeout(2)` on the focused cancellation regression.
+4. Replace its thread-backed startup wait with bounded async condition polling.
+5. Yield to the scheduler once after `shutdown_task.cancel()` and before
+   releasing the provider.
+6. Retain observable assertions for cleanup, cancellation propagation, and
+   reinitialization.
+7. Add bounded per-test timeouts with explicit longer markers for genuine
+   credentialed evaluations, while retaining job-level CI timeouts as the
+   outer safety net.
+
+Final evidence: the focused regression passed 20 consecutive runs, all 20
+observability tests passed, and the noncredentialed agent suite passed.
 
 ### Required validation
 
-- The reproducer fails quickly before the fix and passes repeatedly after it.
-- Cancellation is re-raised, cleanup executes once, and reinitialization cannot
-  race incomplete cleanup.
+- The focused test has a two-second deadline and passes repeatedly with no
+  thread-backed wait involved in its startup synchronization.
+- The test observes cancellation propagation, one completed provider cleanup,
+  and successful reinitialization after cleanup.
 - Both complete Python suites run under 3.13 with no unbounded test.
 - Timeout diagnostics identify the hanging test and retain useful stack output.
 
@@ -608,18 +619,29 @@ code changes.
 The detailed executable plan is the same
 [Python Test Foundation Implementation Plan](../superpowers/plans/2026-07-30-python-test-foundation.md).
 
-1. Measure each complete app suite after the hang is fixed.
+1. Measure each complete app suite after the test-only 9A-1R stabilization is
+   verified.
 2. Record independent line and branch baselines.
 3. Fail CI on regression below either baseline.
-4. Require an intentional, reviewed baseline update; CI never initializes or
-   overwrites it.
+4. Require an intentional, reviewed baseline update only for a repeatable
+   improvement attributable to code or test changes; CI never initializes or
+   overwrites it, and one stochastic higher run does not justify a raise.
 5. Add tests for valuable missing behavior instead of exclusions or percentage
    padding.
 
+The original genuine API run measured 89.545% line and 76.469% branch and
+initialized the current downward-rounded 89.54% and 76.46% floors. A later
+unchanged-code run measured 89.588% and 76.664%, isolated to alternate
+`billing_service.py` paths. Both pass; the later stochastic increase does not
+change the baseline.
+
 ### Required validation
 
-- Checker unit tests cover pass, line regression, branch regression, malformed
-  reports, missing files, and precision boundaries.
+- Checker subprocess tests cover pass, line regression, branch regression,
+  malformed reports, missing files, downward rounding, and raw precision
+  boundaries.
+- Baseline initialization stages and flushes a complete payload before an
+  atomic no-clobber install, with staging cleanup on success and failure.
 - Complete suites generate branch data and enforce independent app thresholds.
 - Focused local test commands remain fast and are not forced to satisfy the
   full-suite threshold.
@@ -654,7 +676,7 @@ No automation expansion is authorized. Preserve the tests as explicitly manual
 credentialed evaluations:
 
 1. Keep their skip reason and invocation documented and visible.
-2. Give them a distinct marker and an explicit longer timeout under 9A.
+2. Give them a distinct marker and an explicit longer timeout under 9A-1R.
 3. Do not count skipped manual evaluations as CI behavioral coverage.
 4. Record actor model, judge model, prompt version, date, and raw/safe artifacts
    when a human runs them.
@@ -985,7 +1007,7 @@ These are consciously accepted gaps, not omissions from this record.
 This document records review outcomes only. It does not authorize source,
 configuration, dependency, infrastructure, or deployment changes.
 
-The first prepared implementation wave covers **9A and 10A only**:
+The first prepared implementation wave covers **9A-1R and 10A only**:
 [Python Test Foundation Implementation Plan](../superpowers/plans/2026-07-30-python-test-foundation.md).
 Every later wave should receive its own reviewed implementation plan, should
 preserve the issue numbers above, and should state which accepted risks remain

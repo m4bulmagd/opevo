@@ -4,20 +4,26 @@
 
 **Parent decision record:** [Agent/API Architecture and Engineering Review Decision Record](../../engineering/2026-07-30-agent-api-review-decisions.md)
 
-**Goal:** Make Python 3.13 the explicit API/agent runtime contract, fix the agent observability cancellation hang, bound every Python test, and establish independently enforced line and branch coverage ratchets from measured baselines.
+**Goal:** Make Python 3.13 the explicit API/agent runtime contract, stabilize the agent observability cancellation regression test, bound every Python test, and establish independently enforced line and branch coverage ratchets from measured baselines.
 
-**Architecture:** Keep runtime declarations and pytest configuration inside each independently locked Python application, with one repository-level Python pin for local tooling. Keep the cancellation fix local to the agent observability lifecycle. Reuse one small, standard-library coverage-gate CLI across both applications so line and branch thresholds are explicit without duplicating comparison logic. Generate baseline files only from complete CI-equivalent suites; CI may check them but may never initialize or overwrite them.
+**Architecture:** Keep runtime declarations and pytest configuration inside each independently locked Python application, with one repository-level Python pin for local tooling. Apply approved amendment **9A-1R** by stabilizing the focused cancellation regression test while leaving production observability unchanged. Reuse one small, standard-library coverage-gate CLI across both applications so line and branch thresholds are explicit without duplicating comparison logic. Generate baseline files only from complete CI-equivalent suites; CI may check them but may never initialize or overwrite them.
 
 **Tech Stack:** CPython 3.13, uv 0.11.19, pytest 9, pytest-timeout 2.4, pytest-cov 7.1, coverage.py, AnyIO, GitHub Actions, PostgreSQL 17, Redis 7.
 
 ## Global Constraints
 
-- This wave implements approved decisions **9A** and **10A only**.
+- This wave implements approved decisions **9A-1R** and **10A only**.
 - Do not change contracts, authentication, outbox behavior, LiveKit versions, transcript behavior, realtime behavior, or production performance settings.
-- The only production behavior change is the bounded, cancellation-safe agent observability shutdown.
-- Follow strict RED → GREEN → REFACTOR for the cancellation bug and the coverage checker.
+- Do not change production application behavior. The apparent observability
+  cancellation bug was a test-teardown artifact, and the proposed production
+  patch was rejected.
+- Follow strict RED → GREEN → REFACTOR for the coverage checker. Preserve the
+  systematic diagnosis and repeated-run evidence for the test-only
+  cancellation amendment.
 - Do not add coverage exclusions merely to increase a percentage. Any new `# pragma: no cover`, omit rule, or excluded file requires separate review and a concrete untestability justification.
-- Do not guess coverage thresholds. Initialize them from complete CI-equivalent runs after the cancellation fix passes on Python 3.13.
+- Do not guess coverage thresholds. Initialize them from complete CI-equivalent
+  runs on Python 3.13, and raise them only for repeatable improvements
+  attributable to code or test changes.
 - Preserve decision **11C**: credentialed LiveKit behavior evaluations remain manual. Give those tests a longer explicit timeout so the global unit-test deadline does not disable them.
 - Preserve decision **12C**: do not add a real agent process to E2E in this wave.
 - Keep focused local pytest commands free of global coverage enforcement. Coverage gates run only on complete app suites.
@@ -26,15 +32,18 @@
 
 ---
 
-## Current Evidence and Intended File Structure
+## Initial Evidence and Intended File Structure
 
-Current mismatches:
+Mismatches at plan approval:
 
 - `apps/api/pyproject.toml` and `apps/agent/pyproject.toml` declare Python `>=3.11`.
 - Ruff, mypy, both Dockerfiles, and CI already target Python 3.13.
 - The existing ignored API and agent virtual environments are Python 3.12.13, which allowed the local verification runtime to drift.
 - Neither app currently installs `pytest-timeout` or `pytest-cov`.
-- `apps/agent/tests/test_observability.py::test_cancelled_shutdown_finishes_cleanup_before_allowing_reinitialization` can spin indefinitely after cancellation because the task suppresses `CancelledError` without consuming its cancellation request before awaiting again.
+- The original focused observability cancellation test used
+  `asyncio.to_thread(threading.Event.wait)`. Systematic diagnosis showed that
+  the worker-thread wait interacting with AnyIO/`asyncio.Runner` teardown—not
+  production cancellation handling—caused the apparent hang.
 - CI has only job-level timeouts and no line or branch coverage gate.
 
 Files created:
@@ -56,11 +65,11 @@ Files modified:
 CONTRIBUTING.md
 apps/api/pyproject.toml
 apps/api/uv.lock
-apps/agent/agent/observability.py
 apps/agent/pyproject.toml
 apps/agent/tests/evals/test_receptionist_behavior.py
 apps/agent/tests/test_observability.py
 apps/agent/uv.lock
+docs/engineering/2026-07-30-agent-api-review-decisions.md
 docs/engineering/ci-and-branch-protection.md
 ```
 
@@ -175,18 +184,25 @@ cd apps/api
 UV_CACHE_DIR=/tmp/uv-cache uv sync --python 3.13 --frozen --all-groups
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -c \
   'import sys; assert sys.version_info[:2] == (3, 13), sys.version'
-UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest --trace-config \
-  2>&1 | rg 'pytest_cov|pytest_timeout'
+set -o pipefail
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest \
+  --trace-config --collect-only 2>&1 | rg 'pytest_cov|pytest_timeout'
 
 cd ../agent
 UV_CACHE_DIR=/tmp/uv-cache uv sync --python 3.13 --frozen --all-groups
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -c \
   'import sys; assert sys.version_info[:2] == (3, 13), sys.version'
-UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest --trace-config \
-  2>&1 | rg 'pytest_cov|pytest_timeout'
+set -o pipefail
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest \
+  --trace-config --collect-only 2>&1 | rg 'pytest_cov|pytest_timeout'
 ```
 
-Expected: both version assertions pass and both plugin names appear for both apps. If dependency installation requires network access, request approval rather than weakening or bypassing the frozen environment.
+Expected: both version assertions pass, collection succeeds, and both plugin
+names appear for both apps. Run each command from its application directory.
+`set -o pipefail` is required so a pytest collection failure cannot be hidden by
+a successful output filter. If dependency installation requires network
+access, request approval rather than weakening or bypassing the frozen
+environment.
 
 - [ ] **Step 7: Checkpoint the toolchain change**
 
@@ -200,20 +216,20 @@ git commit -m "test: standardize Python 3.13 and bound pytest"
 
 ---
 
-## Task 2: Fix cancellation-safe observability shutdown with the existing regression
+## Task 2: Implement approved 9A-1R test-only cancellation stabilization
 
 **Files:**
 
 - Modify: `apps/agent/tests/test_observability.py`
-- Modify: `apps/agent/agent/observability.py`
+
+Production observability remains unchanged. Systematic diagnosis superseded
+the original production-fix proposal.
 
 - [ ] **Step 1: Put a focused deadline on the regression**
 
 Place `@pytest.mark.timeout(2)` immediately above the existing
 `@pytest.mark.anyio` decorator on
 `test_cancelled_shutdown_finishes_cleanup_before_allowing_reinitialization`.
-Retain the test body unchanged; its existing assertions already observe the
-required behavior.
 
 ```python
 @pytest.mark.timeout(2)
@@ -224,91 +240,67 @@ Those assertions cover:
 
 - the original shutdown surfaces `CancelledError`;
 - provider shutdown still happens exactly once;
-- a fresh adapter cannot replace the old one until cleanup completes;
 - reinitialization succeeds after cleanup.
 
 Do not replace these assertions with checks of private cancellation counters.
 
-- [ ] **Step 2: Run the regression and observe RED**
+- [ ] **Step 2: Preserve the systematic diagnosis**
+
+The initial focused test timed out while its startup synchronization awaited
+`asyncio.to_thread(threading.Event.wait)`. The worker-thread wait interacting
+with AnyIO/`asyncio.Runner` teardown caused the apparent RED. A candidate
+production `uncancel()` change did not affect the timeout, so it was rejected.
+This evidence supersedes the original production-cancellation diagnosis.
+
+- [ ] **Step 3: Replace thread-backed test synchronization**
+
+Retain the thread event used by the fake synchronous provider, but poll its
+condition from the async test with a bounded loop. After cancellation, yield
+once so the shutdown task observes cancellation before the provider is
+released:
+
+```python
+    for _ in range(50):
+        if flush_started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert flush_started.is_set()
+    shutdown_task.cancel()
+    await asyncio.sleep(0)
+    release_flush.set()
+```
+
+- [ ] **Step 4: Prove the focused test is stable**
 
 ```bash
 cd apps/agent
-UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest \
-  tests/test_observability.py::test_cancelled_shutdown_finishes_cleanup_before_allowing_reinitialization \
-  -vv
+for run in {1..20}; do
+  UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest \
+    tests/test_observability.py::test_cancelled_shutdown_finishes_cleanup_before_allowing_reinitialization \
+    -q || exit 1
+done
 ```
 
-Expected before the production fix: pytest-timeout fails the test after two seconds. Confirm the failure is the repeated post-cancellation await, not an import, fixture, or dependency error.
+Expected: 20 consecutive passes under the two-second focused deadline.
 
-- [ ] **Step 3: Consume suppressed cancellation requests while cleanup is shielded**
-
-In `shutdown_observability`, retain the shielded cleanup task and explicit re-raise, but consume each cancellation request when it is temporarily suppressed:
-
-```python
-    cleanup_task = asyncio.create_task(
-        _close_adapter(adapter, timeout_seconds=timeout_seconds)
-    )
-    current_task = asyncio.current_task()
-    cancellation: asyncio.CancelledError | None = None
-    while not cleanup_task.done():
-        try:
-            await asyncio.shield(cleanup_task)
-        except asyncio.CancelledError as exc:
-            if cancellation is None:
-                cancellation = exc
-            if current_task is not None:
-                current_task.uncancel()
-
-    cleanup_task.result()
-    if cancellation is not None:
-        raise cancellation
-```
-
-Why this shape:
-
-- `shield` prevents the caller's cancellation from cancelling provider cleanup.
-- `uncancel()` is required when deliberately suppressing cancellation and then awaiting again on Python 3.13.
-- preserving the first `CancelledError` keeps the caller-visible cancellation contract.
-- the loop still tolerates another cancellation request while cleanup is in progress.
-- `cleanup_task.result()` still propagates an unexpected internal cleanup defect.
-
-Do not move provider shutdown back onto the event-loop thread and do not permit reinitialization before the old provider's actions return.
-
-- [ ] **Step 4: Run the focused test and observe GREEN**
-
-```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest \
-  tests/test_observability.py::test_cancelled_shutdown_finishes_cleanup_before_allowing_reinitialization \
-  -vv
-```
-
-Expected: PASS in well under two seconds.
-
-- [ ] **Step 5: Run the complete observability lifecycle tests**
+- [ ] **Step 5: Run the observability and noncredentialed agent suites**
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest \
   tests/test_observability.py -q
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
 ```
 
-Expected: all tests pass. In particular, the timed-out-provider test must still keep reinitialization blocked until the provider thread returns.
+Expected: all 20 observability tests pass, and the noncredentialed agent suite
+passes with only the explicitly credential-gated LiveKit evaluations skipped.
+The focused test continues to observe cleanup, cancellation propagation, and
+reinitialization.
 
-- [ ] **Step 6: Perform the mutation check**
-
-Verify mentally and, if necessary, temporarily mutate locally:
-
-- removing `uncancel()` makes the focused test hit its two-second timeout;
-- removing `shield()` lets cancellation abort cleanup and breaks the shutdown assertion;
-- resetting initialization before the provider completes breaks the reinitialization assertions;
-- omitting the final `raise cancellation` breaks the `pytest.raises(CancelledError)` assertion.
-
-Revert every temporary mutation before continuing.
-
-- [ ] **Step 7: Checkpoint the bug fix**
+- [ ] **Step 6: Checkpoint the test-only amendment**
 
 ```bash
-git add apps/agent/agent/observability.py apps/agent/tests/test_observability.py
-git commit -m "fix(agent): finish telemetry cleanup after cancellation"
+git add apps/agent/tests/test_observability.py
+git commit -m "test(agent): stabilize cancellation regression"
 ```
 
 ---
@@ -327,11 +319,21 @@ check_python_coverage.py initialize --report REPORT --baseline BASELINE
 check_python_coverage.py check      --report REPORT --baseline BASELINE
 ```
 
-`initialize` exclusively creates a baseline and refuses to overwrite one. `check` compares current unrounded line and branch percentages against the stored two-decimal minimums.
+`initialize` serializes a complete baseline, stages and flushes it in the
+destination directory, then atomically installs it without overwriting an
+existing baseline. `check` compares current unrounded line and branch
+percentages against the stored minimums and expands diagnostic precision only
+when two-decimal displays would be contradictory.
 
 - [ ] **Step 1: Write CLI behavior tests first**
 
-Create `apps/api/tests/tooling/test_python_coverage_gate.py` with real subprocess tests. Use literal fixtures; do not import or duplicate the checker's percentage implementation.
+Create `apps/api/tests/tooling/test_python_coverage_gate.py` with real
+subprocess tests. Use literal fixtures; do not import or duplicate the
+checker's percentage implementation. Cover downward rounding of
+non-terminating ratios, raw comparison at an equal-looking two-decimal
+boundary, and a missing baseline as data-error exit 2. The one staged-install
+fault-injection test may import the real checker module to inject an
+`os.link()` failure and prove both the final and staging paths are absent.
 
 ```python
 import json
@@ -570,7 +572,11 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest \
   tests/tooling/test_python_coverage_gate.py -q
 ```
 
-Expected: failures because `scripts/check_python_coverage.py` does not exist. The failure proves the tests exercise the real CLI.
+Expected final-review RED: the atomic-install fault test fails because the
+checker has no staged no-clobber install seam, and the raw-boundary test exposes
+the contradictory `89.54% is below 89.54%` diagnostic. The downward-rounding
+and missing-baseline subprocess cases already pass, characterizing existing
+correct behavior.
 
 - [ ] **Step 3: Implement the smallest shared checker**
 
@@ -580,7 +586,9 @@ Create `scripts/check_python_coverage.py` as a standard-library-only CLI. Keep t
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from pathlib import Path
@@ -673,6 +681,49 @@ def _display(value: Decimal) -> str:
     return f"{value.quantize(_TWO_DECIMAL_PLACES):.2f}"
 
 
+def _regression_displays(measured: Decimal, minimum: Decimal) -> tuple[str, str]:
+    measured_display = _display(measured)
+    minimum_display = _display(minimum)
+    if measured_display != minimum_display:
+        return measured_display, minimum_display
+    for decimal_places in range(3, 7):
+        measured_display = f"{measured:.{decimal_places}f}"
+        minimum_display = f"{minimum:.{decimal_places}f}"
+        if measured_display != minimum_display:
+            return measured_display, minimum_display
+    return str(measured), str(minimum)
+
+
+def _install_baseline_exclusively(path: Path, payload: str) -> None:
+    staging_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as staging_file:
+            staging_path = Path(staging_file.name)
+            staging_file.write(payload)
+            staging_file.flush()
+            os.fsync(staging_file.fileno())
+        os.link(staging_path, path)
+    except FileExistsError as error:
+        raise CoverageDataError(f"coverage baseline already exists: {path}") from error
+    except OSError as error:
+        raise CoverageDataError(f"cannot create coverage baseline: {error}") from error
+    finally:
+        if staging_path is not None:
+            try:
+                staging_path.unlink(missing_ok=True)
+            except OSError as error:
+                raise CoverageDataError(
+                    f"cannot remove staged coverage baseline: {error}"
+                ) from error
+
+
 def initialize(report_path: Path, baseline_path: Path) -> int:
     measured = load_report(report_path)
     baseline = {
@@ -685,18 +736,8 @@ def initialize(report_path: Path, baseline_path: Path) -> int:
             ".2f",
         ),
     }
-    try:
-        with baseline_path.open("x", encoding="utf-8") as baseline_file:
-            json.dump(baseline, baseline_file, indent=2)
-            baseline_file.write("\n")
-    except FileExistsError as error:
-        raise CoverageDataError(
-            f"coverage baseline already exists: {baseline_path}"
-        ) from error
-    except OSError as error:
-        raise CoverageDataError(
-            f"cannot create coverage baseline: {error}"
-        ) from error
+    payload = json.dumps(baseline, indent=2) + "\n"
+    _install_baseline_exclusively(baseline_path, payload)
     print(
         f"initialized line={baseline['minimum_line_percent']}% "
         f"branch={baseline['minimum_branch_percent']}%"
@@ -709,14 +750,20 @@ def check(report_path: Path, baseline_path: Path) -> int:
     minimum = load_baseline(baseline_path)
     failures: list[str] = []
     if measured.line < minimum.line:
+        measured_display, minimum_display = _regression_displays(
+            measured.line,
+            minimum.line,
+        )
         failures.append(
-            f"line coverage {_display(measured.line)}% is below "
-            f"{_display(minimum.line)}%"
+            f"line coverage {measured_display}% is below {minimum_display}%"
         )
     if measured.branch < minimum.branch:
+        measured_display, minimum_display = _regression_displays(
+            measured.branch,
+            minimum.branch,
+        )
         failures.append(
-            f"branch coverage {_display(measured.branch)}% is below "
-            f"{_display(minimum.branch)}%"
+            f"branch coverage {measured_display}% is below {minimum_display}%"
         )
     if failures:
         for failure in failures:
@@ -775,7 +822,11 @@ Verify the tests fail independently if:
 
 - `check()` stops comparing line coverage;
 - `check()` stops comparing branch coverage;
-- `initialize()` opens the baseline in overwrite mode;
+- `check()` rounds before comparing raw percentages;
+- equal-looking raw regressions return a contradictory two-decimal diagnostic;
+- `initialize()` rounds a non-terminating percentage upward;
+- staged installation overwrites an existing baseline;
+- a staged install failure leaves a partial final file or staging file;
 - booleans are accepted as integer counts;
 - zero branch totals are treated as valid branch coverage.
 
@@ -798,6 +849,14 @@ git commit -m "test: add independent Python coverage gates"
 - Create: `apps/api/coverage-baseline.json`
 - Modify: `apps/agent/pyproject.toml`
 - Create: `apps/agent/coverage-baseline.json`
+
+Baseline raises require repeatable improvements attributable to code or test
+changes. Do not raise a baseline from one higher unchanged-code run. The
+original genuine API run measured 89.545% line and 76.469% branch, producing
+the current downward-rounded 89.54% and 76.46% floors. A later unchanged-code
+run measured 89.588% and 76.664%, isolated to alternate
+`billing_service.py` paths. Both runs pass the current floors; the stochastic
+increase does not authorize a baseline edit.
 
 - [ ] **Step 1: Configure coverage collection without forcing it on focused tests**
 
@@ -867,7 +926,11 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python \
   --baseline coverage-baseline.json
 ```
 
-Expected: initialization creates the file once, and the immediate check passes. Review the two generated numeric strings; do not round them upward and do not lower them manually.
+Expected: initialization creates the file once, and the immediate check passes.
+Review the two generated numeric strings; do not round them upward and do not
+lower them manually. After initialization, raise a committed value only when
+the improvement repeats and is attributable to the code or test changes under
+review.
 
 - [ ] **Step 5: Run the complete agent suite on Python 3.13**
 
@@ -969,7 +1032,9 @@ In `CONTRIBUTING.md`:
 - replace the API and agent plain pytest commands with the exact coverage collection and checker commands from Task 4;
 - state that focused pytest runs omit coverage flags;
 - state that a coverage decrease requires tests, not a lowered baseline;
-- state that when coverage increases, the baseline should be raised to the new measured, downward-rounded value in the same change;
+- state that a baseline is raised to the new measured, downward-rounded value
+  in the same change only for a repeatable improvement attributable to that
+  change, never for one stochastic higher run;
 - explain that `pytest-timeout` applies 60 seconds per API test and 30 seconds per agent test, with 180 seconds only for manual LiveKit evaluations.
 
 - [ ] **Step 4: Update CI documentation**
@@ -1086,11 +1151,14 @@ Expected:
 
 Confirm from the final diff:
 
-- no app behavior changed outside `apps/agent/agent/observability.py`;
-- the cancellation fix still re-raises cancellation after cleanup;
+- no production application behavior changed;
+- the test-only 9A-1R amendment retains observable cleanup, cancellation
+  propagation, and reinitialization assertions;
 - no coverage exclusions were added;
-- line and branch coverage are compared separately;
+- line and branch coverage are compared separately at raw precision;
 - CI cannot initialize or lower baselines;
+- baseline raises require repeatable improvements attributable to code or test
+  changes;
 - focused local pytest commands still work without running whole-app coverage;
 - timeouts cover fixtures and teardown;
 - the manual LiveKit evaluation exception is explicit and limited to that module.
@@ -1103,11 +1171,13 @@ If the task was implemented as separate checkpoint commits, inspect them and ret
 git add .python-version .gitignore .github/workflows/ci.yml CONTRIBUTING.md \
   apps/api/pyproject.toml apps/api/uv.lock apps/api/coverage-baseline.json \
   apps/api/tests/tooling/test_python_coverage_gate.py \
-  apps/agent/agent/observability.py apps/agent/pyproject.toml \
+  apps/agent/pyproject.toml \
   apps/agent/tests/evals/test_receptionist_behavior.py \
   apps/agent/tests/test_observability.py apps/agent/uv.lock \
   apps/agent/coverage-baseline.json \
+  docs/engineering/2026-07-30-agent-api-review-decisions.md \
   docs/engineering/ci-and-branch-protection.md \
+  docs/superpowers/plans/2026-07-30-python-test-foundation.md \
   scripts/check_python_coverage.py
 git commit -m "test: harden Python runtime and coverage gates"
 ```
@@ -1117,18 +1187,24 @@ git commit -m "test: harden Python runtime and coverage gates"
 ## Rollback Boundaries
 
 1. **Toolchain rollback:** `.python-version`, both pyprojects, both lockfiles, and the LiveKit evaluation timeout marker can be reverted together without touching runtime behavior.
-2. **Cancellation rollback:** the observability production change and its focused test marker form one isolated unit. Do not revert only the test.
+2. **Test-stabilization rollback:** the focused test's timeout, bounded async
+   condition polling, and post-cancellation scheduling yield form one test-only
+   unit. Production observability is not part of this boundary.
 3. **Coverage rollback:** the checker, checker tests, coverage configuration, baseline files, CI steps, ignore rules, and documentation form one unit. Removing only CI enforcement would silently invalidate decision 10A.
 
 ## Completion Criteria
 
 - Both applications install and run under CPython 3.13 from frozen lockfiles.
 - A missing timeout or coverage plugin causes pytest configuration to fail immediately.
-- The cancellation regression fails quickly without the fix and passes with it.
+- The focused cancellation regression has a two-second deadline, uses no
+  thread-backed startup wait, passes repeatedly, and production observability
+  remains unchanged.
 - Every API test has a 60-second deadline; every ordinary agent test has a 30-second deadline; manual credentialed LiveKit evaluations have an explicit 180-second deadline.
 - Complete API coverage is measured with PostgreSQL and Redis available.
 - Complete agent coverage is measured with only the approved credentialed evaluations skipped.
-- Line and branch percentages are independently checked against committed, measured baselines.
-- Coverage decreases fail CI; baseline decreases are prohibited by review policy.
+- Line and branch percentages are independently checked at raw precision
+  against committed, measured baselines.
+- Coverage decreases fail CI; baseline decreases are prohibited, and baseline
+  raises require repeatable improvements attributable to code or test changes.
 - Focused test runs remain fast and do not invoke whole-app coverage gates.
 - No unrelated code or `Presvo_frontend/` file is changed.

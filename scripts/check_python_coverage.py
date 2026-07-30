@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from pathlib import Path
@@ -98,6 +100,49 @@ def _display(value: Decimal) -> str:
     return f"{value.quantize(_TWO_DECIMAL_PLACES):.2f}"
 
 
+def _regression_displays(measured: Decimal, minimum: Decimal) -> tuple[str, str]:
+    measured_display = _display(measured)
+    minimum_display = _display(minimum)
+    if measured_display != minimum_display:
+        return measured_display, minimum_display
+    for decimal_places in range(3, 7):
+        measured_display = f"{measured:.{decimal_places}f}"
+        minimum_display = f"{minimum:.{decimal_places}f}"
+        if measured_display != minimum_display:
+            return measured_display, minimum_display
+    return str(measured), str(minimum)
+
+
+def _install_baseline_exclusively(path: Path, payload: str) -> None:
+    staging_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as staging_file:
+            staging_path = Path(staging_file.name)
+            staging_file.write(payload)
+            staging_file.flush()
+            os.fsync(staging_file.fileno())
+        os.link(staging_path, path)
+    except FileExistsError as error:
+        raise CoverageDataError(f"coverage baseline already exists: {path}") from error
+    except OSError as error:
+        raise CoverageDataError(f"cannot create coverage baseline: {error}") from error
+    finally:
+        if staging_path is not None:
+            try:
+                staging_path.unlink(missing_ok=True)
+            except OSError as error:
+                raise CoverageDataError(
+                    f"cannot remove staged coverage baseline: {error}"
+                ) from error
+
+
 def initialize(report_path: Path, baseline_path: Path) -> int:
     measured = load_report(report_path)
     baseline = {
@@ -110,16 +155,8 @@ def initialize(report_path: Path, baseline_path: Path) -> int:
             ".2f",
         ),
     }
-    try:
-        with baseline_path.open("x", encoding="utf-8") as baseline_file:
-            json.dump(baseline, baseline_file, indent=2)
-            baseline_file.write("\n")
-    except FileExistsError as error:
-        raise CoverageDataError(
-            f"coverage baseline already exists: {baseline_path}"
-        ) from error
-    except OSError as error:
-        raise CoverageDataError(f"cannot create coverage baseline: {error}") from error
+    payload = json.dumps(baseline, indent=2) + "\n"
+    _install_baseline_exclusively(baseline_path, payload)
     print(
         f"initialized line={baseline['minimum_line_percent']}% "
         f"branch={baseline['minimum_branch_percent']}%"
@@ -132,14 +169,20 @@ def check(report_path: Path, baseline_path: Path) -> int:
     minimum = load_baseline(baseline_path)
     failures: list[str] = []
     if measured.line < minimum.line:
+        measured_display, minimum_display = _regression_displays(
+            measured.line,
+            minimum.line,
+        )
         failures.append(
-            f"line coverage {_display(measured.line)}% is below "
-            f"{_display(minimum.line)}%"
+            f"line coverage {measured_display}% is below {minimum_display}%"
         )
     if measured.branch < minimum.branch:
+        measured_display, minimum_display = _regression_displays(
+            measured.branch,
+            minimum.branch,
+        )
         failures.append(
-            f"branch coverage {_display(measured.branch)}% is below "
-            f"{_display(minimum.branch)}%"
+            f"branch coverage {measured_display}% is below {minimum_display}%"
         )
     if failures:
         for failure in failures:

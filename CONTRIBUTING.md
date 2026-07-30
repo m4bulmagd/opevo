@@ -141,8 +141,10 @@ manual LiveKit evaluations use their explicit 180-second deadline.
 
 The committed `coverage-baseline.json` files are measured quality gates. A
 coverage decrease requires adding or improving tests, never lowering a
-baseline. When coverage increases, raise the relevant baseline in the same
-change to the new measured value, rounded down to two decimal places.
+baseline. Raise a baseline in the same change only for a repeatable coverage
+improvement attributable to its code or test changes, using the new measured
+value rounded down to two decimal places. Do not raise a baseline from a single
+higher run caused by stochastic execution-path variance.
 
 ### Web
 
