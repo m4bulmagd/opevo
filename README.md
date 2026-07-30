@@ -229,6 +229,7 @@ libs/shared/       Small cross-application Python contracts
 ## Documentation
 
 - [Project status and roadmap](docs/PROJECT_STATUS.md)
+- [Agent/API architecture and engineering review decisions](docs/engineering/2026-07-30-agent-api-review-decisions.md)
 - [Local self-service activation](docs/architecture/local-self-service-activation.md)
 - [Backend context](docs/architecture/backend-context.md)
 - [Integration endpoints](docs/architecture/integration-endpoints.md)
