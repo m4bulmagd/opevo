@@ -1,7 +1,7 @@
 [project]
 name = "ai-call-assistant-agent"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.13,<3.14"
 dependencies = [
   "httpx>=0.28,<0.29",
   "livekit-agents==1.4.4",
@@ -24,6 +24,8 @@ dev = [
   "mypy>=2.3,<3",
   "pip-audit>=2.10.1,<3",
   "pytest>=9.0.3,<10",
+  "pytest-cov>=7.1,<8",
+  "pytest-timeout>=2.4,<3",
   "ruff>=0.15.21,<0.16",
 ]
 
@@ -56,6 +58,11 @@ warn_unused_ignores = true
 markers = [
   "livekit_eval: credentialed LiveKit model behavior evaluation",
 ]
+required_plugins = [
+  "pytest-cov>=7.1,<8",
+  "pytest-timeout>=2.4,<3",
+]
+timeout = 30
 
 [[tool.mypy.overrides]]
 module = ["speechmatics.voice._smart_turn"]
