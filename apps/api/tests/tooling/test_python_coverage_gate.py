@@ -48,7 +48,7 @@ def _write_baseline(path: Path, *, line: object = "90.00", branch: object = "75.
     )
 
 
-def _run(*arguments: str) -> subprocess.CompletedProcess[str]:
+def _run_checker(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(CHECKER), *arguments],
         check=False,
@@ -75,7 +75,7 @@ def test_initialize_writes_measured_line_and_branch_minimums(tmp_path: Path) -> 
     baseline = tmp_path / "baseline.json"
     _write_report(report)
 
-    result = _run(
+    result = _run_checker(
         "initialize",
         "--report",
         str(report),
@@ -103,7 +103,7 @@ def test_initialize_rounds_non_terminating_percentages_down(
         num_branches=6,
     )
 
-    result = _run(
+    result = _run_checker(
         "initialize",
         "--report",
         str(report),
@@ -124,7 +124,7 @@ def test_initialize_refuses_to_replace_a_reviewed_baseline(tmp_path: Path) -> No
     _write_report(report)
     baseline.write_text('{"reviewed": true}', encoding="utf-8")
 
-    result = _run(
+    result = _run_checker(
         "initialize",
         "--report",
         str(report),
@@ -194,7 +194,7 @@ def test_check_rejects_each_independent_coverage_regression(
     _write_baseline(baseline)
     _write_report(report, **report_counts)
 
-    result = _run(
+    result = _run_checker(
         "check",
         "--report",
         str(report),
@@ -218,7 +218,7 @@ def test_check_rejects_raw_regression_when_two_decimal_displays_match(
     )
     _write_baseline(baseline, line="89.54")
 
-    result = _run(
+    result = _run_checker(
         "check",
         "--report",
         str(report),
@@ -236,7 +236,7 @@ def test_check_accepts_coverage_at_the_reviewed_minimum(tmp_path: Path) -> None:
     _write_report(report)
     _write_baseline(baseline)
 
-    result = _run(
+    result = _run_checker(
         "check",
         "--report",
         str(report),
@@ -278,7 +278,7 @@ def test_initialize_rejects_invalid_counts(tmp_path: Path, totals: dict[str, obj
     baseline = tmp_path / "baseline.json"
     report.write_text(json.dumps({"totals": totals}), encoding="utf-8")
 
-    result = _run(
+    result = _run_checker(
         "initialize",
         "--report",
         str(report),
@@ -299,7 +299,7 @@ def test_initialize_rejects_non_object_or_malformed_report(
     baseline = tmp_path / "baseline.json"
     report.write_text(contents, encoding="utf-8")
 
-    result = _run(
+    result = _run_checker(
         "initialize",
         "--report",
         str(report),
@@ -316,7 +316,7 @@ def test_check_rejects_a_missing_report(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline.json"
     _write_baseline(baseline)
 
-    result = _run(
+    result = _run_checker(
         "check",
         "--report",
         str(tmp_path / "missing.json"),
@@ -335,7 +335,7 @@ def test_check_rejects_a_missing_baseline_with_a_safe_data_error(
     missing_baseline = tmp_path / "missing-baseline.json"
     _write_report(report)
 
-    result = _run(
+    result = _run_checker(
         "check",
         "--report",
         str(report),
@@ -356,7 +356,7 @@ def test_initialize_rejects_zero_branch_total_with_valid_line_total(
     baseline = tmp_path / "baseline.json"
     _write_report(report, covered_branches=0, num_branches=0)
 
-    result = _run(
+    result = _run_checker(
         "initialize",
         "--report",
         str(report),
@@ -376,7 +376,7 @@ def test_check_rejects_invalid_baseline_values(tmp_path: Path, line: object) -> 
     _write_report(report)
     _write_baseline(baseline, line=line)
 
-    result = _run(
+    result = _run_checker(
         "check",
         "--report",
         str(report),
