@@ -21,6 +21,7 @@ EVALUATION_MODEL = os.environ.get("LIVEKIT_EVAL_MODEL", "")
 pytestmark = [
     pytest.mark.anyio,
     pytest.mark.livekit_eval,
+    pytest.mark.timeout(180),
     # An import-time module skip exits 5 when pytest runs only this file.
     pytest.mark.skipif(
         not EVALUATION_ENV_READY,
