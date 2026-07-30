@@ -63,6 +63,16 @@ required_plugins = [
 ]
 timeout = 60
 
+[tool.coverage.run]
+branch = true
+relative_files = true
+source = ["app"]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+
 [tool.ruff]
 target-version = "py313"
 

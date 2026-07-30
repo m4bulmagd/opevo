@@ -64,6 +64,16 @@ required_plugins = [
 ]
 timeout = 30
 
+[tool.coverage.run]
+branch = true
+relative_files = true
+source = ["agent"]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+
 [[tool.mypy.overrides]]
 module = ["speechmatics.voice._smart_turn"]
 ignore_missing_imports = true
