@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -20,6 +20,7 @@ from app.schemas.agent_identity import AuthenticatedAgentIdentity
 
 
 FIXTURES = Path(__file__).parents[4] / "libs/shared/tests/fixtures/v1"
+FIXTURE_CALL_ID = UUID("11111111-1111-4111-8111-111111111111")
 
 
 class CapturingQueue:
@@ -29,12 +30,6 @@ class CapturingQueue:
     async def enqueue(self, payload: dict) -> str:
         self.payloads.append(payload)
         return f"call-finalization:{payload['call_id']}"
-
-
-class GoldenFixtureQueue(CapturingQueue):
-    async def enqueue(self, payload: dict) -> str:
-        self.payloads.append(payload)
-        return "call-finalization:11111111-1111-4111-8111-111111111111"
 
 
 def test_agent_identity_requires_scoped_claims() -> None:
@@ -64,7 +59,13 @@ def test_agent_identity_requires_scoped_claims() -> None:
             AuthenticatedAgentIdentity(**identity)
 
 
-async def _runtime_call(db_session, active_user, *, status: str = "pending"):
+async def _runtime_call(
+    db_session,
+    active_user,
+    *,
+    status: str = "pending",
+    call_id: UUID | None = None,
+):
     config = AgentConfig(
         user_id=active_user.id,
         agent_name="Runtime",
@@ -75,7 +76,7 @@ async def _runtime_call(db_session, active_user, *, status: str = "pending"):
     db_session.add(config)
     await db_session.flush()
     call = Call(
-        id=uuid4(),
+        id=call_id or uuid4(),
         user_id=active_user.id,
         agent_config_id=config.id,
         status=status,
@@ -139,19 +140,19 @@ async def _post(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("endpoint", "request_name", "acknowledgement_name", "queue"),
+    ("endpoint", "request_name", "acknowledgement_name", "needs_queue"),
     [
         (
             "transcript",
             "transcript_append_request.json",
             "transcript_append_acknowledgement.json",
-            None,
+            False,
         ),
         (
             "complete",
             "call_completion_request.json",
             "call_completion_acknowledgement.json",
-            GoldenFixtureQueue(),
+            True,
         ),
     ],
 )
@@ -161,9 +162,14 @@ async def test_actual_agent_http_route_matches_golden_contracts(
     endpoint: str,
     request_name: str,
     acknowledgement_name: str,
-    queue: CapturingQueue | None,
+    needs_queue: bool,
 ) -> None:
-    call, _, token = await _runtime_call(db_session, active_user)
+    call, _, token = await _runtime_call(
+        db_session,
+        active_user,
+        call_id=FIXTURE_CALL_ID if endpoint == "complete" else None,
+    )
+    queue = CapturingQueue() if needs_queue else None
     request_fixture = json.loads((FIXTURES / request_name).read_text())
     acknowledgement_fixture = json.loads(
         (FIXTURES / acknowledgement_name).read_text()
@@ -178,6 +184,10 @@ async def test_actual_agent_http_route_matches_golden_contracts(
 
     assert response.status_code == (202 if endpoint == "complete" else 200)
     assert response.json() == acknowledgement_fixture
+    if endpoint == "complete":
+        assert acknowledgement_fixture["job_id"] == f"call-finalization:{call.id}"
+        assert queue is not None
+        assert queue.payloads == [{"call_id": str(call.id)}]
 
 
 @pytest.mark.anyio
@@ -464,6 +474,7 @@ async def test_completion_preserves_explicit_reordered_recovery_sequences(
             "transcript": [
                 {"sequence_number": 2, "speaker": "AGENT", "text": "Second"},
                 {"sequence_number": 1, "speaker": "CALLER", "text": "First"},
+                {"sequence_number": 2, "speaker": "AGENT", "text": "Second"},
             ],
         },
     )
