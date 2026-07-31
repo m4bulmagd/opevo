@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-31
 **Decision:** 2A
-**Status:** Approved
+**Status:** Implemented
 
 ## Purpose
 
@@ -13,6 +13,21 @@ This design replaces duplicated models, literals, validation, acknowledgement
 inspection, and source-text synchronization tests with one tested contract
 module. It does not move business logic or infrastructure adapters into a
 shared package.
+
+## Implementation Evidence
+
+The shared package, golden fixtures, and migrated API/agent seam tests have
+been completed. Focused shared, API, and agent suites passed in the task
+reports; each application lockfile was checked independently; and both
+root-context production images built and passed an import smoke test for
+`presvo_contracts`. The final duplication scans found no app-local mapped wire
+model, manual acknowledgement parser, duplicate realtime channel prefix, or
+legacy realtime producer discriminator.
+
+This status records the implemented wire-contract scope only. It does not
+claim a final full API suite, coverage-gate, deployment, or realtime-enablement
+result; those remain separate verification and rollout work. Realtime remains
+disabled, and accepted risks 11C and 12C remain unchanged.
 
 ## Context
 
