@@ -5,7 +5,9 @@ from uuid import uuid4
 import pytest
 
 from agent.api_client import TranscriptAppendPermanentError
-from agent.schemas import CallTranscriptItem, DispatchMetadata
+from presvo_contracts import CustomerCallDispatch, create_contract
+
+from agent.schemas import CallTranscriptItem
 from agent.session_runtime import SessionRuntime
 
 
@@ -68,12 +70,14 @@ class PermanentlyFailingAppendClient(FakeApiClient):
         raise TranscriptAppendPermanentError("TRANSCRIPT_SENTINEL_FROM_APPEND")
 
 
-def make_metadata(**kwargs) -> DispatchMetadata:
+def make_metadata(**kwargs) -> CustomerCallDispatch:
+    call_id = kwargs.pop("call_id", uuid4())
     defaults = dict(
-        call_id="call_123",
-        user_id="user_123",
-        agent_config_id=str(uuid4()),
-        agent_identity="agent-call-call_123",
+        job_type="customer_call",
+        call_id=call_id,
+        user_id=uuid4(),
+        agent_config_id=uuid4(),
+        agent_identity=f"agent-call-{call_id}",
         agent_name="A",
         owner_name="O",
         owner_context=None,
@@ -85,7 +89,7 @@ def make_metadata(**kwargs) -> DispatchMetadata:
         dispatch_token="dispatch-token",
     )
     defaults.update(kwargs)
-    return DispatchMetadata(**defaults)
+    return create_contract(CustomerCallDispatch, **defaults)
 
 
 # T4-1: finalize() when api_client.complete_call() raises — should log but not crash
@@ -128,7 +132,7 @@ async def test_finalize_no_api_client_still_publishes_call_ended() -> None:
 
     assert any(e["type"] == "call_ended" for e in publisher.events)
     call_ended = next(e for e in publisher.events if e["type"] == "call_ended")
-    assert call_ended["call_id"] == "call_123"
+    assert call_ended["call_id"] == str(metadata.call_id)
     assert call_ended["duration_seconds"] == 45
 
 
@@ -149,7 +153,9 @@ async def test_handle_caller_transcript_publish_failure_does_not_crash() -> None
 
 
 @pytest.mark.anyio
-async def test_transcript_publish_failure_does_not_log_provider_error_content(caplog) -> None:
+async def test_transcript_publish_failure_does_not_log_provider_error_content(
+    caplog,
+) -> None:
     runtime = SessionRuntime(SecretBearingFailingEventPublisher())
     metadata = make_metadata()
 
@@ -157,11 +163,13 @@ async def test_transcript_publish_failure_does_not_log_provider_error_content(ca
         await runtime.handle_caller_transcript(metadata, "caller transcript")
 
     assert "TRANSCRIPT_SENTINEL_FROM_PROVIDER_ERROR" not in caplog.text
-    assert "call_123" in caplog.text
+    assert str(metadata.call_id) in caplog.text
 
 
 @pytest.mark.anyio
-async def test_agent_utterance_publish_failure_does_not_log_provider_error_content(caplog) -> None:
+async def test_agent_utterance_publish_failure_does_not_log_provider_error_content(
+    caplog,
+) -> None:
     runtime = SessionRuntime(SecretBearingFailingEventPublisher())
     metadata = make_metadata()
 
@@ -169,23 +177,27 @@ async def test_agent_utterance_publish_failure_does_not_log_provider_error_conte
         await runtime.handle_agent_utterance(metadata, "agent transcript")
 
     assert "TRANSCRIPT_SENTINEL_FROM_PROVIDER_ERROR" not in caplog.text
-    assert "call_123" in caplog.text
+    assert str(metadata.call_id) in caplog.text
 
 
 @pytest.mark.anyio
 async def test_complete_call_failure_does_not_log_api_error_content(caplog) -> None:
-    runtime = SessionRuntime(FakeEventPublisher(), api_client=SecretBearingFailingApiClient())
+    runtime = SessionRuntime(
+        FakeEventPublisher(), api_client=SecretBearingFailingApiClient()
+    )
     metadata = make_metadata(dispatch_token="dispatch_secret")
 
     with caplog.at_level(logging.ERROR):
         await runtime.finalize(metadata, duration_seconds=60)
 
     assert "AUTHORIZATION_SENTINEL_FROM_API_CLIENT" not in caplog.text
-    assert "call_123" in caplog.text
+    assert str(metadata.call_id) in caplog.text
 
 
 @pytest.mark.anyio
-async def test_call_ended_publish_failure_does_not_log_provider_error_content(caplog) -> None:
+async def test_call_ended_publish_failure_does_not_log_provider_error_content(
+    caplog,
+) -> None:
     runtime = SessionRuntime(SecretBearingFailingEventPublisher())
     metadata = make_metadata()
 
@@ -193,7 +205,7 @@ async def test_call_ended_publish_failure_does_not_log_provider_error_content(ca
         await runtime.finalize(metadata, duration_seconds=60)
 
     assert "TRANSCRIPT_SENTINEL_FROM_PROVIDER_ERROR" not in caplog.text
-    assert "call_123" in caplog.text
+    assert str(metadata.call_id) in caplog.text
 
 
 # T4-5: handle_agent_utterance deduplication — same utterance twice should only append once

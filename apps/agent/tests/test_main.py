@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from livekit.agents import JobExecutorType
-from pydantic import ValidationError
+from presvo_contracts import ContractError, CustomerCallDispatch, create_contract
 
 import agent.main as agent_main
 from agent.main import build_worker_options
@@ -20,16 +20,16 @@ from agent.main import _play_call_limit_message
 from agent.main import _register_standard_session_handlers
 from agent.main import _register_sts_session_handlers
 from agent.main import prewarm_assets
-from agent.schemas import DispatchMetadata
 from pathlib import Path
 
 
-def make_metadata(**overrides) -> DispatchMetadata:
-    call_id = overrides.pop("call_id", str(uuid4()))
+def make_metadata(**overrides) -> CustomerCallDispatch:
+    call_id = overrides.pop("call_id", uuid4())
     defaults = {
+        "job_type": "customer_call",
         "call_id": call_id,
-        "user_id": str(uuid4()),
-        "agent_config_id": str(uuid4()),
+        "user_id": uuid4(),
+        "agent_config_id": uuid4(),
         "agent_identity": f"agent-call-{call_id}",
         "agent_name": "Agent",
         "owner_name": "Owner",
@@ -42,7 +42,7 @@ def make_metadata(**overrides) -> DispatchMetadata:
         "dispatch_token": "dispatch-token",
     }
     defaults.update(overrides)
-    return DispatchMetadata(**defaults)
+    return create_contract(CustomerCallDispatch, **defaults)
 
 
 def test_build_worker_options_sets_prewarm_hook() -> None:
@@ -63,7 +63,9 @@ def test_build_worker_options_registers_job_request_handler() -> None:
 def test_build_worker_options_registers_inference_runners(monkeypatch) -> None:
     called = []
 
-    monkeypatch.setattr("agent.main._register_inference_runners", lambda: called.append(True))
+    monkeypatch.setattr(
+        "agent.main._register_inference_runners", lambda: called.append(True)
+    )
 
     build_worker_options()
 
@@ -71,9 +73,7 @@ def test_build_worker_options_registers_inference_runners(monkeypatch) -> None:
 
 
 def test_agent_env_example_documents_debug_stream_flag() -> None:
-    env_example = (
-        Path(__file__).resolve().parents[1] / ".env.example"
-    ).read_text()
+    env_example = (Path(__file__).resolve().parents[1] / ".env.example").read_text()
 
     assert "AGENT_DEBUG_STREAMS=false" in env_example
     assert "AGENT_MIN_ENDPOINTING_DELAY=0.25" in env_example
@@ -98,10 +98,14 @@ class FakeRuntime:
         self.caller_text: list[str] = []
         self.agent_text: list[str] = []
 
-    async def handle_caller_transcript(self, _metadata: DispatchMetadata, text: str) -> None:
+    async def handle_caller_transcript(
+        self, _metadata: CustomerCallDispatch, text: str
+    ) -> None:
         self.caller_text.append(text)
 
-    async def handle_agent_utterance(self, _metadata: DispatchMetadata, text: str) -> None:
+    async def handle_agent_utterance(
+        self, _metadata: CustomerCallDispatch, text: str
+    ) -> None:
         self.agent_text.append(text)
 
     def create_handler_task(self, factory) -> bool:
@@ -141,15 +145,21 @@ class FakeGreetingSession:
         self.generate_reply_calls.append(kwargs)
 
 
-def test_register_standard_session_handlers_forwards_final_caller_and_agent_text() -> None:
+def test_register_standard_session_handlers_forwards_final_caller_and_agent_text() -> (
+    None
+):
     session = FakeSession()
     runtime = FakeRuntime()
-    metadata = make_metadata(call_id="call-1", user_id="user-1")
+    metadata = make_metadata()
 
     _register_standard_session_handlers(session, runtime, metadata)
 
-    session.handlers["user_input_transcribed"](FakeTranscriptEvent("Hello", is_final=True))
-    session.handlers["conversation_item_added"](FakeConversationEvent("assistant", "Hi there"))
+    session.handlers["user_input_transcribed"](
+        FakeTranscriptEvent("Hello", is_final=True)
+    )
+    session.handlers["conversation_item_added"](
+        FakeConversationEvent("assistant", "Hi there")
+    )
 
     assert runtime.caller_text == ["Hello"]
     assert runtime.agent_text == ["Hi there"]
@@ -158,12 +168,16 @@ def test_register_standard_session_handlers_forwards_final_caller_and_agent_text
 def test_register_sts_session_handlers_forwards_caller_and_agent_text() -> None:
     session = FakeSession()
     runtime = FakeRuntime()
-    metadata = make_metadata(call_id="call-1", user_id="user-1")
+    metadata = make_metadata()
 
     _register_sts_session_handlers(session, runtime, metadata)
 
-    session.handlers["conversation_item_added"](FakeConversationEvent("user", "Need help"))
-    session.handlers["conversation_item_added"](FakeConversationEvent("assistant", "Sure"))
+    session.handlers["conversation_item_added"](
+        FakeConversationEvent("user", "Need help")
+    )
+    session.handlers["conversation_item_added"](
+        FakeConversationEvent("assistant", "Sure")
+    )
 
     assert runtime.caller_text == ["Need help"]
     assert runtime.agent_text == ["Sure"]
@@ -176,8 +190,6 @@ def test_send_initial_greeting_uses_say_for_standard_mode() -> None:
         _send_initial_greeting(
             session,
             make_metadata(
-                call_id="test",
-                user_id="test",
                 agent_name="Ava",
                 owner_name="Sam",
                 pipeline_mode="stt_llm_tts",
@@ -201,8 +213,6 @@ def test_send_initial_greeting_uses_generate_reply_for_sts_mode() -> None:
         _send_initial_greeting(
             session,
             make_metadata(
-                call_id="test",
-                user_id="test",
                 agent_name="Ava",
                 owner_name="Sam",
                 pipeline_mode="sts",
@@ -244,8 +254,7 @@ def test_call_limit_message_uses_generate_reply_for_sts_mode() -> None:
     assert session.generate_reply_calls == [
         {
             "instructions": (
-                "Say exactly in English, without adding or removing words: "
-                f'"{message}"'
+                f'Say exactly in English, without adding or removing words: "{message}"'
             ),
             "allow_interruptions": False,
         }
@@ -340,12 +349,12 @@ def test_dispatch_metadata_forbids_extra_fields() -> None:
     payload = make_metadata().model_dump()
     payload["caller_number"] = "+33123456789"
 
-    with pytest.raises(ValidationError):
-        DispatchMetadata.model_validate(payload)
+    with pytest.raises(ContractError):
+        create_contract(CustomerCallDispatch, **payload)
 
 
 class FakeJobContext:
-    def __init__(self, metadata: DispatchMetadata) -> None:
+    def __init__(self, metadata: CustomerCallDispatch) -> None:
         self.job = SimpleNamespace(metadata=metadata.model_dump_json())
         self.proc = SimpleNamespace(userdata={})
         self.inference_executor = object()
@@ -399,7 +408,9 @@ class FakeEntrypointSession(FakeSession):
 
 
 @pytest.mark.anyio
-async def test_expiry_interrupts_input_and_speech_before_noninterruptible_close() -> None:
+async def test_expiry_interrupts_input_and_speech_before_noninterruptible_close() -> (
+    None
+):
     session = FakeEntrypointSession()
     metadata = make_metadata()
 
@@ -459,27 +470,18 @@ async def test_entrypoint_connects_then_waits_only_for_sip_participant(
 
 
 @pytest.mark.anyio
-async def test_customer_entrypoint_accepts_legacy_metadata_without_job_type(
+async def test_customer_entrypoint_rejects_legacy_metadata_without_job_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     metadata = make_metadata()
     context = FakeJobContext(metadata)
-    payload = metadata.model_dump()
+    payload = metadata.model_dump(mode="json")
     payload.pop("job_type")
     context.job.metadata = json.dumps(payload)
-    session = FakeEntrypointSession()
-    captured: list[dict] = []
+    with pytest.raises(ContractError) as error:
+        await entrypoint(context)
 
-    def capture_runtime(dispatch_metadata, **_kwargs):
-        captured.append(dispatch_metadata)
-        return object(), session
-
-    monkeypatch.setattr("agent.main.build_agent_runtime", capture_runtime)
-
-    await entrypoint(context)
-
-    assert session.started is True
-    assert captured[0]["job_type"] == "customer_call"
+    assert error.value.code == "invalid_payload"
 
 
 @pytest.mark.anyio
@@ -524,7 +526,7 @@ async def test_entrypoint_records_only_fixed_lifecycle_and_provider_boundaries(
         (
             "lifecycle",
             {
-                "call_id": metadata.call_id,
+                "call_id": str(metadata.call_id),
                 "pipeline_mode": metadata.pipeline_mode,
             },
         ),
@@ -533,7 +535,7 @@ async def test_entrypoint_records_only_fixed_lifecycle_and_provider_boundaries(
             {
                 "provider": "livekit",
                 "operation": "connect",
-                "call_id": metadata.call_id,
+                "call_id": str(metadata.call_id),
             },
         ),
         (
@@ -541,7 +543,7 @@ async def test_entrypoint_records_only_fixed_lifecycle_and_provider_boundaries(
             {
                 "provider": "livekit",
                 "operation": "session_start",
-                "call_id": metadata.call_id,
+                "call_id": str(metadata.call_id),
             },
         ),
     ]
@@ -597,12 +599,15 @@ async def test_entrypoint_registers_observability_shutdown_before_metadata_parsi
         raising=False,
     )
 
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(ContractError) as error:
         await entrypoint(context)
+
+    assert error.value.code == "malformed_json"
 
     assert context.shutdown_callbacks == [capture_shutdown]
     await context.shutdown_callbacks[0]()
     assert shutdown_calls == [True]
+
 
 @pytest.mark.anyio
 async def test_entrypoint_delivers_disclosure_before_enabling_caller_input(
@@ -745,9 +750,7 @@ async def test_entrypoint_injects_job_shutdown_into_session_runtime(
     assert captured["limit_metadata"] == metadata
     assert captured["call_limit_started_at"] == 100.0
 
-    await captured["warning_callback"](
-        "You have one minute remaining in this call."
-    )
+    await captured["warning_callback"]("You have one minute remaining in this call.")
     await captured["disconnect"]()
 
     assert session.events[-5:] == [

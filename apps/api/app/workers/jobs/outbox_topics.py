@@ -4,6 +4,14 @@ import json
 from typing import Any
 from uuid import UUID
 
+from presvo_contracts import (
+    VERIFICATION_MESSAGE,
+    CustomerCallDispatch,
+    ForwardingVerificationDispatch,
+    create_contract,
+    dump_contract_json,
+)
+
 from app.core.config import get_settings
 from app.core.dispatch_token import create_dispatch_token
 from app.core.observability import get_observability
@@ -37,7 +45,6 @@ from app.repositories.phone_number_provisioning_repository import (
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.usage_repository import UsageRepository
-from app.schemas.livekit import LiveKitDispatchMetadata, VerificationDispatchMetadata
 from app.services.activation_go_live_service import (
     is_current_go_live_event,
     is_go_live_event,
@@ -902,28 +909,32 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
                 user_id=str(call.user_id),
                 agent_config_id=str(agent_config.id),
             )
-            metadata = LiveKitDispatchMetadata(
-                user_id=str(call.user_id),
-                agent_config_id=str(agent_config.id),
-                call_id=str(call.id),
-                agent_identity=expected_agent_identity(call.id),
-                minutes_remaining=balance,
-                allowed_duration_seconds=calculate_allowed_duration(
+            metadata = dump_contract_json(
+                create_contract(
+                    CustomerCallDispatch,
+                    job_type="customer_call",
+                    user_id=call.user_id,
+                    agent_config_id=agent_config.id,
+                    call_id=call.id,
+                    agent_identity=expected_agent_identity(call.id),
                     minutes_remaining=balance,
-                    maximum=settings.max_call_duration_seconds,
-                ),
-                agent_name=agent_config.agent_name,
-                owner_name=(
-                    business_display_name
-                    or (user.full_name or "").strip()
-                    or "the business"
-                ),
-                owner_context=agent_config.owner_context,
-                system_prompt=agent_config.system_prompt,
-                knowledge_base=agent_config.knowledge_base,
-                pipeline_mode=agent_config.pipeline_mode,
-                dispatch_token=dispatch_token,
-            ).model_dump_json()
+                    allowed_duration_seconds=calculate_allowed_duration(
+                        minutes_remaining=balance,
+                        maximum=settings.max_call_duration_seconds,
+                    ),
+                    agent_name=agent_config.agent_name,
+                    owner_name=(
+                        business_display_name
+                        or (user.full_name or "").strip()
+                        or "the business"
+                    ),
+                    owner_context=agent_config.owner_context,
+                    system_prompt=agent_config.system_prompt,
+                    knowledge_base=agent_config.knowledge_base,
+                    pipeline_mode=agent_config.pipeline_mode,
+                    dispatch_token=dispatch_token,
+                )
+            )
         except Exception:
             await session.rollback()
             raise OutboxDeliveryError(
@@ -1208,15 +1219,21 @@ async def _verification_dispatch_snapshot(
             worker_name = get_settings().livekit_agent_name.strip()
             if not worker_name:
                 raise ValueError
-            metadata = VerificationDispatchMetadata(
-                verification_session_id=session_id,
-                user_id=str(user_id),
-                agent_identity=f"agent-verification-{session_id}",
-                completion_token=create_verification_token(
-                    session_id=session_id,
-                    user_id=str(user_id),
-                ),
-            ).model_dump_json()
+            metadata = dump_contract_json(
+                create_contract(
+                    ForwardingVerificationDispatch,
+                    job_type="forwarding_verification",
+                    verification_session_id=session_id,
+                    user_id=user_id,
+                    agent_identity=f"agent-verification-{session_id}",
+                    completion_token=create_verification_token(
+                        session_id=session_id,
+                        user_id=str(user_id),
+                    ),
+                    message=VERIFICATION_MESSAGE,
+                    tts_provider="speechmatics",
+                )
+            )
         except Exception:
             await session.rollback()
             raise OutboxDeliveryError(

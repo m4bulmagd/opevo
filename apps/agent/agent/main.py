@@ -1,4 +1,3 @@
-import json
 import time
 import logging
 import importlib
@@ -13,7 +12,13 @@ from livekit.agents import (
     cli,
     room_io,
 )
-from pydantic import ValidationError
+from presvo_contracts import (
+    ContractError,
+    CustomerCallDispatch,
+    ForwardingVerificationDispatch,
+    dump_contract,
+    parse_dispatch,
+)
 
 from agent.api_client import AgentApiClient
 from agent.config import get_settings
@@ -30,11 +35,6 @@ from agent.prompt_builder import build_initial_greeting
 from agent.providers import PipelineMode
 from agent.runtime_validation import validate_agent_runtime
 from agent.safe_logging import report_safe_exception
-from agent.schemas import (
-    DispatchMetadata,
-    ForwardingVerificationDispatchMetadata,
-    parse_job_metadata,
-)
 from agent.session_runtime import (
     CALL_LIMIT_EXPIRY_MESSAGE,
     SessionRuntime,
@@ -78,7 +78,7 @@ def _register_inference_runners() -> None:
 
 async def _handle_standard_user_input_transcribed(
     runtime: SessionRuntime,
-    metadata: DispatchMetadata,
+    metadata: CustomerCallDispatch,
     event,
 ) -> None:
     if not getattr(event, "is_final", False) or not getattr(event, "transcript", None):
@@ -88,7 +88,7 @@ async def _handle_standard_user_input_transcribed(
 
 async def _handle_standard_conversation_item_added(
     runtime: SessionRuntime,
-    metadata: DispatchMetadata,
+    metadata: CustomerCallDispatch,
     event,
 ) -> None:
     item = getattr(event, "item", None)
@@ -104,7 +104,7 @@ async def _handle_standard_conversation_item_added(
 
 async def _handle_sts_conversation_item_added(
     runtime: SessionRuntime,
-    metadata: DispatchMetadata,
+    metadata: CustomerCallDispatch,
     event,
 ) -> None:
     item = getattr(event, "item", None)
@@ -122,7 +122,9 @@ async def _handle_sts_conversation_item_added(
         await runtime.handle_agent_utterance(metadata, text)
 
 
-def _register_standard_session_handlers(session, runtime: SessionRuntime, metadata: DispatchMetadata) -> None:
+def _register_standard_session_handlers(
+    session, runtime: SessionRuntime, metadata: CustomerCallDispatch
+) -> None:
     def on_user_input_transcribed(event) -> None:
         runtime.create_handler_task(
             lambda: _safe_task(
@@ -149,7 +151,9 @@ def _register_standard_session_handlers(session, runtime: SessionRuntime, metada
     session.on("conversation_item_added", on_conversation_item_added)
 
 
-def _register_sts_session_handlers(session, runtime: SessionRuntime, metadata: DispatchMetadata) -> None:
+def _register_sts_session_handlers(
+    session, runtime: SessionRuntime, metadata: CustomerCallDispatch
+) -> None:
     def on_conversation_item_added(event) -> None:
         runtime.create_handler_task(
             lambda: _safe_task(
@@ -160,19 +164,28 @@ def _register_sts_session_handlers(session, runtime: SessionRuntime, metadata: D
     session.on("conversation_item_added", on_conversation_item_added)
 
 
-def _register_session_handlers(session, runtime: SessionRuntime, metadata: DispatchMetadata) -> None:
-    if getattr(metadata, "pipeline_mode", PipelineMode.STT_LLM_TTS.value) == PipelineMode.STS.value:
+def _register_session_handlers(
+    session, runtime: SessionRuntime, metadata: CustomerCallDispatch
+) -> None:
+    if (
+        getattr(metadata, "pipeline_mode", PipelineMode.STT_LLM_TTS.value)
+        == PipelineMode.STS.value
+    ):
         _register_sts_session_handlers(session, runtime, metadata)
         return
     _register_standard_session_handlers(session, runtime, metadata)
 
-async def _send_initial_greeting(session, metadata: DispatchMetadata) -> None:
+
+async def _send_initial_greeting(session, metadata: CustomerCallDispatch) -> None:
     greeting = build_initial_greeting(
         agent_name=metadata.agent_name,
         owner_name=metadata.owner_name,
     )
 
-    if getattr(metadata, "pipeline_mode", PipelineMode.STT_LLM_TTS.value) == PipelineMode.STS.value:
+    if (
+        getattr(metadata, "pipeline_mode", PipelineMode.STT_LLM_TTS.value)
+        == PipelineMode.STS.value
+    ):
         result = session.generate_reply(
             instructions=(
                 "Say exactly in English, without adding or removing words: "
@@ -189,14 +202,13 @@ async def _send_initial_greeting(session, metadata: DispatchMetadata) -> None:
 
 async def _play_call_limit_message(
     session,
-    metadata: DispatchMetadata,
+    metadata: CustomerCallDispatch,
     message: str,
 ) -> None:
     if metadata.pipeline_mode == PipelineMode.STS.value:
         result = session.generate_reply(
             instructions=(
-                "Say exactly in English, without adding or removing words: "
-                f'"{message}"'
+                f'Say exactly in English, without adding or removing words: "{message}"'
             ),
             allow_interruptions=False,
         )
@@ -209,7 +221,7 @@ async def _play_call_limit_message(
 
 async def _disconnect_at_call_limit(
     session,
-    metadata: DispatchMetadata,
+    metadata: CustomerCallDispatch,
 ) -> None:
     try:
         await session.interrupt(force=True)
@@ -225,20 +237,23 @@ async def _disconnect_at_call_limit(
 
 async def handle_job_request(request: JobRequest) -> None:
     try:
-        metadata_dict = json.loads(request.job.metadata or "{}")
-        metadata = parse_job_metadata(metadata_dict)
-        if isinstance(metadata, ForwardingVerificationDispatchMetadata):
-            expected_identity = (
-                f"agent-verification-{metadata.verification_session_id}"
-            )
+        metadata = parse_dispatch(request.job.metadata or "{}")
+        if isinstance(metadata, ForwardingVerificationDispatch):
+            expected_identity = f"agent-verification-{metadata.verification_session_id}"
             display_name = "Presvo forwarding verification"
         else:
             expected_identity = f"agent-call-{metadata.call_id}"
             display_name = metadata.agent_name
         if metadata.agent_identity != expected_identity:
-            raise ValueError("invalid agent identity")
-    except (json.JSONDecodeError, ValidationError, TypeError, ValueError):
-        logger.warning("job_request_rejected reason=invalid_dispatch_metadata")
+            logger.warning("job_request_rejected reason=invalid_agent_identity")
+            await request.reject(terminate=True)
+            return
+    except ContractError as error:
+        logger.warning(
+            "job_request_rejected contract_name=%s code=%s transport=livekit",
+            error.contract_name,
+            error.code,
+        )
         await request.reject(terminate=True)
         return
 
@@ -251,21 +266,20 @@ async def handle_job_request(request: JobRequest) -> None:
 async def entrypoint(context: JobContext) -> None:
     _initialize_observability_safely()
     context.add_shutdown_callback(shutdown_observability)
-    metadata_dict = json.loads(context.job.metadata or "{}")
-    metadata = parse_job_metadata(metadata_dict)
-    if isinstance(metadata, ForwardingVerificationDispatchMetadata):
+    metadata = parse_dispatch(context.job.metadata or "{}")
+    if isinstance(metadata, ForwardingVerificationDispatch):
         await run_forwarding_verification(context, metadata)
         return
-    metadata_dict = metadata.model_dump()
+    metadata_dict = dump_contract(metadata)
     started_at = time.monotonic()
     with agent_lifecycle_span(
-        call_id=metadata.call_id,
+        call_id=str(metadata.call_id),
         pipeline_mode=metadata.pipeline_mode,
     ):
         with agent_provider_span(
             provider="livekit",
             operation="connect",
-            call_id=metadata.call_id,
+            call_id=str(metadata.call_id),
         ):
             await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
             sip_participant = await context.wait_for_participant(
@@ -300,7 +314,7 @@ async def entrypoint(context: JobContext) -> None:
         with agent_provider_span(
             provider="livekit",
             operation="session_start",
-            call_id=metadata.call_id,
+            call_id=str(metadata.call_id),
         ):
             await session.start(
                 agent=agent,
@@ -364,7 +378,10 @@ def prewarm_assets(proc) -> None:
         return
 
     try:
-        if _resolve_speechmatics_turn_detection_mode(speechmatics) == speechmatics.TurnDetectionMode.SMART_TURN:
+        if (
+            _resolve_speechmatics_turn_detection_mode(speechmatics)
+            == speechmatics.TurnDetectionMode.SMART_TURN
+        ):
             SmartTurnDetector().setup()
     except Exception as exc:
         report_safe_exception(

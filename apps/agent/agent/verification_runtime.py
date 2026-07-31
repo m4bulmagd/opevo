@@ -6,10 +6,10 @@ from typing import Any
 
 from livekit import rtc
 from livekit.agents import Agent, AutoSubscribe, JobContext, room_io
+from presvo_contracts import ForwardingVerificationDispatch
 
 from agent.api_client import AgentApiClient
 from agent.pipeline_factory import build_verification_session
-from agent.schemas import ForwardingVerificationDispatchMetadata
 
 
 SIP_PARTICIPANT_KIND = rtc.ParticipantKind.Value("PARTICIPANT_KIND_SIP")
@@ -41,9 +41,7 @@ async def _close_session(session: Any) -> None:
         return
     fallback_shutdown = getattr(session, "shutdown", None)
     if not callable(fallback_shutdown):
-        raise VerificationRuntimeCleanupError(
-            "verification runtime cleanup failed"
-        )
+        raise VerificationRuntimeCleanupError("verification runtime cleanup failed")
     await _await_if_needed(fallback_shutdown(drain=True))
 
 
@@ -82,7 +80,7 @@ async def _cleanup_runtime(
 
 async def run_forwarding_verification(
     context: JobContext,
-    metadata: ForwardingVerificationDispatchMetadata,
+    metadata: ForwardingVerificationDispatch,
     *,
     session_factory: Callable[[str], Any] = build_verification_session,
     agent_factory: Callable[[], Any] = _build_verification_agent,
@@ -94,9 +92,7 @@ async def run_forwarding_verification(
     owns_api_client = api_client is None
     try:
         await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
-        sip_participant = await context.wait_for_participant(
-            kind=SIP_PARTICIPANT_KIND
-        )
+        sip_participant = await context.wait_for_participant(kind=SIP_PARTICIPANT_KIND)
 
         session = session_factory(metadata.tts_provider)
         agent = agent_factory()
@@ -121,7 +117,7 @@ async def run_forwarding_verification(
         )
         await _await_if_needed(speech)
         await resolved_api_client.complete_verification(
-            metadata.verification_session_id,
+            str(metadata.verification_session_id),
             metadata.completion_token,
         )
     finally:

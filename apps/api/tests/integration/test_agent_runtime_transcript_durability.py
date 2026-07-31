@@ -15,6 +15,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
+from presvo_contracts import CustomerCallDispatch, create_contract
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -24,7 +25,6 @@ if str(AGENT_APP_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_APP_DIR))
 
 from agent.api_client import AgentApiClient  # noqa: E402
-from agent.schemas import DispatchMetadata  # noqa: E402
 from agent.session_runtime import SessionRuntime  # noqa: E402
 
 from app.core.database import get_session  # noqa: E402
@@ -101,7 +101,7 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
         user_id=active_user.id,
         agent_name="Durability agent",
         system_prompt="Be helpful",
-        knowledge_base="",
+        knowledge_base="No documented details.",
         is_enabled=True,
     )
     db_session.add(config)
@@ -145,15 +145,17 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
         user_id=str(active_user.id),
         agent_config_id=str(config.id),
     )
-    metadata = DispatchMetadata(
-        call_id=str(call.id),
-        user_id=str(active_user.id),
-        agent_config_id=str(config.id),
+    metadata = create_contract(
+        CustomerCallDispatch,
+        job_type="customer_call",
+        call_id=call.id,
+        user_id=active_user.id,
+        agent_config_id=config.id,
         agent_identity=f"agent-call-{call.id}",
         agent_name="Durability agent",
         owner_name="Owner",
         system_prompt="Be helpful",
-        knowledge_base="",
+        knowledge_base="No documented details.",
         pipeline_mode="stt_llm_tts",
         minutes_remaining=10,
         allowed_duration_seconds=600,

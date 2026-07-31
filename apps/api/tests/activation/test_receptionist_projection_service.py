@@ -4,7 +4,7 @@ import pytest
 
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
-from app.schemas.agent_content import (
+from presvo_contracts import (
     KNOWLEDGE_BASE_MAX_LENGTH,
     OWNER_CONTEXT_MAX_LENGTH,
 )
