@@ -85,9 +85,17 @@ create_quarantine_directory() {
 
 restore_unexpected_object() {
   local path=$1
-  local quarantine_path=$2
-  if mv -T -n -- "$quarantine_path" "$path" &&
-    [ ! -e "$quarantine_path" ] && [ ! -L "$quarantine_path" ]; then
+  local quarantine_directory=$2
+  local quarantine_identity=$3
+  local quarantine_name=$4
+  local quarantine_path="$quarantine_directory/$quarantine_name"
+  if (
+    cd -P -- "$quarantine_directory" &&
+      [ "$(path_identity .)" = "$quarantine_identity" ] &&
+      mv -T -n -- "./$quarantine_name" "$path" &&
+      [ ! -e "./$quarantine_name" ] &&
+      [ ! -L "./$quarantine_name" ]
+  ); then
     printf '%s ownership changed after quarantine; restored unexpected object without deleting it.\n' \
       "$path" >&2
   else
@@ -102,24 +110,25 @@ cleanup_owned_file() {
   local expected_identity=$2
   local expected_marker=$3
   local quarantine_path="$repo_quarantine_directory/sentinel"
-  local current_identity=""
   if ! mv -T -- "$path" "$quarantine_path"; then
     printf 'failed to quarantine owned file %s; refusing deletion.\n' \
       "$path" >&2
     promote_cleanup_failure
     return
   fi
-  if [ -f "$quarantine_path" ] && [ ! -L "$quarantine_path" ] &&
-    current_identity=$(path_identity "$quarantine_path") &&
-    [ "$current_identity" = "$expected_identity" ] &&
-    grep -Fxq "$expected_marker" "$quarantine_path"; then
-    if ! rm -- "$quarantine_path"; then
-      printf 'failed to remove owned quarantined file %s.\n' \
-        "$quarantine_path" >&2
-      promote_cleanup_failure
-    fi
-  else
-    restore_unexpected_object "$path" "$quarantine_path"
+  if ! (
+    cd -P -- "$repo_quarantine_directory" &&
+      [ "$(path_identity .)" = "$repo_quarantine_identity" ] &&
+      [ -f ./sentinel ] && [ ! -L ./sentinel ] &&
+      [ "$(path_identity ./sentinel)" = "$expected_identity" ] &&
+      grep -Fxq "$expected_marker" ./sentinel &&
+      rm -- ./sentinel
+  ); then
+    restore_unexpected_object \
+      "$path" \
+      "$repo_quarantine_directory" \
+      "$repo_quarantine_identity" \
+      sentinel
   fi
 }
 
@@ -130,26 +139,45 @@ cleanup_owned_directory() {
   local quarantine_directory=$4
   local quarantine_name=$5
   local quarantine_path="$quarantine_directory/$quarantine_name"
-  local current_identity=""
-  local marker_path="$quarantine_path/.env.contract-context-owner"
+  local quarantine_identity=""
+  case "$quarantine_directory" in
+    "$repo_quarantine_directory")
+      quarantine_identity=$repo_quarantine_identity
+      ;;
+    "$output_quarantine_directory")
+      quarantine_identity=$output_quarantine_identity
+      ;;
+    *)
+      printf 'unknown cleanup quarantine %s; refusing recursive deletion.\n' \
+        "$quarantine_directory" >&2
+      promote_cleanup_failure
+      return
+      ;;
+  esac
   if ! mv -T -- "$path" "$quarantine_path"; then
     printf 'failed to quarantine owned directory %s; refusing recursive deletion.\n' \
       "$path" >&2
     promote_cleanup_failure
     return
   fi
-  if [ -d "$quarantine_path" ] && [ ! -L "$quarantine_path" ] &&
-    current_identity=$(path_identity "$quarantine_path") &&
-    [ "$current_identity" = "$expected_identity" ] &&
-    [ -f "$marker_path" ] && [ ! -L "$marker_path" ] &&
-    grep -Fxq "$expected_marker" "$marker_path"; then
-    if ! rm -rf -- "$quarantine_path"; then
-      printf 'failed to remove owned quarantined directory %s.\n' \
-        "$quarantine_path" >&2
-      promote_cleanup_failure
-    fi
-  else
-    restore_unexpected_object "$path" "$quarantine_path"
+  if ! (
+    cd -P -- "$quarantine_directory" &&
+      [ "$(path_identity .)" = "$quarantine_identity" ] &&
+      [ -d "./$quarantine_name" ] &&
+      [ ! -L "./$quarantine_name" ] &&
+      [ "$(path_identity "./$quarantine_name")" = "$expected_identity" ] &&
+      [ -f "./$quarantine_name/.env.contract-context-owner" ] &&
+      [ ! -L "./$quarantine_name/.env.contract-context-owner" ] &&
+      grep -Fxq \
+        "$expected_marker" \
+        "./$quarantine_name/.env.contract-context-owner" &&
+      rm -rf -- "./$quarantine_name"
+  ); then
+    restore_unexpected_object \
+      "$path" \
+      "$quarantine_directory" \
+      "$quarantine_identity" \
+      "$quarantine_name"
   fi
 }
 
