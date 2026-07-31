@@ -1,9 +1,16 @@
 """Dispatch payload wire contracts shared by the API and voice worker."""
 
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Literal, Self, TypeAlias
 from uuid import UUID
 
-from pydantic import Field, StrictInt, StringConstraints, TypeAdapter, field_validator
+from pydantic import (
+    Field,
+    StrictInt,
+    StringConstraints,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from .versioning import (
     NonBlankString,
@@ -39,7 +46,6 @@ OwnerContext = Annotated[
     str,
     StringConstraints(
         strip_whitespace=True,
-        min_length=1,
         max_length=OWNER_CONTEXT_MAX_LENGTH,
     ),
 ]
@@ -47,7 +53,6 @@ SystemPrompt = Annotated[
     str,
     StringConstraints(
         strip_whitespace=True,
-        min_length=1,
         max_length=SYSTEM_PROMPT_MAX_LENGTH,
     ),
 ]
@@ -55,7 +60,6 @@ KnowledgeBase = Annotated[
     str,
     StringConstraints(
         strip_whitespace=True,
-        min_length=1,
         max_length=KNOWLEDGE_BASE_MAX_LENGTH,
     ),
 ]
@@ -76,6 +80,12 @@ class CustomerCallDispatch(VersionedContract):
     minutes_remaining: StrictInt = Field(ge=0)
     allowed_duration_seconds: StrictInt = Field(gt=0)
     dispatch_token: str = Field(min_length=1, repr=False)
+
+    @model_validator(mode="after")
+    def require_instruction_source(self) -> Self:
+        if not (self.system_prompt or self.knowledge_base):
+            raise ValueError("system prompt or knowledge base is required")
+        return self
 
     @field_validator("dispatch_token", mode="before")
     @classmethod

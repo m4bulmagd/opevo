@@ -1,9 +1,12 @@
 import json
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
+from presvo_contracts import ContractError, VersionedContract, dump_contract
 
 import agent.main as agent_main
 
@@ -13,6 +16,10 @@ FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "libs/shared/tests/fixtures
 
 def _fixture(name: str) -> dict[str, object]:
     return json.loads((FIXTURE_ROOT / name).read_text())
+
+
+def _fixture_text(name: str) -> str:
+    return (FIXTURE_ROOT / name).read_text()
 
 
 def _customer_metadata(**overrides: object) -> dict[str, object]:
@@ -44,29 +51,87 @@ class FakeJobContext:
     def __init__(self, metadata: str) -> None:
         self.job = SimpleNamespace(metadata=metadata)
         self.shutdown_callbacks: list[object] = []
+        self.proc = SimpleNamespace(userdata={})
+        self.inference_executor = object()
+        self.room = object()
+        self.events: list[object] = []
 
     def add_shutdown_callback(self, callback: object) -> None:
         self.shutdown_callbacks.append(callback)
 
+    async def connect(self, **kwargs: object) -> None:
+        self.events.append(("connect", kwargs))
+
+    async def wait_for_participant(self, **kwargs: object) -> object:
+        self.events.append(("wait_for_participant", kwargs))
+        return SimpleNamespace(identity="sip-caller")
+
+    def shutdown(self, reason: str) -> None:
+        self.events.append(("shutdown", reason))
+
+
+class FakeSession:
+    def __init__(self) -> None:
+        self.input = SimpleNamespace(set_audio_enabled=lambda _enabled: None)
+        self.handlers: dict[str, object] = {}
+
+    def on(self, event_name: str, callback: object) -> None:
+        self.handlers[event_name] = callback
+
+    async def start(self, **_kwargs: object) -> None:
+        return None
+
+    async def say(self, _text: str, **_kwargs: object) -> None:
+        return None
+
+
+class FakeRuntime:
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        self.call_limit_expired_on_start = False
+        self.call_limit_task = None
+
+    def create_handler_task(self, _factory: object) -> bool:
+        return True
+
+    def enforce_call_limit(self, _metadata: object, _disconnect: object) -> None:
+        return None
+
+    async def handle_caller_transcript(self, *_args: object) -> None:
+        return None
+
+    async def handle_agent_utterance(self, *_args: object) -> None:
+        return None
+
+    async def finalize(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("payload", "expected_name"),
+    ("fixture_name", "expected_name", "expected_identity"),
     [
-        (_customer_metadata(), "Fixture Agent"),
-        (_verification_metadata(), "Presvo forwarding verification"),
+        (
+            "customer_call_dispatch.json",
+            "Fixture Agent",
+            "agent-call-11111111-1111-4111-8111-111111111111",
+        ),
+        (
+            "forwarding_verification_dispatch.json",
+            "Presvo forwarding verification",
+            "agent-verification-44444444-4444-4444-8444-444444444444",
+        ),
     ],
 )
-async def test_job_request_accepts_versioned_shared_dispatch_fixtures(
-    payload: dict[str, object], expected_name: str
+async def test_job_request_accepts_exact_shared_dispatch_artifacts(
+    fixture_name: str, expected_name: str, expected_identity: str
 ) -> None:
-    request = FakeJobRequest(json.dumps(payload))
+    request = FakeJobRequest(_fixture_text(fixture_name))
 
     await agent_main.handle_job_request(request)
 
     assert request.rejected == []
     assert request.accepted == [
-        {"name": expected_name, "identity": payload["agent_identity"]}
+        {"name": expected_name, "identity": expected_identity}
     ]
 
 
@@ -129,19 +194,118 @@ async def test_job_request_redacts_malformed_dispatch_details(
 
 
 @pytest.mark.anyio
-async def test_entrypoint_parses_versioned_verification_fixture(
+@pytest.mark.parametrize(
+    "fixture_name",
+    ["customer_call_dispatch.json", "forwarding_verification_dispatch.json"],
+)
+async def test_entrypoint_parses_exact_shared_dispatch_artifacts(
+    fixture_name: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context = FakeJobContext(json.dumps(_verification_metadata()))
-    calls: list[object] = []
+    raw_fixture = _fixture_text(fixture_name)
+    expected = json.loads(raw_fixture)
+    context = FakeJobContext(raw_fixture)
+    parsed_payloads: list[dict[str, object]] = []
+    session = FakeSession()
 
     async def capture_verification(resolved_context: object, metadata: object) -> None:
-        calls.append((resolved_context, metadata))
+        assert resolved_context is context
+        parsed_payloads.append(dump_contract(cast(VersionedContract, metadata)))
+
+    def capture_customer(
+        metadata: dict[str, object], **_kwargs: object
+    ) -> tuple[object, FakeSession]:
+        parsed_payloads.append(metadata)
+        return object(), session
 
     monkeypatch.setattr(agent_main, "_initialize_observability_safely", lambda: None)
     monkeypatch.setattr(agent_main, "shutdown_observability", lambda: None)
     monkeypatch.setattr(agent_main, "run_forwarding_verification", capture_verification)
+    monkeypatch.setattr(agent_main, "build_agent_runtime", capture_customer)
+    monkeypatch.setattr(agent_main, "SessionRuntime", FakeRuntime)
+    monkeypatch.setattr(agent_main, "EventPublisher", lambda: object())
+    monkeypatch.setattr(agent_main, "AgentApiClient", lambda: object())
+    monkeypatch.setattr(agent_main, "agent_lifecycle_span", lambda **_kwargs: nullcontext())
+    monkeypatch.setattr(agent_main, "agent_provider_span", lambda **_kwargs: nullcontext())
 
     await agent_main.entrypoint(context)
 
-    assert calls and calls[0][0] is context
+    assert parsed_payloads == [expected]
+
+
+def _invalid_dispatch_artifacts() -> list[tuple[str, str]]:
+    unsupported_version = _customer_metadata(schema_version=2)
+    bad_customer_uuid = _customer_metadata(call_id="BAD_CUSTOMER_UUID_SENTINEL")
+    bad_verification_uuid = _verification_metadata(
+        verification_session_id="BAD_VERIFICATION_UUID_SENTINEL"
+    )
+    missing_discriminator = _customer_metadata()
+    missing_discriminator.pop("job_type")
+    unknown_discriminator = _customer_metadata(job_type="UNKNOWN_JOB_SENTINEL")
+    return [
+        (json.dumps(unsupported_version), "unsupported_schema_version"),
+        (json.dumps(bad_customer_uuid), "invalid_payload"),
+        (json.dumps(bad_verification_uuid), "invalid_payload"),
+        ("{MALFORMED_JSON_SENTINEL", "malformed_json"),
+        (json.dumps(missing_discriminator), "invalid_payload"),
+        (json.dumps(unknown_discriminator), "invalid_payload"),
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("raw_metadata", "expected_code"), _invalid_dispatch_artifacts())
+async def test_job_request_rejects_invalid_artifacts_with_safe_logs(
+    raw_metadata: str,
+    expected_code: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    request = FakeJobRequest(raw_metadata)
+
+    with caplog.at_level(logging.WARNING):
+        await agent_main.handle_job_request(request)
+
+    assert request.accepted == []
+    assert request.rejected == [{"terminate": True}]
+    assert caplog.messages == [
+        "job_request_rejected contract_name=DispatchContract "
+        f"code={expected_code} transport=livekit"
+    ]
+    for sentinel in (
+        "fixture-dispatch-token",
+        "fixture-completion-token",
+        "Help the fixture caller clearly.",
+        "BAD_CUSTOMER_UUID_SENTINEL",
+        "BAD_VERIFICATION_UUID_SENTINEL",
+        "MALFORMED_JSON_SENTINEL",
+        "UNKNOWN_JOB_SENTINEL",
+    ):
+        assert sentinel not in caplog.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("raw_metadata", "expected_code"), _invalid_dispatch_artifacts())
+async def test_entrypoint_rejects_invalid_artifacts_with_safe_contract_error(
+    raw_metadata: str,
+    expected_code: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = FakeJobContext(raw_metadata)
+    monkeypatch.setattr(agent_main, "_initialize_observability_safely", lambda: None)
+    monkeypatch.setattr(agent_main, "shutdown_observability", lambda: None)
+
+    with pytest.raises(ContractError) as caught:
+        await agent_main.entrypoint(context)
+
+    assert caught.value.contract_name == "DispatchContract"
+    assert caught.value.code == expected_code
+    assert str(caught.value) == f"DispatchContract rejected: {expected_code}"
+    for sentinel in (
+        "fixture-dispatch-token",
+        "fixture-completion-token",
+        "Help the fixture caller clearly.",
+        "BAD_CUSTOMER_UUID_SENTINEL",
+        "BAD_VERIFICATION_UUID_SENTINEL",
+        "MALFORMED_JSON_SENTINEL",
+        "UNKNOWN_JOB_SENTINEL",
+    ):
+        assert sentinel not in str(caught.value)

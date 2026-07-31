@@ -53,12 +53,9 @@ def valid_verification_dispatch() -> dict[str, object]:
     [
         ("agent_name", AGENT_NAME_MAX_LENGTH),
         ("owner_name", OWNER_NAME_MAX_LENGTH),
-        ("owner_context", OWNER_CONTEXT_MAX_LENGTH),
-        ("system_prompt", SYSTEM_PROMPT_MAX_LENGTH),
-        ("knowledge_base", KNOWLEDGE_BASE_MAX_LENGTH),
     ],
 )
-def test_customer_content_fields_enforce_exact_length_bounds(
+def test_customer_name_fields_enforce_nonblank_exact_length_bounds(
     field: str, limit: int
 ) -> None:
     for value in ("x", "x" * limit):
@@ -72,6 +69,88 @@ def test_customer_content_fields_enforce_exact_length_bounds(
         with pytest.raises(ContractError) as caught:
             parse_dispatch(payload)
         assert caught.value.code == "invalid_payload"
+
+
+@pytest.mark.parametrize(
+    ("field", "limit"),
+    [
+        ("owner_context", OWNER_CONTEXT_MAX_LENGTH),
+        ("system_prompt", SYSTEM_PROMPT_MAX_LENGTH),
+        ("knowledge_base", KNOWLEDGE_BASE_MAX_LENGTH),
+    ],
+)
+def test_customer_optional_content_fields_allow_empty_and_enforce_maximum(
+    field: str, limit: int
+) -> None:
+    for value in ("", "   ", "x", "x" * limit):
+        payload = valid_customer_dispatch()
+        payload[field] = value
+        if field == "system_prompt" and not value.strip():
+            payload["knowledge_base"] = "Knowledge"
+        if field == "knowledge_base" and not value.strip():
+            payload["system_prompt"] = "Be helpful."
+        dispatch = parse_dispatch(payload)
+        assert isinstance(dispatch, CustomerCallDispatch)
+        assert getattr(dispatch, field) == value.strip()
+
+    payload = valid_customer_dispatch()
+    payload[field] = "x" * (limit + 1)
+    with pytest.raises(ContractError) as caught:
+        parse_dispatch(payload)
+    assert caught.value.code == "invalid_payload"
+
+
+@pytest.mark.parametrize(
+    ("system_prompt", "knowledge_base"),
+    [
+        ("", "Knowledge"),
+        ("Be helpful.", ""),
+        ("   ", " Knowledge "),
+        (" Be helpful. ", "   "),
+    ],
+)
+def test_customer_requires_at_least_one_normalized_instruction_source(
+    system_prompt: str, knowledge_base: str
+) -> None:
+    payload = valid_customer_dispatch()
+    payload["system_prompt"] = system_prompt
+    payload["knowledge_base"] = knowledge_base
+
+    dispatch = parse_dispatch(payload)
+
+    assert isinstance(dispatch, CustomerCallDispatch)
+    assert dispatch.system_prompt == system_prompt.strip()
+    assert dispatch.knowledge_base == knowledge_base.strip()
+
+
+@pytest.mark.parametrize(
+    ("system_prompt", "knowledge_base"),
+    [("", ""), ("   ", ""), ("", "   "), ("  ", "  ")],
+)
+def test_customer_rejects_when_all_instruction_sources_are_blank(
+    system_prompt: str, knowledge_base: str
+) -> None:
+    payload = valid_customer_dispatch()
+    payload["system_prompt"] = system_prompt
+    payload["knowledge_base"] = knowledge_base
+
+    with pytest.raises(ContractError) as caught:
+        parse_dispatch(payload)
+
+    assert caught.value.code == "invalid_payload"
+
+
+@pytest.mark.parametrize(("value", "expected"), [("", ""), ("   ", ""), (None, None)])
+def test_customer_owner_context_preserves_none_and_normalizes_empty(
+    value: str | None, expected: str | None
+) -> None:
+    payload = valid_customer_dispatch()
+    payload["owner_context"] = value
+
+    dispatch = parse_dispatch(payload)
+
+    assert isinstance(dispatch, CustomerCallDispatch)
+    assert dispatch.owner_context == expected
 
 
 @pytest.mark.parametrize("field", ["agent_identity", "dispatch_token"])

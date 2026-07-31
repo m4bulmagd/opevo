@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import pytest
 from sqlalchemy import select, text
@@ -85,11 +86,15 @@ async def _seed_dispatch(
     *,
     owner_name: str | None = None,
     business_display_name: str | None = None,
+    user_id: UUID | None = None,
+    config_id: UUID | None = None,
+    call_id: UUID | None = None,
 ):
     from app.models.user import User
 
     now = datetime.now(UTC)
     user = User(
+        id=user_id,
         clerk_user_id="outbox-user",
         email="outbox@example.com",
         full_name=owner_name,
@@ -106,6 +111,7 @@ async def _seed_dispatch(
         is_active=True,
     )
     config = AgentConfig(
+        id=config_id,
         user_id=user.id,
         agent_name="Ava",
         business_display_name=business_display_name,
@@ -128,6 +134,7 @@ async def _seed_dispatch(
     db_session.add_all([phone, config, subscription])
     await db_session.flush()
     call = Call(
+        id=call_id,
         user_id=user.id,
         phone_number_id=phone.id,
         agent_config_id=config.id,
@@ -386,6 +393,85 @@ async def test_activation_flow_missing_business_name_fails_dispatch_closed(
     assert exc_info.value.retryable is False
     assert provider.list_calls == []
     assert provider.create_calls == []
+
+
+@pytest.mark.anyio
+async def test_default_guided_projection_serializes_through_dispatch_contract(
+    db_session,
+    monkeypatch,
+) -> None:
+    call, event, _subscription = await _seed_dispatch(
+        db_session,
+        owner_name="Morgan Rivera",
+    )
+    from app.models.business_profile import BusinessProfile
+    from app.models.customer_activation import CustomerActivation
+    from app.services.receptionist_projection_service import (
+        ReceptionistProjectionService,
+    )
+    from app.services.routing_fingerprint import routing_fingerprint
+
+    phone = await db_session.get(PhoneNumber, call.phone_number_id)
+    config = await db_session.get(AgentConfig, call.agent_config_id)
+    assert phone is not None
+    assert config is not None
+    now = datetime.now(UTC)
+    profile = BusinessProfile(
+        user_id=call.user_id,
+        owner_name="Morgan Rivera",
+        business_name="Atelier Nord",
+        business_type="Bicycle repair",
+        public_description="Repairs city bicycles.",
+        timezone="Europe/Paris",
+        business_hours={"monday": {"closed": True, "intervals": []}},
+        existing_phone_e164="+33199000300",
+        confirmed_carrier="orange",
+        receptionist_name="Claire",
+        content_revision=2,
+        routing_revision=2,
+    )
+    ReceptionistProjectionService().project(profile, config)
+    assert config.system_prompt == ""
+    assert config.knowledge_base
+    activation = CustomerActivation(
+        user_id=call.user_id,
+        profile_confirmed_revision=profile.content_revision,
+        profile_confirmed_at=now - timedelta(hours=2),
+        provisioning_consented_at=now - timedelta(hours=1),
+        verification_status="succeeded",
+        forwarding_verified_at=now - timedelta(minutes=10),
+        go_live_requested_at=now - timedelta(minutes=5),
+        go_live_approved_at=now - timedelta(minutes=5),
+        activated_at=now - timedelta(minutes=4),
+    )
+    db_session.add_all([profile, activation])
+    await db_session.flush()
+    activation.verified_routing_fingerprint = routing_fingerprint(profile, phone)
+    await db_session.commit()
+    provider = _Provider()
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    try:
+        await deliver_livekit_dispatch(
+            {
+                "session_factory": session_factory,
+                "livekit_dispatch_provider": provider,
+            },
+            event,
+        )
+    finally:
+        get_settings.cache_clear()
+
+    metadata = parse_dispatch(provider.create_calls[0]["metadata"])
+    assert metadata.system_prompt == ""
+    assert metadata.knowledge_base == config.knowledge_base
 
 
 @pytest.mark.anyio

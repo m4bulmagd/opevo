@@ -101,7 +101,7 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
         user_id=active_user.id,
         agent_name="Durability agent",
         system_prompt="Be helpful",
-        knowledge_base="No documented details.",
+        knowledge_base="",
         is_enabled=True,
     )
     db_session.add(config)
@@ -155,7 +155,7 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
         agent_name="Durability agent",
         owner_name="Owner",
         system_prompt="Be helpful",
-        knowledge_base="No documented details.",
+        knowledge_base="",
         pipeline_mode="stt_llm_tts",
         minutes_remaining=10,
         allowed_duration_seconds=600,

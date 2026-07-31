@@ -10,6 +10,7 @@ from presvo_contracts import (
     ContractError,
     CustomerCallDispatch,
     ForwardingVerificationDispatch,
+    dump_contract,
     parse_dispatch,
 )
 
@@ -79,16 +80,17 @@ def test_customer_metadata_requires_explicit_job_type() -> None:
         parse_dispatch(payload)
 
 
-def test_verification_metadata_is_discriminated_and_forbids_customer_fields() -> None:
+def test_verification_metadata_is_discriminated_and_ignores_customer_fields() -> None:
     metadata = parse_dispatch(verification_metadata())
 
     assert isinstance(metadata, ForwardingVerificationDispatch)
     assert metadata.job_type == "forwarding_verification"
 
-    assert isinstance(
-        parse_dispatch(verification_metadata(system_prompt="customer-only-secret")),
-        ForwardingVerificationDispatch,
+    with_extra = parse_dispatch(
+        verification_metadata(system_prompt="customer-only-secret")
     )
+    assert isinstance(with_extra, ForwardingVerificationDispatch)
+    assert "system_prompt" not in dump_contract(with_extra)
 
 
 def test_explicit_customer_job_type_is_accepted() -> None:
@@ -113,13 +115,12 @@ def test_explicit_customer_job_type_is_accepted() -> None:
         "dispatch_token",
     ],
 )
-def test_verification_metadata_rejects_every_customer_only_field(
+def test_verification_metadata_ignores_every_customer_only_field(
     field: str,
 ) -> None:
-    assert isinstance(
-        parse_dispatch(verification_metadata(**{field: "secret"})),
-        ForwardingVerificationDispatch,
-    )
+    metadata = parse_dispatch(verification_metadata(**{field: "secret"}))
+    assert isinstance(metadata, ForwardingVerificationDispatch)
+    assert field not in dump_contract(metadata)
 
 
 @pytest.mark.parametrize(
@@ -131,13 +132,12 @@ def test_verification_metadata_rejects_every_customer_only_field(
         "tts_provider",
     ],
 )
-def test_customer_metadata_rejects_every_verification_only_field(
+def test_customer_metadata_ignores_every_verification_only_field(
     field: str,
 ) -> None:
-    assert isinstance(
-        parse_dispatch(customer_metadata(**{field: "secret"})),
-        CustomerCallDispatch,
-    )
+    metadata = parse_dispatch(customer_metadata(**{field: "secret"}))
+    assert isinstance(metadata, CustomerCallDispatch)
+    assert field not in dump_contract(metadata)
 
 
 @pytest.mark.parametrize(

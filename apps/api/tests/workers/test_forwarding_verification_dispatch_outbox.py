@@ -1,6 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from presvo_contracts import (
@@ -115,15 +115,23 @@ class _CompletingProvider(_Provider):
         return created
 
 
-async def _seed_verification_dispatch(db_session):
+async def _seed_verification_dispatch(
+    db_session,
+    *,
+    user_id: UUID | None = None,
+    activation_id: UUID | None = None,
+    session_id: str | None = None,
+):
     user = User(
+        id=user_id,
         clerk_user_id="verification-dispatch-owner",
         email="verification-dispatch-owner@example.invalid",
     )
     db_session.add(user)
     await db_session.flush()
-    session_id = str(uuid4())
+    session_id = session_id or str(uuid4())
     activation = CustomerActivation(
+        id=activation_id,
         user_id=user.id,
         verification_window_started_at=FIXED_NOW - timedelta(minutes=1),
         verification_window_expires_at=FIXED_NOW + timedelta(minutes=9),
@@ -150,7 +158,7 @@ async def _seed_verification_dispatch(db_session):
     return user, activation, event
 
 
-def test_verification_dispatch_metadata_is_exact_and_forbids_extras() -> None:
+def test_verification_producer_forbids_extras_and_consumer_ignores_them() -> None:
     payload = {
         "job_type": "forwarding_verification",
         "verification_session_id": str(uuid4()),
@@ -176,6 +184,10 @@ def test_verification_dispatch_metadata_is_exact_and_forbids_extras() -> None:
             ForwardingVerificationDispatch,
             **(payload | {"system_prompt": "customer content"}),
         )
+    parsed = parse_dispatch(
+        dump_contract(metadata) | {"system_prompt": "customer content"}
+    )
+    assert "system_prompt" not in dump_contract(parsed)
     with pytest.raises(ContractError):
         create_contract(
             ForwardingVerificationDispatch,

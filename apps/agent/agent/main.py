@@ -167,10 +167,7 @@ def _register_sts_session_handlers(
 def _register_session_handlers(
     session, runtime: SessionRuntime, metadata: CustomerCallDispatch
 ) -> None:
-    if (
-        getattr(metadata, "pipeline_mode", PipelineMode.STT_LLM_TTS.value)
-        == PipelineMode.STS.value
-    ):
+    if metadata.pipeline_mode == PipelineMode.STS.value:
         _register_sts_session_handlers(session, runtime, metadata)
         return
     _register_standard_session_handlers(session, runtime, metadata)
@@ -182,10 +179,7 @@ async def _send_initial_greeting(session, metadata: CustomerCallDispatch) -> Non
         owner_name=metadata.owner_name,
     )
 
-    if (
-        getattr(metadata, "pipeline_mode", PipelineMode.STT_LLM_TTS.value)
-        == PipelineMode.STS.value
-    ):
+    if metadata.pipeline_mode == PipelineMode.STS.value:
         result = session.generate_reply(
             instructions=(
                 "Say exactly in English, without adding or removing words: "
