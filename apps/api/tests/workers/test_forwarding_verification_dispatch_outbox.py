@@ -115,6 +115,9 @@ def test_verification_reconciliation_requires_a_valid_matching_verification_cont
         "mismatched_user_id": json.dumps(
             valid | {"user_id": "00000000-0000-0000-0000-000000000027"}
         ),
+        "mismatched_agent_identity": json.dumps(
+            valid | {"agent_identity": "FOREIGN_AGENT_IDENTITY_SENTINEL"}
+        ),
     }
 
     reconciled = outbox_topics._reconcile_verification_dispatches(
@@ -149,6 +152,55 @@ def test_verification_reconciliation_rejects_mismatched_persisted_identity() -> 
 
     assert caught.value.error_code == "dispatch_conflict"
     assert caught.value.retryable is False
+
+
+@pytest.mark.anyio
+async def test_verification_reconciliation_never_persists_foreign_agent_identity(
+    db_session,
+    caplog,
+) -> None:
+    user, activation, event = await _seed_verification_dispatch(db_session)
+    activation_id = activation.id
+    snapshot = outbox_topics._VerificationDispatchSnapshot(
+        activation_id=activation.id,
+        user_id=user.id,
+        session_id=activation.verification_session_id,
+        room_name="verification-dispatch-room",
+        worker_name="ai-call-agent",
+        metadata="",
+        persisted_dispatch_id=None,
+    )
+    metadata = _verification_reconciliation_metadata(snapshot) | {
+        "agent_identity": "FOREIGN_AGENT_IDENTITY_SENTINEL"
+    }
+    provider = _Provider()
+    provider.dispatches.append(
+        _verification_reconciliation_dispatch(
+            snapshot,
+            json.dumps(metadata),
+            dispatch_id="foreign-identity-dispatch",
+        )
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with caplog.at_level("INFO"), pytest.raises(OutboxDeliveryError) as caught:
+        await _handler()(
+            {
+                "session_factory": session_factory,
+                "livekit_dispatch_provider": provider,
+                "verification_now": lambda: FIXED_NOW,
+            },
+            event,
+        )
+
+    db_session.expire_all()
+    stored = await db_session.get(CustomerActivation, activation_id)
+    assert caught.value.error_code == "dispatch_conflict"
+    assert caught.value.retryable is False
+    assert stored is not None
+    assert stored.verification_dispatch_id is None
+    assert provider.create_calls == []
+    assert "FOREIGN_AGENT_IDENTITY_SENTINEL" not in caplog.text
 
 
 class _Provider:

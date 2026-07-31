@@ -169,6 +169,9 @@ def test_customer_reconciliation_requires_a_valid_matching_customer_contract() -
         "mismatched_agent_config_id": json.dumps(
             valid | {"agent_config_id": "00000000-0000-0000-0000-000000000017"}
         ),
+        "mismatched_agent_identity": json.dumps(
+            valid | {"agent_identity": "FOREIGN_AGENT_IDENTITY_SENTINEL"}
+        ),
     }
 
     reconciled = outbox_topics._reconcile_dispatches(
@@ -203,6 +206,60 @@ def test_customer_reconciliation_rejects_mismatched_persisted_identity() -> None
 
     assert caught.value.error_code == "dispatch_conflict"
     assert caught.value.retryable is False
+
+
+@pytest.mark.anyio
+async def test_customer_reconciliation_never_persists_foreign_agent_identity(
+    db_session,
+    monkeypatch,
+    caplog,
+) -> None:
+    call, event, _subscription = await _seed_dispatch(db_session)
+    call_id = call.id
+    snapshot = outbox_topics._DispatchSnapshot(
+        call_id=call.id,
+        user_id=call.user_id,
+        agent_config_id=call.agent_config_id,
+        room_name=call.livekit_room_id,
+        worker_name="reconciliation-worker",
+        metadata="",
+        persisted_dispatch_id=None,
+    )
+    metadata = _customer_reconciliation_metadata(snapshot) | {
+        "agent_identity": "FOREIGN_AGENT_IDENTITY_SENTINEL"
+    }
+    provider = _Provider()
+    provider.dispatches.append(
+        _customer_reconciliation_dispatch(
+            snapshot,
+            json.dumps(metadata),
+            dispatch_id="foreign-identity-dispatch",
+        )
+    )
+    monkeypatch.setenv("LIVEKIT_AGENT_NAME", snapshot.worker_name)
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with caplog.at_level("INFO"), pytest.raises(OutboxDeliveryError) as caught:
+        await deliver_livekit_dispatch(
+            {"session_factory": session_factory, "livekit_dispatch_provider": provider},
+            event,
+        )
+
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert caught.value.error_code == "dispatch_conflict"
+    assert caught.value.retryable is False
+    assert stored is not None
+    assert stored.livekit_dispatch_id is None
+    assert provider.create_calls == []
+    assert "FOREIGN_AGENT_IDENTITY_SENTINEL" not in caplog.text
 
 
 async def _seed_dispatch(
