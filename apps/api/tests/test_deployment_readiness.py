@@ -391,8 +391,8 @@ def test_api_startup_is_migration_free_but_release_image_keeps_alembic() -> None
     api_main = (REPO_ROOT / "apps" / "api" / "app" / "main.py").read_text()
     migration_compose = (REPO_ROOT / "compose.migrate.yaml").read_text()
 
-    assert "COPY alembic.ini" in api_dockerfile
-    assert "COPY alembic" in api_dockerfile
+    assert "COPY apps/api/alembic.ini ./" in api_dockerfile
+    assert "COPY apps/api/alembic ./alembic" in api_dockerfile
     assert "alembic" not in api_main.lower()
     assert not (REPO_ROOT / "apps" / "api" / "docker-entrypoint.sh").exists()
     assert 'CMD ["/app/.venv/bin/uvicorn"' in api_dockerfile
@@ -477,7 +477,10 @@ def test_runtime_images_are_pinned_minimal_non_root_and_health_checked() -> None
         dockerfile = dockerfiles[application]
         assert "python:3.13-slim@sha256:" in dockerfile
         assert 'uv==0.11.19' in dockerfile
-        assert "uv sync --frozen --no-dev" in dockerfile
+        assert (
+            f"uv sync --directory apps/{application} --frozen --no-dev --no-editable"
+            in dockerfile
+        )
         assert 'CMD ["uv"' not in dockerfile
 
     assert "node:22-alpine@sha256:" in dockerfiles["web"]

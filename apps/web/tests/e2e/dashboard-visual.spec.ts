@@ -83,7 +83,8 @@ async function expectDashboardReady(page: Page, viewportMode: ViewportMode) {
   if (viewportMode === "desktop") {
     await expect(sidebar).toBeVisible();
     await expect(sidebar).toHaveCSS("width", "256px");
-    await expect(desktopNavigation.getByRole("link", { name: AGENT_NAME })).toBeVisible();
+    await expect(desktopNavigation.getByRole("link", { exact: true, name: "Agent" })).toBeVisible();
+    await expect(sidebar.getByRole("group", { name: `Agent runtime: ${AGENT_NAME}, Enabled` })).toBeVisible();
     await expect(mobileTrigger).toBeHidden();
   } else {
     await expect(sidebar).toBeHidden();
@@ -239,7 +240,7 @@ test("reduced motion keeps workspace route changes static", async ({ page }) => 
     { heading: "Operations overview", link: "Overview" },
     { heading: "Live call", link: "Live call" },
     { heading: "Calls", link: "Calls" },
-    { heading: "Assistant", link: AGENT_NAME },
+    { heading: "Assistant", link: "Agent" },
   ] as const;
 
   for (const destination of destinations) {

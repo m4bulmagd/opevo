@@ -6,9 +6,15 @@ from uuid import UUID
 
 import pytest
 
+from agent.config import get_settings
 from agent.event_publisher import EventPublisher, RedisEventBus
 from agent.session_runtime import SessionRuntime
-from presvo_contracts import CustomerCallDispatch, create_contract, realtime_channel
+from presvo_contracts import (
+    CustomerCallDispatch,
+    TranscriptObservedEvent,
+    create_contract,
+    realtime_channel,
+)
 
 
 FIXTURES = (
@@ -45,6 +51,49 @@ def _metadata() -> CustomerCallDispatch:
         allowed_duration_seconds=600,
         dispatch_token="dispatch-token",
     )
+
+
+@pytest.mark.anyio
+async def test_redis_event_bus_lazily_uses_configured_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = _Redis()
+    created: list[tuple[str, bool]] = []
+
+    def from_url(url: str, *, decode_responses: bool) -> _Redis:
+        created.append((url, decode_responses))
+        return redis
+
+    monkeypatch.setenv("REDIS_URL", "redis://redis.test:6380/7")
+    get_settings.cache_clear()
+    from redis.asyncio import Redis
+
+    monkeypatch.setattr(Redis, "from_url", from_url)
+    event = create_contract(
+        TranscriptObservedEvent,
+        type="transcript_observed",
+        user_id=USER_ID,
+        call_id=CALL_ID,
+        sequence_number=1,
+        speaker="CALLER",
+        text="Configured client event.",
+    )
+
+    try:
+        await RedisEventBus().publish(event)
+    finally:
+        get_settings.cache_clear()
+
+    assert created == [("redis://redis.test:6380/7", True)]
+    assert redis.published == [
+        (
+            "realtime:user:22222222-2222-4222-8222-222222222222",
+            '{"call_id":"11111111-1111-4111-8111-111111111111",'
+            '"schema_version":1,"sequence_number":1,"speaker":"CALLER",'
+            '"text":"Configured client event.","type":"transcript_observed",'
+            '"user_id":"22222222-2222-4222-8222-222222222222"}',
+        )
+    ]
 
 
 @pytest.mark.anyio
