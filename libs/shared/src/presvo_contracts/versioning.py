@@ -8,6 +8,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     StringConstraints,
+    TypeAdapter,
     ValidationError,
     field_validator,
 )
@@ -59,6 +60,7 @@ class VersionedContract(WireValue):
 
 
 ContractT = TypeVar("ContractT", bound=VersionedContract)
+UnionT = TypeVar("UnionT")
 
 
 def create_contract(
@@ -83,6 +85,18 @@ def parse_contract(
         return model_type.model_validate(payload, extra="ignore")
     except (TypeError, ValidationError):
         raise ContractError(model_type.__name__, "invalid_payload") from None
+
+
+def _parse_contract_union(
+    adapter: TypeAdapter[UnionT],
+    contract_name: str,
+    value: object,
+) -> UnionT:
+    payload = _decode_versioned_object(contract_name, value)
+    try:
+        return adapter.validate_python(payload, extra="ignore")
+    except (TypeError, ValidationError):
+        raise ContractError(contract_name, "invalid_payload") from None
 
 
 def dump_contract(contract: VersionedContract) -> dict[str, object]:
