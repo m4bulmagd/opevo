@@ -9,9 +9,15 @@ from .transcript import TranscriptSegment
 from .versioning import NonBlankString, VersionedContract
 
 
+CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS = 2_000
+
+
 class CallCompletionRequest(VersionedContract):
     duration_seconds: StrictInt = Field(ge=0)
-    transcript: tuple[TranscriptSegment, ...] = Field(default=(), max_length=2_000)
+    transcript: tuple[TranscriptSegment, ...] = Field(
+        default=(),
+        max_length=CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS,
+    )
 
 
 class CallCompletionAcknowledgement(VersionedContract):

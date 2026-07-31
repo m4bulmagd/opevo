@@ -1,15 +1,16 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import json
-from typing import Any
+from typing import Any, overload
 from uuid import UUID
 
 from presvo_contracts import (
     VERIFICATION_MESSAGE,
+    ContractError,
     CustomerCallDispatch,
     ForwardingVerificationDispatch,
     create_contract,
     dump_contract_json,
+    parse_dispatch,
 )
 
 from app.core.config import get_settings
@@ -964,15 +965,17 @@ def _reconcile_dispatches(
     ]
     matches: list[LiveKitDispatch] = []
     for dispatch in named_dispatches:
-        try:
-            metadata = json.loads(dispatch.metadata)
-        except (TypeError, ValueError):
-            metadata = None
+        metadata = _parse_expected_dispatch_metadata(
+            dispatch.metadata,
+            CustomerCallDispatch,
+        )
         if (
             dispatch.agent_name == snapshot.worker_name
             and dispatch.room == snapshot.room_name
-            and isinstance(metadata, dict)
-            and metadata.get("call_id") == str(snapshot.call_id)
+            and metadata is not None
+            and metadata.call_id == snapshot.call_id
+            and metadata.user_id == snapshot.user_id
+            and metadata.agent_config_id == snapshot.agent_config_id
         ):
             matches.append(dispatch)
 
@@ -1024,6 +1027,33 @@ async def _persist_dispatch_identity(
             livekit_dispatch_id=dispatch_id,
         )
         await session.commit()
+
+
+@overload
+def _parse_expected_dispatch_metadata(
+    metadata: object,
+    expected_type: type[CustomerCallDispatch],
+) -> CustomerCallDispatch | None: ...
+
+
+@overload
+def _parse_expected_dispatch_metadata(
+    metadata: object,
+    expected_type: type[ForwardingVerificationDispatch],
+) -> ForwardingVerificationDispatch | None: ...
+
+
+def _parse_expected_dispatch_metadata(
+    metadata: object,
+    expected_type: type[CustomerCallDispatch] | type[ForwardingVerificationDispatch],
+) -> CustomerCallDispatch | ForwardingVerificationDispatch | None:
+    try:
+        parsed = parse_dispatch(metadata)
+    except ContractError:
+        return None
+    if not isinstance(parsed, expected_type):
+        return None
+    return parsed
 
 
 async def deliver_livekit_verification_dispatch(
@@ -1299,18 +1329,19 @@ def _reconcile_verification_dispatches(
     named_dispatches = [
         dispatch for dispatch in dispatches if dispatch.agent_name.strip()
     ]
+    expected_session_id = UUID(snapshot.session_id)
     matches: list[LiveKitDispatch] = []
     for dispatch in named_dispatches:
-        try:
-            metadata = json.loads(dispatch.metadata)
-        except (TypeError, ValueError):
-            metadata = None
+        metadata = _parse_expected_dispatch_metadata(
+            dispatch.metadata,
+            ForwardingVerificationDispatch,
+        )
         if (
             dispatch.agent_name == snapshot.worker_name
             and dispatch.room == snapshot.room_name
-            and isinstance(metadata, dict)
-            and metadata.get("job_type") == "forwarding_verification"
-            and metadata.get("verification_session_id") == snapshot.session_id
+            and metadata is not None
+            and metadata.verification_session_id == expected_session_id
+            and metadata.user_id == snapshot.user_id
         ):
             matches.append(dispatch)
 
