@@ -47,7 +47,9 @@ class FakeRealtimeService:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
-    async def publish_call_started(self, user_id: str, *, room_name: str, call_id: str) -> None:
+    async def publish_call_started(
+        self, user_id: UUID, *, room_name: str, call_id: UUID
+    ) -> None:
         self.events.append({"user_id": user_id, "room_name": room_name, "call_id": call_id})
 
 

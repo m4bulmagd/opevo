@@ -58,7 +58,9 @@ class _Realtime:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
-    async def publish_call_started(self, user_id, *, room_name: str, call_id) -> None:
+    async def publish_call_started(
+        self, user_id: UUID, *, room_name: str, call_id: UUID
+    ) -> None:
         self.events.append(
             {"user_id": user_id, "room_name": room_name, "call_id": call_id}
         )
@@ -67,10 +69,10 @@ class _Realtime:
 class _FailingRealtime:
     async def publish_call_started(
         self,
-        user_id: str,
+        user_id: UUID,
         *,
         room_name: str,
-        call_id: str,
+        call_id: UUID,
     ) -> None:
         raise RuntimeError("REALTIME_PROVIDER_SECRET caller transcript")
 

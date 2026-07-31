@@ -55,7 +55,7 @@ class RedisEventBus:
         await pubsub.psubscribe(f"{REALTIME_CHANNEL_PREFIX}*")
         try:
             async for message in pubsub.listen():
-                if message.get("type") != "pmessage" or not message.get("data"):
+                if message.get("type") != "pmessage" or message.get("data") is None:
                     continue
 
                 channel = message["channel"]
@@ -72,6 +72,8 @@ class RedisEventBus:
                 try:
                     channel_user_id = str(UUID(suffix))
                 except (TypeError, ValueError, AttributeError):
+                    continue
+                if suffix != channel_user_id:
                     continue
                 yield channel_user_id, message["data"]
         finally:

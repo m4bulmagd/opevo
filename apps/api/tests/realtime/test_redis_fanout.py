@@ -52,19 +52,26 @@ class FakeWebSocket:
 
 
 class _PubSub:
+    def __init__(self, messages: list[dict[str, object]]) -> None:
+        self.messages = messages
+
     async def psubscribe(self, _pattern: str) -> None:
         pass
 
     async def listen(self):
-        yield {"type": "pmessage", "channel": f"realtime:user:{USER_ID}", "data": "raw"}
+        for message in self.messages:
+            yield message
 
     async def aclose(self) -> None:
         pass
 
 
 class _Redis:
+    def __init__(self, messages: list[dict[str, object]]) -> None:
+        self.messages = messages
+
     def pubsub(self) -> _PubSub:
-        return _PubSub()
+        return _PubSub(self.messages)
 
 
 def _event() -> CallStartedEvent:
@@ -134,11 +141,109 @@ async def test_realtime_service_publishes_call_started_as_typed_event() -> None:
 
 @pytest.mark.anyio
 async def test_redis_subscription_canonicalizes_channel_and_leaves_payload_raw() -> None:
-    bus = RedisEventBus(redis_client=_Redis())
+    bus = RedisEventBus(
+        redis_client=_Redis(
+            [
+                {
+                    "type": "pmessage",
+                    "channel": f"realtime:user:{USER_ID}",
+                    "data": "raw",
+                }
+            ]
+        )
+    )
 
     event = await anext(bus.subscribe())
 
     assert event == (str(USER_ID), "raw")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("empty_payload", ["", b""])
+async def test_actual_redis_adapter_validates_empty_payload_then_broadcasts_next_valid(
+    empty_payload: str | bytes,
+) -> None:
+    manager = WebSocketManager()
+    websocket = FakeWebSocket()
+    await manager.connect(str(USER_ID), websocket)
+    valid_payload = json.dumps(dump_contract(_event()))
+    redis = _Redis(
+        [
+            {
+                "type": "pmessage",
+                "channel": f"realtime:user:{USER_ID}",
+                "data": empty_payload,
+            },
+            {
+                "type": "pmessage",
+                "channel": f"realtime:user:{USER_ID}",
+                "data": valid_payload,
+            },
+        ]
+    )
+    service, observability = _service(RedisEventBus(redis_client=redis), manager)
+
+    await service.fanout_once()
+
+    assert websocket.messages == [dump_contract(_event())]
+    assert observability.invalid == [
+        {
+            "contract_name": "RealtimeEvent",
+            "code": "malformed_json",
+            "transport": "redis",
+        }
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("invalid_channel", "secret"),
+    [
+        (b"realtime:user:\xff", "realtime:user"),
+        (12345, "12345"),
+        (f"wrong:user:{USER_ID}", str(USER_ID)),
+        ("realtime:user:INVALID_CHANNEL_SENTINEL", "INVALID_CHANNEL_SENTINEL"),
+        (f"realtime:user:{USER_ID.hex}", USER_ID.hex),
+    ],
+)
+async def test_actual_redis_adapter_silently_discards_invalid_channel_then_continues(
+    invalid_channel: object,
+    secret: str | None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = WebSocketManager()
+    websocket = FakeWebSocket()
+    await manager.connect(str(USER_ID), websocket)
+    invalid_event = create_contract(
+        CallStartedEvent,
+        type="call_started",
+        user_id=USER_ID,
+        call_id=CALL_ID,
+        room_name="invalid-channel-event",
+    )
+    redis = _Redis(
+        [
+            {
+                "type": "pmessage",
+                "channel": invalid_channel,
+                "data": json.dumps(dump_contract(invalid_event)),
+            },
+            {
+                "type": "pmessage",
+                "channel": f"realtime:user:{USER_ID}",
+                "data": json.dumps(dump_contract(_event())),
+            },
+        ]
+    )
+    service, observability = _service(RedisEventBus(redis_client=redis), manager)
+
+    await service.fanout_once()
+
+    assert websocket.messages == [dump_contract(_event())]
+    assert observability.invalid == []
+    assert "invalid-channel-event" not in caplog.text
+    if secret is not None:
+        assert secret not in caplog.text
 
 
 @pytest.mark.anyio

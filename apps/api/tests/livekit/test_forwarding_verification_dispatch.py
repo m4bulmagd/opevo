@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 import json
+from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select
@@ -47,10 +48,10 @@ class _Realtime:
 
     async def publish_call_started(
         self,
-        user_id: str,
+        user_id: UUID,
         *,
         room_name: str,
-        call_id: str,
+        call_id: UUID,
     ) -> None:
         self.events.append(
             {"user_id": user_id, "room_name": room_name, "call_id": call_id}
