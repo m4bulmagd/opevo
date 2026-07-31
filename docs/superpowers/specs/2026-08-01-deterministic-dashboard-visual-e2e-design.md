@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-01
 **Decision:** 20A
-**Status:** Approved direction; written specification awaiting review
+**Status:** Approved
 
 ## Problem
 
