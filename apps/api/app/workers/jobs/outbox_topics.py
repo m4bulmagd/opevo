@@ -976,6 +976,7 @@ def _reconcile_dispatches(
             and metadata.call_id == snapshot.call_id
             and metadata.user_id == snapshot.user_id
             and metadata.agent_config_id == snapshot.agent_config_id
+            and metadata.agent_identity == expected_agent_identity(snapshot.call_id)
         ):
             matches.append(dispatch)
 
@@ -1255,7 +1256,7 @@ async def _verification_dispatch_snapshot(
                     job_type="forwarding_verification",
                     verification_session_id=session_id,
                     user_id=user_id,
-                    agent_identity=f"agent-verification-{session_id}",
+                    agent_identity=_verification_agent_identity(session_id),
                     completion_token=create_verification_token(
                         session_id=session_id,
                         user_id=str(user_id),
@@ -1342,6 +1343,9 @@ def _reconcile_verification_dispatches(
             and metadata is not None
             and metadata.verification_session_id == expected_session_id
             and metadata.user_id == snapshot.user_id
+            and metadata.agent_identity == _verification_agent_identity(
+                snapshot.session_id
+            )
         ):
             matches.append(dispatch)
 
@@ -1361,6 +1365,10 @@ def _reconcile_verification_dispatches(
         "dispatch_conflict",
         retryable=False,
     )
+
+
+def _verification_agent_identity(session_id: str) -> str:
+    return f"agent-verification-{session_id}"
 
 
 async def _persist_verification_dispatch_identity(
