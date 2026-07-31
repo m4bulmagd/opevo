@@ -88,14 +88,14 @@ def parse_contract(
 def dump_contract(contract: VersionedContract) -> dict[str, object]:
     try:
         return cast(dict[str, object], contract.model_dump(mode="json", exclude_none=False))
-    except (TypeError, ValueError, ValidationError):
+    except Exception:
         raise ContractError(type(contract).__name__, "invalid_payload") from None
 
 
 def dump_contract_json(contract: VersionedContract) -> str:
     try:
         return json.dumps(dump_contract(contract), separators=(",", ":"), sort_keys=True)
-    except (TypeError, ValueError, ValidationError):
+    except Exception:
         raise ContractError(type(contract).__name__, "invalid_payload") from None
 
 
