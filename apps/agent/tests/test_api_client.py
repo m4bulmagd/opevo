@@ -51,6 +51,60 @@ def _call_request() -> CallCompletionRequest:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("operation", "expected_error"),
+    [
+        ("append", TranscriptAppendPermanentError),
+        ("call", ValueError),
+        ("verification", VerificationCompletionPermanentError),
+    ],
+)
+async def test_client_rejects_missing_credentials_before_http(
+    operation: str,
+    expected_error: type[Exception],
+) -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(500)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = AgentApiClient(base_url="http://api.test", http_client=http)
+        with pytest.raises(expected_error):
+            if operation == "append":
+                await client.append_transcript(uuid4(), "", _segment())
+            elif operation == "call":
+                await client.complete_call(uuid4(), "", _call_request())
+            else:
+                await client.complete_verification(uuid4(), " ")
+
+    assert requests == 0
+
+
+@pytest.mark.anyio
+async def test_zero_verification_retries_fails_without_http_attempt() -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = AgentApiClient(
+            base_url="http://api.test",
+            http_client=http,
+            max_retries=0,
+        )
+        with pytest.raises(VerificationCompletionRetryableError):
+            await client.complete_verification(uuid4(), "token")
+
+    assert requests == 0
+
+
+@pytest.mark.anyio
 async def test_client_matches_transcript_golden_request_and_acknowledgement() -> None:
     request_fixture = _fixture("transcript_append_request.json")
     acknowledgement_fixture = _fixture("transcript_append_acknowledgement.json")

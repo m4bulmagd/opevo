@@ -314,8 +314,16 @@ async def test_transcript_flush_job_happy_path(
     monkeypatch.setattr(transcript_flush_module, "get_session_factory", lambda: session_factory)
 
     transcript = [
-        {"speaker": "CALLER", "text": "Hello, what are your hours?"},
-        {"speaker": "AGENT", "text": "We are open nine to five."},
+        {
+            "sequence_number": 1,
+            "speaker": "CALLER",
+            "text": "Hello, what are your hours?",
+        },
+        {
+            "sequence_number": 2,
+            "speaker": "AGENT",
+            "text": "We are open nine to five.",
+        },
     ]
     payload = {
         "call_id": str(call.id),
