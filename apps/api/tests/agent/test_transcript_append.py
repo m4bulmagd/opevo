@@ -14,7 +14,7 @@ from app.core.dispatch_token import create_dispatch_token
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.call_message import CallMessage
-from app.schemas.agent_runtime import AuthenticatedAgentIdentity
+from app.schemas.agent_identity import AuthenticatedAgentIdentity
 
 
 class CapturingQueue:
@@ -101,6 +101,16 @@ async def _post(
     *,
     raise_app_exceptions: bool = True,
 ) -> httpx.Response:
+    if "schema_version" not in payload:
+        payload = (
+            {
+                "schema_version": 1,
+                "duration_seconds": payload["duration_seconds"],
+                "transcript": payload.get("transcript", []),
+            }
+            if path.endswith("/complete")
+            else {"schema_version": 1, "segment": payload}
+        )
     transport = httpx.ASGITransport(
         app=app,
         raise_app_exceptions=raise_app_exceptions,
@@ -132,7 +142,7 @@ async def test_deactivating_account_call_can_append_and_replay_transcript(
         app,
         path,
         token,
-        {"sequence_number": 1, "speaker": " caller ", "text": "  Hello  "},
+        {"sequence_number": 1, "speaker": "CALLER", "text": "  Hello  "},
     )
     duplicate = await _post(
         app,
@@ -142,9 +152,17 @@ async def test_deactivating_account_call_can_append_and_replay_transcript(
     )
 
     assert stored.status_code == 200
-    assert stored.json() == {"status": "stored", "sequence_number": 1}
+    assert stored.json() == {
+        "schema_version": 1,
+        "status": "stored",
+        "sequence_number": 1,
+    }
     assert duplicate.status_code == 200
-    assert duplicate.json() == {"status": "duplicate", "sequence_number": 1}
+    assert duplicate.json() == {
+        "schema_version": 1,
+        "status": "duplicate",
+        "sequence_number": 1,
+    }
     rows = list(
         (
             await db_session.execute(
@@ -307,7 +325,11 @@ async def test_nonterminal_transition_accepts_new_sequence(
     )
 
     assert response.status_code == 200
-    assert response.json() == {"status": "stored", "sequence_number": 1}
+    assert response.json() == {
+        "schema_version": 1,
+        "status": "stored",
+        "sequence_number": 1,
+    }
 
 
 @pytest.mark.anyio

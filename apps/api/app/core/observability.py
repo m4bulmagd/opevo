@@ -157,6 +157,26 @@ _SERVICE_NAMES = frozenset({"presvo-api", "presvo-worker"})
 _HTTP_METHODS = frozenset(
     {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 )
+_CONTRACT_NAMES = frozenset(
+    {
+        "TranscriptAppendRequest",
+        "TranscriptAppendAcknowledgement",
+        "CallCompletionRequest",
+        "CallCompletionAcknowledgement",
+        "VerificationCompletionRequest",
+        "VerificationCompletionAcknowledgement",
+    }
+)
+_CONTRACT_CODES = frozenset(
+    {
+        "malformed_json",
+        "missing_schema_version",
+        "unsupported_schema_version",
+        "invalid_payload",
+        "channel_user_mismatch",
+    }
+)
+_CONTRACT_TRANSPORTS = frozenset({"http", "livekit", "redis"})
 
 
 def _safe_failure(event: str, operation: str, error: BaseException) -> None:
@@ -457,6 +477,26 @@ class Observability:
         self.account_deactivation_completion_duration = meter.create_histogram(
             "presvo.account_deactivation.completion_duration",
             unit="s",
+        )
+        self.invalid_contract_messages = meter.create_counter(
+            "presvo.contract.invalid_messages"
+        )
+
+    def record_invalid_contract(
+        self,
+        *,
+        contract_name: str,
+        code: str,
+        transport: str,
+    ) -> None:
+        attributes = {
+            "contract_name": _safe_label(contract_name, _CONTRACT_NAMES),
+            "code": _safe_label(code, _CONTRACT_CODES),
+            "transport": _safe_label(transport, _CONTRACT_TRANSPORTS),
+        }
+        _safe_call(
+            "record_invalid_contract",
+            lambda: self.invalid_contract_messages.add(1, attributes),
         )
 
     def record_http_request(

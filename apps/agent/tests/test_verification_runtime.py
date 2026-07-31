@@ -404,7 +404,7 @@ async def test_verification_runtime_plays_exact_message_then_completes_and_clean
         "speech_complete",
         (
             "complete",
-            str(metadata.verification_session_id),
+                metadata.verification_session_id,
             metadata.completion_token,
         ),
         ("shutdown", {"drain": True}),

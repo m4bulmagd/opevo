@@ -5,9 +5,14 @@ from uuid import uuid4
 import pytest
 
 from agent.api_client import TranscriptAppendPermanentError
-from presvo_contracts import CustomerCallDispatch, create_contract
+from presvo_contracts import (
+    CallCompletionAcknowledgement,
+    CallCompletionRequest,
+    CustomerCallDispatch,
+    create_contract,
+)
 
-from agent.schemas import CallTranscriptItem
+from presvo_contracts import TranscriptSegment as CallTranscriptItem
 from agent.session_runtime import SessionRuntime
 
 
@@ -31,15 +36,16 @@ class SecretBearingFailingEventPublisher:
 
 class FakeApiClient:
     def __init__(self) -> None:
-        self.calls: list[dict] = []
+        self.calls: list[tuple] = []
 
-    async def complete_call(self, payload: dict) -> dict:
-        self.calls.append(payload)
-        return {
-            "status": "accepted",
-            "queued": True,
-            "job_id": f"call-finalization:{payload['call_id']}",
-        }
+    async def complete_call(self, call_id, dispatch_token, request: CallCompletionRequest):
+        self.calls.append((call_id, dispatch_token, request))
+        return create_contract(
+            CallCompletionAcknowledgement,
+            status="accepted",
+            queued=True,
+            job_id=f"call-finalization:{call_id}",
+        )
 
     async def append_transcript(
         self,
@@ -51,12 +57,12 @@ class FakeApiClient:
 
 
 class FailingApiClient:
-    async def complete_call(self, payload: dict) -> dict:
+    async def complete_call(self, *_args) -> dict:
         raise RuntimeError("API unreachable")
 
 
 class SecretBearingFailingApiClient:
-    async def complete_call(self, payload: dict) -> dict:
+    async def complete_call(self, *_args) -> dict:
         raise RuntimeError("AUTHORIZATION_SENTINEL_FROM_API_CLIENT")
 
 
@@ -239,7 +245,7 @@ async def test_finalize_empty_transcript() -> None:
     await runtime.finalize(metadata, duration_seconds=30)
 
     assert len(api_client.calls) == 1
-    assert api_client.calls[0]["transcript"] == []
+    assert api_client.calls[0][2].transcript == ()
     assert any(e["type"] == "call_ended" for e in publisher.events)
 
 

@@ -2,27 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from app.schemas.agent_runtime import TranscriptAppendRequest
-
-
-class AgentCallCompletionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    duration_seconds: int = Field(ge=0)
-    transcript: list[TranscriptAppendRequest] = Field(
-        default_factory=list,
-        max_length=2000,
-    )
-    caller_number: str | None = None
-
-
-class AgentCallCompletionResponse(BaseModel):
-    status: str
-    queued: bool
-    job_id: str
-
+from pydantic import BaseModel, Field
 
 class CallResponse(BaseModel):
     id: UUID

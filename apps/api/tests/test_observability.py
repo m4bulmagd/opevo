@@ -1764,3 +1764,25 @@ async def test_call_reconciliation_job_emits_exact_result_outcomes(
 
     assert result == {"scanned": 7, "recovered": 4, "failed": 2, "deferred": 1}
     assert observed == [result]
+
+
+def test_invalid_contract_metric_has_closed_labels() -> None:
+    meter = _Meter()
+    telemetry = _observability(meter=meter)
+
+    telemetry.record_invalid_contract(
+        contract_name="TRANSCRIPT_SENTINEL",
+        code="TOKEN_SENTINEL",
+        transport="RAW_BODY_SENTINEL",
+    )
+
+    assert meter.instruments["presvo.contract.invalid_messages"].measurements == [
+        (
+            1,
+            {
+                "contract_name": "unknown",
+                "code": "unknown",
+                "transport": "unknown",
+            },
+        )
+    ]

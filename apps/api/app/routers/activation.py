@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.core.database import get_session
 from app.core.dispatch_token import DispatchTokenConfigurationError
+from app.core.contract_http import contract_request_openapi, parse_contract_request
 from app.core.verification_token import (
     VerificationTokenError,
     verify_verification_token,
@@ -43,6 +44,11 @@ from app.services.forwarding_verification_service import (
 )
 from app.services.receptionist_projection_service import (
     ReceptionistProjectionTooLargeError,
+)
+from presvo_contracts import (
+    VerificationCompletionAcknowledgement,
+    VerificationCompletionRequest,
+    create_contract,
 )
 
 
@@ -259,9 +265,14 @@ async def go_live(
         ) from None
 
 
-@router.post("/api/activation/verification/{session_id}/complete")
+@router.post(
+    "/api/activation/verification/{session_id}/complete",
+    response_model=VerificationCompletionAcknowledgement,
+    openapi_extra=contract_request_openapi(VerificationCompletionRequest),
+)
 async def complete_forwarding_verification(
     session_id: str,
+    request: Request,
     x_verification_token: str | None = Header(
         default=None,
         alias="x-verification-token",
@@ -270,7 +281,7 @@ async def complete_forwarding_verification(
     service: ForwardingVerificationService = Depends(
         get_forwarding_verification_service
     ),
-) -> dict[str, str]:
+) -> VerificationCompletionAcknowledgement:
     activation = (
         await CustomerActivationRepository(session).get_by_verification_session_id(
             session_id
@@ -287,6 +298,8 @@ async def complete_forwarding_verification(
     except (VerificationTokenError, DispatchTokenConfigurationError):
         raise _verification_auth_error() from None
 
+    await parse_contract_request(request, VerificationCompletionRequest)
+
     try:
         await service.complete(session_id=session_id)
     except ForwardingVerificationConflictError:
@@ -294,7 +307,11 @@ async def complete_forwarding_verification(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "verification_not_claimable"},
         ) from None
-    return {"status": "verified", "session_id": session_id}
+    return create_contract(
+        VerificationCompletionAcknowledgement,
+        status="verified",
+        session_id=session_id,
+    )
 
 
 async def _get_activation_snapshot(

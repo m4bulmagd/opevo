@@ -5,21 +5,22 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
+from uuid import UUID
 
-from presvo_contracts import CustomerCallDispatch
+from presvo_contracts import (
+    CallCompletionRequest,
+    CustomerCallDispatch,
+    TranscriptSegment,
+    TranscriptSpeaker,
+    create_contract,
+)
 
 from agent.api_client import (
     AgentApiClient,
     TranscriptAppendPermanentError,
     TranscriptAppendRetryableError,
-    is_completion_acknowledgement,
 )
 from agent.event_publisher import EventPublisher
-from agent.schemas import (
-    CallCompletionPayload,
-    CallTranscriptItem,
-    TranscriptSpeaker,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -58,9 +59,9 @@ class SessionRuntime:
     ) -> None:
         self.event_publisher = event_publisher
         self.api_client = api_client
-        self.transcript: list[CallTranscriptItem] = []
+        self.transcript: list[TranscriptSegment] = []
 
-        self._pending: deque[CallTranscriptItem] = deque(
+        self._pending: deque[TranscriptSegment] = deque(
             maxlen=MAX_PENDING_TRANSCRIPT_ITEMS
         )
         self._next_sequence_number = 1
@@ -90,7 +91,7 @@ class SessionRuntime:
         self._detached_call_limit_tasks: set[asyncio.Task[Any]] = set()
 
     @property
-    def pending_transcript(self) -> tuple[CallTranscriptItem, ...]:
+    def pending_transcript(self) -> tuple[TranscriptSegment, ...]:
         return tuple(self._pending)
 
     @property
@@ -319,7 +320,7 @@ class SessionRuntime:
         text: str,
     ) -> bool:
         self._bind_metadata(metadata)
-        line = self._accept_segment("CALLER", text)
+        line = self._accept_segment(TranscriptSpeaker.CALLER, text)
         if line is None:
             return False
         await self._publish_transcript_event(metadata, line)
@@ -336,18 +337,18 @@ class SessionRuntime:
         normalized_text = text.strip() if isinstance(text, str) else text
         if (
             self.transcript
-            and self.transcript[-1].speaker == "AGENT"
+            and self.transcript[-1].speaker == TranscriptSpeaker.AGENT
             and self.transcript[-1].text == normalized_text
         ):
-            duplicate = CallTranscriptItem(
+            duplicate = TranscriptSegment(
                 sequence_number=self.transcript[-1].sequence_number,
-                speaker="AGENT",
+                speaker=TranscriptSpeaker.AGENT,
                 text=text,
             )
             await self._publish_transcript_event(metadata, duplicate)
             return False
 
-        line = self._accept_segment("AGENT", text)
+        line = self._accept_segment(TranscriptSpeaker.AGENT, text)
         if line is None:
             return False
         await self._publish_transcript_event(metadata, line)
@@ -357,7 +358,7 @@ class SessionRuntime:
         self,
         speaker: TranscriptSpeaker,
         text: str,
-    ) -> CallTranscriptItem | None:
+    ) -> TranscriptSegment | None:
         if not self._accepting_current_task():
             return None
 
@@ -369,7 +370,7 @@ class SessionRuntime:
             self._request_fatal_shutdown("transcript_buffer_overflow")
             raise TranscriptBufferOverflow("transcript recovery buffer is full")
 
-        line = CallTranscriptItem(
+        line = TranscriptSegment(
             sequence_number=self._next_sequence_number,
             speaker=speaker,
             text=text,
@@ -404,7 +405,7 @@ class SessionRuntime:
             while self._pending:
                 item = self._pending[0]
                 try:
-                    acknowledgement = await api_client.append_transcript(
+                    await api_client.append_transcript(
                         self._active_call_id,
                         self._active_dispatch_token,
                         item,
@@ -434,16 +435,6 @@ class SessionRuntime:
                     self._request_fatal_shutdown("transcript_append_permanent_failure")
                     return
 
-                if not self._acknowledges(acknowledgement, item):
-                    logger.error(
-                        "transcript append acknowledgement invalid call_id=%s sequence_number=%d",
-                        self._active_call_id,
-                        item.sequence_number,
-                    )
-                    self._flusher_stopped_permanently = True
-                    self._request_fatal_shutdown("transcript_append_permanent_failure")
-                    return
-
                 if self._pending and self._pending[0] == item:
                     self._pending.popleft()
                 retry_delay = 1
@@ -451,23 +442,11 @@ class SessionRuntime:
             self._wake_flusher.clear()
             self._drained.set()
 
-    @staticmethod
-    def _acknowledges(
-        acknowledgement: object,
-        item: CallTranscriptItem,
-    ) -> bool:
-        return (
-            isinstance(acknowledgement, dict)
-            and acknowledgement.get("status") in {"stored", "duplicate"}
-            and type(acknowledgement.get("sequence_number")) is int
-            and acknowledgement["sequence_number"] == item.sequence_number
-        )
-
     @property
-    def _active_call_id(self) -> str:
+    def _active_call_id(self) -> UUID:
         if self._metadata is None:
             raise RuntimeError("transcript metadata is unavailable")
-        return str(self._metadata.call_id)
+        return self._metadata.call_id
 
     @property
     def _active_dispatch_token(self) -> str:
@@ -486,7 +465,7 @@ class SessionRuntime:
     async def _publish_transcript_event(
         self,
         metadata: CustomerCallDispatch,
-        line: CallTranscriptItem,
+        line: TranscriptSegment,
     ) -> None:
         try:
             await self.event_publisher.publish(
@@ -590,20 +569,22 @@ class SessionRuntime:
         metadata: CustomerCallDispatch,
         *,
         duration_seconds: int,
-        recovery_items: tuple[CallTranscriptItem, ...],
+        recovery_items: tuple[TranscriptSegment, ...],
     ) -> bool:
         if self.api_client is None:
             return False
 
-        payload = CallCompletionPayload(
-            call_id=str(metadata.call_id),
+        request = create_contract(
+            CallCompletionRequest,
             duration_seconds=duration_seconds,
-            transcript=list(recovery_items),
+            transcript=recovery_items,
         )
-        call_payload = payload.model_dump()
-        call_payload["dispatch_token"] = metadata.dispatch_token
         try:
-            acknowledgement = await self.api_client.complete_call(call_payload)
+            await self.api_client.complete_call(
+                metadata.call_id,
+                metadata.dispatch_token,
+                request,
+            )
         except Exception as exc:
             logger.error(
                 "failed to complete call %s after retries error_type=%s",
@@ -612,15 +593,6 @@ class SessionRuntime:
             )
             return False
 
-        if not is_completion_acknowledgement(
-            acknowledgement,
-            str(metadata.call_id),
-        ):
-            logger.error(
-                "call completion acknowledgement invalid call_id=%s",
-                metadata.call_id,
-            )
-            return False
         return True
 
     async def _close_api_client(self) -> None:
