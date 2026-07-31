@@ -120,6 +120,7 @@ def _lifespan(settings: Settings):
                     auth_provider=ClerkAuthProvider(settings=settings),
                     event_bus=realtime_event_bus,
                     websocket_manager=websocket_manager,
+                    observability=app.state.observability,
                 )
             if settings.app_env != "test":
                 call_finalization_pool = await create_arq_pool(settings.redis_url)

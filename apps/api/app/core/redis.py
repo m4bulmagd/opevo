@@ -1,6 +1,6 @@
-import json
 from collections.abc import AsyncIterator
 from functools import lru_cache
+from uuid import UUID
 
 from arq import create_pool
 from arq.connections import ArqRedis
@@ -8,10 +8,12 @@ from arq.connections import RedisSettings
 from redis.asyncio import Redis
 
 from app.core.config import get_settings
-
-# SHARED CONTRACT — apps/agent/agent/event_publisher.py and
-# libs/shared/constants.py use the same prefix. Update all if changing.
-REALTIME_CHANNEL_PREFIX = "realtime:user:"
+from presvo_contracts import (
+    REALTIME_CHANNEL_PREFIX,
+    RealtimeEvent,
+    dump_contract_json,
+    realtime_channel,
+)
 
 
 @lru_cache
@@ -42,14 +44,13 @@ class RedisEventBus:
             self.redis_client = get_redis_client()
             self._owns_client = False
 
-    @staticmethod
-    def channel_name(user_id: str) -> str:
-        return f"{REALTIME_CHANNEL_PREFIX}{user_id}"
+    async def publish(self, event: RealtimeEvent) -> None:
+        await self.redis_client.publish(
+            realtime_channel(event.user_id),
+            dump_contract_json(event),
+        )
 
-    async def publish_json(self, user_id: str, payload: dict) -> None:
-        await self.redis_client.publish(self.channel_name(user_id), json.dumps(payload))
-
-    async def subscribe(self) -> AsyncIterator[tuple[str, dict]]:
+    async def subscribe(self) -> AsyncIterator[tuple[str, object]]:
         pubsub = self.redis_client.pubsub()
         await pubsub.psubscribe(f"{REALTIME_CHANNEL_PREFIX}*")
         try:
@@ -59,12 +60,20 @@ class RedisEventBus:
 
                 channel = message["channel"]
                 if isinstance(channel, bytes):
-                    channel = channel.decode("utf-8")
-                data = message["data"]
-                if isinstance(data, bytes):
-                    data = data.decode("utf-8")
-
-                yield channel.rsplit(":", 1)[-1], json.loads(data)
+                    try:
+                        channel = channel.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
+                if not isinstance(channel, str):
+                    continue
+                suffix = channel.removeprefix(REALTIME_CHANNEL_PREFIX)
+                if suffix == channel:
+                    continue
+                try:
+                    channel_user_id = str(UUID(suffix))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                yield channel_user_id, message["data"]
         finally:
             close = getattr(pubsub, "aclose", None)
             if close is not None:

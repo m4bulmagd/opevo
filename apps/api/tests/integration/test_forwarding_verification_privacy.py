@@ -297,7 +297,7 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
             completed = await client.post(
                 f"/api/activation/verification/{session_id}/complete",
                 headers={"x-verification-token": completion_token},
-                json={},
+                json={"schema_version": 1},
             )
 
         replay_result = await LiveKitDispatchService(
@@ -338,7 +338,11 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
     assert rejected.status_code == 401
     assert rejected.json() == {"detail": "Invalid verification token"}
     assert completed.status_code == 200
-    assert completed.json() == {"status": "verified", "session_id": session_id}
+    assert completed.json() == {
+        "schema_version": 1,
+        "status": "verified",
+        "session_id": session_id,
+    }
     assert replay_result.status == "denied"
     assert stored_activation is not None
     assert stored_phone is not None
@@ -368,6 +372,7 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
     assert recording.starts == []
 
     assert set(dispatch_metadata) == {
+        "schema_version",
         "job_type",
         "verification_session_id",
         "user_id",

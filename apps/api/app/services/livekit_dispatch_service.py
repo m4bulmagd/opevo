@@ -349,9 +349,9 @@ class LiveKitDispatchService:
         if self.realtime_service is not None:
             try:
                 await self.realtime_service.publish_call_started(
-                    str(user.id),
+                    user.id,
                     room_name=room_name,
-                    call_id=str(call.id),
+                    call_id=call.id,
                 )
             except Exception as error:
                 report_safe_exception(

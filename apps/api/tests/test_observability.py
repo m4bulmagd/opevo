@@ -1786,3 +1786,25 @@ def test_invalid_contract_metric_has_closed_labels() -> None:
             },
         )
     ]
+
+
+def test_invalid_realtime_contract_metric_uses_a_bounded_contract_label() -> None:
+    meter = _Meter()
+    telemetry = _observability(meter=meter)
+
+    telemetry.record_invalid_contract(
+        contract_name="CallStartedEvent",
+        code="channel_user_mismatch",
+        transport="redis",
+    )
+
+    assert meter.instruments["presvo.contract.invalid_messages"].measurements == [
+        (
+            1,
+            {
+                "contract_name": "CallStartedEvent",
+                "code": "channel_user_mismatch",
+                "transport": "redis",
+            },
+        )
+    ]

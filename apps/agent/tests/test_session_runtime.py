@@ -13,6 +13,8 @@ from presvo_contracts import (
     TranscriptAppendAcknowledgement,
     TranscriptSegment,
     create_contract,
+    dump_contract,
+    TranscriptObservedEvent,
 )
 
 from agent.session_runtime import (
@@ -26,8 +28,8 @@ class FakeEventPublisher:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
-    async def publish(self, payload: dict) -> None:
-        self.events.append(payload)
+    async def publish(self, event: object) -> None:
+        self.events.append(dump_contract(event))
 
 
 class FakeApiClient:
@@ -88,7 +90,7 @@ async def test_session_runtime_publishes_transcript_events() -> None:
     metadata = make_metadata()
     await runtime.handle_agent_utterance(metadata, "Bonjour")
 
-    assert fake_event_publisher.events[0]["type"] == "transcript"
+    assert fake_event_publisher.events[0]["type"] == "transcript_observed"
     assert fake_event_publisher.events[0]["user_id"] == str(metadata.user_id)
 
 
@@ -109,7 +111,7 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
         duration_seconds=61,
     )
 
-    assert fake_event_publisher.events[-1]["type"] == "call_ended"
+    assert fake_event_publisher.events[-1]["type"] == "agent_session_ended"
     assert fake_event_publisher.events[-1]["user_id"] == str(dispatch_payload.user_id)
     assert [item.model_dump() for item in api_client.appends] == [
         {"sequence_number": 1, "speaker": "AGENT", "text": "Bonjour"},
@@ -130,10 +132,10 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
 
 class FakeBus:
     def __init__(self) -> None:
-        self.published: list[tuple[str, dict]] = []
+        self.published: list[object] = []
 
-    async def publish_json(self, user_id: str, payload: dict) -> None:
-        self.published.append((user_id, payload))
+    async def publish(self, event: object) -> None:
+        self.published.append(event)
 
 
 @pytest.mark.anyio
@@ -141,13 +143,18 @@ async def test_event_publisher_routes_events_to_user_channel() -> None:
     bus = FakeBus()
     publisher = EventPublisher(event_bus=bus)
 
-    await publisher.publish(
-        {"user_id": "user_123", "type": "transcript", "text": "Bonjour"}
+    event = create_contract(
+        TranscriptObservedEvent,
+        type="transcript_observed",
+        user_id=uuid4(),
+        call_id=uuid4(),
+        sequence_number=1,
+        speaker="CALLER",
+        text="Bonjour",
     )
+    await publisher.publish(event)
 
-    assert bus.published == [
-        ("user_123", {"user_id": "user_123", "type": "transcript", "text": "Bonjour"})
-    ]
+    assert bus.published == [event]
 
 
 async def wait_until(
@@ -350,7 +357,7 @@ async def test_finalize_retains_recovery_tail_until_completion_acknowledges() ->
 
     assert [item.sequence_number for item in runtime.pending_transcript] == [1]
     await wait_until(
-        lambda: any(event["type"] == "call_ended" for event in publisher.events)
+        lambda: any(event["type"] == "agent_session_ended" for event in publisher.events)
     )
 
     completion_release.set()
@@ -436,12 +443,12 @@ async def test_closing_runtime_rejects_duplicate_agent_callbacks_without_publish
     await runtime.handle_agent_utterance(metadata, "same")
     await runtime.finalize(metadata, duration_seconds=1)
     transcript_event_count = len(
-        [event for event in publisher.events if event["type"] == "transcript"]
+        [event for event in publisher.events if event["type"] == "transcript_observed"]
     )
 
     assert await runtime.handle_agent_utterance(metadata, "same") is False
     assert (
-        len([event for event in publisher.events if event["type"] == "transcript"])
+        len([event for event in publisher.events if event["type"] == "transcript_observed"])
         == transcript_event_count
     )
 
@@ -515,7 +522,7 @@ async def test_failed_completion_ack_retains_recovery_and_second_finalize_retrie
     assert [item.sequence_number for item in runtime.pending_transcript] == [1]
     assert api_client.completion_attempts == 1
     assert (
-        len([event for event in publisher.events if event["type"] == "call_ended"]) == 1
+        len([event for event in publisher.events if event["type"] == "agent_session_ended"]) == 1
     )
 
     await runtime.finalize(metadata, duration_seconds=1)
@@ -524,7 +531,7 @@ async def test_failed_completion_ack_retains_recovery_and_second_finalize_retrie
     assert api_client.completion_attempts == 2
     assert api_client.close_attempts == 2
     assert (
-        len([event for event in publisher.events if event["type"] == "call_ended"]) == 1
+        len([event for event in publisher.events if event["type"] == "agent_session_ended"]) == 1
     )
 
 

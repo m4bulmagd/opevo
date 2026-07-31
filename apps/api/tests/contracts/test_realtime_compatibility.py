@@ -1,0 +1,70 @@
+"""Compatibility checks for API-produced realtime wire events."""
+
+import json
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+
+from app.core.auth import ClerkAuthProvider
+from app.services.realtime_service import RealtimeService
+from app.websockets.manager import WebSocketManager
+
+
+FIXTURES = (
+    Path(__file__).resolve().parents[4]
+    / "libs/shared/tests/fixtures/v1"
+)
+USER_ID = UUID("22222222-2222-4222-8222-222222222222")
+CALL_ID = UUID("11111111-1111-4111-8111-111111111111")
+
+
+class _Bus:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    async def publish(self, event: object) -> None:
+        self.events.append(event)
+
+
+class _Observability:
+    def record_invalid_contract(self, **_attributes: str) -> None:
+        pass
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("method", "kwargs", "fixture"),
+    [
+        (
+            "publish_call_started",
+            {"room_name": "fixture-room-001", "call_id": CALL_ID},
+            "call_started_event.json",
+        ),
+        (
+            "publish_call_finalized",
+            {
+                "call_id": CALL_ID,
+                "minutes_charged": 1,
+                "summary_text": "Fixture call summary.",
+            },
+            "call_finalized_event.json",
+        ),
+    ],
+)
+async def test_api_realtime_producers_match_golden_contracts(
+    method: str, kwargs: dict[str, object], fixture: str
+) -> None:
+    bus = _Bus()
+    service = RealtimeService(
+        auth_provider=ClerkAuthProvider(),
+        event_bus=bus,
+        websocket_manager=WebSocketManager(),
+        observability=_Observability(),
+    )
+
+    await getattr(service, method)(USER_ID, **kwargs)
+
+    assert bus.events[0].model_dump(mode="json") == json.loads(
+        (FIXTURES / fixture).read_text()
+    )

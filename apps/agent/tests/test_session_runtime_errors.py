@@ -12,6 +12,7 @@ from presvo_contracts import (
     TranscriptAppendAcknowledgement,
     TranscriptSegment,
     create_contract,
+    dump_contract,
 )
 
 from agent.session_runtime import SessionRuntime
@@ -21,17 +22,17 @@ class FakeEventPublisher:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
-    async def publish(self, payload: dict) -> None:
-        self.events.append(payload)
+    async def publish(self, event: object) -> None:
+        self.events.append(dump_contract(event))
 
 
 class FailingEventPublisher:
-    async def publish(self, payload: dict) -> None:
+    async def publish(self, event: object) -> None:
         raise RuntimeError("Redis connection refused")
 
 
 class SecretBearingFailingEventPublisher:
-    async def publish(self, payload: dict) -> None:
+    async def publish(self, event: object) -> None:
         raise RuntimeError("TRANSCRIPT_SENTINEL_FROM_PROVIDER_ERROR")
 
 
@@ -133,8 +134,8 @@ async def test_finalize_api_client_raises_does_not_crash() -> None:
     # Must not raise
     await runtime.finalize(metadata, duration_seconds=60)
 
-    # call_ended event should still be published despite the API failure
-    assert any(e["type"] == "call_ended" for e in publisher.events)
+    # agent_session_ended event should still be published despite the API failure
+    assert any(e["type"] == "agent_session_ended" for e in publisher.events)
 
 
 # T4-2: finalize() when event_publisher.publish() raises — should log but not crash
@@ -154,17 +155,19 @@ async def test_finalize_publisher_raises_does_not_crash() -> None:
 
 # T4-3: finalize() with api_client=None — should skip API call, still publish event
 @pytest.mark.anyio
-async def test_finalize_no_api_client_still_publishes_call_ended() -> None:
+async def test_finalize_no_api_client_still_publishes_agent_session_ended() -> None:
     publisher = FakeEventPublisher()
     runtime = SessionRuntime(publisher)  # api_client defaults to None
     metadata = make_metadata()
 
     await runtime.finalize(metadata, duration_seconds=45)
 
-    assert any(e["type"] == "call_ended" for e in publisher.events)
-    call_ended = next(e for e in publisher.events if e["type"] == "call_ended")
-    assert call_ended["call_id"] == str(metadata.call_id)
-    assert call_ended["duration_seconds"] == 45
+    assert any(e["type"] == "agent_session_ended" for e in publisher.events)
+    agent_session_ended = next(
+        e for e in publisher.events if e["type"] == "agent_session_ended"
+    )
+    assert agent_session_ended["call_id"] == str(metadata.call_id)
+    assert agent_session_ended["duration_seconds"] == 45
 
 
 # T4-4: handle_caller_transcript when Redis publish fails — should log but not crash
@@ -244,7 +247,7 @@ async def test_api_client_close_failure_does_not_break_finalize_or_leak_error(
 
 
 @pytest.mark.anyio
-async def test_call_ended_publish_failure_does_not_log_provider_error_content(
+async def test_agent_session_ended_publish_failure_does_not_log_provider_error_content(
     caplog,
 ) -> None:
     runtime = SessionRuntime(SecretBearingFailingEventPublisher())
@@ -289,7 +292,7 @@ async def test_finalize_empty_transcript() -> None:
 
     assert len(api_client.calls) == 1
     assert api_client.calls[0][2].transcript == ()
-    assert any(e["type"] == "call_ended" for e in publisher.events)
+    assert any(e["type"] == "agent_session_ended" for e in publisher.events)
 
 
 @pytest.mark.anyio

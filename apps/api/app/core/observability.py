@@ -165,6 +165,11 @@ _CONTRACT_NAMES = frozenset(
         "CallCompletionAcknowledgement",
         "VerificationCompletionRequest",
         "VerificationCompletionAcknowledgement",
+        "RealtimeEvent",
+        "TranscriptObservedEvent",
+        "CallStartedEvent",
+        "AgentSessionEndedEvent",
+        "CallFinalizedEvent",
     }
 )
 _CONTRACT_CODES = frozenset(
