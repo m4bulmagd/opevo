@@ -7,8 +7,10 @@ from uuid import UUID
 import pytest
 
 from app.core.auth import ClerkAuthProvider
+from app.core.redis import RedisEventBus
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import WebSocketManager
+from presvo_contracts import realtime_channel
 
 
 FIXTURES = (
@@ -19,12 +21,12 @@ USER_ID = UUID("22222222-2222-4222-8222-222222222222")
 CALL_ID = UUID("11111111-1111-4111-8111-111111111111")
 
 
-class _Bus:
+class _Redis:
     def __init__(self) -> None:
-        self.events: list[object] = []
+        self.published: list[tuple[str, str]] = []
 
-    async def publish(self, event: object) -> None:
-        self.events.append(event)
+    async def publish(self, channel: str, payload: str) -> None:
+        self.published.append((channel, payload))
 
 
 class _Observability:
@@ -55,16 +57,19 @@ class _Observability:
 async def test_api_realtime_producers_match_golden_contracts(
     method: str, kwargs: dict[str, object], fixture: str
 ) -> None:
-    bus = _Bus()
+    redis = _Redis()
     service = RealtimeService(
         auth_provider=ClerkAuthProvider(),
-        event_bus=bus,
+        event_bus=RedisEventBus(redis_client=redis),
         websocket_manager=WebSocketManager(),
         observability=_Observability(),
     )
 
     await getattr(service, method)(USER_ID, **kwargs)
 
-    assert bus.events[0].model_dump(mode="json") == json.loads(
-        (FIXTURES / fixture).read_text()
+    expected_json = json.dumps(
+        json.loads((FIXTURES / fixture).read_text()),
+        separators=(",", ":"),
+        sort_keys=True,
     )
+    assert redis.published == [(realtime_channel(USER_ID), expected_json)]

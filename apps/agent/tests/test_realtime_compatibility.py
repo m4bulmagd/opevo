@@ -6,8 +6,9 @@ from uuid import UUID
 
 import pytest
 
+from agent.event_publisher import EventPublisher, RedisEventBus
 from agent.session_runtime import SessionRuntime
-from presvo_contracts import CustomerCallDispatch, create_contract
+from presvo_contracts import CustomerCallDispatch, create_contract, realtime_channel
 
 
 FIXTURES = (
@@ -18,12 +19,12 @@ USER_ID = UUID("22222222-2222-4222-8222-222222222222")
 CALL_ID = UUID("11111111-1111-4111-8111-111111111111")
 
 
-class _Publisher:
+class _Redis:
     def __init__(self) -> None:
-        self.events: list[object] = []
+        self.published: list[tuple[str, str]] = []
 
-    async def publish(self, event: object) -> None:
-        self.events.append(event)
+    async def publish(self, channel: str, payload: str) -> None:
+        self.published.append((channel, payload))
 
 
 def _metadata() -> CustomerCallDispatch:
@@ -48,14 +49,26 @@ def _metadata() -> CustomerCallDispatch:
 
 @pytest.mark.anyio
 async def test_agent_realtime_producers_match_golden_contracts() -> None:
-    publisher = _Publisher()
+    redis = _Redis()
+    publisher = EventPublisher(event_bus=RedisEventBus(redis_client=redis))
     runtime = SessionRuntime(publisher)
     metadata = _metadata()
 
     await runtime.handle_caller_transcript(metadata, "Fixture caller text.")
     await runtime.finalize(metadata, duration_seconds=42)
 
-    assert [event.model_dump(mode="json") for event in publisher.events] == [
-        json.loads((FIXTURES / "transcript_observed_event.json").read_text()),
-        json.loads((FIXTURES / "agent_session_ended_event.json").read_text()),
+    expected_json = [
+        json.dumps(
+            json.loads((FIXTURES / fixture).read_text()),
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        for fixture in (
+            "transcript_observed_event.json",
+            "agent_session_ended_event.json",
+        )
+    ]
+    assert redis.published == [
+        (realtime_channel(USER_ID), expected_json[0]),
+        (realtime_channel(USER_ID), expected_json[1]),
     ]
