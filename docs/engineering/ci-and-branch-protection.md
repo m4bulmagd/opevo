@@ -53,6 +53,8 @@ contents permission, and checkout steps do not persist credentials.
   five time-limited exceptions are verified exactly as documented in [the
   dependency exception register](../security/dependency-exceptions.md).
 - `CI / Gitleaks` scans full Git history with redaction enabled.
+- `CI / Docker context hygiene` exports the filtered repository-root context
+  and runs the dangling-sentinel and cleanup-ownership safety checks.
 - `CI / Container scan / api`, `CI / Container scan / agent`, and
   `CI / Container scan / web` build each application image and fail on fixed
   HIGH or CRITICAL vulnerabilities. API and agent builds use the repository
@@ -95,6 +97,7 @@ not replace the individual migration, dependency, secret, or container checks:
 - `CI / Dependency audit / shared`
 - `CI / Dependency audit / web`
 - `CI / Gitleaks`
+- `CI / Docker context hygiene`
 - `CI / Container scan / api`
 - `CI / Container scan / agent`
 - `CI / Container scan / web`
