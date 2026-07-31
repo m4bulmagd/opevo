@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
+from presvo_contracts import ContractError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import report_safe_exception
@@ -352,6 +353,24 @@ class LiveKitDispatchService:
                     user.id,
                     room_name=room_name,
                     call_id=call.id,
+                )
+            except ContractError as error:
+                contract_name = (
+                    error.contract_name
+                    if error.contract_name == "CallStartedEvent"
+                    else "unknown"
+                )
+                code = error.code if error.code in {
+                    "malformed_json",
+                    "missing_schema_version",
+                    "unsupported_schema_version",
+                    "invalid_payload",
+                } else "unknown"
+                logger.warning(
+                    "operation=publish_call_started contract_name=%s "
+                    "code=%s transport=redis",
+                    contract_name,
+                    code,
                 )
             except Exception as error:
                 report_safe_exception(

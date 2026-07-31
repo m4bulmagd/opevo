@@ -77,6 +77,20 @@ class _FailingRealtime:
         raise RuntimeError("REALTIME_PROVIDER_SECRET caller transcript")
 
 
+class _ContractFailingRealtime:
+    async def publish_call_started(
+        self,
+        user_id: UUID,
+        *,
+        room_name: str,
+        call_id: UUID,
+    ) -> None:
+        try:
+            raise RuntimeError("REALTIME_CONTRACT_CHAIN_SENTINEL")
+        except RuntimeError as cause:
+            raise ContractError("CallStartedEvent", "invalid_payload") from cause
+
+
 class _Recording:
     def __init__(self) -> None:
         self.starts: list[dict] = []
@@ -585,7 +599,7 @@ async def test_realtime_publish_failure_cannot_change_durable_acceptance(
     db_session,
     caplog,
 ) -> None:
-    await _seed_eligible_user(db_session)
+    user, _phone, _config = await _seed_eligible_user(db_session)
     service = LiveKitDispatchService(
         db_session,
         _ForbiddenDirectDispatch(),
@@ -604,8 +618,45 @@ async def test_realtime_publish_failure_cannot_change_durable_acceptance(
     assert len(calls) == len(events) == 1
     assert events[0].aggregate_id == calls[0].id
     assert "event=livekit_realtime_publish_failed" in caplog.text
+    assert str(calls[0].id) in caplog.text
+    assert str(user.id) in caplog.text
     assert "REALTIME_PROVIDER_SECRET" not in caplog.text
     assert "caller transcript" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_realtime_contract_failure_logs_only_bounded_contract_fields(
+    db_session,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    user, _phone, _config = await _seed_eligible_user(db_session)
+    service = LiveKitDispatchService(
+        db_session,
+        _ForbiddenDirectDispatch(),
+        realtime_service=_ContractFailingRealtime(),
+        recording_service=_Recording(),
+    )
+
+    with caplog.at_level("WARNING"):
+        result = await service.handle_participant_joined(
+            _sip_join(room="ROOM_CONTRACT_SENTINEL")
+        )
+
+    call = await db_session.scalar(select(Call))
+    assert call is not None
+    assert result.status == "accepted"
+    assert "operation=publish_call_started" in caplog.text
+    assert "contract_name=CallStartedEvent" in caplog.text
+    assert "code=invalid_payload" in caplog.text
+    assert "transport=redis" in caplog.text
+    for forbidden in (
+        str(call.id),
+        str(user.id),
+        "ROOM_CONTRACT_SENTINEL",
+        "REALTIME_CONTRACT_CHAIN_SENTINEL",
+    ):
+        assert forbidden not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 @pytest.mark.anyio

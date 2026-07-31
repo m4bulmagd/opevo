@@ -18,7 +18,7 @@ from presvo_contracts import (
 )
 
 from agent.config import get_settings
-from agent.safe_logging import install_safe_http_client_logging
+from agent.safe_logging import install_safe_http_client_logging, report_contract_failure
 
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,19 @@ class TranscriptAppendPermanentError(TranscriptAppendError):
     """The segment cannot be retried safely without operator intervention."""
 
 
-class CallCompletionAcknowledgementError(ValueError):
+class TranscriptAppendContractError(TranscriptAppendPermanentError):
+    """A local request or successful response violated the transcript contract."""
+
+
+class TranscriptAppendAcknowledgementError(TranscriptAppendContractError):
+    """A successful response did not acknowledge the expected segment."""
+
+
+class CallCompletionContractError(ValueError):
+    """A local request or successful response violated the completion contract."""
+
+
+class CallCompletionAcknowledgementError(CallCompletionContractError):
     """A successful response did not acknowledge the expected finalization job."""
 
 
@@ -58,11 +70,12 @@ class VerificationCompletionAcknowledgementError(VerificationCompletionPermanent
 
 
 def _log_contract_error(*, operation: str, error: ContractError) -> None:
-    logger.warning(
-        "%s acknowledgement rejected contract_name=%s code=%s",
-        operation,
-        error.contract_name,
-        error.code,
+    report_contract_failure(
+        logger,
+        operation=operation,
+        contract_name=error.contract_name,
+        code=error.code,
+        transport="http",
     )
 
 
@@ -93,11 +106,18 @@ class AgentApiClient:
     ) -> TranscriptAppendAcknowledgement:
         if not dispatch_token:
             raise TranscriptAppendPermanentError("dispatch token is required")
-        request = create_contract(TranscriptAppendRequest, segment=segment)
+        try:
+            request = create_contract(TranscriptAppendRequest, segment=segment)
+            request_payload = dump_contract(request)
+        except ContractError as error:
+            _log_contract_error(operation="append_transcript", error=error)
+            raise TranscriptAppendContractError(
+                "transcript append request contract failed"
+            ) from None
         try:
             response = await self._get_http_client().post(
                 f"{self.base_url}/api/agent/calls/{call_id}/transcript",
-                json=dump_contract(request),
+                json=request_payload,
                 headers={"x-agent-token": dispatch_token},
             )
         except httpx.TransportError:
@@ -118,11 +138,18 @@ class AgentApiClient:
             )
         except ContractError as error:
             _log_contract_error(operation="append_transcript", error=error)
-            raise TranscriptAppendPermanentError(
+            raise TranscriptAppendAcknowledgementError(
                 "transcript append acknowledgement is malformed"
             ) from None
         if acknowledgement.sequence_number != segment.sequence_number:
-            raise TranscriptAppendPermanentError(
+            report_contract_failure(
+                logger,
+                operation="append_transcript",
+                contract_name="TranscriptAppendAcknowledgement",
+                code="correlation_mismatch",
+                transport="http",
+            )
+            raise TranscriptAppendAcknowledgementError(
                 "transcript append acknowledgement sequence mismatch"
             )
         return acknowledgement
@@ -172,6 +199,13 @@ class AgentApiClient:
                             "verification completion acknowledgement is malformed"
                         ) from None
                     if acknowledgement.session_id != session_id:
+                        report_contract_failure(
+                            logger,
+                            operation="complete_verification",
+                            contract_name="VerificationCompletionAcknowledgement",
+                            code="correlation_mismatch",
+                            transport="http",
+                        )
                         raise VerificationCompletionAcknowledgementError(
                             "verification completion acknowledgement correlation mismatch"
                         )
@@ -193,12 +227,19 @@ class AgentApiClient:
         if not dispatch_token:
             raise ValueError("Dispatch token is required")
         url = f"{self.base_url}/api/agent/calls/{call_id}/complete"
+        try:
+            request_payload = dump_contract(request)
+        except ContractError as error:
+            _log_contract_error(operation="complete_call", error=error)
+            raise CallCompletionContractError(
+                "call completion request contract failed"
+            ) from None
         last_error: CallCompletionRetryableError | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
                 response = await self._get_http_client().post(
                     url,
-                    json=dump_contract(request),
+                    json=request_payload,
                     headers={"x-agent-token": dispatch_token},
                 )
             except httpx.TransportError as error:
@@ -230,6 +271,13 @@ class AgentApiClient:
                             "call completion acknowledgement is malformed"
                         ) from None
                     if acknowledgement.job_id != f"call-finalization:{call_id}":
+                        report_contract_failure(
+                            logger,
+                            operation="complete_call",
+                            contract_name="CallCompletionAcknowledgement",
+                            code="correlation_mismatch",
+                            transport="http",
+                        )
                         raise CallCompletionAcknowledgementError(
                             "call completion acknowledgement correlation mismatch"
                         )
