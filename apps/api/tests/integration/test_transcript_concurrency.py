@@ -19,7 +19,7 @@ from app.models import Base
 from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.user import User
-from app.schemas.agent_runtime import TranscriptAppendRequest
+from presvo_contracts import TranscriptSegment as TranscriptAppendRequest
 from app.services.transcript_service import (
     TranscriptSequenceConflictError,
     TranscriptService,

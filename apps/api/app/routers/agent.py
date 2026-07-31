@@ -7,15 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.core.database import get_session
 from app.core.dispatch_token import DispatchTokenError, verify_dispatch_token
+from app.core.contract_http import contract_request_openapi, parse_contract_request
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.schemas.agent import AgentConfigPatchRequest, AgentConfigResponse
-from app.schemas.agent_runtime import (
-    AuthenticatedAgentIdentity,
-    TranscriptAppendRequest,
-    TranscriptAppendResponse,
-)
-from app.schemas.calls import AgentCallCompletionRequest, AgentCallCompletionResponse
+from app.schemas.agent_identity import AuthenticatedAgentIdentity
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.services.agent_config_service import (
     AgentConfigEnableManagedByActivationError,
@@ -39,6 +35,13 @@ from app.services.transcript_service import (
     TranscriptService,
 )
 from app.workers.call_finalization_queue import CallFinalizationQueue
+from presvo_contracts import (
+    CallCompletionAcknowledgement,
+    CallCompletionRequest,
+    TranscriptAppendAcknowledgement,
+    TranscriptAppendRequest,
+    create_contract,
+)
 
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -191,19 +194,21 @@ async def patch_agent_config(
 
 @router.post(
     "/calls/{call_id}/transcript",
-    response_model=TranscriptAppendResponse,
+    response_model=TranscriptAppendAcknowledgement,
+    openapi_extra=contract_request_openapi(TranscriptAppendRequest),
 )
 async def append_transcript(
     call_id: UUID,
-    payload: TranscriptAppendRequest,
+    request: Request,
     identity: AuthenticatedAgentIdentity = Depends(require_agent_auth),
     session: AsyncSession = Depends(get_session),
-) -> TranscriptAppendResponse:
+) -> TranscriptAppendAcknowledgement:
+    payload = await parse_contract_request(request, TranscriptAppendRequest)
     service = TranscriptService(session)
     try:
         result = await service.append(
             call_id=call_id,
-            item=payload,
+            item=payload.segment,
             expected_user_id=identity.user_id,
             expected_agent_config_id=identity.agent_config_id,
         )
@@ -225,7 +230,8 @@ async def append_transcript(
             ),
             detail=exc.code,
         ) from None
-    return TranscriptAppendResponse(
+    return create_contract(
+        TranscriptAppendAcknowledgement,
         status=result.status,
         sequence_number=result.sequence_number,
     )
@@ -233,16 +239,17 @@ async def append_transcript(
 
 @router.post(
     "/calls/{call_id}/complete",
-    response_model=AgentCallCompletionResponse,
+    response_model=CallCompletionAcknowledgement,
     status_code=status.HTTP_202_ACCEPTED,
+    openapi_extra=contract_request_openapi(CallCompletionRequest),
 )
 async def complete_call(
     call_id: UUID,
-    payload: AgentCallCompletionRequest,
     request: Request,
     identity: AuthenticatedAgentIdentity = Depends(require_agent_auth),
     session: AsyncSession = Depends(get_session),
-) -> AgentCallCompletionResponse:
+) -> CallCompletionAcknowledgement:
+    payload = await parse_contract_request(request, CallCompletionRequest)
     transcript_service = TranscriptService(session)
     try:
         recovery_results = await transcript_service.merge_recovery(
@@ -315,7 +322,8 @@ async def complete_call(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Call finalization queue unavailable",
         ) from None
-    return AgentCallCompletionResponse(
+    return create_contract(
+        CallCompletionAcknowledgement,
         status="accepted",
         queued=True,
         job_id=job_id,

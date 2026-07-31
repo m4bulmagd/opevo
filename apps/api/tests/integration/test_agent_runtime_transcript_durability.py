@@ -80,8 +80,8 @@ class BlockThirdAppendClient:
             await self.never_release_third.wait()
         return await self.client.append_transcript(call_id, dispatch_token, item)
 
-    async def complete_call(self, payload: dict) -> dict:
-        return await self.client.complete_call(payload)
+    async def complete_call(self, call_id, dispatch_token, request):
+        return await self.client.complete_call(call_id, dispatch_token, request)
 
 
 async def _wait_until(predicate, *, attempts: int = 200) -> None:

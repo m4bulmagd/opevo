@@ -6,9 +6,14 @@ from uuid import uuid4
 
 from agent.api_client import TranscriptAppendRetryableError
 from agent.event_publisher import EventPublisher
-from presvo_contracts import CustomerCallDispatch, create_contract
+from presvo_contracts import (
+    CallCompletionAcknowledgement,
+    CallCompletionRequest,
+    CustomerCallDispatch,
+    create_contract,
+)
 
-from agent.schemas import CallTranscriptItem
+from presvo_contracts import TranscriptSegment as CallTranscriptItem
 from agent.session_runtime import (
     MAX_TRANSCRIPT_ITEMS,
     SessionRuntime,
@@ -26,16 +31,17 @@ class FakeEventPublisher:
 
 class FakeApiClient:
     def __init__(self) -> None:
-        self.calls: list[dict] = []
+        self.calls: list[tuple] = []
         self.appends: list[CallTranscriptItem] = []
 
-    async def complete_call(self, payload: dict) -> dict:
-        self.calls.append(payload)
-        return {
-            "status": "accepted",
-            "queued": True,
-            "job_id": f"call-finalization:{payload['call_id']}",
-        }
+    async def complete_call(self, call_id, dispatch_token, request: CallCompletionRequest):
+        self.calls.append((call_id, dispatch_token, request))
+        return create_contract(
+            CallCompletionAcknowledgement,
+            status="accepted",
+            queued=True,
+            job_id=f"call-finalization:{call_id}",
+        )
 
     async def append_transcript(
         self,
@@ -109,12 +115,11 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
         },
     ]
     assert api_client.calls == [
-        {
-            "call_id": str(dispatch_payload.call_id),
-            "duration_seconds": 61,
-            "transcript": [],
-            "dispatch_token": "dispatch-token",
-        }
+        (
+            dispatch_payload.call_id,
+            "dispatch-token",
+            create_contract(CallCompletionRequest, duration_seconds=61, transcript=()),
+        )
     ]
 
 
@@ -293,9 +298,9 @@ async def test_finalize_sends_only_unacknowledged_original_sequence_items() -> N
 
     await runtime.finalize(metadata, duration_seconds=3)
 
-    assert api_client.calls[0]["transcript"] == [
-        {"sequence_number": 3, "speaker": "CALLER", "text": "three"}
-    ]
+    assert api_client.calls[0][2].transcript == (
+        CallTranscriptItem(sequence_number=3, speaker="CALLER", text="three"),
+    )
     assert runtime.pending_transcript == ()
     assert runtime.flusher_task is not None
     assert runtime.flusher_task.done()
@@ -308,15 +313,14 @@ async def test_finalize_retains_recovery_tail_until_completion_acknowledges() ->
     publisher = FakeEventPublisher()
 
     class CompletionBlockingClient(OrderedAppendClient):
-        async def complete_call(self, payload: dict) -> dict:
-            self.calls.append(payload)
+        async def complete_call(self, call_id, dispatch_token, request):
+            self.calls.append((call_id, dispatch_token, request))
             completion_started.set()
             await completion_release.wait()
-            return {
-                "status": "accepted",
-                "queued": True,
-                "job_id": f"call-finalization:{payload['call_id']}",
-            }
+            return create_contract(
+                CallCompletionAcknowledgement,
+                status="accepted", queued=True, job_id=f"call-finalization:{call_id}",
+            )
 
     api_client = CompletionBlockingClient(blocked_sequence=1)
     runtime = SessionRuntime(
@@ -470,20 +474,15 @@ async def test_failed_completion_ack_retains_recovery_and_second_finalize_retrie
             self.completion_attempts = 0
             self.close_attempts = 0
 
-        async def complete_call(self, payload: dict) -> dict:
-            self.calls.append(payload)
+        async def complete_call(self, call_id, dispatch_token, request):
+            self.calls.append((call_id, dispatch_token, request))
             self.completion_attempts += 1
             if self.completion_attempts == 1:
-                return {
-                    "status": "accepted",
-                    "queued": False,
-                    "job_id": f"call-finalization:{payload['call_id']}",
-                }
-            return {
-                "status": "accepted",
-                "queued": True,
-                "job_id": f"call-finalization:{payload['call_id']}",
-            }
+                raise RuntimeError("completion acknowledgement rejected")
+            return create_contract(
+                CallCompletionAcknowledgement,
+                status="accepted", queued=True, job_id=f"call-finalization:{call_id}",
+            )
 
         async def aclose(self) -> None:
             self.close_attempts += 1

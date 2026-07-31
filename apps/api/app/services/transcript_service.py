@@ -4,12 +4,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from pydantic import ValidationError
+from presvo_contracts import TranscriptSegment
 
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository
 from app.repositories.message_repository import MessageRepository
-from app.schemas.agent_runtime import TranscriptAppendRequest
 
 
 TRANSCRIPT_OPEN_CALL_STATUSES = frozenset(
@@ -63,7 +62,7 @@ class TranscriptService:
         self,
         *,
         call_id: UUID,
-        item: TranscriptAppendRequest,
+        item: TranscriptSegment,
         expected_user_id: UUID | None = None,
         expected_agent_config_id: UUID | None = None,
     ) -> TranscriptAppendResult:
@@ -83,7 +82,7 @@ class TranscriptService:
         self,
         *,
         call_id: UUID,
-        transcript: Sequence[TranscriptAppendRequest | dict],
+        transcript: Sequence[TranscriptSegment],
         expected_user_id: UUID | None = None,
         expected_agent_config_id: UUID | None = None,
     ) -> list[TranscriptAppendResult]:
@@ -93,9 +92,8 @@ class TranscriptService:
             expected_agent_config_id=expected_agent_config_id,
         )
 
-        normalized = self.normalize_recovery(transcript)
         results: list[TranscriptAppendResult] = []
-        for item in normalized:
+        for item in transcript:
             results.append(
                 await self._merge_item(
                     call_id=call_id,
@@ -134,32 +132,12 @@ class TranscriptService:
             raise TranscriptAuthorizationError
         return call
 
-    @staticmethod
-    def normalize_recovery(
-        transcript: Sequence[TranscriptAppendRequest | dict],
-    ) -> list[TranscriptAppendRequest]:
-        normalized: list[TranscriptAppendRequest] = []
-        for index, raw_item in enumerate(transcript, start=1):
-            if isinstance(raw_item, TranscriptAppendRequest):
-                normalized.append(raw_item)
-                continue
-            item = dict(raw_item)
-            text = item.get("text")
-            if isinstance(text, str) and not text.strip():
-                continue
-            item.setdefault("sequence_number", index)
-            try:
-                normalized.append(TranscriptAppendRequest.model_validate(item))
-            except ValidationError:
-                raise
-        return normalized
-
     async def _merge_item(
         self,
         *,
         call_id: UUID,
         call_status: str,
-        item: TranscriptAppendRequest,
+        item: TranscriptSegment,
         allow_terminal_new: bool,
     ) -> TranscriptAppendResult:
         existing = await self.message_repository.get_by_sequence(
@@ -186,7 +164,7 @@ class TranscriptService:
         )
 
     @staticmethod
-    def _classify_existing(existing, item: TranscriptAppendRequest) -> TranscriptAppendResult:
+    def _classify_existing(existing, item: TranscriptSegment) -> TranscriptAppendResult:
         if existing.speaker != item.speaker.value or existing.text != item.text:
             raise TranscriptSequenceConflictError
         return TranscriptAppendResult(

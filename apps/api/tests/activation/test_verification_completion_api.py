@@ -126,11 +126,15 @@ async def test_completion_requires_only_verification_token_and_writes_no_call_ar
     response = await async_client.post(
         f"/api/activation/verification/{session_id}/complete",
         headers={"x-verification-token": token},
-        json={},
+        json={"schema_version": 1},
     )
 
     assert response.status_code == 200
-    assert response.json() == {"status": "verified", "session_id": session_id}
+    assert response.json() == {
+        "schema_version": 1,
+        "status": "verified",
+        "session_id": session_id,
+    }
     assert await _load_artifact_counts(client_database_url) == {
         "calls": 0,
         "messages": 0,
@@ -147,17 +151,21 @@ async def test_duplicate_completion_returns_the_exact_same_success_once(
 ) -> None:
     session_id, user_id = await _seed_claimed_verification(client_database_url)
     token = create_verification_token(session_id=session_id, user_id=user_id)
-    expected = {"status": "verified", "session_id": session_id}
+    expected = {
+        "schema_version": 1,
+        "status": "verified",
+        "session_id": session_id,
+    }
 
     first = await async_client.post(
         f"/api/activation/verification/{session_id}/complete",
         headers={"x-verification-token": token},
-        json={},
+        json={"schema_version": 1},
     )
     duplicate = await async_client.post(
         f"/api/activation/verification/{session_id}/complete",
         headers={"x-verification-token": token},
-        json={},
+        json={"schema_version": 1},
     )
 
     assert first.status_code == duplicate.status_code == 200
@@ -222,7 +230,7 @@ async def test_completion_authentication_failures_are_generic_401(
     response = await async_client.post(
         f"/api/activation/verification/{path_session_id}/complete",
         headers=headers,
-        json={},
+        json={"schema_version": 1},
     )
 
     assert response.status_code == 401
@@ -268,7 +276,7 @@ async def test_authenticated_unclaimable_completion_is_stable_safe_409(
     response = await async_client.post(
         f"/api/activation/verification/{session_id}/complete",
         headers={"x-verification-token": token},
-        json={},
+        json={"schema_version": 1},
     )
 
     assert response.status_code == 409

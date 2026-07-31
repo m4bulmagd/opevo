@@ -117,7 +117,7 @@ async def run_forwarding_verification(
         )
         await _await_if_needed(speech)
         await resolved_api_client.complete_verification(
-            str(metadata.verification_session_id),
+            metadata.verification_session_id,
             metadata.completion_token,
         )
     finally:

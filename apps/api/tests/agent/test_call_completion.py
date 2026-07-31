@@ -15,7 +15,7 @@ from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.outbox_event import OutboxEvent
 from app.models.recording_egress_operation import RecordingEgressOperation
-from app.schemas.agent_runtime import AuthenticatedAgentIdentity
+from app.schemas.agent_identity import AuthenticatedAgentIdentity
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.outbox_service import OutboxService
 
@@ -63,6 +63,10 @@ class FakeOutboxPool:
         self.jobs.append((name, payload))
         if self.failure:
             raise RuntimeError("redis unavailable")
+
+
+def _completion_payload(**values: object) -> dict[str, object]:
+    return {"schema_version": 1, "transcript": [], **values}
 
 
 class FakeAuthSession:
@@ -186,15 +190,14 @@ async def test_agent_completion_endpoint_rejects_accounting_authority_fields(
     ) as client:
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
-            json={
-                "user_id": str(uuid4()),
-                "duration_seconds": 61,
-                "minutes_remaining": 999,
-                "transcript": [],
-            },
+            json=_completion_payload(
+                user_id=str(uuid4()),
+                duration_seconds=61,
+                minutes_remaining=999,
+            ),
         )
 
-    assert response.status_code == 422
+    assert response.status_code == 401
     assert fake_queue.calls == []
 
 
@@ -212,13 +215,13 @@ async def test_agent_completion_endpoint_rejects_raw_recording_blob(
     ) as client:
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
-            json={
-                "duration_seconds": 61,
-                "recording_bytes_base64": "cmVjb3JkaW5nLWJ5dGVz",
-            },
+            json=_completion_payload(
+                duration_seconds=61,
+                recording_bytes_base64="cmVjb3JkaW5nLWJ5dGVz",
+            ),
         )
 
-    assert response.status_code == 422
+    assert response.status_code == 401
     assert fake_queue.calls == []
 
 
@@ -237,7 +240,7 @@ async def test_agent_completion_endpoint_rejects_negative_duration(
     ) as client:
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
-            json={"duration_seconds": -1, "transcript": []},
+            json=_completion_payload(duration_seconds=-1),
         )
 
     assert response.status_code == 422
@@ -263,7 +266,7 @@ async def test_static_agent_token_is_rejected_in_every_environment(
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
             headers={"x-agent-token": "test-agent-token"},
-            json={"duration_seconds": 1},
+            json=_completion_payload(duration_seconds=1),
         )
 
     assert response.status_code == 401
@@ -321,7 +324,7 @@ async def test_deactivating_account_call_finalizes_with_dispatch_jwt(
         response = await client.post(
             f"/api/agent/calls/{call.id}/complete",
             headers={"x-agent-token": token},
-            json={"duration_seconds": 1},
+            json=_completion_payload(duration_seconds=1),
         )
 
     assert response.status_code == 202
@@ -377,16 +380,16 @@ async def test_queue_outage_preserves_end_facts_recovery_and_recording_stop_inte
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
             headers={"x-agent-token": token},
-            json={
-                "duration_seconds": 7,
-                "transcript": [
+            json=_completion_payload(
+                duration_seconds=7,
+                transcript=[
                     {
                         "sequence_number": 1,
                         "speaker": "CALLER",
                         "text": "Durable recovery tail",
                     }
                 ],
-            },
+            ),
         )
 
     assert response.status_code == 503
@@ -469,7 +472,7 @@ async def test_failed_call_completion_is_conflict_and_does_not_enqueue(
         response = await client.post(
             f"/api/agent/calls/{call.id}/complete",
             headers={"x-agent-token": token},
-            json={"duration_seconds": 1},
+            json=_completion_payload(duration_seconds=1),
         )
 
     assert response.status_code == 409
@@ -542,16 +545,16 @@ async def test_completed_call_accepts_scoped_recovery_tail_then_finalizes_idempo
         response = await client.post(
             f"/api/agent/calls/{call.id}/complete",
             headers={"x-agent-token": token},
-            json={
-                "duration_seconds": 999,
-                "transcript": [
+            json=_completion_payload(
+                duration_seconds=999,
+                transcript=[
                     {
                         "sequence_number": 2,
                         "speaker": "AGENT",
                         "text": "Late recovery tail",
                     }
                 ],
-            },
+            ),
         )
 
     assert response.status_code == 202
@@ -563,16 +566,16 @@ async def test_completed_call_accepts_scoped_recovery_tail_then_finalizes_idempo
         duplicate = await client.post(
             f"/api/agent/calls/{call.id}/complete",
             headers={"x-agent-token": token},
-            json={
-                "duration_seconds": 999,
-                "transcript": [
+            json=_completion_payload(
+                duration_seconds=999,
+                transcript=[
                     {
                         "sequence_number": 2,
                         "speaker": "AGENT",
                         "text": "Late recovery tail",
                     }
                 ],
-            },
+            ),
         )
     assert duplicate.status_code == 202
     messages = list(
@@ -641,7 +644,7 @@ async def test_dispatch_jwt_for_call_a_cannot_complete_call_b(
         response = await client.post(
             f"/api/agent/calls/{call_b_id}/complete",
             headers={"x-agent-token": token},
-            json={"duration_seconds": 1},
+            json=_completion_payload(duration_seconds=1),
         )
 
     assert response.status_code == 401
@@ -701,7 +704,7 @@ async def test_dispatch_jwt_rejects_durable_ownership_or_config_mismatch_before_
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
             headers={"x-agent-token": token},
-            json={"duration_seconds": 1},
+            json=_completion_payload(duration_seconds=1),
         )
 
     assert response.status_code == 401
