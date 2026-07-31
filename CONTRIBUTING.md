@@ -52,6 +52,36 @@ The staging runbook documents the complete provider-backed path:
 
 ## Verification
 
+### Shared wire contracts
+
+The API and agent share the small, versioned `presvo-contracts` package. Run
+its focused package checks from the package directory:
+
+```bash
+cd libs/shared
+UV_CACHE_DIR=/tmp/uv-cache uv sync --frozen --all-groups
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check src tests
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy src
+```
+
+The API and agent remain independent uv projects. Refresh **both** application
+lockfiles when the shared package's dependency graph changes (for example, a
+shared runtime dependency is added, removed, or constrained differently). A
+shared source-only change does not require lockfile churn. Local uv installs
+may use the editable path dependency for fast iteration; production images use
+`uv sync --no-editable`, so their runtime environment contains an installed
+copy rather than a source-path reference.
+
+API and agent images intentionally use the repository root as their Docker
+build context so they can install `libs/shared`; run these commands from the
+repository root:
+
+```bash
+docker build --file apps/api/Dockerfile --tag presvo-api:local .
+docker build --file apps/agent/Dockerfile --tag presvo-agent:local .
+```
+
 ### API
 
 Start isolated CI-equivalent PostgreSQL and Redis services before running the

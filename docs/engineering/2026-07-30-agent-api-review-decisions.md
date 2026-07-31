@@ -37,7 +37,7 @@ The recommendations use these agreed priorities:
 | Issue | Area | Recorded decision | Status |
 |---|---|---|---|
 | 1 | Realtime correctness | **1A** — API-authoritative realtime observer with resynchronization | Accepted |
-| 2 | Cross-app contracts | **2A** — small, versioned shared wire-contract package | Accepted |
+| 2 | Cross-app contracts | **2A** — small, versioned shared wire-contract package | Accepted; implemented |
 | 3 | Authentication boundary | **3A** — validate Clerk authorized parties | Accepted |
 | 4 | Worker isolation | **4A + 4B** — split critical/background queues and add explicit limits, metrics, and load criteria | Accepted |
 | 5 | Outbox structure | **5A** — split the topic god module by cohesive topic family | Accepted |
@@ -183,7 +183,7 @@ app to deploy a payload that the other app cannot parse.
 | **2B:** generate clients/models from OpenAPI or JSON Schema | High | Toolchain and generated-code churn | Build/release pipeline and most API consumers | Medium–high; strongest when many languages consume the API |
 | **2C:** retain duplicate models and manual synchronization | None now | High drift risk | No immediate changes | High review burden and recurring defects |
 
-### Recorded decision and proposed solution — 2A
+### Recorded decision and implemented solution — 2A
 
 1. Put only cross-process wire types, enum values, event names, and serialization
    helpers in `libs/shared`. Do not move database models, services, repositories,
@@ -195,6 +195,14 @@ app to deploy a payload that the other app cannot parse.
    compatibility tests executed from both apps.
 5. Require additive changes by default. Breaking removal or reinterpretation
    requires a version transition and deployment sequence.
+
+Implementation evidence: the [shared package](../../libs/shared), its
+[reviewed golden fixtures](../../libs/shared/tests/fixtures/v1), the
+[implementation design](../superpowers/specs/2026-07-31-shared-wire-contracts-design.md),
+and the [delivery plan](../superpowers/plans/2026-07-31-shared-wire-contracts.md)
+now provide one versioned source of truth at the API/agent/Redis seams. This
+makes a later realtime implementation safer; it does **not** enable realtime.
+The accepted risks in decisions 11C and 12C are unchanged.
 
 ### Required validation
 
