@@ -3,7 +3,14 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
+from presvo_contracts import (
+    VERIFICATION_MESSAGE,
+    ContractError,
+    ForwardingVerificationDispatch,
+    create_contract,
+    dump_contract,
+    parse_dispatch,
+)
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -12,20 +19,16 @@ from app.models.call import Call
 from app.models.customer_activation import CustomerActivation
 from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
-from app.schemas import livekit as livekit_schemas
 from app.services.outbox_service import OutboxService, SUPPORTED_OUTBOX_TOPICS
 from app.workers.jobs import outbox_topics
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError, _validated_event_call_id
+from app.workers.jobs.outbox_delivery import (
+    OutboxDeliveryError,
+    _validated_event_call_id,
+)
 
 
 FIXED_NOW = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
-SUCCESS_MESSAGE = "Forwarding test successful. Return to Presvo to go live."
-
-
-def _metadata_model():
-    model = getattr(livekit_schemas, "VerificationDispatchMetadata", None)
-    assert model is not None, "verification dispatch metadata is missing"
-    return model
+SUCCESS_MESSAGE = VERIFICATION_MESSAGE
 
 
 def _handler():
@@ -148,7 +151,6 @@ async def _seed_verification_dispatch(db_session):
 
 
 def test_verification_dispatch_metadata_is_exact_and_forbids_extras() -> None:
-    model = _metadata_model()
     payload = {
         "job_type": "forwarding_verification",
         "verification_session_id": str(uuid4()),
@@ -159,16 +161,26 @@ def test_verification_dispatch_metadata_is_exact_and_forbids_extras() -> None:
         "tts_provider": "speechmatics",
     }
 
-    metadata = model.model_validate(payload)
+    metadata = create_contract(ForwardingVerificationDispatch, **payload)
 
-    assert metadata.model_dump() == payload
-    assert model.model_validate(
-        payload | {"tts_provider": "elevenlabs"}
-    ).tts_provider == "elevenlabs"
-    with pytest.raises(ValidationError):
-        model.model_validate(payload | {"system_prompt": "customer content"})
-    with pytest.raises(ValidationError):
-        model.model_validate(payload | {"job_type": "customer_call"})
+    assert dump_contract(metadata) == payload | {"schema_version": 1}
+    assert (
+        create_contract(
+            ForwardingVerificationDispatch,
+            **(payload | {"tts_provider": "elevenlabs"}),
+        ).tts_provider
+        == "elevenlabs"
+    )
+    with pytest.raises(ContractError):
+        create_contract(
+            ForwardingVerificationDispatch,
+            **(payload | {"system_prompt": "customer content"}),
+        )
+    with pytest.raises(ContractError):
+        create_contract(
+            ForwardingVerificationDispatch,
+            **(payload | {"job_type": "customer_call"}),
+        )
 
 
 @pytest.mark.anyio
@@ -209,12 +221,11 @@ async def test_handler_creates_exact_verification_job_and_persists_identity(
     assert metadata["job_type"] == "forwarding_verification"
     assert metadata["verification_session_id"] == session_id
     assert metadata["user_id"] == str(user_id)
-    assert metadata["agent_identity"] == (
-        f"agent-verification-{session_id}"
-    )
+    assert metadata["agent_identity"] == (f"agent-verification-{session_id}")
     assert metadata["message"] == SUCCESS_MESSAGE
     assert metadata["tts_provider"] == "speechmatics"
     assert set(metadata) == {
+        "schema_version",
         "job_type",
         "verification_session_id",
         "user_id",
@@ -229,6 +240,7 @@ async def test_handler_creates_exact_verification_job_and_persists_identity(
         expected_user_id=str(user_id),
     )
     assert metadata["completion_token"] not in json.dumps(outbox_payload)
+    assert dump_contract(parse_dispatch(created["metadata"])) == metadata
     assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
 
 
@@ -270,7 +282,9 @@ async def test_matching_provider_dispatch_reconciles_without_create(db_session) 
 
 
 @pytest.mark.anyio
-async def test_create_timeout_reconciles_to_one_verification_dispatch(db_session) -> None:
+async def test_create_timeout_reconciles_to_one_verification_dispatch(
+    db_session,
+) -> None:
     _user, activation, event = await _seed_verification_dispatch(db_session)
     activation_id = activation.id
     provider = _Provider(timeout_after_create=True)
@@ -409,7 +423,9 @@ async def test_foreign_duplicate_and_persisted_dispatch_conflicts_are_terminal(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("invalid_case", ["topic", "aggregate", "activation", "session"])
+@pytest.mark.parametrize(
+    "invalid_case", ["topic", "aggregate", "activation", "session"]
+)
 async def test_handler_rejects_mismatched_event_identity_without_provider_io(
     db_session,
     invalid_case: str,
@@ -590,7 +606,8 @@ async def test_verification_topic_is_registered_but_never_classified_as_call(
     _user, _activation, event = await _seed_verification_dispatch(db_session)
 
     assert "livekit.verification_dispatch" in SUPPORTED_OUTBOX_TOPICS
-    assert outbox_topics.DEFAULT_OUTBOX_HANDLERS[
-        "livekit.verification_dispatch"
-    ] is _handler()
+    assert (
+        outbox_topics.DEFAULT_OUTBOX_HANDLERS["livekit.verification_dispatch"]
+        is _handler()
+    )
     assert _validated_event_call_id(event) is None

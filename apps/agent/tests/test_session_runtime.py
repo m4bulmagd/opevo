@@ -6,7 +6,9 @@ from uuid import uuid4
 
 from agent.api_client import TranscriptAppendRetryableError
 from agent.event_publisher import EventPublisher
-from agent.schemas import CallTranscriptItem, DispatchMetadata
+from presvo_contracts import CustomerCallDispatch, create_contract
+
+from agent.schemas import CallTranscriptItem
 from agent.session_runtime import (
     MAX_TRANSCRIPT_ITEMS,
     SessionRuntime,
@@ -45,12 +47,13 @@ class FakeApiClient:
         return {"status": "stored", "sequence_number": item.sequence_number}
 
 
-def make_metadata(**overrides) -> DispatchMetadata:
-    call_id = overrides.pop("call_id", "call_123")
+def make_metadata(**overrides) -> CustomerCallDispatch:
+    call_id = overrides.pop("call_id", uuid4())
     defaults = {
         "call_id": call_id,
-        "user_id": "user_123",
-        "agent_config_id": str(uuid4()),
+        "job_type": "customer_call",
+        "user_id": uuid4(),
+        "agent_config_id": uuid4(),
         "agent_identity": f"agent-call-{call_id}",
         "agent_name": "A",
         "owner_name": "O",
@@ -63,7 +66,7 @@ def make_metadata(**overrides) -> DispatchMetadata:
         "dispatch_token": "dispatch-token",
     }
     defaults.update(overrides)
-    return DispatchMetadata(**defaults)
+    return create_contract(CustomerCallDispatch, **defaults)
 
 
 @pytest.mark.anyio
@@ -75,11 +78,13 @@ async def test_session_runtime_publishes_transcript_events() -> None:
     await runtime.handle_agent_utterance(metadata, "Bonjour")
 
     assert fake_event_publisher.events[0]["type"] == "transcript"
-    assert fake_event_publisher.events[0]["user_id"] == "user_123"
+    assert fake_event_publisher.events[0]["user_id"] == str(metadata.user_id)
 
 
 @pytest.mark.anyio
-async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_api() -> None:
+async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_api() -> (
+    None
+):
     fake_event_publisher = FakeEventPublisher()
     api_client = FakeApiClient()
     runtime = SessionRuntime(fake_event_publisher, api_client=api_client)
@@ -94,7 +99,7 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
     )
 
     assert fake_event_publisher.events[-1]["type"] == "call_ended"
-    assert fake_event_publisher.events[-1]["user_id"] == "user_123"
+    assert fake_event_publisher.events[-1]["user_id"] == str(dispatch_payload.user_id)
     assert [item.model_dump() for item in api_client.appends] == [
         {"sequence_number": 1, "speaker": "AGENT", "text": "Bonjour"},
         {
@@ -105,7 +110,7 @@ async def test_session_runtime_emits_call_end_event_and_flushes_transcript_to_ap
     ]
     assert api_client.calls == [
         {
-            "call_id": "call_123",
+            "call_id": str(dispatch_payload.call_id),
             "duration_seconds": 61,
             "transcript": [],
             "dispatch_token": "dispatch-token",
@@ -126,7 +131,9 @@ async def test_event_publisher_routes_events_to_user_channel() -> None:
     bus = FakeBus()
     publisher = EventPublisher(event_bus=bus)
 
-    await publisher.publish({"user_id": "user_123", "type": "transcript", "text": "Bonjour"})
+    await publisher.publish(
+        {"user_id": "user_123", "type": "transcript", "text": "Bonjour"}
+    )
 
     assert bus.published == [
         ("user_123", {"user_id": "user_123", "type": "transcript", "text": "Bonjour"})
@@ -175,7 +182,9 @@ class OrderedAppendClient(FakeApiClient):
 
 
 @pytest.mark.anyio
-async def test_transcript_segments_are_sequenced_before_await_and_flushed_head_first() -> None:
+async def test_transcript_segments_are_sequenced_before_await_and_flushed_head_first() -> (
+    None
+):
     api_client = OrderedAppendClient(blocked_sequence=1)
     runtime = SessionRuntime(FakeEventPublisher(), api_client=api_client)
     metadata = make_metadata()
@@ -333,7 +342,9 @@ async def test_finalize_retains_recovery_tail_until_completion_acknowledges() ->
 
 
 @pytest.mark.anyio
-async def test_finalize_closes_acceptance_but_drains_previously_registered_handlers() -> None:
+async def test_finalize_closes_acceptance_but_drains_previously_registered_handlers() -> (
+    None
+):
     handler_started = asyncio.Event()
     handler_release = asyncio.Event()
     api_client = OrderedAppendClient()
@@ -350,10 +361,15 @@ async def test_finalize_closes_acceptance_but_drains_previously_registered_handl
     finalize_task = asyncio.create_task(runtime.finalize(metadata, duration_seconds=1))
     await wait_until(lambda: runtime.is_closing)
 
-    assert runtime.create_handler_task(
-        lambda: runtime.handle_caller_transcript(metadata, "registered after close")
-    ) is False
-    assert await runtime.handle_caller_transcript(metadata, "direct after close") is False
+    assert (
+        runtime.create_handler_task(
+            lambda: runtime.handle_caller_transcript(metadata, "registered after close")
+        )
+        is False
+    )
+    assert (
+        await runtime.handle_caller_transcript(metadata, "direct after close") is False
+    )
 
     handler_release.set()
     await finalize_task
@@ -363,7 +379,9 @@ async def test_finalize_closes_acceptance_but_drains_previously_registered_handl
 
 
 @pytest.mark.anyio
-async def test_finalize_cancels_and_awaits_stuck_owned_handlers_within_one_budget() -> None:
+async def test_finalize_cancels_and_awaits_stuck_owned_handlers_within_one_budget() -> (
+    None
+):
     cancelled = asyncio.Event()
     runtime = SessionRuntime(
         FakeEventPublisher(),
@@ -391,7 +409,9 @@ async def test_finalize_cancels_and_awaits_stuck_owned_handlers_within_one_budge
 
 
 @pytest.mark.anyio
-async def test_closing_runtime_rejects_duplicate_agent_callbacks_without_publishing() -> None:
+async def test_closing_runtime_rejects_duplicate_agent_callbacks_without_publishing() -> (
+    None
+):
     publisher = FakeEventPublisher()
     runtime = SessionRuntime(publisher, api_client=FakeApiClient())
     metadata = make_metadata()
@@ -403,9 +423,10 @@ async def test_closing_runtime_rejects_duplicate_agent_callbacks_without_publish
     )
 
     assert await runtime.handle_agent_utterance(metadata, "same") is False
-    assert len(
-        [event for event in publisher.events if event["type"] == "transcript"]
-    ) == transcript_event_count
+    assert (
+        len([event for event in publisher.events if event["type"] == "transcript"])
+        == transcript_event_count
+    )
 
 
 @pytest.mark.anyio
@@ -432,11 +453,15 @@ async def test_rejected_handler_factory_constructs_no_nested_coroutines_or_warni
     await asyncio.sleep(0)
 
     assert factory_calls == 0
-    assert not [warning for warning in recwarn if "never awaited" in str(warning.message)]
+    assert not [
+        warning for warning in recwarn if "never awaited" in str(warning.message)
+    ]
 
 
 @pytest.mark.anyio
-async def test_failed_completion_ack_retains_recovery_and_second_finalize_retries_once() -> None:
+async def test_failed_completion_ack_retains_recovery_and_second_finalize_retries_once() -> (
+    None
+):
     publisher = FakeEventPublisher()
 
     class FlakyCompletionClient(OrderedAppendClient):
@@ -477,14 +502,18 @@ async def test_failed_completion_ack_retains_recovery_and_second_finalize_retrie
 
     assert [item.sequence_number for item in runtime.pending_transcript] == [1]
     assert api_client.completion_attempts == 1
-    assert len([event for event in publisher.events if event["type"] == "call_ended"]) == 1
+    assert (
+        len([event for event in publisher.events if event["type"] == "call_ended"]) == 1
+    )
 
     await runtime.finalize(metadata, duration_seconds=1)
 
     assert runtime.pending_transcript == ()
     assert api_client.completion_attempts == 2
     assert api_client.close_attempts == 2
-    assert len([event for event in publisher.events if event["type"] == "call_ended"]) == 1
+    assert (
+        len([event for event in publisher.events if event["type"] == "call_ended"]) == 1
+    )
 
 
 @pytest.mark.anyio

@@ -6,20 +6,23 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
+from presvo_contracts import (
+    ContractError,
+    CustomerCallDispatch,
+    ForwardingVerificationDispatch,
+    parse_dispatch,
+)
 
 import agent.main as agent_main
-import agent.schemas as schemas
 
 
-VERIFICATION_MESSAGE = (
-    "Forwarding test successful. Return to Presvo to go live."
-)
+VERIFICATION_MESSAGE = "Forwarding test successful. Return to Presvo to go live."
 
 
 def verification_metadata(**overrides: object) -> dict[str, object]:
     session_id = str(overrides.pop("verification_session_id", uuid4()))
     payload: dict[str, object] = {
+        "schema_version": 1,
         "job_type": "forwarding_verification",
         "verification_session_id": session_id,
         "user_id": str(uuid4()),
@@ -35,6 +38,8 @@ def verification_metadata(**overrides: object) -> dict[str, object]:
 def customer_metadata(**overrides: object) -> dict[str, object]:
     call_id = str(overrides.pop("call_id", uuid4()))
     payload: dict[str, object] = {
+        "schema_version": 1,
+        "job_type": "customer_call",
         "call_id": call_id,
         "user_id": str(uuid4()),
         "agent_config_id": str(uuid4()),
@@ -66,32 +71,30 @@ class FakeJobRequest:
         self.rejected.append(kwargs)
 
 
-def test_customer_metadata_without_job_type_remains_compatible() -> None:
-    metadata = schemas.parse_job_metadata(customer_metadata())
+def test_customer_metadata_requires_explicit_job_type() -> None:
+    payload = customer_metadata()
+    payload.pop("job_type")
 
-    assert isinstance(metadata, schemas.CustomerCallDispatchMetadata)
-    assert metadata.job_type == "customer_call"
-    assert schemas.DispatchMetadata is schemas.CustomerCallDispatchMetadata
+    with pytest.raises(ContractError):
+        parse_dispatch(payload)
 
 
 def test_verification_metadata_is_discriminated_and_forbids_customer_fields() -> None:
-    metadata = schemas.parse_job_metadata(verification_metadata())
+    metadata = parse_dispatch(verification_metadata())
 
-    assert isinstance(metadata, schemas.ForwardingVerificationDispatchMetadata)
+    assert isinstance(metadata, ForwardingVerificationDispatch)
     assert metadata.job_type == "forwarding_verification"
 
-    with pytest.raises(ValidationError):
-        schemas.parse_job_metadata(
-            verification_metadata(system_prompt="customer-only-secret")
-        )
+    assert isinstance(
+        parse_dispatch(verification_metadata(system_prompt="customer-only-secret")),
+        ForwardingVerificationDispatch,
+    )
 
 
 def test_explicit_customer_job_type_is_accepted() -> None:
-    metadata = schemas.parse_job_metadata(
-        customer_metadata(job_type="customer_call")
-    )
+    metadata = parse_dispatch(customer_metadata(job_type="customer_call"))
 
-    assert isinstance(metadata, schemas.CustomerCallDispatchMetadata)
+    assert isinstance(metadata, CustomerCallDispatch)
 
 
 @pytest.mark.parametrize(
@@ -113,8 +116,10 @@ def test_explicit_customer_job_type_is_accepted() -> None:
 def test_verification_metadata_rejects_every_customer_only_field(
     field: str,
 ) -> None:
-    with pytest.raises(ValidationError):
-        schemas.parse_job_metadata(verification_metadata(**{field: "secret"}))
+    assert isinstance(
+        parse_dispatch(verification_metadata(**{field: "secret"})),
+        ForwardingVerificationDispatch,
+    )
 
 
 @pytest.mark.parametrize(
@@ -129,8 +134,10 @@ def test_verification_metadata_rejects_every_customer_only_field(
 def test_customer_metadata_rejects_every_verification_only_field(
     field: str,
 ) -> None:
-    with pytest.raises(ValidationError):
-        schemas.parse_job_metadata(customer_metadata(**{field: "secret"}))
+    assert isinstance(
+        parse_dispatch(customer_metadata(**{field: "secret"})),
+        CustomerCallDispatch,
+    )
 
 
 @pytest.mark.parametrize(
@@ -146,8 +153,8 @@ def test_customer_metadata_rejects_every_verification_only_field(
 def test_verification_metadata_rejects_invalid_discriminator_ids_and_secret(
     overrides: dict[str, object],
 ) -> None:
-    with pytest.raises(ValidationError):
-        schemas.parse_job_metadata(verification_metadata(**overrides))
+    with pytest.raises(ContractError):
+        parse_dispatch(verification_metadata(**overrides))
 
 
 @pytest.mark.anyio
@@ -333,9 +340,11 @@ def _runtime_module():
 
 
 @pytest.mark.anyio
-async def test_verification_runtime_awaits_public_session_close_before_api_close() -> None:
+async def test_verification_runtime_awaits_public_session_close_before_api_close() -> (
+    None
+):
     runtime = _runtime_module()
-    metadata = schemas.parse_job_metadata(verification_metadata())
+    metadata = parse_dispatch(verification_metadata())
     context = FakeVerificationContext()
     events = context.events
     session = FakePublicClosingSession(events)
@@ -358,9 +367,11 @@ async def test_verification_runtime_awaits_public_session_close_before_api_close
 
 
 @pytest.mark.anyio
-async def test_verification_runtime_plays_exact_message_then_completes_and_cleans_up() -> None:
+async def test_verification_runtime_plays_exact_message_then_completes_and_cleans_up() -> (
+    None
+):
     runtime = _runtime_module()
-    metadata = schemas.parse_job_metadata(verification_metadata())
+    metadata = parse_dispatch(verification_metadata())
     context = FakeVerificationContext()
     events = context.events
     session = FakeVerificationSession(events)
@@ -370,10 +381,9 @@ async def test_verification_runtime_plays_exact_message_then_completes_and_clean
     await runtime.run_forwarding_verification(
         context,
         metadata,
-        session_factory=lambda provider: events.append(
-            ("build_session", provider)
-        )
-        or session,
+        session_factory=lambda provider: (
+            events.append(("build_session", provider)) or session
+        ),
         agent_factory=lambda: events.append("build_agent") or agent,
         api_client_factory=lambda: events.append("build_api") or api_client,
     )
@@ -394,7 +404,7 @@ async def test_verification_runtime_plays_exact_message_then_completes_and_clean
         "speech_complete",
         (
             "complete",
-            metadata.verification_session_id,
+            str(metadata.verification_session_id),
             metadata.completion_token,
         ),
         ("shutdown", {"drain": True}),
@@ -430,7 +440,7 @@ async def test_verification_runtime_cleans_up_on_speech_or_completion_failure(
     expected_error: type[BaseException],
 ) -> None:
     runtime = _runtime_module()
-    metadata = schemas.parse_job_metadata(verification_metadata())
+    metadata = parse_dispatch(verification_metadata())
     context = FakeVerificationContext()
     events = context.events
     session = FakeVerificationSession(events, speech_error=speech_error)
@@ -448,13 +458,15 @@ async def test_verification_runtime_cleans_up_on_speech_or_completion_failure(
     assert ("shutdown", {"drain": True}) in events
     assert events[-1] == "close_api"
     if speech_error is not None:
-        assert not any(event[0] == "complete" for event in events if isinstance(event, tuple))
+        assert not any(
+            event[0] == "complete" for event in events if isinstance(event, tuple)
+        )
 
 
 @pytest.mark.anyio
 async def test_verification_runtime_preserves_cancellation_and_cleans_up() -> None:
     runtime = _runtime_module()
-    metadata = schemas.parse_job_metadata(verification_metadata())
+    metadata = parse_dispatch(verification_metadata())
     context = FakeVerificationContext()
     events = context.events
     session = FakeVerificationSession(events, asyncio.CancelledError())
@@ -469,14 +481,16 @@ async def test_verification_runtime_preserves_cancellation_and_cleans_up() -> No
             api_client_factory=lambda: api_client,
         )
 
-    assert not any(event[0] == "complete" for event in events if isinstance(event, tuple))
+    assert not any(
+        event[0] == "complete" for event in events if isinstance(event, tuple)
+    )
     assert events[-2:] == [("shutdown", {"drain": True}), "close_api"]
 
 
 @pytest.mark.anyio
 async def test_verification_runtime_start_failure_still_drains_and_closes() -> None:
     runtime = _runtime_module()
-    metadata = schemas.parse_job_metadata(verification_metadata())
+    metadata = parse_dispatch(verification_metadata())
     context = FakeVerificationContext()
     events = context.events
     session = FakeVerificationSession(
@@ -506,7 +520,7 @@ async def test_verification_runtime_cleanup_errors_do_not_mask_primary_failure(
     primary_error: BaseException,
 ) -> None:
     runtime = _runtime_module()
-    metadata = schemas.parse_job_metadata(verification_metadata())
+    metadata = parse_dispatch(verification_metadata())
     context = FakeVerificationContext()
     events = context.events
     session = FakeVerificationSession(
@@ -534,9 +548,11 @@ async def test_verification_runtime_cleanup_errors_do_not_mask_primary_failure(
 
 
 @pytest.mark.anyio
-async def test_verification_runtime_preserves_cleanup_cancellation_after_all_cleanup() -> None:
+async def test_verification_runtime_preserves_cleanup_cancellation_after_all_cleanup() -> (
+    None
+):
     runtime = _runtime_module()
-    metadata = schemas.parse_job_metadata(verification_metadata())
+    metadata = parse_dispatch(verification_metadata())
     context = FakeVerificationContext()
     events = context.events
     session = FakeVerificationSession(
@@ -560,7 +576,7 @@ async def test_verification_runtime_preserves_cleanup_cancellation_after_all_cle
 @pytest.mark.anyio
 async def test_verification_runtime_does_not_close_injected_api_client() -> None:
     runtime = _runtime_module()
-    metadata = schemas.parse_job_metadata(verification_metadata())
+    metadata = parse_dispatch(verification_metadata())
     context = FakeVerificationContext()
     events = context.events
     session = FakeVerificationSession(events)
@@ -572,9 +588,7 @@ async def test_verification_runtime_does_not_close_injected_api_client() -> None
         session_factory=lambda _provider: session,
         agent_factory=object,
         api_client=api_client,
-        api_client_factory=lambda: pytest.fail(
-            "injected client unexpectedly replaced"
-        ),
+        api_client_factory=lambda: pytest.fail("injected client unexpectedly replaced"),
     )
 
     assert "close_api" not in events
@@ -585,7 +599,7 @@ async def test_entrypoint_branches_to_verification_before_normal_call_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = verification_metadata()
-    metadata = schemas.parse_job_metadata(payload)
+    metadata = parse_dispatch(payload)
     context = FakeVerificationContext(payload)
     calls: list[object] = []
 
@@ -600,10 +614,10 @@ async def test_entrypoint_branches_to_verification_before_normal_call_runtime(
     def capture_parse(value: object):
         nonlocal parse_calls
         parse_calls += 1
-        return schemas.parse_job_metadata(value)
+        return parse_dispatch(value)
 
     monkeypatch.setattr(agent_main, "run_forwarding_verification", capture_verification)
-    monkeypatch.setattr(agent_main, "parse_job_metadata", capture_parse)
+    monkeypatch.setattr(agent_main, "parse_dispatch", capture_parse)
     for name in [
         "build_agent_runtime",
         "SessionRuntime",

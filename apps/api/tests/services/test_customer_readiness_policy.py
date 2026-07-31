@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.schemas.agent_content import (
+from presvo_contracts import (
     AGENT_NAME_MAX_LENGTH,
     KNOWLEDGE_BASE_MAX_LENGTH,
     OWNER_CONTEXT_MAX_LENGTH,
@@ -155,7 +155,9 @@ def test_flag_on_activation_prerequisite_blocks_enable_and_routing(
     assert result.can_route is False
 
 
-def test_approved_activation_enables_projection_but_not_routing_until_completed() -> None:
+def test_approved_activation_enables_projection_but_not_routing_until_completed() -> (
+    None
+):
     result = evaluate(
         activation_required=True,
         business_profile_complete=True,

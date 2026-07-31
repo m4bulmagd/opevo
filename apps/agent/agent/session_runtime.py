@@ -6,6 +6,8 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
+from presvo_contracts import CustomerCallDispatch
+
 from agent.api_client import (
     AgentApiClient,
     TranscriptAppendPermanentError,
@@ -16,7 +18,6 @@ from agent.event_publisher import EventPublisher
 from agent.schemas import (
     CallCompletionPayload,
     CallTranscriptItem,
-    DispatchMetadata,
     TranscriptSpeaker,
 )
 
@@ -30,8 +31,7 @@ DEFAULT_CALL_LIMIT_CLEANUP_TIMEOUT_SECONDS = 0.01
 MAX_RETRY_DELAY_SECONDS = 10
 CALL_LIMIT_WARNING_MESSAGE = "You have one minute remaining in this call."
 CALL_LIMIT_EXPIRY_MESSAGE = (
-    "The maximum call duration has been reached. "
-    "Thank you for calling. Goodbye."
+    "The maximum call duration has been reached. Thank you for calling. Goodbye."
 )
 
 
@@ -70,7 +70,7 @@ class SessionRuntime:
         self._flusher_task: asyncio.Task[None] | None = None
         self._flusher_stopped_permanently = False
         self._handler_tasks: set[asyncio.Task[Any]] = set()
-        self._metadata: DispatchMetadata | None = None
+        self._metadata: CustomerCallDispatch | None = None
 
         self._fatal_shutdown = fatal_shutdown
         self._fatal_shutdown_requested = False
@@ -84,9 +84,7 @@ class SessionRuntime:
         self._call_limit_started_at = call_limit_started_at
         self._call_limit_clock = call_limit_clock
         self._call_limit_sleep = call_limit_sleep
-        self._call_limit_cleanup_timeout_seconds = (
-            call_limit_cleanup_timeout_seconds
-        )
+        self._call_limit_cleanup_timeout_seconds = call_limit_cleanup_timeout_seconds
         self._call_limit_task: asyncio.Task[None] | None = None
         self._call_limit_expired_on_start = False
         self._detached_call_limit_tasks: set[asyncio.Task[Any]] = set()
@@ -134,7 +132,7 @@ class SessionRuntime:
 
     def enforce_call_limit(
         self,
-        metadata: DispatchMetadata,
+        metadata: CustomerCallDispatch,
         disconnect: Callable[[], object],
     ) -> None:
         self._bind_metadata(metadata)
@@ -153,7 +151,7 @@ class SessionRuntime:
 
     async def _run_call_limit(
         self,
-        metadata: DispatchMetadata,
+        metadata: CustomerCallDispatch,
         deadline: float,
         disconnect: Callable[[], object],
     ) -> None:
@@ -262,9 +260,7 @@ class SessionRuntime:
                     "call limit child cleanup timed out child=%s",
                     child_name,
                 )
-                self._request_fatal_shutdown(
-                    "call_limit_child_cleanup_timeout"
-                )
+                self._request_fatal_shutdown("call_limit_child_cleanup_timeout")
                 self._detached_call_limit_tasks.add(task)
                 task.add_done_callback(
                     lambda completed: self._finish_detached_call_limit_task(
@@ -319,7 +315,7 @@ class SessionRuntime:
 
     async def handle_caller_transcript(
         self,
-        metadata: DispatchMetadata,
+        metadata: CustomerCallDispatch,
         text: str,
     ) -> bool:
         self._bind_metadata(metadata)
@@ -331,7 +327,7 @@ class SessionRuntime:
 
     async def handle_agent_utterance(
         self,
-        metadata: DispatchMetadata,
+        metadata: CustomerCallDispatch,
         text: str,
     ) -> bool:
         self._bind_metadata(metadata)
@@ -367,9 +363,7 @@ class SessionRuntime:
 
         if len(self.transcript) >= MAX_TRANSCRIPT_ITEMS:
             self._request_fatal_shutdown("transcript_history_overflow")
-            raise TranscriptBufferOverflow(
-                "transcript compatibility history is full"
-            )
+            raise TranscriptBufferOverflow("transcript compatibility history is full")
 
         if len(self._pending) >= MAX_PENDING_TRANSCRIPT_ITEMS:
             self._request_fatal_shutdown("transcript_buffer_overflow")
@@ -389,10 +383,7 @@ class SessionRuntime:
         return line
 
     def _accepting_current_task(self) -> bool:
-        return (
-            not self._closing
-            or asyncio.current_task() in self._handler_tasks
-        )
+        return not self._closing or asyncio.current_task() in self._handler_tasks
 
     def _ensure_flusher(self) -> None:
         if self.api_client is None or not hasattr(self.api_client, "append_transcript"):
@@ -429,9 +420,7 @@ class SessionRuntime:
                         item.sequence_number,
                     )
                     self._flusher_stopped_permanently = True
-                    self._request_fatal_shutdown(
-                        "transcript_append_permanent_failure"
-                    )
+                    self._request_fatal_shutdown("transcript_append_permanent_failure")
                     return
                 except asyncio.CancelledError:
                     raise
@@ -442,9 +431,7 @@ class SessionRuntime:
                         item.sequence_number,
                     )
                     self._flusher_stopped_permanently = True
-                    self._request_fatal_shutdown(
-                        "transcript_append_permanent_failure"
-                    )
+                    self._request_fatal_shutdown("transcript_append_permanent_failure")
                     return
 
                 if not self._acknowledges(acknowledgement, item):
@@ -454,9 +441,7 @@ class SessionRuntime:
                         item.sequence_number,
                     )
                     self._flusher_stopped_permanently = True
-                    self._request_fatal_shutdown(
-                        "transcript_append_permanent_failure"
-                    )
+                    self._request_fatal_shutdown("transcript_append_permanent_failure")
                     return
 
                 if self._pending and self._pending[0] == item:
@@ -482,7 +467,7 @@ class SessionRuntime:
     def _active_call_id(self) -> str:
         if self._metadata is None:
             raise RuntimeError("transcript metadata is unavailable")
-        return self._metadata.call_id
+        return str(self._metadata.call_id)
 
     @property
     def _active_dispatch_token(self) -> str:
@@ -490,7 +475,7 @@ class SessionRuntime:
             raise RuntimeError("transcript metadata is unavailable")
         return self._metadata.dispatch_token
 
-    def _bind_metadata(self, metadata: DispatchMetadata) -> None:
+    def _bind_metadata(self, metadata: CustomerCallDispatch) -> None:
         if self._metadata is not None and (
             self._metadata.call_id != metadata.call_id
             or self._metadata.dispatch_token != metadata.dispatch_token
@@ -500,15 +485,15 @@ class SessionRuntime:
 
     async def _publish_transcript_event(
         self,
-        metadata: DispatchMetadata,
+        metadata: CustomerCallDispatch,
         line: CallTranscriptItem,
     ) -> None:
         try:
             await self.event_publisher.publish(
                 {
                     "type": "transcript",
-                    "user_id": metadata.user_id,
-                    "call_id": metadata.call_id,
+                    "user_id": str(metadata.user_id),
+                    "call_id": str(metadata.call_id),
                     "speaker": line.speaker,
                     "text": line.text,
                 }
@@ -537,7 +522,7 @@ class SessionRuntime:
 
     async def finalize(
         self,
-        metadata: DispatchMetadata,
+        metadata: CustomerCallDispatch,
         *,
         duration_seconds: int,
     ) -> None:
@@ -576,9 +561,7 @@ class SessionRuntime:
             await self._close_api_client()
 
             if completion_acknowledged:
-                recovery_sequences = {
-                    item.sequence_number for item in recovery_items
-                }
+                recovery_sequences = {item.sequence_number for item in recovery_items}
                 self._pending = deque(
                     (
                         item
@@ -604,7 +587,7 @@ class SessionRuntime:
 
     async def _complete_call(
         self,
-        metadata: DispatchMetadata,
+        metadata: CustomerCallDispatch,
         *,
         duration_seconds: int,
         recovery_items: tuple[CallTranscriptItem, ...],
@@ -613,7 +596,7 @@ class SessionRuntime:
             return False
 
         payload = CallCompletionPayload(
-            call_id=metadata.call_id,
+            call_id=str(metadata.call_id),
             duration_seconds=duration_seconds,
             transcript=list(recovery_items),
         )
@@ -631,7 +614,7 @@ class SessionRuntime:
 
         if not is_completion_acknowledgement(
             acknowledgement,
-            metadata.call_id,
+            str(metadata.call_id),
         ):
             logger.error(
                 "call completion acknowledgement invalid call_id=%s",
@@ -656,7 +639,7 @@ class SessionRuntime:
 
     async def _publish_call_ended(
         self,
-        metadata: DispatchMetadata,
+        metadata: CustomerCallDispatch,
         *,
         duration_seconds: int,
     ) -> None:
@@ -664,8 +647,8 @@ class SessionRuntime:
             await self.event_publisher.publish(
                 {
                     "type": "call_ended",
-                    "user_id": metadata.user_id,
-                    "call_id": metadata.call_id,
+                    "user_id": str(metadata.user_id),
+                    "call_id": str(metadata.call_id),
                     "duration_seconds": duration_seconds,
                 }
             )

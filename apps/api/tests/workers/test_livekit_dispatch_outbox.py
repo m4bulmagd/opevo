@@ -14,7 +14,7 @@ from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
-from app.schemas.agent_content import AGENT_NAME_MAX_LENGTH
+from presvo_contracts import AGENT_NAME_MAX_LENGTH, dump_contract, parse_dispatch
 from app.services.outbox_service import OutboxService
 from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
@@ -240,6 +240,8 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
     assert provider.create_calls[0]["agent_name"] == "configured-worker"
     metadata = json.loads(provider.create_calls[0]["metadata"])
     assert metadata["agent_name"] == "Ava"
+    assert metadata["schema_version"] == 1
+    assert metadata["job_type"] == "customer_call"
     assert metadata["call_id"] == str(call.id)
     assert metadata["agent_identity"] == f"agent-call-{call.id}"
     assert metadata["owner_name"] == expected_owner_name
@@ -247,6 +249,8 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
     assert metadata["minutes_remaining"] == 60
     assert metadata["allowed_duration_seconds"] == 900
     assert set(metadata) == {
+        "schema_version",
+        "job_type",
         "call_id",
         "user_id",
         "agent_config_id",
@@ -261,6 +265,9 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
         "allowed_duration_seconds",
         "dispatch_token",
     }
+    assert (
+        dump_contract(parse_dispatch(provider.create_calls[0]["metadata"])) == metadata
+    )
     assert "+33999888777" not in provider.create_calls[0]["metadata"]
     assert "+33123456789" not in provider.create_calls[0]["metadata"]
 
@@ -796,8 +803,7 @@ async def test_terminal_dispatch_failure_rolls_back_when_recording_stop_fails(
     stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
     stop_event = await db_session.scalar(
         select(OutboxEvent).where(
-            OutboxEvent.idempotency_key
-            == f"recording.reconcile:{operation_id}:stop"
+            OutboxEvent.idempotency_key == f"recording.reconcile:{operation_id}:stop"
         )
     )
     assert stored_call is not None

@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from app.schemas.agent_content import (
+from presvo_contracts import (
     AgentName,
     KnowledgeBase,
     OwnerContext,

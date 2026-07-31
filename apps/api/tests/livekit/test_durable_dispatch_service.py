@@ -3,7 +3,16 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from pydantic import ValidationError
+from presvo_contracts import (
+    AGENT_NAME_MAX_LENGTH,
+    KNOWLEDGE_BASE_MAX_LENGTH,
+    OWNER_CONTEXT_MAX_LENGTH,
+    OWNER_NAME_MAX_LENGTH,
+    SYSTEM_PROMPT_MAX_LENGTH,
+    ContractError,
+    CustomerCallDispatch,
+    create_contract,
+)
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -17,14 +26,6 @@ from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
-from app.schemas.agent_content import (
-    AGENT_NAME_MAX_LENGTH,
-    KNOWLEDGE_BASE_MAX_LENGTH,
-    OWNER_CONTEXT_MAX_LENGTH,
-    OWNER_NAME_MAX_LENGTH,
-    SYSTEM_PROMPT_MAX_LENGTH,
-)
-from app.schemas.livekit import LiveKitDispatchMetadata
 from app.schemas.business_profile import WEEKDAYS
 from app.services.routing_fingerprint import routing_fingerprint
 from app.services.call_lifecycle_service import CallLifecycleService
@@ -57,7 +58,9 @@ class _Realtime:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
-    async def publish_call_started(self, user_id: str, *, room_name: str, call_id: str) -> None:
+    async def publish_call_started(
+        self, user_id: str, *, room_name: str, call_id: str
+    ) -> None:
         self.events.append(
             {"user_id": user_id, "room_name": room_name, "call_id": call_id}
         )
@@ -80,9 +83,7 @@ class _Recording:
         self.stops: list[str] = []
 
     async def start_room_recording(self, *, room_name, object_key):
-        self.starts.append(
-            {"room_name": room_name, "object_key": object_key}
-        )
+        self.starts.append({"room_name": room_name, "object_key": object_key})
         return SimpleNamespace(
             object_key=object_key,
             egress_id="egress-1",
@@ -285,9 +286,7 @@ async def _seed_verified_activation(
         business_type="Plomberie",
         public_description="Dépannage et installation de plomberie.",
         timezone="Europe/Paris",
-        business_hours={
-            day: {"closed": True, "intervals": []} for day in WEEKDAYS
-        },
+        business_hours={day: {"closed": True, "intervals": []} for day in WEEKDAYS},
         existing_phone_e164="+33199000200",
         confirmed_carrier="orange",
         receptionist_name="Léa",
@@ -358,7 +357,9 @@ async def test_activation_flow_denies_before_go_live_and_admits_after_provider_s
         )
         assert denied.status == "denied"
         assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
-        assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
+        assert (
+            await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
+        )
 
         now = datetime.now(UTC)
         activation.go_live_requested_at = now - timedelta(minutes=2)
@@ -371,7 +372,9 @@ async def test_activation_flow_denies_before_go_live_and_admits_after_provider_s
 
         assert accepted.status == "accepted"
         assert await db_session.scalar(select(func.count()).select_from(Call)) == 1
-        assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
+        assert (
+            await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
+        )
     finally:
         get_settings.cache_clear()
 
@@ -456,10 +459,11 @@ async def test_disabled_activation_flow_preserves_legacy_dispatch(
 
 def _dispatch_metadata_payload(**overrides) -> dict:
     defaults = {
-        "call_id": "call-1",
-        "user_id": "user-1",
-        "agent_config_id": "config-1",
-        "agent_identity": "agent-call-1",
+        "job_type": "customer_call",
+        "call_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "22222222-2222-4222-8222-222222222222",
+        "agent_config_id": "33333333-3333-4333-8333-333333333333",
+        "agent_identity": "agent-call-11111111-1111-4111-8111-111111111111",
         "agent_name": "Ava",
         "owner_name": "Sam",
         "owner_context": "Dental reception",
@@ -489,26 +493,31 @@ def test_api_dispatch_metadata_normalizes_and_bounds_customer_content(
     maximum: int,
 ) -> None:
     bounded_value = "x" * maximum
-    metadata = LiveKitDispatchMetadata.model_validate(
-        _dispatch_metadata_payload(**{field_name: f"  {bounded_value}  "})
+    metadata = create_contract(
+        CustomerCallDispatch,
+        **_dispatch_metadata_payload(**{field_name: f"  {bounded_value}  "}),
     )
 
     assert getattr(metadata, field_name) == bounded_value
-    with pytest.raises(ValidationError):
-        LiveKitDispatchMetadata.model_validate(
-            _dispatch_metadata_payload(**{field_name: "x" * (maximum + 1)})
+    with pytest.raises(ContractError):
+        create_contract(
+            CustomerCallDispatch,
+            **_dispatch_metadata_payload(**{field_name: "x" * (maximum + 1)}),
         )
 
 
 def test_api_dispatch_metadata_rejects_unknown_fields() -> None:
-    with pytest.raises(ValidationError):
-        LiveKitDispatchMetadata.model_validate(
-            _dispatch_metadata_payload(untrusted_extra="value")
+    with pytest.raises(ContractError):
+        create_contract(
+            CustomerCallDispatch,
+            **_dispatch_metadata_payload(untrusted_extra="value"),
         )
 
 
 @pytest.mark.anyio
-async def test_sip_join_commits_call_and_dispatch_intent_without_provider_io(db_session) -> None:
+async def test_sip_join_commits_call_and_dispatch_intent_without_provider_io(
+    db_session,
+) -> None:
     user, phone, config = await _seed_eligible_user(db_session)
     direct = _ForbiddenDirectDispatch()
     realtime = _Realtime()
@@ -560,9 +569,7 @@ async def test_sip_join_is_durable_without_realtime_service(db_session) -> None:
         arq_pool=pool,
     )
 
-    result = await service.handle_participant_joined(
-        _sip_join(room="room-no-realtime")
-    )
+    result = await service.handle_participant_joined(_sip_join(room="room-no-realtime"))
 
     calls = list((await db_session.execute(select(Call))).scalars())
     events = list((await db_session.execute(select(OutboxEvent))).scalars())
@@ -737,7 +744,9 @@ async def test_readiness_blocker_creates_no_call_or_outbox(
 
 
 @pytest.mark.anyio
-async def test_only_expected_agent_identity_connects_and_starts_recording(db_session) -> None:
+async def test_only_expected_agent_identity_connects_and_starts_recording(
+    db_session,
+) -> None:
     user, _phone, _config = await _seed_eligible_user(db_session)
     recording = _Recording()
     service = LiveKitDispatchService(
@@ -754,7 +763,11 @@ async def test_only_expected_agent_identity_connects_and_starts_recording(db_ses
         {
             "event": "participant_joined",
             "room": {"name": "room-1"},
-            "participant": {"identity": "agent-wrong", "kind": "AGENT", "attributes": {}},
+            "participant": {
+                "identity": "agent-wrong",
+                "kind": "AGENT",
+                "attributes": {},
+            },
         }
     )
     accepted = await service.handle_participant_joined(
@@ -1010,16 +1023,22 @@ async def test_prepare_failure_rolls_back_connection_operation_and_start_event(
     assert stored is not None
     assert stored.status == "pending"
     assert recording.starts == []
-    assert await db_session.scalar(
-        select(func.count())
-        .select_from(RecordingEgressOperation)
-        .where(RecordingEgressOperation.call_id == call_id)
-    ) == 0
-    assert await db_session.scalar(
-        select(func.count())
-        .select_from(OutboxEvent)
-        .where(OutboxEvent.topic == "recording.reconcile")
-    ) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(RecordingEgressOperation)
+            .where(RecordingEgressOperation.call_id == call_id)
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.topic == "recording.reconcile")
+        )
+        == 0
+    )
 
 
 @pytest.mark.anyio
@@ -1164,8 +1183,7 @@ async def test_completion_racing_success_preserves_terminal_facts_and_stop_inten
     assert recording.stops == []
     stop_intent = await db_session.scalar(
         select(OutboxEvent).where(
-            OutboxEvent.idempotency_key
-            == f"recording.reconcile:{operation.id}:stop"
+            OutboxEvent.idempotency_key == f"recording.reconcile:{operation.id}:stop"
         )
     )
     assert stop_intent is not None

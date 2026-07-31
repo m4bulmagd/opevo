@@ -14,7 +14,7 @@ from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
-from app.schemas.agent_content import (
+from presvo_contracts import (
     AGENT_NAME_MAX_LENGTH,
     KNOWLEDGE_BASE_MAX_LENGTH,
     OWNER_CONTEXT_MAX_LENGTH,
