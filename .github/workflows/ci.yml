@@ -129,6 +129,36 @@ jobs:
           --report coverage.json
           --baseline coverage-baseline.json
 
+  shared-contracts:
+    name: CI / Shared contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: libs/shared
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: libs/shared/uv.lock
+      - name: Verify lockfile
+        run: uv lock --check
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups
+      - name: Ruff
+        run: uv run --frozen --no-sync ruff check src tests
+      - name: Mypy
+        run: uv run --frozen --no-sync mypy src
+      - name: Tests
+        run: uv run --frozen --no-sync python -m pytest -q
+
   web:
     name: CI / Web
     runs-on: ubuntu-24.04
@@ -252,6 +282,10 @@ jobs:
             ecosystem: python
             working-directory: apps/agent
             lockfile: apps/agent/uv.lock
+          - application: shared
+            ecosystem: python
+            working-directory: libs/shared
+            lockfile: libs/shared/uv.lock
           - application: web
             ecosystem: npm
             working-directory: apps/web
@@ -275,7 +309,7 @@ jobs:
         run: |
           uv lock --check
           uv sync --frozen --all-groups
-          uv export --frozen --all-groups --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/${{ matrix.application }}-requirements.txt"
+          uv export --frozen --all-groups --no-emit-project --no-emit-local --format requirements-txt --output-file "$RUNNER_TEMP/${{ matrix.application }}-requirements.txt"
           if [ "${{ matrix.application }}" = "agent" ]; then
             python -c 'from datetime import date; assert date.today() < date.fromisoformat("2026-08-14"), "agent dependency exceptions expired on 2026-08-14"'
             audit_output="$(uv run --frozen --no-sync pip-audit --disable-pip --require-hashes --no-deps --progress-spinner=off --requirement "$RUNNER_TEMP/agent-requirements.txt" --ignore-vuln PYSEC-2025-217 --ignore-vuln PYSEC-2025-218 --ignore-vuln PYSEC-2026-2290 --ignore-vuln PYSEC-2026-2288 --ignore-vuln PYSEC-2026-2289 2>&1)"
@@ -330,18 +364,32 @@ jobs:
       matrix:
         include:
           - application: api
-            context: apps/api
+            context: .
+            dockerfile: apps/api/Dockerfile
           - application: agent
-            context: apps/agent
+            context: .
+            dockerfile: apps/agent/Dockerfile
           - application: web
             context: apps/web
+            dockerfile: apps/web/Dockerfile
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Build image
-        run: docker build --tag "presvo-${{ matrix.application }}:${{ github.sha }}" "${{ matrix.context }}"
+        run: >-
+          docker build
+          --file "${{ matrix.dockerfile }}"
+          --tag "presvo-${{ matrix.application }}:${{ github.sha }}"
+          "${{ matrix.context }}"
+      - name: Verify shared package in Python runtime images
+        if: matrix.application != 'web'
+        run: >-
+          docker run --rm
+          --entrypoint /app/.venv/bin/python
+          "presvo-${{ matrix.application }}:${{ github.sha }}"
+          -c "import presvo_contracts; assert presvo_contracts.CURRENT_SCHEMA_VERSION == 1"
       - name: Scan agent image with reviewed exceptions
         if: matrix.application == 'agent'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -380,6 +428,7 @@ jobs:
     needs:
       - api
       - agent
+      - shared-contracts
       - web
       - e2e
       - migrations
@@ -391,6 +440,7 @@ jobs:
         env:
           API_RESULT: ${{ needs.api.result }}
           AGENT_RESULT: ${{ needs.agent.result }}
+          SHARED_CONTRACTS_RESULT: ${{ needs.shared-contracts.result }}
           WEB_RESULT: ${{ needs.web.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
           MIGRATIONS_RESULT: ${{ needs.migrations.result }}
@@ -398,7 +448,7 @@ jobs:
           GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
           CONTAINER_SCAN_RESULT: ${{ needs['container-scan'].result }}
         run: |
-          for result in "$API_RESULT" "$AGENT_RESULT" "$WEB_RESULT" "$E2E_RESULT" "$MIGRATIONS_RESULT" "$DEPENDENCY_AUDIT_RESULT" "$GITLEAKS_RESULT" "$CONTAINER_SCAN_RESULT"; do
+          for result in "$API_RESULT" "$AGENT_RESULT" "$SHARED_CONTRACTS_RESULT" "$WEB_RESULT" "$E2E_RESULT" "$MIGRATIONS_RESULT" "$DEPENDENCY_AUDIT_RESULT" "$GITLEAKS_RESULT" "$CONTAINER_SCAN_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "A required CI job did not succeed."
               exit 1

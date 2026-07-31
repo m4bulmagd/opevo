@@ -4,21 +4,24 @@ WORKDIR /app
 
 ENV HF_HOME=/opt/models/huggingface \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
 
-COPY pyproject.toml uv.lock ./
+COPY apps/agent/pyproject.toml apps/agent/uv.lock ./apps/agent/
+COPY libs/shared/pyproject.toml /app/libs/shared/pyproject.toml
+COPY libs/shared/src /app/libs/shared/src
 
 RUN python -m pip install --no-cache-dir uv==0.11.19 \
-    && uv sync --frozen --no-dev
+    && uv sync --directory apps/agent --frozen --no-dev --no-editable
 RUN mkdir -p "$HF_HOME" \
     && /app/.venv/bin/python -c "from livekit.plugins.turn_detector.multilingual import _EUORunnerMultilingual; _EUORunnerMultilingual._download_files()"
 
 FROM builder AS development
 
-RUN uv sync --frozen --all-groups
+RUN uv sync --directory apps/agent --frozen --all-groups --no-editable
 
-COPY agent ./agent
-COPY dev_runner.py ./dev_runner.py
+COPY apps/agent/agent ./agent
+COPY apps/agent/dev_runner.py ./dev_runner.py
 
 FROM python:3.13-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280 AS runtime
 
@@ -33,7 +36,7 @@ ENV HF_HOME=/opt/models/huggingface \
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /opt/models/huggingface /opt/models/huggingface
-COPY agent ./agent
+COPY apps/agent/agent ./agent
 
 USER 10001:10001
 
