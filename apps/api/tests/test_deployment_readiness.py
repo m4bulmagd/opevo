@@ -860,6 +860,27 @@ def test_local_e2e_runner_is_disposable_and_never_starts_voice_agent() -> None:
     assert "agent" not in started_services
 
 
+def test_local_e2e_runner_scopes_dashboard_metrics_reference_time_to_api() -> None:
+    runner = (REPO_ROOT / "scripts" / "run-local-e2e.sh").read_text()
+    compose_dev = (REPO_ROOT / "compose.dev.yaml").read_text()
+    production_compose = (REPO_ROOT / "compose.yaml").read_text()
+    migration_service = compose_dev.split("\n  migrate:", 1)[1].split("\n  api:", 1)[0]
+    api_service = compose_dev.split("\n  api:", 1)[1].split("\n  worker:", 1)[0]
+    worker_service = compose_dev.split("\n  worker:", 1)[1].split("\n  agent:", 1)[0]
+    agent_service = compose_dev.split("\n  agent:", 1)[1].split("\n  web:", 1)[0]
+    web_service = compose_dev.split("\n  web:", 1)[1].split("\nvolumes:", 1)[0]
+    reference_setting = "DASHBOARD_METRICS_REFERENCE_TIME"
+    reference_export = (
+        "export DASHBOARD_METRICS_REFERENCE_TIME=2026-07-29T12:00:00Z"
+    )
+
+    assert reference_export in runner
+    assert f"{reference_setting}:" in api_service
+    for service in (migration_service, worker_service, agent_service, web_service):
+        assert reference_setting not in service
+    assert reference_setting not in production_compose
+
+
 def test_local_e2e_runner_proves_deactivation_survives_api_worker_restart() -> None:
     runner = (REPO_ROOT / "scripts" / "run-local-e2e.sh").read_text()
 
