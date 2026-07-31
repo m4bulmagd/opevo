@@ -34,6 +34,10 @@ contents permission, and checkout steps do not persist credentials.
   180-second deadline. The job collects branch-aware coverage and independently
   checks line and branch results against the committed measured
   `coverage-baseline.json`; it never rewrites that baseline.
+- `CI / Shared contracts` runs on Python 3.13 in `libs/shared`, checks the
+  frozen shared-package lockfile, installs all locked groups, and runs Ruff,
+  mypy, and the complete shared-contract pytest suite independently of either
+  application.
 - `CI / Web` installs with `npm ci`, runs Biome, TypeScript, Vitest, and the
   Next.js production build. Its build uses explicit non-secret Clerk and local
   API/application placeholders; it does not use provider secrets.
@@ -41,19 +45,26 @@ contents permission, and checkout steps do not persist credentials.
   `ai_call_migrations` database and runs `alembic -c alembic.ini upgrade head`.
   This blank-database upgrade is required migration verification and must stay
   required even when API tests pass.
-- `CI / Dependency audit / api`, `CI / Dependency audit / agent`, and
-  `CI / Dependency audit / web` audit the committed uv/npm lockfiles. The
-  agent's five time-limited exceptions are verified exactly as documented in
-  [the dependency exception register](../security/dependency-exceptions.md).
+- `CI / Dependency audit / api`, `CI / Dependency audit / agent`,
+  `CI / Dependency audit / shared`, and `CI / Dependency audit / web` audit
+  the committed uv/npm lockfiles. Python exports omit local workspace sources
+  before hash auditing; those packages are reviewed directly from repository
+  source while every third-party dependency remains hash-audited. The agent's
+  five time-limited exceptions are verified exactly as documented in [the
+  dependency exception register](../security/dependency-exceptions.md).
 - `CI / Gitleaks` scans full Git history with redaction enabled.
 - `CI / Container scan / api`, `CI / Container scan / agent`, and
   `CI / Container scan / web` build each application image and fail on fixed
-  HIGH or CRITICAL vulnerabilities. Only the agent image receives the reviewed
-  exceptions in `.trivyignore.yaml`.
+  HIGH or CRITICAL vulnerabilities. API and agent builds use the repository
+  root as their Docker context with explicit application Dockerfiles, so their
+  non-editable shared-contract installation is part of the tested image.
+  Python runtime images also import the shared package before scanning. Only
+  the agent image receives the reviewed exceptions in `.trivyignore.yaml`.
 - `CI / Required` depends on every job group above and fails unless each group
   completed successfully.
 
-Dependabot checks uv, npm, GitHub Actions, and Docker dependencies weekly.
+Dependabot checks API, agent, and shared-package uv dependencies, npm, GitHub
+Actions, and Docker dependencies weekly.
 
 ## Required GitHub ruleset for `main`
 
@@ -76,10 +87,12 @@ not replace the individual migration, dependency, secret, or container checks:
 
 - `CI / API`
 - `CI / Agent`
+- `CI / Shared contracts`
 - `CI / Web`
 - `CI / Migrations`
 - `CI / Dependency audit / api`
 - `CI / Dependency audit / agent`
+- `CI / Dependency audit / shared`
 - `CI / Dependency audit / web`
 - `CI / Gitleaks`
 - `CI / Container scan / api`

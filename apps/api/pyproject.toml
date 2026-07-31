@@ -15,6 +15,7 @@ dependencies = [
   "opentelemetry-exporter-otlp-proto-http>=1.39,<2",
   "opentelemetry-sdk>=1.39,<2",
   "phonenumbers>=9.0,<10.0",
+  "presvo-contracts",
   "pydantic-settings>=2.14.2,<3.0",
   "pyjwt>=2.13,<3.0",
   "redis>=5.0,<6.0",
@@ -25,6 +26,9 @@ dependencies = [
   "telnyx>=2.0,<3.0",
   "uvicorn>=0.34,<1.0",
 ]
+
+[tool.uv.sources]
+presvo-contracts = { path = "../../libs/shared" }
 
 [dependency-groups]
 dev = [

@@ -69,7 +69,7 @@ model-loading operation is isolated in a separately sandboxed service.
 
 ```bash
 cd apps/agent
-UV_CACHE_DIR=/tmp/uv-cache uv export --frozen --all-groups --no-emit-project \
+UV_CACHE_DIR=/tmp/uv-cache uv export --frozen --all-groups --no-emit-project --no-emit-local \
   --format requirements-txt --output-file /tmp/presvo-agent-requirements.txt
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pip-audit \
   --disable-pip --require-hashes --no-deps --progress-spinner=off \

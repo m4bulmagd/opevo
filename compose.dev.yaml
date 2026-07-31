@@ -64,7 +64,8 @@ services:
 
   migrate:
     build:
-      context: ./apps/api
+      context: .
+      dockerfile: apps/api/Dockerfile
       target: development
     depends_on:
       postgres:
@@ -80,7 +81,8 @@ services:
 
   api:
     build:
-      context: ./apps/api
+      context: .
+      dockerfile: apps/api/Dockerfile
       target: development
     env_file:
       - path: ./apps/api/.env
@@ -124,7 +126,8 @@ services:
 
   worker:
     build:
-      context: ./apps/api
+      context: .
+      dockerfile: apps/api/Dockerfile
       target: development
     depends_on:
       migrate:
@@ -153,7 +156,8 @@ services:
   agent:
     profiles: ["voice"]
     build:
-      context: ./apps/agent
+      context: .
+      dockerfile: apps/agent/Dockerfile
       target: development
     env_file:
       - path: ./apps/agent/.env

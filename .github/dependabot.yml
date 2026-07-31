@@ -4,6 +4,7 @@ updates:
     directories:
       - "/apps/api"
       - "/apps/agent"
+      - "/libs/shared"
     schedule:
       interval: "weekly"
       day: "monday"

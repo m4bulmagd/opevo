@@ -3,20 +3,23 @@ FROM python:3.13-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493
 WORKDIR /app
 
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
 
-COPY pyproject.toml uv.lock ./
+COPY apps/api/pyproject.toml apps/api/uv.lock ./apps/api/
+COPY libs/shared/pyproject.toml /app/libs/shared/pyproject.toml
+COPY libs/shared/src /app/libs/shared/src
 
 RUN python -m pip install --no-cache-dir uv==0.11.19 \
-    && uv sync --frozen --no-dev
+    && uv sync --directory apps/api --frozen --no-dev --no-editable
 
 FROM builder AS development
 
-RUN uv sync --frozen --all-groups
+RUN uv sync --directory apps/api --frozen --all-groups --no-editable
 
-COPY alembic.ini ./
-COPY alembic ./alembic
-COPY app ./app
+COPY apps/api/alembic.ini ./
+COPY apps/api/alembic ./alembic
+COPY apps/api/app ./app
 
 FROM python:3.13-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280 AS runtime
 
@@ -29,9 +32,9 @@ ENV HOME=/tmp \
     PYTHONUNBUFFERED=1
 
 COPY --from=builder /app/.venv /app/.venv
-COPY alembic.ini ./
-COPY alembic ./alembic
-COPY app ./app
+COPY apps/api/alembic.ini ./
+COPY apps/api/alembic ./alembic
+COPY apps/api/app ./app
 
 USER 10001:10001
 
