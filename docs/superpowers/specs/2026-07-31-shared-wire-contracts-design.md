@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-31
 **Decision:** 2A
-**Status:** Approved design pending written-spec review
+**Status:** Approved
 
 ## Purpose
 
@@ -195,10 +195,11 @@ Version rules:
    deployment exists.
 
 The package exposes the current and supported version values so tests and
-tooling do not repeat them. Versioned model fields default to the current
-version for producer construction, but consumer parsing checks that the raw
-document actually contains `schema_version` before model validation. A missing
-wire version therefore cannot acquire the producer default accidentally.
+tooling do not repeat them. Versioned model fields are required and have no
+model-level default. The producer-only `create_contract` helper injects the
+current version before strict validation. Consumer parsing checks the raw
+document before model validation, so framework validation and direct model
+validation cannot silently supply a missing wire version.
 
 ## Producer and Consumer Strictness
 
@@ -470,7 +471,9 @@ contract seam rather than chained into logs.
 Application mapping remains explicit:
 
 - invalid LiveKit dispatch: reject the job and log only the safe code;
-- invalid agent HTTP request: reject before domain or database work;
+- invalid agent HTTP request: reject before domain service calls or database
+  mutation; authentication dependencies may perform their existing owner reads
+  first;
 - invalid acknowledgement: classify as a permanent contract failure;
 - invalid Redis event: record a bounded metric/log entry, discard the event,
   and continue the fanout loop;
@@ -481,10 +484,12 @@ Application mapping remains explicit:
 The shared package does not decide HTTP status codes, retries, alerts, or
 shutdown policy.
 
-The applications record invalid messages through a
+The API records invalid messages through a
 `presvo.contract.invalid_messages` counter. Its bounded attributes are
 `contract_name`, `code`, and `transport`; it never includes identifiers or
-payload content.
+payload content. The agent's existing observability lifecycle is deliberately
+trace-only, so the agent records the same bounded fields through safe structured
+logs instead of adding a metrics exporter solely for this contract change.
 
 ## Limits and Edge Cases
 
