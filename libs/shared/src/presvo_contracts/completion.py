@@ -3,7 +3,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictInt, field_validator
 
 from .transcript import TranscriptSegment
 from .versioning import NonBlankString, VersionedContract
@@ -18,6 +18,13 @@ class CallCompletionAcknowledgement(VersionedContract):
     status: Literal["accepted"]
     queued: Literal[True]
     job_id: NonBlankString
+
+    @field_validator("queued", mode="before")
+    @classmethod
+    def require_true_boolean(cls, value: object) -> object:
+        if value is not True:
+            raise ValueError("queued must be true")
+        return value
 
 
 class VerificationCompletionRequest(VersionedContract):

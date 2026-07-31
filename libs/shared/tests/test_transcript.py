@@ -101,5 +101,17 @@ def test_transcript_append_acknowledgement_rejects_unknown_status() -> None:
     assert caught.value.code == "invalid_payload"
 
 
+@pytest.mark.parametrize("value", [0, True, 1.0, "1"])
+def test_transcript_append_acknowledgement_rejects_non_positive_or_coerced_sequence_numbers(
+    value: object,
+) -> None:
+    with pytest.raises(ContractError) as caught:
+        parse_contract(
+            TranscriptAppendAcknowledgement,
+            {"schema_version": 1, "status": "stored", "sequence_number": value},
+        )
+    assert caught.value.code == "invalid_payload"
+
+
 def test_transcript_speaker_has_documented_values() -> None:
     assert set(TranscriptSpeaker) == {TranscriptSpeaker.CALLER, TranscriptSpeaker.AGENT}
