@@ -1,5 +1,22 @@
 """Public API for Presvo's versioned wire contracts."""
 
+from .dispatch import (
+    AGENT_NAME_MAX_LENGTH,
+    KNOWLEDGE_BASE_MAX_LENGTH,
+    OWNER_CONTEXT_MAX_LENGTH,
+    OWNER_NAME_MAX_LENGTH,
+    SYSTEM_PROMPT_MAX_LENGTH,
+    VERIFICATION_MESSAGE,
+    AgentName,
+    CustomerCallDispatch,
+    DispatchContract,
+    ForwardingVerificationDispatch,
+    KnowledgeBase,
+    OwnerContext,
+    OwnerName,
+    SystemPrompt,
+    parse_dispatch,
+)
 from .versioning import (
     CURRENT_SCHEMA_VERSION,
     SUPPORTED_SCHEMA_VERSIONS,
@@ -14,10 +31,25 @@ from .versioning import (
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "SUPPORTED_SCHEMA_VERSIONS",
+    "AGENT_NAME_MAX_LENGTH",
+    "OWNER_NAME_MAX_LENGTH",
+    "OWNER_CONTEXT_MAX_LENGTH",
+    "SYSTEM_PROMPT_MAX_LENGTH",
+    "KNOWLEDGE_BASE_MAX_LENGTH",
+    "VERIFICATION_MESSAGE",
+    "AgentName",
+    "OwnerName",
+    "OwnerContext",
+    "SystemPrompt",
+    "KnowledgeBase",
     "ContractError",
     "VersionedContract",
+    "CustomerCallDispatch",
+    "ForwardingVerificationDispatch",
+    "DispatchContract",
     "create_contract",
     "parse_contract",
     "dump_contract",
     "dump_contract_json",
+    "parse_dispatch",
 ]
