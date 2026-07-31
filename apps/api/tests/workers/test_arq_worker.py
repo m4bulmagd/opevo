@@ -42,6 +42,7 @@ def test_worker_registers_outbox_wakeup_and_reconciliation() -> None:
     assert "summary_job" not in function_names
     assert "recording_job" not in function_names
     assert "notifications_job" not in function_names
+    assert "transcript_flush_job" not in function_names
     assert "call_finalization_job" in function_names
     assert "call_reconciliation_job" in function_names
     assert any(
