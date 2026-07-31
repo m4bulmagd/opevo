@@ -3,14 +3,15 @@
 - **Date:** 2026-07-30
 - **Scope:** `apps/agent`, `apps/api`, and the shared contracts and
   infrastructure that directly connect them
-- **Status:** Review complete; directions recorded; implementation requires a
-  separate, explicitly authorized change
+- **Status:** Review complete; directions and implementation follow-ups
+  recorded. Issue 2 is implemented; later issues still require their own
+  explicitly authorized changes unless marked otherwise below.
 - **Review mode:** Big change, four sections, at most four top issues per section
 
-This document is the durable record of the 16 issues reviewed interactively.
-It preserves the evidence, alternatives, concrete tradeoffs, accepted
-directions, proposed solutions, dependencies, and validation gates so that the
-conversation is not the only source of truth.
+This document is the durable record of the 16 issues reviewed interactively and
+two implementation-review follow-ups. It preserves the evidence, alternatives,
+concrete tradeoffs, accepted directions, proposed solutions, dependencies, and
+validation gates so that the conversation is not the only source of truth.
 
 Line references are a snapshot of the repository on the date above. If code
 moves, use the named symbol as the durable locator.
@@ -52,6 +53,8 @@ The recommendations use these agreed priorities:
 | 14 | Realtime scaling | **14A** — per-active-user subscriptions and bounded socket delivery | Accepted |
 | 15 | Transcript ingest | **15A** — preserve per-segment durability while removing redundant work | Accepted |
 | 16 | Performance governance | **16A** — measure first, then set explicit budgets and thresholds | Accepted |
+| 17 | Docker context-probe cleanup | **17A** — quarantine and physically anchor recursive cleanup | Accepted; implemented |
+| 18 | Same-UID quarantine capture race | **18A** — document and accept the narrow CI-only residual risk | Accepted risk |
 
 Decisions **11C** and **12C** deliberately retain test gaps. They must not be
 described as solved by later work unless the user explicitly selects a
@@ -1015,16 +1018,107 @@ at the appropriate boundary, then tested at every consumer:
 |---|---|---|---|---|
 | No automated real-model receptionist behavior gate | 11C | CI may miss behavior regressions | Manual credentialed evaluations with recorded artifacts | Behavior becomes a release gate, regressions recur, or staging cost exceeds automation cost |
 | No real agent process in E2E | 12C | CI cannot prove boot/dispatch/media/crash/shutdown lifecycle | Unit/contract/integration tests plus manual staging calls | Agent lifecycle defects recur, protocol churn rises, or production promotion requires automated proof |
+| Same-UID race during initial CI quarantine capture | 18A | A hostile same-UID process could redirect the initial non-recursive `mv` and clobber a CI artifact | Random private roots plus physically anchored, identity-checked recursive cleanup; same UID already has broader workspace authority | The probe runs across trust boundaries, CI shares a UID with untrusted workloads, or artifact clobbering is observed |
 
 These are consciously accepted gaps, not omissions from this record.
+
+## Implementation Follow-Up Decisions
+
+### Issue 17 — Docker Context-Probe Cleanup Re-resolved Mutable Paths
+
+#### Concrete problem and evidence
+
+The Docker root-context hygiene probe creates temporary sentinel, fixture, and
+output objects and cleans them on exit. Earlier implementations validated a
+shared pathname and later supplied that pathname to recursive removal. A
+same-UID process could replace the validated object, or replace an intermediate
+quarantine-root pathname with a symlink, between validation and removal. That
+made a CI cleanup check capable of recursively deleting a replacement object.
+
+The implementation is now in
+`tests/docker/test_root_context_hygiene.sh:108-181`. It atomically moves owned
+objects into private, same-filesystem quarantine directories, enters those
+directories with `cd -P`, revalidates their physical identity, and deletes only
+relative children. The adversarial regression harness is in
+`tests/docker/test_root_context_hygiene_cleanup_ownership.sh`.
+
+#### Options and tradeoffs
+
+| Option | Effort | Risk | Impact on other code | Ongoing maintenance |
+|---|---:|---:|---|---|
+| **17A — Selected and recommended:** quarantine each owned object, pin the physical cleanup directory, and delete only verified relative children | Medium | Low runtime risk; shell complexity is materially higher | CI Docker-context probe and its regression harness only | Medium; Linux/GNU-specific safety code must remain tested |
+| **17B:** retain check-then-delete cleanup | None | Important recursive deletion race under same-UID interference | No code changes | Low code burden; unacceptable cleanup risk |
+| **17C:** replace shell cleanup with a descriptor-relative native helper | High | New build/runtime dependency and portability surface | CI tooling, packaging, and tests | Medium-high; strongest primitive but disproportionate here |
+
+#### Recorded decision and implemented solution — 17A
+
+The selected implementation prevents recursive deletion from being redirected
+through either the original shared pathname or a replaced quarantine-root
+pathname. It preserves the original command's failure status, promotes a
+cleanup-only failure when appropriate, and retains unexpected objects for
+inspection instead of deleting them. Tests cover the sentinel, repository
+fixture, and `/tmp` output with successful and failing primary commands.
+
+### Issue 18 — Initial Quarantine Capture Still Trusts a Random Private Path
+
+#### Concrete problem and evidence
+
+The remaining reviewer concern is narrower than Issue 17. The initial capture
+still calls absolute `mv -T` destinations before entering the quarantine root
+at `tests/docker/test_root_context_hygiene.sh:113` and `:157`; the harness uses
+the analogous pattern at
+`tests/docker/test_root_context_hygiene_cleanup_ownership.sh:282`, `:300`, and
+`:388`. A deliberate process running as the same UID could discover the
+randomized temporary root, rename it, replace the original root pathname with
+a symlink, and race the initial move. That can make `mv` clobber an existing
+file or empty directory at the substituted destination. It cannot redirect the
+later anchored recursive deletion fixed by 17A.
+
+This threat requires an adversarial same-UID process able to inspect and mutate
+the CI workspace while the short-lived probe runs. Such a process already has
+permission to modify or delete the workspace directly. The existing harness is
+approximately 940 lines because it exercises the real probe at adversarial
+interleavings; expanding it further would add substantial maintenance cost to
+a CI-only hygiene check.
+
+#### Options and tradeoffs
+
+| Option | Effort | Risk | Impact on other code | Ongoing maintenance |
+|---|---:|---:|---|---|
+| **18A — Selected and recommended:** document and accept this same-UID initial-capture race | None | Narrow CI artifact-clobber risk under deliberate same-UID interference; no application/runtime exposure | No source behavior change | Lowest additional burden; retain the current explicit limitation |
+| **18B:** enter and identity-check the quarantine root before capture, use relative non-clobbering `mv -T -n`, verify source disappearance, and add an `mv`-barrier regression | Medium | Lowers the narrow race but adds more intricate shell/fake-command state | Probe plus an already-large adversarial harness | High relative to the value of the CI check |
+| **18C:** replace the shell mechanism with a small descriptor-relative native helper | High | New compiled/runtime dependency and a larger support surface | CI tooling and packaging | Medium-high; formally stronger but over-engineered for the stated threat |
+
+#### Recorded decision — 18A
+
+The residual risk is accepted explicitly. No claim is made that the cleanup is
+formally race-free against a hostile same-UID process. The implemented boundary
+is that recursive deletion is physically anchored and cannot be redirected;
+the remaining exposure is only the initial non-recursive `mv` capture. This is
+the “engineered enough” stopping point: further same-UID hardening would add
+complexity disproportionate to the protected CI-only artifacts, while a
+same-UID attacker already possesses broader workspace authority.
+
+Two minor follow-ups from the implementation review remain documented rather
+than silently expanded into this change:
+
+- the API's bounded LiveKit contract-failure logging repeats a local policy
+  that could move behind a small API-local helper if another consumer appears;
+- direct tests could strengthen verification-completion correlation logging
+  and the API unknown-label fallback, although the shared agent helper's
+  unknown-label behavior is already covered.
+
+Neither minor is a functional blocker for the shared-contract change.
 
 ## Implementation Authorization Boundary
 
 This document records review outcomes only. It does not authorize source,
 configuration, dependency, infrastructure, or deployment changes.
 
-The first prepared implementation wave covers **9A-1R and 10A only**:
+The first prepared implementation wave covered **9A-1R and 10A**:
 [Python Test Foundation Implementation Plan](../superpowers/plans/2026-07-30-python-test-foundation.md).
-Every later wave should receive its own reviewed implementation plan, should
-preserve the issue numbers above, and should state which accepted risks remain
-unchanged.
+Issue **2A** was subsequently implemented by the
+[Shared Wire Contracts Implementation Plan](../superpowers/plans/2026-07-31-shared-wire-contracts.md),
+including the authorized implementation follow-ups 17A and 18A. Every later
+wave should receive its own reviewed implementation plan, preserve the issue
+numbers above, and state which accepted risks remain unchanged.
