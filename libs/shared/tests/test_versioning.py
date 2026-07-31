@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from uuid import UUID
 
 import pytest
@@ -12,13 +13,14 @@ from presvo_contracts import (
     dump_contract_json,
     parse_contract,
 )
+from presvo_contracts.versioning import WireValue
 
 
 class ProbeContract(VersionedContract):
     value: str
 
 
-class NestedValue(VersionedContract):
+class NestedValue(WireValue):
     value: str
 
 
@@ -28,6 +30,17 @@ class NestedProbeContract(VersionedContract):
 
 class IdentifierContract(VersionedContract):
     identifier: UUID
+
+
+class ExplodingSerializerContract(VersionedContract):
+    value: str
+
+    def model_dump(
+        self,
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        raise RuntimeError(f"unsafe serializer detail: {self.value}")
 
 
 def test_producer_injects_version_and_forbids_extras() -> None:
@@ -61,11 +74,11 @@ def test_consumer_ignores_additive_fields_in_nested_values() -> None:
         NestedProbeContract,
         {
             "schema_version": 1,
-            "child": {"schema_version": 1, "value": "known", "future": "ignored"},
+            "child": {"value": "known", "future": "ignored"},
         },
     )
     assert dump_contract(parsed) == {
-        "child": {"schema_version": 1, "value": "known"},
+        "child": {"value": "known"},
         "schema_version": 1,
     }
 
@@ -128,3 +141,19 @@ def test_dumpers_return_json_values_and_stable_json() -> None:
         '{"identifier":"12345678-1234-5678-1234-567812345678","schema_version":1}'
     )
     assert json.loads(dump_contract_json(contract)) == dumped
+
+
+@pytest.mark.parametrize("dumper", [dump_contract, dump_contract_json])
+def test_dumpers_wrap_unexpected_serializer_failures(
+    dumper: Callable[[VersionedContract], object],
+) -> None:
+    secret = "do-not-expose-serializer-detail"
+    contract = create_contract(ExplodingSerializerContract, value=secret)
+
+    with pytest.raises(ContractError) as caught:
+        dumper(contract)
+
+    assert str(caught.value) == "ExplodingSerializerContract rejected: invalid_payload"
+    assert secret not in str(caught.value)
+    assert secret not in repr(caught.value)
+    assert caught.value.__cause__ is None
