@@ -17,6 +17,36 @@ _SENSITIVE_MARKERS = (
 )
 _HTTP_CLIENT_LOGGER_PREFIXES = ("httpx", "httpcore")
 _HTTP_CLIENT_LOGGING_LOCK = threading.Lock()
+_CONTRACT_OPERATIONS = frozenset(
+    {
+        "append_transcript",
+        "complete_call",
+        "complete_verification",
+        "publish_agent_session_ended",
+        "publish_transcript_observed",
+    }
+)
+_CONTRACT_NAMES = frozenset(
+    {
+        "AgentSessionEndedEvent",
+        "CallCompletionAcknowledgement",
+        "CallCompletionRequest",
+        "TranscriptAppendAcknowledgement",
+        "TranscriptAppendRequest",
+        "TranscriptObservedEvent",
+        "VerificationCompletionAcknowledgement",
+    }
+)
+_CONTRACT_CODES = frozenset(
+    {
+        "correlation_mismatch",
+        "invalid_payload",
+        "malformed_json",
+        "missing_schema_version",
+        "unsupported_schema_version",
+    }
+)
+_CONTRACT_TRANSPORTS = frozenset({"http", "redis"})
 
 
 def _is_http_client_record(record: logging.LogRecord) -> bool:
@@ -109,6 +139,24 @@ def _safe_label(value: object) -> str | None:
     if any(marker in normalized for marker in _SENSITIVE_MARKERS):
         return None
     return value
+
+
+def report_contract_failure(
+    logger: logging.Logger,
+    *,
+    operation: str,
+    contract_name: str,
+    code: str,
+    transport: str,
+) -> None:
+    """Log only fixed-cardinality contract diagnostics, never wire values."""
+    logger.warning(
+        "operation=%s contract_name=%s code=%s transport=%s",
+        operation if operation in _CONTRACT_OPERATIONS else "unknown",
+        contract_name if contract_name in _CONTRACT_NAMES else "unknown",
+        code if code in _CONTRACT_CODES else "unknown",
+        transport if transport in _CONTRACT_TRANSPORTS else "unknown",
+    )
 
 
 def report_safe_exception(

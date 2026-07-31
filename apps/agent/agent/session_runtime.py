@@ -10,6 +10,7 @@ from uuid import UUID
 from presvo_contracts import (
     CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS,
     CallCompletionRequest,
+    ContractError,
     CustomerCallDispatch,
     AgentSessionEndedEvent,
     TranscriptObservedEvent,
@@ -20,10 +21,13 @@ from presvo_contracts import (
 
 from agent.api_client import (
     AgentApiClient,
+    CallCompletionContractError,
+    TranscriptAppendContractError,
     TranscriptAppendPermanentError,
     TranscriptAppendRetryableError,
 )
 from agent.event_publisher import EventPublisher
+from agent.safe_logging import report_contract_failure
 
 
 logger = logging.getLogger(__name__)
@@ -416,6 +420,10 @@ class SessionRuntime:
                     await self._retry_sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY_SECONDS)
                     continue
+                except TranscriptAppendContractError:
+                    self._flusher_stopped_permanently = True
+                    self._request_fatal_shutdown("transcript_append_permanent_failure")
+                    return
                 except TranscriptAppendPermanentError:
                     logger.error(
                         "transcript append permanently rejected call_id=%s sequence_number=%d",
@@ -480,6 +488,14 @@ class SessionRuntime:
                     speaker=line.speaker,
                     text=line.text,
                 )
+            )
+        except ContractError as error:
+            report_contract_failure(
+                logger,
+                operation="publish_transcript_observed",
+                contract_name=error.contract_name,
+                code=error.code,
+                transport="redis",
             )
         except Exception as exc:
             logger.error(
@@ -578,17 +594,29 @@ class SessionRuntime:
         if self.api_client is None:
             return False
 
-        request = create_contract(
-            CallCompletionRequest,
-            duration_seconds=duration_seconds,
-            transcript=recovery_items,
-        )
+        try:
+            request = create_contract(
+                CallCompletionRequest,
+                duration_seconds=duration_seconds,
+                transcript=recovery_items,
+            )
+        except ContractError as error:
+            report_contract_failure(
+                logger,
+                operation="complete_call",
+                contract_name=error.contract_name,
+                code=error.code,
+                transport="http",
+            )
+            return False
         try:
             await self.api_client.complete_call(
                 metadata.call_id,
                 metadata.dispatch_token,
                 request,
             )
+        except CallCompletionContractError:
+            return False
         except Exception as exc:
             logger.error(
                 "failed to complete call %s after retries error_type=%s",
@@ -628,6 +656,14 @@ class SessionRuntime:
                     call_id=metadata.call_id,
                     duration_seconds=duration_seconds,
                 )
+            )
+        except ContractError as error:
+            report_contract_failure(
+                logger,
+                operation="publish_agent_session_ended",
+                contract_name=error.contract_name,
+                code=error.code,
+                transport="redis",
             )
         except Exception as exc:
             logger.error(

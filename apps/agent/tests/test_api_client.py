@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from presvo_contracts import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
+    ContractError,
     TranscriptAppendAcknowledgement,
     TranscriptAppendRequest,
     TranscriptSegment,
@@ -24,6 +25,7 @@ from agent.api_client import (
     CallCompletionAcknowledgementError,
     CallCompletionRetryableError,
     TranscriptAppendPermanentError,
+    TranscriptAppendAcknowledgementError,
     TranscriptAppendRetryableError,
     VerificationCompletionAcknowledgementError,
     VerificationCompletionPermanentError,
@@ -221,6 +223,98 @@ async def test_append_transcript_rejects_malformed_or_mismatched_acknowledgement
 
 
 @pytest.mark.anyio
+async def test_append_transcript_producer_contract_failure_is_safely_classified(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200)
+
+    def reject_request_contract(*_args, **_kwargs):
+        try:
+            raise RuntimeError("APPEND_PRODUCER_CHAIN_SENTINEL")
+        except RuntimeError as cause:
+            raise ContractError("TranscriptAppendRequest", "invalid_payload") from cause
+
+    monkeypatch.setattr(api_client_module, "create_contract", reject_request_contract)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with caplog.at_level(logging.WARNING), pytest.raises(
+            TranscriptAppendPermanentError
+        ) as caught:
+            await AgentApiClient(
+                base_url="http://api.test/PATH_SENTINEL",
+                http_client=http,
+            ).append_transcript(FIXTURE_CALL_ID, "TOKEN_SENTINEL", _segment())
+
+    assert requests == 0
+    assert "operation=append_transcript" in caplog.text
+    assert "contract_name=TranscriptAppendRequest" in caplog.text
+    assert "code=invalid_payload" in caplog.text
+    assert "transport=http" in caplog.text
+    combined = caplog.text + str(caught.value)
+    for forbidden in (
+        str(FIXTURE_CALL_ID),
+        "TOKEN_SENTINEL",
+        "private transcript",
+        "PATH_SENTINEL",
+        "APPEND_PRODUCER_CHAIN_SENTINEL",
+    ):
+        assert forbidden not in combined
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("body", "expected_code"),
+    [
+        (b"not-json", "malformed_json"),
+        (
+            b'{"schema_version":1,"status":"stored","sequence_number":2}',
+            "correlation_mismatch",
+        ),
+    ],
+)
+async def test_append_transcript_acknowledgement_failure_has_safe_distinct_type(
+    body: bytes,
+    expected_code: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, content=body)
+        )
+    ) as http:
+        with caplog.at_level(logging.WARNING), pytest.raises(
+            TranscriptAppendPermanentError
+        ) as caught:
+            await AgentApiClient(
+                base_url="http://api.test/PATH_SENTINEL",
+                http_client=http,
+            ).append_transcript(FIXTURE_CALL_ID, "TOKEN_SENTINEL", _segment())
+
+    assert isinstance(caught.value, TranscriptAppendAcknowledgementError)
+    assert "operation=append_transcript" in caplog.text
+    assert "contract_name=TranscriptAppendAcknowledgement" in caplog.text
+    assert f"code={expected_code}" in caplog.text
+    assert "transport=http" in caplog.text
+    combined = caplog.text + str(caught.value)
+    for forbidden in (
+        str(FIXTURE_CALL_ID),
+        "TOKEN_SENTINEL",
+        "private transcript",
+        "PATH_SENTINEL",
+        body.decode(),
+    ):
+        assert forbidden not in combined
+    assert caught.value.__cause__ is None
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "status_code",
     [code for code in range(400, 500) if code not in {408, 425, 429}],
@@ -279,24 +373,42 @@ async def test_complete_call_retries_every_retryable_status(status_code: int, mo
 
 
 @pytest.mark.anyio
-async def test_complete_call_rejects_bad_acknowledgement_as_safe_permanent_error() -> None:
+async def test_complete_call_rejects_bad_acknowledgement_as_safe_permanent_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(202, content=b'{"schema_version":1,"status":"accepted","queued":true,"job_id":"wrong"}'))) as http:
-        with pytest.raises(CallCompletionAcknowledgementError):
+        with caplog.at_level(logging.WARNING), pytest.raises(
+            CallCompletionAcknowledgementError
+        ) as caught:
             await AgentApiClient(base_url="http://api.test", http_client=http).complete_call(uuid4(), "token", _call_request())
+
+    assert "operation=complete_call" in caplog.text
+    assert "contract_name=CallCompletionAcknowledgement" in caplog.text
+    assert "code=correlation_mismatch" in caplog.text
+    assert "transport=http" in caplog.text
+    assert caught.value.__cause__ is None
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    "body",
+    ("body", "expected_code"),
     [
-        b"not-json",
-        b'["valid-json-non-object"]',
-        b'{"status":"accepted","queued":true,"job_id":"missing-version"}',
-        b'{"schema_version":2,"status":"accepted","queued":true,"job_id":"unsupported"}',
+        (b"not-json", "malformed_json"),
+        (b'["valid-json-non-object"]', "invalid_payload"),
+        (
+            b'{"status":"accepted","queued":true,"job_id":"missing-version"}',
+            "missing_schema_version",
+        ),
+        (
+            b'{"schema_version":2,"status":"accepted","queued":true,"job_id":"unsupported"}',
+            "unsupported_schema_version",
+        ),
     ],
 )
 async def test_complete_call_rejects_each_unsafe_acknowledgement_shape(
     body: bytes,
+    expected_code: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     async with httpx.AsyncClient(
@@ -320,6 +432,12 @@ async def test_complete_call_rejects_each_unsafe_acknowledgement_shape(
     assert "TOKEN_SENTINEL" not in combined
     assert "PATH_SENTINEL" not in combined
     assert body.decode() not in combined
+    assert str(FIXTURE_CALL_ID) not in caplog.text
+    assert "operation=complete_call" in caplog.text
+    assert "contract_name=CallCompletionAcknowledgement" in caplog.text
+    assert f"code={expected_code}" in caplog.text
+    assert "transport=http" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 @pytest.mark.anyio

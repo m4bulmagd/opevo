@@ -3,14 +3,22 @@ import logging
 from uuid import UUID, uuid4
 
 import pytest
+import httpx
 
-from agent.api_client import TranscriptAppendPermanentError
+import agent.session_runtime as session_runtime_module
+from agent.api_client import (
+    AgentApiClient,
+    TranscriptAppendPermanentError,
+)
 from presvo_contracts import (
+    AgentSessionEndedEvent,
     CallCompletionAcknowledgement,
     CallCompletionRequest,
+    ContractError,
     CustomerCallDispatch,
     TranscriptAppendAcknowledgement,
     TranscriptSegment,
+    TranscriptObservedEvent,
     create_contract,
     dump_contract,
 )
@@ -100,6 +108,40 @@ class PermanentlyFailingAppendClient(FakeApiClient):
         _item: TranscriptSegment,
     ) -> TranscriptAppendAcknowledgement:
         raise TranscriptAppendPermanentError("TRANSCRIPT_SENTINEL_FROM_APPEND")
+
+
+def _reject_contract(model_type: type, rejected_type: type):
+    if model_type is rejected_type:
+        try:
+            raise RuntimeError("CONTRACT_EXCEPTION_CHAIN_SENTINEL")
+        except RuntimeError as cause:
+            raise ContractError(model_type.__name__, "invalid_payload") from cause
+    return None
+
+
+def _assert_safe_contract_log(
+    caplog: pytest.LogCaptureFixture,
+    metadata: CustomerCallDispatch,
+    *,
+    operation: str,
+    contract_name: str,
+    code: str,
+    transport: str,
+    sentinels: tuple[str, ...] = (),
+) -> None:
+    assert f"operation={operation}" in caplog.text
+    assert f"contract_name={contract_name}" in caplog.text
+    assert f"code={code}" in caplog.text
+    assert f"transport={transport}" in caplog.text
+    for forbidden in (
+        str(metadata.call_id),
+        str(metadata.user_id),
+        metadata.dispatch_token,
+        "CONTRACT_EXCEPTION_CHAIN_SENTINEL",
+        *sentinels,
+    ):
+        assert forbidden not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 def make_metadata(**kwargs) -> CustomerCallDispatch:
@@ -215,6 +257,44 @@ async def test_agent_utterance_publish_failure_does_not_log_provider_error_conte
 
 
 @pytest.mark.anyio
+async def test_transcript_producer_contract_failure_logs_only_safe_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runtime = SessionRuntime(FakeEventPublisher())
+    metadata = make_metadata(dispatch_token="TRANSCRIPT_DISPATCH_TOKEN_SENTINEL")
+    original_create_contract = session_runtime_module.create_contract
+
+    def rejecting_create_contract(model_type, /, **values):
+        _reject_contract(model_type, TranscriptObservedEvent)
+        return original_create_contract(model_type, **values)
+
+    monkeypatch.setattr(
+        session_runtime_module,
+        "create_contract",
+        rejecting_create_contract,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        accepted = await runtime.handle_caller_transcript(
+            metadata,
+            "TRANSCRIPT_TEXT_SENTINEL",
+        )
+
+    assert accepted is True
+    assert runtime.transcript[0].text == "TRANSCRIPT_TEXT_SENTINEL"
+    _assert_safe_contract_log(
+        caplog,
+        metadata,
+        operation="publish_transcript_observed",
+        contract_name="TranscriptObservedEvent",
+        code="invalid_payload",
+        transport="redis",
+        sentinels=("TRANSCRIPT_TEXT_SENTINEL",),
+    )
+
+
+@pytest.mark.anyio
 async def test_complete_call_failure_does_not_log_api_error_content(caplog) -> None:
     runtime = SessionRuntime(
         FakeEventPublisher(), api_client=SecretBearingFailingApiClient()
@@ -226,6 +306,152 @@ async def test_complete_call_failure_does_not_log_api_error_content(caplog) -> N
 
     assert "AUTHORIZATION_SENTINEL_FROM_API_CLIENT" not in caplog.text
     assert str(metadata.call_id) in caplog.text
+
+
+@pytest.mark.anyio
+async def test_completion_producer_contract_failure_logs_only_safe_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    publisher = FakeEventPublisher()
+    api_client = FakeApiClient()
+    runtime = SessionRuntime(publisher, api_client=api_client)
+    metadata = make_metadata(dispatch_token="COMPLETION_TOKEN_SENTINEL")
+    original_create_contract = session_runtime_module.create_contract
+
+    def rejecting_create_contract(model_type, /, **values):
+        _reject_contract(model_type, CallCompletionRequest)
+        return original_create_contract(model_type, **values)
+
+    monkeypatch.setattr(
+        session_runtime_module,
+        "create_contract",
+        rejecting_create_contract,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await runtime.finalize(metadata, duration_seconds=60)
+
+    assert api_client.calls == []
+    assert any(event["type"] == "agent_session_ended" for event in publisher.events)
+    _assert_safe_contract_log(
+        caplog,
+        metadata,
+        operation="complete_call",
+        contract_name="CallCompletionRequest",
+        code="invalid_payload",
+        transport="http",
+    )
+
+
+@pytest.mark.anyio
+async def test_completion_acknowledgement_failure_logs_no_identifiers(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    call_id = uuid4()
+    completion_attempts = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal completion_attempts
+        completion_attempts += 1
+        return httpx.Response(
+            202,
+            json={
+                "schema_version": 1,
+                "status": "accepted",
+                "queued": True,
+                "job_id": "CALL_ACK_CORRELATION_SENTINEL",
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    ) as http_client:
+        publisher = FakeEventPublisher()
+        runtime = SessionRuntime(
+            publisher,
+            api_client=AgentApiClient(
+                base_url="http://api.test/PATH_SENTINEL",
+                http_client=http_client,
+            ),
+        )
+        metadata = make_metadata(
+            call_id=call_id,
+            dispatch_token="COMPLETION_ACK_TOKEN_SENTINEL",
+        )
+        with caplog.at_level(logging.WARNING):
+            await runtime.finalize(metadata, duration_seconds=60)
+            await runtime.finalize(metadata, duration_seconds=60)
+
+    assert completion_attempts == 2
+    assert len(
+        [event for event in publisher.events if event["type"] == "agent_session_ended"]
+    ) == 1
+    _assert_safe_contract_log(
+        caplog,
+        metadata,
+        operation="complete_call",
+        contract_name="CallCompletionAcknowledgement",
+        code="correlation_mismatch",
+        transport="http",
+        sentinels=("CALL_ACK_CORRELATION_SENTINEL", "PATH_SENTINEL"),
+    )
+
+
+@pytest.mark.anyio
+async def test_transcript_acknowledgement_failure_keeps_recovery_and_requests_shutdown(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    shutdown_reasons: list[str] = []
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "schema_version": 1,
+                "status": "stored",
+                "sequence_number": 2,
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    ) as http_client:
+        runtime = SessionRuntime(
+            FakeEventPublisher(),
+            api_client=AgentApiClient(
+                base_url="http://api.test/PATH_SENTINEL",
+                http_client=http_client,
+            ),
+            fatal_shutdown=shutdown_reasons.append,
+        )
+        metadata = make_metadata(
+            dispatch_token="TRANSCRIPT_ACK_TOKEN_SENTINEL",
+        )
+        with caplog.at_level(logging.WARNING):
+            await runtime.handle_caller_transcript(
+                metadata,
+                "TRANSCRIPT_ACK_TEXT_SENTINEL",
+            )
+            for _ in range(100):
+                if shutdown_reasons:
+                    break
+                await asyncio.sleep(0)
+
+    assert shutdown_reasons == ["transcript_append_permanent_failure"]
+    assert [item.sequence_number for item in runtime.pending_transcript] == [1]
+    _assert_safe_contract_log(
+        caplog,
+        metadata,
+        operation="append_transcript",
+        contract_name="TranscriptAppendAcknowledgement",
+        code="correlation_mismatch",
+        transport="http",
+        sentinels=(
+            "PATH_SENTINEL",
+            "TRANSCRIPT_ACK_TEXT_SENTINEL",
+        ),
+    )
 
 
 @pytest.mark.anyio
@@ -258,6 +484,39 @@ async def test_agent_session_ended_publish_failure_does_not_log_provider_error_c
 
     assert "TRANSCRIPT_SENTINEL_FROM_PROVIDER_ERROR" not in caplog.text
     assert str(metadata.call_id) in caplog.text
+
+
+@pytest.mark.anyio
+async def test_session_ended_producer_contract_failure_logs_only_safe_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    publisher = FakeEventPublisher()
+    runtime = SessionRuntime(publisher)
+    metadata = make_metadata(dispatch_token="SESSION_ENDED_TOKEN_SENTINEL")
+    original_create_contract = session_runtime_module.create_contract
+
+    def rejecting_create_contract(model_type, /, **values):
+        _reject_contract(model_type, AgentSessionEndedEvent)
+        return original_create_contract(model_type, **values)
+
+    monkeypatch.setattr(
+        session_runtime_module,
+        "create_contract",
+        rejecting_create_contract,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await runtime.finalize(metadata, duration_seconds=60)
+
+    _assert_safe_contract_log(
+        caplog,
+        metadata,
+        operation="publish_agent_session_ended",
+        contract_name="AgentSessionEndedEvent",
+        code="invalid_payload",
+        transport="redis",
+    )
 
 
 # T4-5: handle_agent_utterance deduplication — same utterance twice should only append once
