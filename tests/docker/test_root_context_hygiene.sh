@@ -14,6 +14,10 @@ fixture_identity=""
 fixture_marker=""
 output_identity=""
 output_marker=""
+repo_quarantine_directory=""
+repo_quarantine_identity=""
+output_quarantine_directory=""
+output_quarantine_identity=""
 
 path_identity() {
   stat -c '%d:%i:%f' -- "$1"
@@ -31,23 +35,91 @@ promote_cleanup_failure() {
   fi
 }
 
+create_quarantine_directory() {
+  local scope=$1
+  local directory=""
+  local identity=""
+  case "$scope" in
+    repository)
+      if [ -n "$repo_quarantine_directory" ]; then
+        return 0
+      fi
+      if ! directory=$(mktemp -d \
+        "$repository_root/tests/docker/.root-context-cleanup.XXXXXX"); then
+        printf 'failed to create repository cleanup quarantine.\n' >&2
+        promote_cleanup_failure
+        return 1
+      fi
+      if ! identity=$(path_identity "$directory"); then
+        printf 'failed to identify repository cleanup quarantine %s.\n' \
+          "$directory" >&2
+        rmdir -- "$directory" 2>/dev/null || true
+        promote_cleanup_failure
+        return 1
+      fi
+      repo_quarantine_directory=$directory
+      repo_quarantine_identity=$identity
+      ;;
+    output)
+      if [ -n "$output_quarantine_directory" ]; then
+        return 0
+      fi
+      if ! directory=$(mktemp -d \
+        /tmp/presvo-contract-context-cleanup.XXXXXX); then
+        printf 'failed to create output cleanup quarantine.\n' >&2
+        promote_cleanup_failure
+        return 1
+      fi
+      if ! identity=$(path_identity "$directory"); then
+        printf 'failed to identify output cleanup quarantine %s.\n' \
+          "$directory" >&2
+        rmdir -- "$directory" 2>/dev/null || true
+        promote_cleanup_failure
+        return 1
+      fi
+      output_quarantine_directory=$directory
+      output_quarantine_identity=$identity
+      ;;
+  esac
+}
+
+restore_unexpected_object() {
+  local path=$1
+  local quarantine_path=$2
+  if mv -T -n -- "$quarantine_path" "$path" &&
+    [ ! -e "$quarantine_path" ] && [ ! -L "$quarantine_path" ]; then
+    printf '%s ownership changed after quarantine; restored unexpected object without deleting it.\n' \
+      "$path" >&2
+  else
+    printf '%s ownership changed after quarantine; unexpected object retained at %s; refusing deletion.\n' \
+      "$path" "$quarantine_path" >&2
+  fi
+  promote_cleanup_failure
+}
+
 cleanup_owned_file() {
   local path=$1
   local expected_identity=$2
   local expected_marker=$3
+  local quarantine_path="$repo_quarantine_directory/sentinel"
   local current_identity=""
-  if [ -f "$path" ] && [ ! -L "$path" ] &&
-    current_identity=$(path_identity "$path") &&
+  if ! mv -T -- "$path" "$quarantine_path"; then
+    printf 'failed to quarantine owned file %s; refusing deletion.\n' \
+      "$path" >&2
+    promote_cleanup_failure
+    return
+  fi
+  if [ -f "$quarantine_path" ] && [ ! -L "$quarantine_path" ] &&
+    current_identity=$(path_identity "$quarantine_path") &&
     [ "$current_identity" = "$expected_identity" ] &&
-    grep -Fxq "$expected_marker" "$path"; then
-    if ! rm -- "$path"; then
-      printf 'failed to remove owned file %s.\n' "$path" >&2
+    grep -Fxq "$expected_marker" "$quarantine_path"; then
+    if ! rm -- "$quarantine_path"; then
+      printf 'failed to remove owned quarantined file %s.\n' \
+        "$quarantine_path" >&2
       promote_cleanup_failure
     fi
   else
-    printf '%s ownership changed before cleanup; refusing to remove it.\n' \
-      "$path" >&2
-    promote_cleanup_failure
+    restore_unexpected_object "$path" "$quarantine_path"
   fi
 }
 
@@ -55,19 +127,49 @@ cleanup_owned_directory() {
   local path=$1
   local expected_identity=$2
   local expected_marker=$3
+  local quarantine_directory=$4
+  local quarantine_name=$5
+  local quarantine_path="$quarantine_directory/$quarantine_name"
   local current_identity=""
-  local marker_path="$path/.env.contract-context-owner"
-  if [ -d "$path" ] && [ ! -L "$path" ] &&
-    current_identity=$(path_identity "$path") &&
+  local marker_path="$quarantine_path/.env.contract-context-owner"
+  if ! mv -T -- "$path" "$quarantine_path"; then
+    printf 'failed to quarantine owned directory %s; refusing recursive deletion.\n' \
+      "$path" >&2
+    promote_cleanup_failure
+    return
+  fi
+  if [ -d "$quarantine_path" ] && [ ! -L "$quarantine_path" ] &&
+    current_identity=$(path_identity "$quarantine_path") &&
     [ "$current_identity" = "$expected_identity" ] &&
     [ -f "$marker_path" ] && [ ! -L "$marker_path" ] &&
     grep -Fxq "$expected_marker" "$marker_path"; then
-    if ! rm -rf -- "$path"; then
-      printf 'failed to remove owned directory %s.\n' "$path" >&2
+    if ! rm -rf -- "$quarantine_path"; then
+      printf 'failed to remove owned quarantined directory %s.\n' \
+        "$quarantine_path" >&2
       promote_cleanup_failure
     fi
   else
-    printf '%s ownership changed before cleanup; refusing to remove it.\n' \
+    restore_unexpected_object "$path" "$quarantine_path"
+  fi
+}
+
+cleanup_quarantine_directory() {
+  local path=$1
+  local expected_identity=$2
+  if [ -z "$path" ]; then
+    return
+  fi
+  local current_identity=""
+  if [ -d "$path" ] && [ ! -L "$path" ] &&
+    current_identity=$(path_identity "$path") &&
+    [ "$current_identity" = "$expected_identity" ]; then
+    if ! rmdir -- "$path"; then
+      printf 'cleanup quarantine retained because it is not empty: %s.\n' \
+        "$path" >&2
+      promote_cleanup_failure
+    fi
+  else
+    printf 'cleanup quarantine ownership changed; retained without recursive deletion: %s.\n' \
       "$path" >&2
     promote_cleanup_failure
   fi
@@ -79,16 +181,35 @@ cleanup() {
   trap - EXIT
 
   if [ "$sentinel_created" = true ]; then
-    cleanup_owned_file "$sentinel_path" "$sentinel_identity" "$sentinel_marker"
+    if create_quarantine_directory repository; then
+      cleanup_owned_file \
+        "$sentinel_path" "$sentinel_identity" "$sentinel_marker"
+    fi
   fi
   if [ -n "$fixture_directory" ]; then
-    cleanup_owned_directory \
-      "$fixture_directory" "$fixture_identity" "$fixture_marker"
+    if create_quarantine_directory repository; then
+      cleanup_owned_directory \
+        "$fixture_directory" \
+        "$fixture_identity" \
+        "$fixture_marker" \
+        "$repo_quarantine_directory" \
+        fixture
+    fi
   fi
   if [ -n "$output_directory" ]; then
-    cleanup_owned_directory \
-      "$output_directory" "$output_identity" "$output_marker"
+    if create_quarantine_directory output; then
+      cleanup_owned_directory \
+        "$output_directory" \
+        "$output_identity" \
+        "$output_marker" \
+        "$output_quarantine_directory" \
+        output
+    fi
   fi
+  cleanup_quarantine_directory \
+    "$repo_quarantine_directory" "$repo_quarantine_identity"
+  cleanup_quarantine_directory \
+    "$output_quarantine_directory" "$output_quarantine_identity"
 
   exit "$cleanup_status"
 }
