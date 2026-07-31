@@ -955,6 +955,12 @@ Validate the dispatch token against the call row, normalize the speaker enum and
 
 Completion synchronously merges the sequence-bearing recovery items and commits before it looks up Redis. A queue outage returns `503` only after recovery is durable. The finalization service idempotently supports legacy worker payloads, loads every ordered `CallMessage`, and supplies that full transcript to summary generation before completing the call. The obsolete transcript flush worker delegates to the same idempotent repository semantics.
 
+> **Current state (2026-07-31):** This paragraph records the implementation
+> plan at the time. HTTP append and synchronous completion recovery subsequently
+> became the only production transcript-ingress paths. Because the obsolete
+> `transcript_flush_job` had no production enqueuer, its ARQ registration and
+> module were removed instead of preserving a second compatibility boundary.
+
 - [ ] **Step 5: Implement the bounded agent flusher**
 
 Use one owned background task per call, a maximum deque of 200 unacknowledged items, sequential head-only delivery, and exponential retry capped at 10 seconds. Never block audio callbacks on the HTTP request. Queue overflow fails closed and requests LiveKit job shutdown without dropping either an old or new segment silently.

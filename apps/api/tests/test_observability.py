@@ -1472,14 +1472,14 @@ async def test_instrumented_job_records_queue_delay_duration_and_no_job_id() -> 
 
 
 @pytest.mark.anyio
-async def test_transcript_job_extracts_only_valid_call_reference_for_trace() -> None:
+async def test_call_finalization_instrumentation_extracts_only_valid_call_reference() -> None:
     from app.core.observability import instrument_job
 
     tracer = _Tracer()
     telemetry = _observability(tracer=tracer)
     call_id = str(uuid4())
 
-    @instrument_job("transcript_flush")
+    @instrument_job("call_finalization")
     async def job(_ctx: dict, payload: dict) -> str:
         return payload["call_id"]
 
@@ -1487,9 +1487,11 @@ async def test_transcript_job_extracts_only_valid_call_reference_for_trace() -> 
         {"observability": telemetry},
         {
             "call_id": call_id,
-            "transcript": [
-                {"speaker": "CALLER", "text": "PRIVATE_TRANSCRIPT_SENTINEL"}
-            ],
+            "unexpected": {
+                "transcript": [
+                    {"speaker": "CALLER", "text": "PRIVATE_TRANSCRIPT_SENTINEL"}
+                ]
+            },
         },
     )
 

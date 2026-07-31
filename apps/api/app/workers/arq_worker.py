@@ -16,7 +16,6 @@ from app.workers.jobs.outbox_delivery import (
     outbox_delivery_job,
     outbox_reconciliation_job,
 )
-from app.workers.jobs.transcript_flush import transcript_flush_job
 from app.workers.jobs.verification_expiry import verification_expiry_job
 
 
@@ -40,9 +39,6 @@ async def on_shutdown(ctx: dict) -> None:
 observed_call_finalization_job = instrument_job("call_finalization")(
     call_finalization_job
 )
-observed_transcript_flush_job = instrument_job("transcript_flush")(
-    transcript_flush_job
-)
 observed_outbox_delivery_job = instrument_job("outbox_delivery")(
     outbox_delivery_job
 )
@@ -63,7 +59,6 @@ class WorkerSettings:
     on_shutdown = on_shutdown
     functions = [
         observed_call_finalization_job,
-        observed_transcript_flush_job,
         observed_outbox_delivery_job,
         observed_call_reconciliation_job,
     ]

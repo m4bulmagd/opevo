@@ -74,7 +74,6 @@ _WEBHOOK_OUTCOMES = frozenset({"accepted", "duplicate", "rejected", "error"})
 _JOB_NAMES = frozenset(
     {
         "call_finalization",
-        "transcript_flush",
         "outbox_delivery",
         "outbox_reconciliation",
         "call_reconciliation",

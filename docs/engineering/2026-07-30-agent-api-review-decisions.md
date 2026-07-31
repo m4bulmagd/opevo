@@ -262,32 +262,40 @@ a broader acceptance boundary than intended.
 
 ### Concrete problem and evidence
 
-- `apps/api/app/workers/arq_worker.py:60-86` registers call finalization,
-  transcript flushing, outbox delivery, and reconciliation in one worker
-  configuration and queue.
+- At review time, `apps/api/app/workers/arq_worker.py:60-86` registered call
+  finalization, transcript flushing, outbox delivery, and reconciliation in one
+  worker configuration and queue.
 - The worker does not declare workload-specific concurrency caps, queue classes,
   or explicit job timeout policy at that boundary.
 - `apps/api/app/workers/jobs/outbox_delivery.py:139-231` loops through provider
   work and awaits handlers serially; provider latency can occupy capacity needed
   by call-lifecycle work.
 
+**Current-state annotation (2026-07-31):** HTTP transcript append plus
+completion recovery superseded the obsolete `transcript_flush_job`. No
+production enqueue site existed, so the ARQ entry point was removed rather than
+carried into a future queue split. Transcript durability is now an HTTP/database
+boundary; the remaining worker split concerns call finalization and lifecycle
+reconciliation versus provider/outbox work.
+
 A slow storage, telephony, billing, or LiveKit provider can create
-head-of-line blocking for transcript durability or call finalization. The
+head-of-line blocking for call finalization or lifecycle reconciliation. The
 single queue is also a deployment-level single failure and scaling domain.
 
 ### Options and tradeoffs
 
 | Option | Effort | Risk | Impact on other code | Ongoing maintenance |
 |---|---:|---:|---|---|
-| **4A — Selected and recommended:** split critical call-lifecycle/transcript work from background provider/outbox/reconciliation work | Medium–high | Routing and deployment mistakes during migration | Job routing, worker settings, compose/deployment manifests, operations | Medium; two explicit scaling domains |
+| **4A — Selected and recommended:** split critical call-lifecycle work from background provider/outbox/reconciliation work; keep transcript durability on HTTP/database paths | Medium–high | Routing and deployment mistakes during migration | Job routing, worker settings, compose/deployment manifests, operations | Medium; two explicit scaling domains |
 | **4B — Also selected:** add per-class concurrency, timeout, graceful-shutdown, metrics, and measured load thresholds | Medium | Incorrect guessed limits if not load-tested | Job definitions, telemetry, dashboards, alerts, deployment settings | Medium; limits must be revisited with traffic |
 | **4C:** keep one unbounded workload class | None | High noisy-neighbor and incident blast-radius risk | None | Low code burden; high operational burden |
 
 ### Recorded decision and proposed solution — 4A + 4B
 
 1. Define two explicit worker classes:
-   - **Critical:** transcript persistence/recovery, call finalization, and
-     lifecycle reconciliation required to make a call durably correct.
+   - **Critical:** call finalization and lifecycle reconciliation required to
+     make a call durably correct. Transcript persistence/recovery remains on the
+     synchronous HTTP/database path and is not an ARQ workload.
    - **Background:** external-provider delivery, recording/summary work, and
      non-urgent reconciliation.
 2. Route jobs explicitly; do not infer the queue from string conventions alone.
@@ -302,8 +310,8 @@ single queue is also a deployment-level single failure and scaling domain.
 
 ### Required validation
 
-- A slow/failing background provider cannot delay critical transcript and
-  finalization jobs beyond the agreed SLO.
+- A slow/failing background provider cannot delay critical finalization and
+  lifecycle-reconciliation jobs beyond the agreed SLO.
 - Duplicate delivery, process death after provider success, process death before
   commit, retry exhaustion, poison jobs, and graceful shutdown.
 - Deployment rollback while both old and new workers may temporarily coexist.
