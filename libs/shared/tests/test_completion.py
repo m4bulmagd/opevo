@@ -2,7 +2,13 @@ from uuid import UUID
 
 import pytest
 
-from presvo_contracts import ContractError, create_contract, dump_contract, parse_contract
+from presvo_contracts import (
+    CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS,
+    ContractError,
+    create_contract,
+    dump_contract,
+    parse_contract,
+)
 from presvo_contracts.completion import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
@@ -34,7 +40,7 @@ def test_call_completion_rejects_negative_or_coerced_durations(value: object) ->
     assert caught.value.code == "invalid_payload"
 
 
-@pytest.mark.parametrize("size", [0, 2_000])
+@pytest.mark.parametrize("size", [0, CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS])
 def test_call_completion_accepts_transcript_size_boundaries(size: int) -> None:
     transcript = [valid_segment(index + 1) for index in range(size)]
     completion = parse_contract(
@@ -44,10 +50,24 @@ def test_call_completion_accepts_transcript_size_boundaries(size: int) -> None:
 
 
 def test_call_completion_rejects_too_many_transcript_segments() -> None:
-    transcript = [valid_segment(index + 1) for index in range(2_001)]
+    transcript = [
+        valid_segment(index + 1)
+        for index in range(CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS + 1)
+    ]
     with pytest.raises(ContractError) as caught:
         parse_contract(CallCompletionRequest, {**valid_call_completion(), "transcript": transcript})
     assert caught.value.code == "invalid_payload"
+
+
+def test_call_completion_transcript_bound_is_exported_in_model_metadata() -> None:
+    metadata = CallCompletionRequest.model_fields["transcript"].metadata
+    max_length = next(
+        constraint.max_length
+        for constraint in metadata
+        if hasattr(constraint, "max_length")
+    )
+
+    assert max_length == CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS
 
 
 def test_call_completion_rejects_invalid_nested_transcript_segment() -> None:

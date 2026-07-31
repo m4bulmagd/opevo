@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from presvo_contracts import (
+    CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS,
     CallCompletionRequest,
     CustomerCallDispatch,
     AgentSessionEndedEvent,
@@ -28,7 +29,6 @@ from agent.event_publisher import EventPublisher
 logger = logging.getLogger(__name__)
 
 MAX_PENDING_TRANSCRIPT_ITEMS = 200
-MAX_TRANSCRIPT_ITEMS = 2000
 DEFAULT_FINALIZE_TIMEOUT_SECONDS = 5.0
 DEFAULT_CALL_LIMIT_CLEANUP_TIMEOUT_SECONDS = 0.01
 MAX_RETRY_DELAY_SECONDS = 10
@@ -364,7 +364,7 @@ class SessionRuntime:
         if not self._accepting_current_task():
             return None
 
-        if len(self.transcript) >= MAX_TRANSCRIPT_ITEMS:
+        if len(self.transcript) >= CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS:
             self._request_fatal_shutdown("transcript_history_overflow")
             raise TranscriptBufferOverflow("transcript compatibility history is full")
 

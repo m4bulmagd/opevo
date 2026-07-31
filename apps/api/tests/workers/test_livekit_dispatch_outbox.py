@@ -15,10 +15,19 @@ from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
-from presvo_contracts import AGENT_NAME_MAX_LENGTH, dump_contract, parse_dispatch
+from presvo_contracts import (
+    AGENT_NAME_MAX_LENGTH,
+    CustomerCallDispatch,
+    ForwardingVerificationDispatch,
+    create_contract,
+    dump_contract,
+    dump_contract_json,
+    parse_dispatch,
+)
 from app.services.outbox_service import OutboxService
 from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
+from app.workers.jobs import outbox_topics
 from app.workers.jobs.outbox_topics import deliver_livekit_dispatch
 
 
@@ -79,6 +88,121 @@ class _ForeignCreateProvider(_Provider):
             metadata=json.dumps({"call_id": "00000000-0000-0000-0000-000000000001"}),
             state="active",
         )
+
+
+def _reconciliation_snapshot(*, persisted_dispatch_id: str | None = None):
+    call_id = UUID("00000000-0000-0000-0000-000000000011")
+    return outbox_topics._DispatchSnapshot(
+        call_id=call_id,
+        user_id=UUID("00000000-0000-0000-0000-000000000012"),
+        agent_config_id=UUID("00000000-0000-0000-0000-000000000013"),
+        room_name="reconciliation-room",
+        worker_name="reconciliation-worker",
+        metadata="",
+        persisted_dispatch_id=persisted_dispatch_id,
+    )
+
+
+def _customer_reconciliation_metadata(snapshot) -> dict[str, object]:
+    return dump_contract(
+        create_contract(
+            CustomerCallDispatch,
+            job_type="customer_call",
+            call_id=snapshot.call_id,
+            user_id=snapshot.user_id,
+            agent_config_id=snapshot.agent_config_id,
+            agent_identity=f"agent-call-{snapshot.call_id}",
+            agent_name="Ava",
+            owner_name="Owner",
+            owner_context=None,
+            system_prompt="Be helpful.",
+            knowledge_base="Hours",
+            pipeline_mode="stt_llm_tts",
+            minutes_remaining=1,
+            allowed_duration_seconds=60,
+            dispatch_token="private-token",
+        )
+    )
+
+
+def _customer_reconciliation_dispatch(
+    snapshot,
+    metadata: str,
+    *,
+    dispatch_id: str = "reconciled-dispatch",
+) -> LiveKitDispatch:
+    return LiveKitDispatch(
+        id=dispatch_id,
+        agent_name=snapshot.worker_name,
+        room=snapshot.room_name,
+        metadata=metadata,
+        state="active",
+    )
+
+
+def test_customer_reconciliation_requires_a_valid_matching_customer_contract() -> None:
+    snapshot = _reconciliation_snapshot()
+    valid = _customer_reconciliation_metadata(snapshot)
+    wrong_variant = dump_contract_json(
+        create_contract(
+            ForwardingVerificationDispatch,
+            job_type="forwarding_verification",
+            verification_session_id=UUID("00000000-0000-0000-0000-000000000014"),
+            user_id=snapshot.user_id,
+            agent_identity="agent-verification-test",
+            completion_token="private-token",
+            message="Forwarding test successful. Return to Presvo to go live.",
+            tts_provider="speechmatics",
+        )
+    )
+    invalid_metadata = {
+        "malformed": "not-json",
+        "unsupported_version": json.dumps(valid | {"schema_version": 2}),
+        "wrong_variant": wrong_variant,
+        "bad_uuid": json.dumps(valid | {"call_id": "not-a-uuid"}),
+        "mismatched_uuid": json.dumps(
+            valid | {"call_id": "00000000-0000-0000-0000-000000000015"}
+        ),
+        "mismatched_user_id": json.dumps(
+            valid | {"user_id": "00000000-0000-0000-0000-000000000016"}
+        ),
+        "mismatched_agent_config_id": json.dumps(
+            valid | {"agent_config_id": "00000000-0000-0000-0000-000000000017"}
+        ),
+    }
+
+    reconciled = outbox_topics._reconcile_dispatches(
+        snapshot,
+        [_customer_reconciliation_dispatch(snapshot, json.dumps(valid))],
+    )
+
+    assert reconciled is not None
+    assert reconciled.id == "reconciled-dispatch"
+    for metadata in invalid_metadata.values():
+        with pytest.raises(OutboxDeliveryError) as caught:
+            outbox_topics._reconcile_dispatches(
+                snapshot,
+                [_customer_reconciliation_dispatch(snapshot, metadata)],
+            )
+        assert caught.value.error_code == "dispatch_conflict"
+        assert caught.value.retryable is False
+
+
+def test_customer_reconciliation_rejects_mismatched_persisted_identity() -> None:
+    snapshot = _reconciliation_snapshot(persisted_dispatch_id="persisted-other")
+    with pytest.raises(OutboxDeliveryError) as caught:
+        outbox_topics._reconcile_dispatches(
+            snapshot,
+            [
+                _customer_reconciliation_dispatch(
+                    snapshot,
+                    json.dumps(_customer_reconciliation_metadata(snapshot)),
+                )
+            ],
+        )
+
+    assert caught.value.error_code == "dispatch_conflict"
+    assert caught.value.retryable is False
 
 
 async def _seed_dispatch(

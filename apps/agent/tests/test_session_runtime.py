@@ -7,6 +7,7 @@ from uuid import uuid4
 from agent.api_client import TranscriptAppendRetryableError
 from agent.event_publisher import EventPublisher
 from presvo_contracts import (
+    CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS,
     CallCompletionAcknowledgement,
     CallCompletionRequest,
     CustomerCallDispatch,
@@ -18,7 +19,6 @@ from presvo_contracts import (
 )
 
 from agent.session_runtime import (
-    MAX_TRANSCRIPT_ITEMS,
     SessionRuntime,
     TranscriptBufferOverflow,
 )
@@ -537,7 +537,7 @@ async def test_failed_completion_ack_retains_recovery_and_second_finalize_retrie
 
 @pytest.mark.anyio
 async def test_compatibility_transcript_is_bounded_without_dropping_old_items() -> None:
-    assert MAX_TRANSCRIPT_ITEMS == 2000
+    assert CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS == 2_000
     shutdown_reasons: list[str] = []
     api_client = FakeApiClient()
     runtime = SessionRuntime(
@@ -547,16 +547,18 @@ async def test_compatibility_transcript_is_bounded_without_dropping_old_items() 
     )
     metadata = make_metadata()
 
-    for sequence in range(1, MAX_TRANSCRIPT_ITEMS + 1):
+    for sequence in range(1, CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS + 1):
         await runtime.handle_caller_transcript(metadata, f"segment {sequence}")
         await wait_until(lambda: not runtime.pending_transcript)
 
     with pytest.raises(TranscriptBufferOverflow):
         await runtime.handle_caller_transcript(metadata, "one too many")
 
-    assert len(runtime.transcript) == MAX_TRANSCRIPT_ITEMS
+    assert len(runtime.transcript) == CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS
     assert runtime.transcript[0].text == "segment 1"
-    assert runtime.transcript[-1].text == f"segment {MAX_TRANSCRIPT_ITEMS}"
+    assert runtime.transcript[-1].text == (
+        f"segment {CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS}"
+    )
     assert shutdown_reasons == ["transcript_history_overflow"]
 
     await runtime.finalize(metadata, duration_seconds=1)

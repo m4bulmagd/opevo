@@ -6,9 +6,11 @@ import pytest
 from presvo_contracts import (
     VERIFICATION_MESSAGE,
     ContractError,
+    CustomerCallDispatch,
     ForwardingVerificationDispatch,
     create_contract,
     dump_contract,
+    dump_contract_json,
     parse_dispatch,
 )
 from sqlalchemy import func, select
@@ -35,6 +37,118 @@ def _handler():
     handler = getattr(outbox_topics, "deliver_livekit_verification_dispatch", None)
     assert handler is not None, "verification dispatch handler is missing"
     return handler
+
+
+def _reconciliation_snapshot(*, persisted_dispatch_id: str | None = None):
+    return outbox_topics._VerificationDispatchSnapshot(
+        activation_id=UUID("00000000-0000-0000-0000-000000000021"),
+        user_id=UUID("00000000-0000-0000-0000-000000000022"),
+        session_id="00000000-0000-0000-0000-000000000023",
+        room_name="verification-reconciliation-room",
+        worker_name="verification-reconciliation-worker",
+        metadata="",
+        persisted_dispatch_id=persisted_dispatch_id,
+    )
+
+
+def _verification_reconciliation_metadata(snapshot) -> dict[str, object]:
+    return dump_contract(
+        create_contract(
+            ForwardingVerificationDispatch,
+            job_type="forwarding_verification",
+            verification_session_id=UUID(snapshot.session_id),
+            user_id=snapshot.user_id,
+            agent_identity=f"agent-verification-{snapshot.session_id}",
+            completion_token="private-token",
+            message=SUCCESS_MESSAGE,
+            tts_provider="speechmatics",
+        )
+    )
+
+
+def _verification_reconciliation_dispatch(
+    snapshot,
+    metadata: str,
+    *,
+    dispatch_id: str = "reconciled-verification-dispatch",
+) -> LiveKitDispatch:
+    return LiveKitDispatch(
+        id=dispatch_id,
+        agent_name=snapshot.worker_name,
+        room=snapshot.room_name,
+        metadata=metadata,
+        state="active",
+    )
+
+
+def test_verification_reconciliation_requires_a_valid_matching_verification_contract() -> None:
+    snapshot = _reconciliation_snapshot()
+    valid = _verification_reconciliation_metadata(snapshot)
+    wrong_variant = dump_contract_json(
+        create_contract(
+            CustomerCallDispatch,
+            job_type="customer_call",
+            call_id=UUID("00000000-0000-0000-0000-000000000024"),
+            user_id=snapshot.user_id,
+            agent_config_id=UUID("00000000-0000-0000-0000-000000000025"),
+            agent_identity="agent-call-test",
+            agent_name="Ava",
+            owner_name="Owner",
+            owner_context=None,
+            system_prompt="Be helpful.",
+            knowledge_base="Hours",
+            pipeline_mode="stt_llm_tts",
+            minutes_remaining=1,
+            allowed_duration_seconds=60,
+            dispatch_token="private-token",
+        )
+    )
+    invalid_metadata = {
+        "malformed": "not-json",
+        "unsupported_version": json.dumps(valid | {"schema_version": 2}),
+        "wrong_variant": wrong_variant,
+        "bad_uuid": json.dumps(valid | {"verification_session_id": "not-a-uuid"}),
+        "mismatched_uuid": json.dumps(
+            valid
+            | {"verification_session_id": "00000000-0000-0000-0000-000000000026"}
+        ),
+        "mismatched_user_id": json.dumps(
+            valid | {"user_id": "00000000-0000-0000-0000-000000000027"}
+        ),
+    }
+
+    reconciled = outbox_topics._reconcile_verification_dispatches(
+        snapshot,
+        [_verification_reconciliation_dispatch(snapshot, json.dumps(valid))],
+    )
+
+    assert reconciled is not None
+    assert reconciled.id == "reconciled-verification-dispatch"
+    for metadata in invalid_metadata.values():
+        with pytest.raises(OutboxDeliveryError) as caught:
+            outbox_topics._reconcile_verification_dispatches(
+                snapshot,
+                [_verification_reconciliation_dispatch(snapshot, metadata)],
+            )
+        assert caught.value.error_code == "dispatch_conflict"
+        assert caught.value.retryable is False
+
+
+def test_verification_reconciliation_rejects_mismatched_persisted_identity() -> None:
+    snapshot = _reconciliation_snapshot(persisted_dispatch_id="persisted-other")
+    with pytest.raises(OutboxDeliveryError) as caught:
+        outbox_topics._reconcile_verification_dispatches(
+            snapshot,
+            [
+                _verification_reconciliation_dispatch(
+                    snapshot,
+                    json.dumps(_verification_reconciliation_metadata(snapshot)),
+                )
+            ],
+        )
+
+    assert caught.value.error_code == "dispatch_conflict"
+    assert caught.value.retryable is False
 
 
 class _Provider:
@@ -258,7 +372,7 @@ async def test_handler_creates_exact_verification_job_and_persists_identity(
 
 @pytest.mark.anyio
 async def test_matching_provider_dispatch_reconciles_without_create(db_session) -> None:
-    _user, activation, event = await _seed_verification_dispatch(db_session)
+    user, activation, event = await _seed_verification_dispatch(db_session)
     activation_id = activation.id
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     provider = _Provider()
@@ -267,11 +381,19 @@ async def test_matching_provider_dispatch_reconciles_without_create(db_session) 
             id="verification-existing",
             agent_name="ai-call-agent",
             room="verification-dispatch-room",
-            metadata=json.dumps(
-                {
-                    "job_type": "forwarding_verification",
-                    "verification_session_id": activation.verification_session_id,
-                }
+            metadata=dump_contract_json(
+                create_contract(
+                    ForwardingVerificationDispatch,
+                    job_type="forwarding_verification",
+                    verification_session_id=UUID(activation.verification_session_id),
+                    user_id=user.id,
+                    agent_identity=(
+                        f"agent-verification-{activation.verification_session_id}"
+                    ),
+                    completion_token="private-token",
+                    message=SUCCESS_MESSAGE,
+                    tts_provider="speechmatics",
+                )
             ),
             state="active",
         )

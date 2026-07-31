@@ -29,26 +29,26 @@ claim a final full API suite, coverage-gate, deployment, or realtime-enablement
 result; those remain separate verification and rollout work. Realtime remains
 disabled, and accepted risks 11C and 12C remain unchanged.
 
-## Context
+## Pre-implementation context
 
-The review decision record identifies these concrete problems:
+At approval time, the review decision record identified these concrete
+problems:
 
-- `apps/agent/agent/schemas.py` independently defines dispatch, transcript, and
-  completion payloads.
+- `apps/agent/agent/schemas.py` independently defined dispatch, transcript,
+  and completion payloads.
 - `apps/api/app/schemas/livekit.py`,
   `apps/api/app/schemas/agent_runtime.py`, and
-  `apps/api/app/schemas/calls.py` define overlapping payloads.
-- The realtime Redis channel prefix is repeated in the API, agent, and
+  `apps/api/app/schemas/calls.py` defined overlapping payloads.
+- The realtime Redis channel prefix was repeated in the API, agent, and
   `libs/shared`.
-- `libs/shared/test_contract.py` compares source text rather than serialized
+- `libs/shared/test_contract.py` compared source text rather than serialized
   behavior.
-- API and agent acknowledgements are validated through repeated dictionary
+- API and agent acknowledgements were validated through repeated dictionary
   inspection.
-- Two different payload shapes currently use the same `call_ended` realtime
-  event name.
+- Two different payload shapes used the same `call_ended` realtime event name.
 
-These are deployment seams. A producer can currently emit JSON that a consumer
-cannot parse even though the repository's source-text test remains green.
+These were deployment seams: a producer could emit JSON that a consumer could
+not parse even though the repository's source-text test remained green.
 
 ## Confirmed Product and Delivery Constraints
 

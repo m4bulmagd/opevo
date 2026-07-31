@@ -18,6 +18,7 @@ from .dispatch import (
     parse_dispatch,
 )
 from .completion import (
+    CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS,
     CallCompletionAcknowledgement,
     CallCompletionRequest,
     VerificationCompletionAcknowledgement,
@@ -63,6 +64,7 @@ __all__ = [
     "KNOWLEDGE_BASE_MAX_LENGTH",
     "VERIFICATION_MESSAGE",
     "TRANSCRIPT_TEXT_MAX_LENGTH",
+    "CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS",
     "REALTIME_CHANNEL_PREFIX",
     "AgentName",
     "OwnerName",

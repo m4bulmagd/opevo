@@ -65,10 +65,27 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check src tests
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy src
 ```
 
-The API and agent remain independent uv projects. Refresh **both** application
-lockfiles when the shared package's dependency graph changes (for example, a
-shared runtime dependency is added, removed, or constrained differently). A
-shared source-only change does not require lockfile churn. Local uv installs
+The shared package, API, and agent are three independent uv projects. Refresh
+**all three** lockfiles when the shared package's dependency graph changes (for
+example, a shared runtime dependency is added, removed, or constrained
+differently):
+
+```bash
+cd libs/shared
+UV_CACHE_DIR=/tmp/uv-cache uv lock
+```
+
+```bash
+cd apps/api
+UV_CACHE_DIR=/tmp/uv-cache uv lock
+```
+
+```bash
+cd apps/agent
+UV_CACHE_DIR=/tmp/uv-cache uv lock
+```
+
+A shared source-only change does not require lockfile churn. Local uv installs
 may use the editable path dependency for fast iteration; production images use
 `uv sync --no-editable`, so their runtime environment contains an installed
 copy rather than a source-path reference.
