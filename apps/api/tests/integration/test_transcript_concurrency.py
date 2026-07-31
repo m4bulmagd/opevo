@@ -19,7 +19,7 @@ from app.models import Base
 from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.user import User
-from presvo_contracts import TranscriptSegment as TranscriptAppendRequest
+from presvo_contracts import TranscriptSegment
 from app.services.transcript_service import (
     TranscriptSequenceConflictError,
     TranscriptService,
@@ -90,7 +90,7 @@ async def _append_once(
     factory: async_sessionmaker[AsyncSession],
     *,
     call_id,
-    item: TranscriptAppendRequest,
+    item: TranscriptSegment,
     start: asyncio.Event,
 ) -> str:
     async with factory() as session:
@@ -113,7 +113,7 @@ async def test_concurrent_exact_append_stores_once_and_returns_duplicate(
 ) -> None:
     call = await _create_call(postgres_session_factory)
     start = asyncio.Event()
-    item = TranscriptAppendRequest(
+    item = TranscriptSegment(
         sequence_number=1,
         speaker="CALLER",
         text="Exactly once",
@@ -154,8 +154,8 @@ async def test_concurrent_different_content_keeps_first_write_and_conflicts_othe
     call = await _create_call(postgres_session_factory)
     start = asyncio.Event()
     items = [
-        TranscriptAppendRequest(sequence_number=1, speaker="CALLER", text="First"),
-        TranscriptAppendRequest(sequence_number=1, speaker="AGENT", text="Second"),
+        TranscriptSegment(sequence_number=1, speaker="CALLER", text="First"),
+        TranscriptSegment(sequence_number=1, speaker="AGENT", text="Second"),
     ]
     tasks = [
         asyncio.create_task(

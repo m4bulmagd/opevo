@@ -92,7 +92,10 @@ CONTRACT_CASES = (
     ContractCase(
         "call_completion_acknowledgement",
         create_contract(
-            CallCompletionAcknowledgement, status="accepted", queued=True, job_id="fixture-job-001"
+            CallCompletionAcknowledgement,
+            status="accepted",
+            queued=True,
+            job_id="call-finalization:11111111-1111-4111-8111-111111111111",
         ),
         lambda value: parse_contract(CallCompletionAcknowledgement, value),
     ),

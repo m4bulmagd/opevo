@@ -176,12 +176,48 @@ def _build_completion_app(
 
 
 @pytest.mark.anyio
-async def test_agent_completion_endpoint_rejects_accounting_authority_fields(
+@pytest.mark.parametrize(
+    "additive_fields",
+    [
+        {"user_id": str(uuid4()), "minutes_remaining": 999},
+        {"recording_bytes_base64": "cmVjb3JkaW5nLWJ5dGVz"},
+    ],
+)
+async def test_agent_completion_ignores_additive_legacy_fields_without_changing_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session,
+    active_user,
+    additive_fields: dict[str, object],
 ) -> None:
-    call_id = uuid4()
-    fake_queue = FakeCallFinalizationQueue()
-
-    app = _build_completion_app(fake_queue, authenticated=True)
+    _configure_auth(
+        monkeypatch,
+        app_env="test",
+        dispatch_secret="dispatch-test-secret-with-enough-entropy-for-tests",
+    )
+    config = AgentConfig(
+        user_id=active_user.id,
+        agent_name="Additive fields",
+        system_prompt="Be helpful",
+        knowledge_base="",
+        is_enabled=True,
+    )
+    db_session.add(config)
+    await db_session.flush()
+    call = Call(
+        id=uuid4(),
+        user_id=active_user.id,
+        agent_config_id=config.id,
+        status="connected",
+    )
+    db_session.add(call)
+    await db_session.commit()
+    queue = FakeCallFinalizationQueue(session=db_session)
+    app = _build_completion_app(queue, auth_session=db_session)
+    token = create_dispatch_token(
+        call_id=str(call.id),
+        user_id=str(active_user.id),
+        agent_config_id=str(config.id),
+    )
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -189,40 +225,26 @@ async def test_agent_completion_endpoint_rejects_accounting_authority_fields(
         base_url="http://testserver",
     ) as client:
         response = await client.post(
-            f"/api/agent/calls/{call_id}/complete",
+            f"/api/agent/calls/{call.id}/complete",
+            headers={"x-agent-token": token},
             json=_completion_payload(
-                user_id=str(uuid4()),
                 duration_seconds=61,
-                minutes_remaining=999,
+                **additive_fields,
             ),
         )
 
-    assert response.status_code == 401
-    assert fake_queue.calls == []
-
-
-@pytest.mark.anyio
-async def test_agent_completion_endpoint_rejects_raw_recording_blob(
-) -> None:
-    call_id = uuid4()
-    fake_queue = FakeCallFinalizationQueue()
-
-    app = _build_completion_app(fake_queue, authenticated=True)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-    ) as client:
-        response = await client.post(
-            f"/api/agent/calls/{call_id}/complete",
-            json=_completion_payload(
-                duration_seconds=61,
-                recording_bytes_base64="cmVjb3JkaW5nLWJ5dGVz",
-            ),
-        )
-
-    assert response.status_code == 401
-    assert fake_queue.calls == []
+    assert response.status_code == 202
+    assert response.json() == {
+        "schema_version": 1,
+        "status": "accepted",
+        "queued": True,
+        "job_id": f"call-finalization:{call.id}",
+    }
+    assert queue.calls[0].payload == {"call_id": str(call.id)}
+    stored_call = await db_session.get(Call, call.id)
+    assert stored_call is not None
+    assert stored_call.user_id == active_user.id
+    assert stored_call.agent_config_id == config.id
 
 
 @pytest.mark.anyio

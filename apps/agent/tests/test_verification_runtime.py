@@ -3,13 +3,15 @@ import json
 import importlib
 import logging
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from presvo_contracts import (
     ContractError,
     CustomerCallDispatch,
     ForwardingVerificationDispatch,
+    VerificationCompletionAcknowledgement,
+    create_contract,
     dump_contract,
     parse_dispatch,
 )
@@ -308,11 +310,19 @@ class FakeVerificationApiClient:
         self.completion_error = completion_error
         self.close_error = close_error
 
-    async def complete_verification(self, session_id: str, token: str) -> dict:
+    async def complete_verification(
+        self,
+        session_id: UUID,
+        token: str,
+    ) -> VerificationCompletionAcknowledgement:
         self.events.append(("complete", session_id, token))
         if self.completion_error is not None:
             raise self.completion_error
-        return {"status": "verified", "session_id": session_id}
+        return create_contract(
+            VerificationCompletionAcknowledgement,
+            status="verified",
+            session_id=session_id,
+        )
 
     async def aclose(self) -> None:
         self.events.append("close_api")

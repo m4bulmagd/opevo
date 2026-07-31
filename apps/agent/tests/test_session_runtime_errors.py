@@ -9,10 +9,11 @@ from presvo_contracts import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
     CustomerCallDispatch,
+    TranscriptAppendAcknowledgement,
+    TranscriptSegment,
     create_contract,
 )
 
-from presvo_contracts import TranscriptSegment as CallTranscriptItem
 from agent.session_runtime import SessionRuntime
 
 
@@ -51,9 +52,13 @@ class FakeApiClient:
         self,
         _call_id: str,
         _dispatch_token: str,
-        item: CallTranscriptItem,
-    ) -> dict:
-        return {"status": "stored", "sequence_number": item.sequence_number}
+        item: TranscriptSegment,
+    ) -> TranscriptAppendAcknowledgement:
+        return create_contract(
+            TranscriptAppendAcknowledgement,
+            status="stored",
+            sequence_number=item.sequence_number,
+        )
 
 
 class FailingApiClient:
@@ -66,12 +71,17 @@ class SecretBearingFailingApiClient:
         raise RuntimeError("AUTHORIZATION_SENTINEL_FROM_API_CLIENT")
 
 
+class CloseFailingApiClient(FakeApiClient):
+    async def aclose(self) -> None:
+        raise RuntimeError("CLOSE_EXCEPTION_SENTINEL")
+
+
 class PermanentlyFailingAppendClient(FakeApiClient):
     async def append_transcript(
         self,
         _call_id: str,
         _dispatch_token: str,
-        _item: CallTranscriptItem,
+        _item: TranscriptSegment,
     ) -> dict:
         raise TranscriptAppendPermanentError("TRANSCRIPT_SENTINEL_FROM_APPEND")
 
@@ -198,6 +208,24 @@ async def test_complete_call_failure_does_not_log_api_error_content(caplog) -> N
 
     assert "AUTHORIZATION_SENTINEL_FROM_API_CLIENT" not in caplog.text
     assert str(metadata.call_id) in caplog.text
+
+
+@pytest.mark.anyio
+async def test_api_client_close_failure_does_not_break_finalize_or_leak_error(
+    caplog,
+) -> None:
+    runtime = SessionRuntime(
+        FakeEventPublisher(),
+        api_client=CloseFailingApiClient(),
+    )
+    metadata = make_metadata(dispatch_token="CLOSE_TOKEN_SENTINEL")
+
+    with caplog.at_level(logging.ERROR):
+        await runtime.finalize(metadata, duration_seconds=60)
+
+    assert runtime.pending_transcript == ()
+    assert "CLOSE_EXCEPTION_SENTINEL" not in caplog.text
+    assert "CLOSE_TOKEN_SENTINEL" not in caplog.text
 
 
 @pytest.mark.anyio
