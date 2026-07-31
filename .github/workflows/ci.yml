@@ -355,6 +355,22 @@ jobs:
           ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
           git --config=/repo/.gitleaks.toml --redact --no-banner --verbose /repo
 
+  docker-context-hygiene:
+    name: CI / Docker context hygiene
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Verify root Docker context hygiene and cleanup safety
+        run: |
+          set -e
+          tests/docker/test_root_context_hygiene.sh
+          tests/docker/test_root_context_hygiene_safety.sh
+          tests/docker/test_root_context_hygiene_cleanup_ownership.sh
+
   container-scan:
     name: CI / Container scan / ${{ matrix.application }}
     runs-on: ubuntu-24.04
@@ -434,6 +450,7 @@ jobs:
       - migrations
       - dependency-audit
       - gitleaks
+      - docker-context-hygiene
       - container-scan
     steps:
       - name: Require every CI job
@@ -446,9 +463,10 @@ jobs:
           MIGRATIONS_RESULT: ${{ needs.migrations.result }}
           DEPENDENCY_AUDIT_RESULT: ${{ needs['dependency-audit'].result }}
           GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
+          DOCKER_CONTEXT_HYGIENE_RESULT: ${{ needs['docker-context-hygiene'].result }}
           CONTAINER_SCAN_RESULT: ${{ needs['container-scan'].result }}
         run: |
-          for result in "$API_RESULT" "$AGENT_RESULT" "$SHARED_CONTRACTS_RESULT" "$WEB_RESULT" "$E2E_RESULT" "$MIGRATIONS_RESULT" "$DEPENDENCY_AUDIT_RESULT" "$GITLEAKS_RESULT" "$CONTAINER_SCAN_RESULT"; do
+          for result in "$API_RESULT" "$AGENT_RESULT" "$SHARED_CONTRACTS_RESULT" "$WEB_RESULT" "$E2E_RESULT" "$MIGRATIONS_RESULT" "$DEPENDENCY_AUDIT_RESULT" "$GITLEAKS_RESULT" "$DOCKER_CONTEXT_HYGIENE_RESULT" "$CONTAINER_SCAN_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "A required CI job did not succeed."
               exit 1

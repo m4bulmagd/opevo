@@ -23,23 +23,31 @@ cleanup() {
       [ ! -L "$target_path" ]; then
       if ! rm -- "$sentinel_path"; then
         printf 'failed to remove the owned dangling sentinel.\n' >&2
-        cleanup_status=1
+        if [ "$cleanup_status" -eq 0 ]; then
+          cleanup_status=1
+        fi
       fi
     else
       printf '%s ownership changed before cleanup; refusing to remove it.\n' \
         "$sentinel_path" >&2
-      cleanup_status=1
+      if [ "$cleanup_status" -eq 0 ]; then
+        cleanup_status=1
+      fi
     fi
   fi
   if [ -n "$target_directory" ] &&
     ! rm -rf -- "$target_directory"; then
     printf 'failed to remove the owned sentinel target directory.\n' >&2
-    cleanup_status=1
+    if [ "$cleanup_status" -eq 0 ]; then
+      cleanup_status=1
+    fi
   fi
   if [ -n "$probe_output_path" ] &&
     ! rm -f -- "$probe_output_path"; then
     printf 'failed to remove the owned probe output.\n' >&2
-    cleanup_status=1
+    if [ "$cleanup_status" -eq 0 ]; then
+      cleanup_status=1
+    fi
   fi
 
   exit "$cleanup_status"

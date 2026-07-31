@@ -22,23 +22,31 @@ cleanup() {
       [ ! -L "$replacement_target" ]; then
       if ! rm -- "$sentinel_path"; then
         printf 'failed to remove the controlled replacement sentinel.\n' >&2
-        cleanup_status=1
+        if [ "$cleanup_status" -eq 0 ]; then
+          cleanup_status=1
+        fi
       fi
     else
       printf 'the controlled replacement sentinel changed; refusing to remove it.\n' >&2
-      cleanup_status=1
+      if [ "$cleanup_status" -eq 0 ]; then
+        cleanup_status=1
+      fi
     fi
   fi
 
   if [ -n "$replacement_directory" ] &&
     ! rm -rf -- "$replacement_directory"; then
     printf 'failed to remove the controlled replacement directory.\n' >&2
-    cleanup_status=1
+    if [ "$cleanup_status" -eq 0 ]; then
+      cleanup_status=1
+    fi
   fi
   if [ -n "$probe_output_path" ] &&
     ! rm -f -- "$probe_output_path"; then
     printf 'failed to remove the controlled probe output.\n' >&2
-    cleanup_status=1
+    if [ "$cleanup_status" -eq 0 ]; then
+      cleanup_status=1
+    fi
   fi
 
   exit "$cleanup_status"
@@ -64,8 +72,9 @@ else
   probe_status=$?
 fi
 
-if [ "$probe_status" -eq 0 ]; then
-  printf 'expected cleanup to reject the replaced sentinel, but it succeeded.\n' >&2
+if [ "$probe_status" -ne 1 ]; then
+  printf 'expected cleanup to promote the successful probe status to 1; got %s.\n' \
+    "$probe_status" >&2
   exit 1
 fi
 
