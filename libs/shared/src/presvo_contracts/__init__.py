@@ -23,6 +23,16 @@ from .completion import (
     VerificationCompletionAcknowledgement,
     VerificationCompletionRequest,
 )
+from .realtime import (
+    REALTIME_CHANNEL_PREFIX,
+    AgentSessionEndedEvent,
+    CallFinalizedEvent,
+    CallStartedEvent,
+    RealtimeEvent,
+    TranscriptObservedEvent,
+    parse_realtime_event,
+    realtime_channel,
+)
 from .transcript import (
     TRANSCRIPT_TEXT_MAX_LENGTH,
     TranscriptAppendAcknowledgement,
@@ -53,6 +63,7 @@ __all__ = [
     "KNOWLEDGE_BASE_MAX_LENGTH",
     "VERIFICATION_MESSAGE",
     "TRANSCRIPT_TEXT_MAX_LENGTH",
+    "REALTIME_CHANNEL_PREFIX",
     "AgentName",
     "OwnerName",
     "OwnerContext",
@@ -72,10 +83,17 @@ __all__ = [
     "CallCompletionAcknowledgement",
     "VerificationCompletionRequest",
     "VerificationCompletionAcknowledgement",
+    "TranscriptObservedEvent",
+    "CallStartedEvent",
+    "AgentSessionEndedEvent",
+    "CallFinalizedEvent",
     "DispatchContract",
+    "RealtimeEvent",
     "create_contract",
     "parse_contract",
     "dump_contract",
     "dump_contract_json",
     "parse_dispatch",
+    "parse_realtime_event",
+    "realtime_channel",
 ]

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "job_type": "forwarding_verification",
+  "verification_session_id": "44444444-4444-4444-8444-444444444444",
+  "user_id": "22222222-2222-4222-8222-222222222222",
+  "agent_identity": "fixture-agent-identity",
+  "completion_token": "fixture-completion-token",
+  "message": "Forwarding test successful. Return to Presvo to go live.",
+  "tts_provider": "speechmatics"
+}

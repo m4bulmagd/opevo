@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "duration_seconds": 42,
+  "transcript": [
+    {
+      "sequence_number": 1,
+      "speaker": "CALLER",
+      "text": "Fixture caller text."
+    }
+  ]
+}
