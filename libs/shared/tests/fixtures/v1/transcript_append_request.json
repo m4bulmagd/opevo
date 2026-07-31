@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "segment": {
+    "sequence_number": 1,
+    "speaker": "CALLER",
+    "text": "Fixture caller text."
+  }
+}
