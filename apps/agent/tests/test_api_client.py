@@ -33,6 +33,7 @@ from agent.api_client import (
 
 FIXTURES = Path(__file__).parents[3] / "libs/shared/tests/fixtures/v1"
 FIXTURE_CALL_ID = UUID("11111111-1111-4111-8111-111111111111")
+RETRYABLE_HTTP_STATUSES = (408, 425, 429, *range(500, 600))
 
 
 def _fixture(name: str) -> dict:
@@ -144,7 +145,7 @@ async def test_append_transcript_sends_versioned_nested_contract_and_parses_addi
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("status_code", [408, 425, 429, *range(500, 600)])
+@pytest.mark.parametrize("status_code", RETRYABLE_HTTP_STATUSES)
 async def test_append_transcript_classifies_retryable_statuses(status_code: int) -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(status_code))) as http:
         with pytest.raises(TranscriptAppendRetryableError):
@@ -203,7 +204,7 @@ async def test_complete_call_sends_credentials_only_in_header_and_correlates_job
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("status_code", [408, 425, 429, *range(500, 600)])
+@pytest.mark.parametrize("status_code", RETRYABLE_HTTP_STATUSES)
 async def test_complete_call_retries_every_retryable_status(status_code: int, monkeypatch: pytest.MonkeyPatch) -> None:
     call_id = uuid4()
     attempts = 0
@@ -345,7 +346,7 @@ async def test_completion_4xx_is_permanent_without_retry(status_code: int) -> No
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("status_code", range(500, 600))
+@pytest.mark.parametrize("status_code", RETRYABLE_HTTP_STATUSES)
 async def test_verification_retries_every_server_error(status_code: int, monkeypatch: pytest.MonkeyPatch) -> None:
     session_id = uuid4()
     attempts = 0

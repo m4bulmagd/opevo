@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -39,7 +39,12 @@ class FakeApiClient:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
 
-    async def complete_call(self, call_id, dispatch_token, request: CallCompletionRequest):
+    async def complete_call(
+        self,
+        call_id: UUID,
+        dispatch_token: str,
+        request: CallCompletionRequest,
+    ) -> CallCompletionAcknowledgement:
         self.calls.append((call_id, dispatch_token, request))
         return create_contract(
             CallCompletionAcknowledgement,
@@ -50,7 +55,7 @@ class FakeApiClient:
 
     async def append_transcript(
         self,
-        _call_id: str,
+        _call_id: UUID,
         _dispatch_token: str,
         item: TranscriptSegment,
     ) -> TranscriptAppendAcknowledgement:
@@ -62,12 +67,22 @@ class FakeApiClient:
 
 
 class FailingApiClient:
-    async def complete_call(self, *_args) -> dict:
+    async def complete_call(
+        self,
+        _call_id: UUID,
+        _dispatch_token: str,
+        _request: CallCompletionRequest,
+    ) -> CallCompletionAcknowledgement:
         raise RuntimeError("API unreachable")
 
 
 class SecretBearingFailingApiClient:
-    async def complete_call(self, *_args) -> dict:
+    async def complete_call(
+        self,
+        _call_id: UUID,
+        _dispatch_token: str,
+        _request: CallCompletionRequest,
+    ) -> CallCompletionAcknowledgement:
         raise RuntimeError("AUTHORIZATION_SENTINEL_FROM_API_CLIENT")
 
 
@@ -79,10 +94,10 @@ class CloseFailingApiClient(FakeApiClient):
 class PermanentlyFailingAppendClient(FakeApiClient):
     async def append_transcript(
         self,
-        _call_id: str,
+        _call_id: UUID,
         _dispatch_token: str,
         _item: TranscriptSegment,
-    ) -> dict:
+    ) -> TranscriptAppendAcknowledgement:
         raise TranscriptAppendPermanentError("TRANSCRIPT_SENTINEL_FROM_APPEND")
 
 
