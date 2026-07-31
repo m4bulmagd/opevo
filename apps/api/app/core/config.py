@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import AwareDatetime, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     call_reconciliation_ending_grace_seconds: int = Field(default=60, ge=1)
     call_reconciliation_finalizing_lease_seconds: int = Field(default=300, ge=1)
     call_reconciliation_max_attempts: int = Field(default=5, ge=1, le=5)
+    dashboard_metrics_reference_time: AwareDatetime | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -70,6 +71,18 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CALL_RECONCILIATION_CONNECTED_STALE_SECONDS must be at least "
                 "MAX_CALL_DURATION_SECONDS plus 120 seconds"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_dashboard_metrics_reference_time(self) -> Self:
+        if (
+            self.dashboard_metrics_reference_time is not None
+            and self.app_env not in {"development", "test"}
+        ):
+            raise ValueError(
+                "DASHBOARD_METRICS_REFERENCE_TIME is supported only in "
+                "development or test"
             )
         return self
 

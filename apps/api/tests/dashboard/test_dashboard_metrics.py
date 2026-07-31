@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.config import get_settings
 from app.models.business_profile import BusinessProfile
 from app.models.call import Call
 from app.models.customer_activation import CustomerActivation
@@ -138,26 +139,34 @@ async def test_dashboard_metrics_resolve_owner_and_return_exact_contract(
     async_client,
     client_database_url: str,
     rs256_clerk_token_for,
+    test_app,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clerk_user_id = "dashboard-api-owner"
     current = datetime(2026, 7, 15, 12, tzinfo=UTC)
     previous = current - timedelta(days=8)
     original_get_metrics = DashboardMetricsService.get_metrics
+    observed_now: datetime | None = None
 
-    async def get_metrics_at_fixed_time(
+    async def get_metrics_at_configured_time(
         service: DashboardMetricsService,
         user_id: UUID,
         *,
         now: datetime | None = None,
     ):
-        return await original_get_metrics(service, user_id, now=current)
+        nonlocal observed_now
+        observed_now = now
+        return await original_get_metrics(service, user_id, now=now)
 
     monkeypatch.setattr(
         DashboardMetricsService,
         "get_metrics",
-        get_metrics_at_fixed_time,
+        get_metrics_at_configured_time,
     )
+    configured_settings = get_settings().model_copy(
+        update={"dashboard_metrics_reference_time": current}
+    )
+    test_app.dependency_overrides[get_settings] = lambda: configured_settings
     await _seed_dashboard(
         client_database_url,
         owner_clerk_user_id=clerk_user_id,
@@ -202,6 +211,7 @@ async def test_dashboard_metrics_resolve_owner_and_return_exact_contract(
             {"date": "2026-07-15", "label": "Wed", "calls": 1},
         ],
     }
+    assert observed_now == current
 
 
 @pytest.mark.anyio
