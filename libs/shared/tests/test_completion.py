@@ -87,6 +87,21 @@ def test_call_completion_consumer_ignores_extras() -> None:
     assert dump_contract(completion) == valid_call_completion()
 
 
+def test_call_completion_producer_rejects_nested_transcript_extras() -> None:
+    payload = valid_call_completion()
+    payload["transcript"] = [{**valid_segment(), "future": "rejected"}]
+    with pytest.raises(ContractError) as caught:
+        create_contract(CallCompletionRequest, **payload)
+    assert caught.value.code == "invalid_payload"
+
+
+def test_call_completion_consumer_ignores_nested_transcript_extras() -> None:
+    payload = valid_call_completion()
+    payload["transcript"] = [{**valid_segment(), "future": "ignored"}]
+    completion = parse_contract(CallCompletionRequest, payload)
+    assert dump_contract(completion) == valid_call_completion()
+
+
 @pytest.mark.parametrize("job_id", ["job-123", "  job-123  "])
 def test_call_completion_acknowledgement_accepts_and_strips_nonblank_job_ids(job_id: str) -> None:
     acknowledgement = parse_contract(
@@ -108,6 +123,28 @@ def test_call_completion_acknowledgement_rejects_blank_job_ids(job_id: str) -> N
     assert caught.value.code == "invalid_payload"
 
 
+@pytest.mark.parametrize("status", ["queued", "verified", ""])
+def test_call_completion_acknowledgement_rejects_non_accepted_status(status: str) -> None:
+    with pytest.raises(ContractError) as caught:
+        parse_contract(
+            CallCompletionAcknowledgement,
+            {"schema_version": 1, "status": status, "queued": True, "job_id": "job-123"},
+        )
+    assert caught.value.code == "invalid_payload"
+
+
+@pytest.mark.parametrize("queued", [False, 1, "true"])
+def test_call_completion_acknowledgement_rejects_non_literal_queued_values(
+    queued: object,
+) -> None:
+    with pytest.raises(ContractError) as caught:
+        parse_contract(
+            CallCompletionAcknowledgement,
+            {"schema_version": 1, "status": "accepted", "queued": queued, "job_id": "job-123"},
+        )
+    assert caught.value.code == "invalid_payload"
+
+
 def test_call_completion_acknowledgement_round_trips() -> None:
     payload = {"schema_version": 1, "status": "accepted", "queued": True, "job_id": "job-123"}
     acknowledgement = parse_contract(CallCompletionAcknowledgement, payload)
@@ -118,6 +155,20 @@ def test_verification_completion_request_round_trips() -> None:
     payload = {"schema_version": 1}
     request = parse_contract(VerificationCompletionRequest, payload)
     assert dump_contract(request) == payload
+
+
+def test_verification_completion_request_producer_rejects_extra_body_fields() -> None:
+    with pytest.raises(ContractError) as caught:
+        create_contract(VerificationCompletionRequest, future="rejected")
+    assert caught.value.code == "invalid_payload"
+
+
+def test_verification_completion_request_consumer_ignores_additive_body_fields() -> None:
+    request = parse_contract(
+        VerificationCompletionRequest,
+        {"schema_version": 1, "future": "ignored"},
+    )
+    assert dump_contract(request) == {"schema_version": 1}
 
 
 def test_verification_completion_acknowledgement_parses_uuid_and_round_trips() -> None:
