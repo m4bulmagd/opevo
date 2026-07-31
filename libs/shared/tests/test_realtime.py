@@ -82,6 +82,17 @@ def test_realtime_rejects_unsupported_or_coerced_schema_versions(value: object) 
     assert caught.value.code == "unsupported_schema_version"
 
 
+@pytest.mark.parametrize("sequence_number", [0, -1, True, 1.0, "1"])
+def test_transcript_observed_rejects_non_positive_or_coerced_sequence_numbers(
+    sequence_number: object,
+) -> None:
+    payload = valid_transcript_observed()
+    payload["sequence_number"] = sequence_number
+    with pytest.raises(ContractError) as caught:
+        parse_realtime_event(payload)
+    assert caught.value.code == "invalid_payload"
+
+
 @pytest.mark.parametrize("field", ["user_id", "call_id"])
 def test_realtime_rejects_invalid_uuids(field: str) -> None:
     payload = valid_call_started()
