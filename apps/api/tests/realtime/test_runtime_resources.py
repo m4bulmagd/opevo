@@ -47,9 +47,10 @@ async def test_app_runtime_dependencies_use_captured_settings(
             observed["bus_closed"] = self.closed
 
     class WaitingRealtimeService:
-        def __init__(self, auth_provider, *, event_bus, websocket_manager) -> None:
+        def __init__(self, auth_provider, *, event_bus, websocket_manager, observability) -> None:
             observed["auth_provider"] = auth_provider
             observed["event_bus"] = event_bus
+            observed["observability"] = observability
 
         async def fanout_forever(self) -> None:
             await asyncio.Event().wait()
@@ -207,7 +208,7 @@ async def test_lifespan_safely_reports_relay_and_cleanup_failures(
             raise RuntimeError("REDIS_PROVIDER_SECRET customer text")
 
     class FailingRealtimeService:
-        def __init__(self, auth_provider, *, event_bus, websocket_manager) -> None:
+        def __init__(self, auth_provider, *, event_bus, websocket_manager, observability) -> None:
             self.event_bus = event_bus
 
         async def fanout_forever(self) -> None:

@@ -58,9 +58,7 @@ class _Realtime:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
-    async def publish_call_started(
-        self, user_id: str, *, room_name: str, call_id: str
-    ) -> None:
+    async def publish_call_started(self, user_id, *, room_name: str, call_id) -> None:
         self.events.append(
             {"user_id": user_id, "room_name": room_name, "call_id": call_id}
         )
@@ -550,9 +548,9 @@ async def test_sip_join_commits_call_and_dispatch_intent_without_provider_io(
     assert pool.jobs == [("outbox_delivery_job", {}, {})]
     assert realtime.events == [
         {
-            "user_id": str(user.id),
+            "user_id": user.id,
             "room_name": "room-1",
-            "call_id": str(calls[0].id),
+            "call_id": calls[0].id,
         }
     ]
 

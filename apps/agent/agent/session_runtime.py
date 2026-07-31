@@ -10,6 +10,8 @@ from uuid import UUID
 from presvo_contracts import (
     CallCompletionRequest,
     CustomerCallDispatch,
+    AgentSessionEndedEvent,
+    TranscriptObservedEvent,
     TranscriptSegment,
     TranscriptSpeaker,
     create_contract,
@@ -80,7 +82,7 @@ class SessionRuntime:
         self._finalize_lock = asyncio.Lock()
         self._closing = False
         self._finalized = False
-        self._call_ended_publish_attempted = False
+        self._agent_session_ended_publish_attempted = False
         self._warning_callback = warning_callback
         self._call_limit_started_at = call_limit_started_at
         self._call_limit_clock = call_limit_clock
@@ -469,13 +471,15 @@ class SessionRuntime:
     ) -> None:
         try:
             await self.event_publisher.publish(
-                {
-                    "type": "transcript",
-                    "user_id": str(metadata.user_id),
-                    "call_id": str(metadata.call_id),
-                    "speaker": line.speaker,
-                    "text": line.text,
-                }
+                create_contract(
+                    TranscriptObservedEvent,
+                    type="transcript_observed",
+                    user_id=metadata.user_id,
+                    call_id=metadata.call_id,
+                    sequence_number=line.sequence_number,
+                    speaker=line.speaker,
+                    text=line.text,
+                )
             )
         except Exception as exc:
             logger.error(
@@ -525,13 +529,13 @@ class SessionRuntime:
                 duration_seconds=duration_seconds,
                 recovery_items=recovery_items,
             )
-            if self._call_ended_publish_attempted:
+            if self._agent_session_ended_publish_attempted:
                 completion_acknowledged = await completion
             else:
-                self._call_ended_publish_attempted = True
+                self._agent_session_ended_publish_attempted = True
                 completion_acknowledged, _ = await asyncio.gather(
                     completion,
-                    self._publish_call_ended(
+                    self._publish_agent_session_ended(
                         metadata,
                         duration_seconds=duration_seconds,
                     ),
@@ -609,7 +613,7 @@ class SessionRuntime:
                 type(exc).__name__,
             )
 
-    async def _publish_call_ended(
+    async def _publish_agent_session_ended(
         self,
         metadata: CustomerCallDispatch,
         *,
@@ -617,16 +621,17 @@ class SessionRuntime:
     ) -> None:
         try:
             await self.event_publisher.publish(
-                {
-                    "type": "call_ended",
-                    "user_id": str(metadata.user_id),
-                    "call_id": str(metadata.call_id),
-                    "duration_seconds": duration_seconds,
-                }
+                create_contract(
+                    AgentSessionEndedEvent,
+                    type="agent_session_ended",
+                    user_id=metadata.user_id,
+                    call_id=metadata.call_id,
+                    duration_seconds=duration_seconds,
+                )
             )
         except Exception as exc:
             logger.error(
-                "failed to publish call_ended event for %s error_type=%s",
+                "failed to publish agent_session_ended event for %s error_type=%s",
                 metadata.call_id,
                 type(exc).__name__,
             )

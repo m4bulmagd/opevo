@@ -3,17 +3,12 @@ from collections import defaultdict
 
 from fastapi import WebSocket
 
-from app.core.redis import REALTIME_CHANNEL_PREFIX
-
 logger = logging.getLogger(__name__)
 
 
 class WebSocketManager:
     def __init__(self) -> None:
         self.connections: dict[str, set[WebSocket]] = defaultdict(set)
-
-    def channel_name(self, user_id: str) -> str:
-        return f"{REALTIME_CHANNEL_PREFIX}{user_id}"
 
     async def connect(self, user_id: str, websocket: WebSocket) -> None:
         self.connections[user_id].add(websocket)

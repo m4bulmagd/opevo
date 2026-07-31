@@ -58,13 +58,18 @@ class FakeAuthProvider(AuthProvider):
 class FakeEventBus:
     """Stub event bus — never touches Redis."""
 
-    async def publish_json(self, user_id: str, payload: dict) -> None:  # noqa: D102
+    async def publish(self, event: object) -> None:  # noqa: D102
         pass
 
     async def subscribe(self):
         # Yields nothing; tests drive broadcasts via ws_manager.broadcast() directly.
         return
         yield  # pragma: no cover — makes this an async generator
+
+
+class FakeObservability:
+    def record_invalid_contract(self, **_attributes: str) -> None:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +123,7 @@ def ws_app(settings_env):  # settings_env auto-use fixture sets env vars
         auth_provider=FakeAuthProvider(),
         event_bus=FakeEventBus(),
         websocket_manager=ws_manager,
+        observability=FakeObservability(),
     )
     # Override the service that the lifespan installs.
     app.state.realtime_service = fake_service

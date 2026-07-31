@@ -21,6 +21,11 @@ class FakeWebSocket:
         self.closed_code = code
 
 
+class FakeObservability:
+    def record_invalid_contract(self, **_attributes: str) -> None:
+        pass
+
+
 @pytest.mark.anyio
 async def test_websocket_requires_auth_message_before_events() -> None:
     websocket = FakeWebSocket()
@@ -29,6 +34,7 @@ async def test_websocket_requires_auth_message_before_events() -> None:
         auth_provider=ClerkAuthProvider(),
         event_bus=RedisEventBus(),
         websocket_manager=WebSocketManager(),
+        observability=FakeObservability(),
     )
     result = await service.authenticate(websocket)
 
