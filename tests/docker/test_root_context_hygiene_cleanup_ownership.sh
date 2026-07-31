@@ -70,7 +70,7 @@ if [ "$invoked_name" = rm ]; then
   test_mode=${PRESVO_OWNERSHIP_TEST_MODE:-}
   target=${!#}
 
-  if [ "$test_mode" != post_validation ]; then
+  if [ "$test_mode" != post_validation ] && [ "$test_mode" != root_redirect ]; then
     exec "$real_rm" "$@"
   fi
 
@@ -81,7 +81,8 @@ if [ "$invoked_name" = rm ]; then
     /tmp/presvo-contract-context.* | \
     "$repository_root/tests/docker/.root-context-cleanup."*/sentinel | \
     "$repository_root/tests/docker/.root-context-cleanup."*/fixture | \
-    /tmp/presvo-contract-context-cleanup.*/output)
+    /tmp/presvo-contract-context-cleanup.*/output | \
+    ./sentinel | ./fixture | ./output)
       ;;
     *)
       exec "$real_rm" "$@"
@@ -92,6 +93,10 @@ if [ "$invoked_name" = rm ]; then
   mv -T -- \
     "$control_directory/delete-target.pending" \
     "$control_directory/delete-target"
+  pwd -P >"$control_directory/delete-cwd.pending"
+  mv -T -- \
+    "$control_directory/delete-cwd.pending" \
+    "$control_directory/delete-cwd"
   : >"$control_directory/delete-ready"
   while [ ! -e "$control_directory/delete-release" ]; do
     sleep 0.02
@@ -145,6 +150,8 @@ held_fixture_marker=""
 held_output=""
 held_output_identity=""
 held_output_marker=""
+resolved_delete_target=""
+redirect_failures=()
 
 path_identity() {
   stat -c '%d:%i:%f' -- "$1"
@@ -187,18 +194,33 @@ remove_quarantined_file() {
   if [ ! -e "$path" ] && [ ! -L "$path" ]; then
     return 0
   fi
-  local current_identity=""
-  if [ -f "$path" ] && [ ! -L "$path" ] &&
-    current_identity=$(path_identity "$path") &&
-    [ "$current_identity" = "$expected_identity" ] &&
-    grep -Fxq "$expected_marker" "$path"; then
-    if ! "$real_rm" -- "$path"; then
-      printf 'failed to remove quarantined harness file %s.\n' "$path" >&2
+  local anchor=""
+  local expected_anchor_identity=""
+  case "$path" in
+    "$repo_cleanup_directory"/*)
+      anchor=$repo_cleanup_directory
+      expected_anchor_identity=$repo_cleanup_identity
+      ;;
+    "$tmp_cleanup_directory"/*)
+      anchor=$tmp_cleanup_directory
+      expected_anchor_identity=$tmp_cleanup_identity
+      ;;
+    *)
+      printf 'harness file is outside a cleanup anchor: %s.\n' "$path" >&2
       promote_cleanup_failure
       return 1
-    fi
-  else
-    printf 'quarantined harness file %s failed ownership validation.\n' \
+      ;;
+  esac
+  local child=${path#"$anchor"/}
+  if [[ "$child" == */* ]] || ! (
+    cd -P -- "$anchor" &&
+      [ "$(path_identity .)" = "$expected_anchor_identity" ] &&
+      [ -f "./$child" ] && [ ! -L "./$child" ] &&
+      [ "$(path_identity "./$child")" = "$expected_identity" ] &&
+      grep -Fxq "$expected_marker" "./$child" &&
+      "$real_rm" -- "./$child"
+  ); then
+    printf 'anchored harness file %s failed ownership-safe cleanup.\n' \
       "$path" >&2
     promote_cleanup_failure
     return 1
@@ -213,21 +235,36 @@ remove_quarantined_directory() {
   if [ ! -e "$path" ] && [ ! -L "$path" ]; then
     return 0
   fi
-  local current_identity=""
-  local marker_path="$path/$marker_name"
-  if [ -d "$path" ] && [ ! -L "$path" ] &&
-    current_identity=$(path_identity "$path") &&
-    [ "$current_identity" = "$expected_identity" ] &&
-    [ -f "$marker_path" ] && [ ! -L "$marker_path" ] &&
-    grep -Fxq "$expected_marker" "$marker_path"; then
-    if ! "$real_rm" -rf -- "$path"; then
-      printf 'failed to remove quarantined harness directory %s.\n' \
+  local anchor=""
+  local expected_anchor_identity=""
+  case "$path" in
+    "$repo_cleanup_directory"/*)
+      anchor=$repo_cleanup_directory
+      expected_anchor_identity=$repo_cleanup_identity
+      ;;
+    "$tmp_cleanup_directory"/*)
+      anchor=$tmp_cleanup_directory
+      expected_anchor_identity=$tmp_cleanup_identity
+      ;;
+    *)
+      printf 'harness directory is outside a cleanup anchor: %s.\n' \
         "$path" >&2
       promote_cleanup_failure
       return 1
-    fi
-  else
-    printf 'quarantined harness directory %s failed ownership validation.\n' \
+      ;;
+  esac
+  local child=${path#"$anchor"/}
+  if [[ "$child" == */* ]] || ! (
+    cd -P -- "$anchor" &&
+      [ "$(path_identity .)" = "$expected_anchor_identity" ] &&
+      [ -d "./$child" ] && [ ! -L "./$child" ] &&
+      [ "$(path_identity "./$child")" = "$expected_identity" ] &&
+      [ -f "./$child/$marker_name" ] &&
+      [ ! -L "./$child/$marker_name" ] &&
+      grep -Fxq "$expected_marker" "./$child/$marker_name" &&
+      "$real_rm" -rf -- "./$child"
+  ); then
+    printf 'anchored harness directory %s failed ownership-safe cleanup.\n' \
       "$path" >&2
     promote_cleanup_failure
     return 1
@@ -404,6 +441,8 @@ clear_barriers() {
     "$control_directory/delete-complete" \
     "$control_directory/delete-target" \
     "$control_directory/delete-target.pending" \
+    "$control_directory/delete-cwd" \
+    "$control_directory/delete-cwd.pending" \
     "$control_directory/delete-ack" \
     "$control_directory/paths" \
     "$control_directory/paths.pending"
@@ -576,6 +615,8 @@ classify_delete_target() {
   local target=$2
   local original_path=""
   local original_parent=""
+  local delete_cwd
+  delete_cwd=$(<"$control_directory/delete-cwd")
   case "$expected_kind" in
     sentinel)
       original_path=$sentinel_path
@@ -593,6 +634,34 @@ classify_delete_target() {
 
   if [ "$target" = "$original_path" ]; then
     hold_old_delete_target "$expected_kind" "$target"
+    resolved_delete_target=$target
+    return 0
+  fi
+
+  if [ "$target" = "./$expected_kind" ]; then
+    case "$expected_kind:$delete_cwd" in
+      sentinel:"$repository_root/tests/docker/.root-context-cleanup."* | \
+      fixture:"$repository_root/tests/docker/.root-context-cleanup."* | \
+      output:/tmp/presvo-contract-context-cleanup.*)
+        ;;
+      *)
+        printf 'unexpected anchored %s delete cwd %s.\n' \
+          "$expected_kind" "$delete_cwd" >&2
+        return 1
+        ;;
+    esac
+    resolved_delete_target="$delete_cwd/$expected_kind"
+    if [ "$(stat -c '%d' -- "$delete_cwd")" != \
+      "$(stat -c '%d' -- "$original_parent")" ]; then
+      printf '%s quarantine is not on the original filesystem: %s.\n' \
+        "$expected_kind" "$delete_cwd" >&2
+      return 1
+    fi
+    if [ -e "$original_path" ] || [ -L "$original_path" ]; then
+      printf '%s original path was not vacated before deletion: %s.\n' \
+        "$expected_kind" "$original_path" >&2
+      return 1
+    fi
     return 0
   fi
 
@@ -617,6 +686,7 @@ classify_delete_target() {
       "$expected_kind" "$original_path" >&2
     return 1
   fi
+  resolved_delete_target=$target
 }
 
 release_delete() {
@@ -632,7 +702,8 @@ release_delete() {
     "$control_directory/delete-ready" \
     "$control_directory/delete-release" \
     "$control_directory/delete-complete" \
-    "$control_directory/delete-target"
+    "$control_directory/delete-target" \
+    "$control_directory/delete-cwd"
   : >"$control_directory/delete-ack"
   local attempt
   for attempt in $(seq 1 250); do
@@ -686,9 +757,9 @@ run_post_validation_case() {
         ;;
     esac
     release_delete
-    if [ -e "$delete_target" ] || [ -L "$delete_target" ]; then
+    if [ -e "$resolved_delete_target" ] || [ -L "$resolved_delete_target" ]; then
       printf 'validated delete target survived cleanup: %s.\n' \
-        "$delete_target" >&2
+        "$resolved_delete_target" >&2
       return 1
     fi
   done
@@ -698,9 +769,175 @@ run_post_validation_case() {
   cleanup_case_artifacts
 }
 
+remove_redirected_owned_child() {
+  local anchor=$1
+  local expected_anchor_identity=$2
+  local child=$3
+  local expected_child_identity=$4
+  local expected_marker=$5
+  local kind=$6
+  if [ "$kind" = sentinel ]; then
+    (
+      cd -P -- "$anchor" &&
+        [ "$(path_identity .)" = "$expected_anchor_identity" ] &&
+        [ -f "./$child" ] && [ ! -L "./$child" ] &&
+        [ "$(path_identity "./$child")" = "$expected_child_identity" ] &&
+        grep -Fxq "$expected_marker" "./$child" &&
+        "$real_rm" -- "./$child"
+    )
+  else
+    (
+      cd -P -- "$anchor" &&
+        [ "$(path_identity .)" = "$expected_anchor_identity" ] &&
+        [ -d "./$child" ] && [ ! -L "./$child" ] &&
+        [ "$(path_identity "./$child")" = "$expected_child_identity" ] &&
+        [ -f "./$child/.env.contract-context-owner" ] &&
+        [ ! -L "./$child/.env.contract-context-owner" ] &&
+        grep -Fxq \
+          "$expected_marker" \
+          "./$child/.env.contract-context-owner" &&
+        "$real_rm" -rf -- "./$child"
+    )
+  fi
+}
+
+release_redirected_delete() {
+  local kind=$1
+  local victim_parent=$2
+  local target
+  local old_root
+  target=$(<"$control_directory/delete-target")
+  local child=${target##*/}
+  case "$target" in
+    ./*)
+      old_root=$(<"$control_directory/delete-cwd")
+      ;;
+    /*)
+      old_root=${target%/*}
+      ;;
+    *)
+      printf 'unexpected relative delete target: %s.\n' "$target" >&2
+      return 1
+      ;;
+  esac
+  local original_root_identity
+  local original_child_identity
+  local original_child_marker
+  original_root_identity=$(path_identity "$old_root")
+  original_child_identity=$(path_identity "$old_root/$child")
+  if [ "$kind" = sentinel ]; then
+    original_child_marker=$(<"$old_root/$child")
+  else
+    original_child_marker=$(<"$old_root/$child/.env.contract-context-owner")
+  fi
+
+  local moved_root=""
+  case "$old_root" in
+    "$repository_root/tests/docker/.root-context-cleanup."*)
+      moved_root="$repo_cleanup_directory/$case_name.redirected-$kind-root"
+      ;;
+    /tmp/presvo-contract-context-cleanup.*)
+      moved_root="$tmp_cleanup_directory/$case_name.redirected-$kind-root"
+      ;;
+    *)
+      printf 'unsafe quarantine root at delete barrier: %s.\n' "$old_root" >&2
+      return 1
+      ;;
+  esac
+  mv -T -- "$old_root" "$moved_root"
+  ln -s -- "$victim_parent" "$old_root"
+
+  : >"$control_directory/delete-release"
+  wait_for_file "$control_directory/delete-complete" 'the redirected delete completion'
+  local delete_status
+  delete_status=$(<"$control_directory/delete-complete")
+  if [ "$delete_status" -ne 0 ]; then
+    printf 'redirected delete returned status %s.\n' "$delete_status" >&2
+    return 1
+  fi
+
+  if [ -e "$moved_root/$child" ] || [ -L "$moved_root/$child" ]; then
+    redirect_failures+=("owned quarantined $kind survived the production delete")
+    remove_redirected_owned_child \
+      "$moved_root" \
+      "$original_root_identity" \
+      "$child" \
+      "$original_child_identity" \
+      "$original_child_marker" \
+      "$kind"
+  fi
+  if [ ! -L "$old_root" ] || [ "$(readlink -- "$old_root")" != "$victim_parent" ]; then
+    printf 'quarantine-root redirect changed unexpectedly: %s.\n' "$old_root" >&2
+    return 1
+  fi
+  "$real_rm" -- "$old_root"
+  mv -T -n -- "$moved_root" "$old_root"
+  if [ -e "$moved_root" ] || [ -L "$moved_root" ]; then
+    printf 'failed to restore the real quarantine root %s.\n' "$old_root" >&2
+    return 1
+  fi
+
+  local victim_path="$victim_parent/$child"
+  if [ "$kind" = sentinel ]; then
+    if [ ! -f "$victim_path" ] || [ -L "$victim_path" ] ||
+      ! grep -Fxq "victim-$kind" "$victim_path"; then
+      redirect_failures+=("redirected deletion removed $kind victim $victim_path")
+    fi
+  elif [ ! -d "$victim_path" ] || [ -L "$victim_path" ] ||
+    [ ! -f "$victim_path/.victim-marker" ] ||
+    ! grep -Fxq "victim-$kind" "$victim_path/.victim-marker"; then
+    redirect_failures+=("redirected deletion removed $kind victim $victim_path")
+  fi
+
+  "$real_rm" -f -- \
+    "$control_directory/delete-ready" \
+    "$control_directory/delete-release" \
+    "$control_directory/delete-complete" \
+    "$control_directory/delete-target" \
+    "$control_directory/delete-cwd"
+  : >"$control_directory/delete-ack"
+  local attempt
+  for attempt in $(seq 1 250); do
+    if [ ! -e "$control_directory/delete-ack" ]; then
+      return 0
+    fi
+    sleep 0.02
+  done
+  printf 'timed out acknowledging the redirected delete.\n' >&2
+  return 1
+}
+
+run_root_redirect_case() {
+  case_name=$1
+  local docker_status=$2
+  local expected_status=$3
+  local probe_output_path="$control_directory/$case_name.output"
+  local victim_parent="$control_directory/$case_name.victims"
+  redirect_failures=()
+  mkdir -- "$victim_parent" "$victim_parent/fixture" "$victim_parent/output"
+  printf 'victim-sentinel\n' >"$victim_parent/sentinel"
+  printf 'victim-fixture\n' >"$victim_parent/fixture/.victim-marker"
+  printf 'victim-output\n' >"$victim_parent/output/.victim-marker"
+
+  start_probe root_redirect "$docker_status" "$probe_output_path"
+  : >"$control_directory/docker-release"
+  local kind
+  for kind in sentinel fixture output; do
+    wait_for_file "$control_directory/delete-ready" "$kind root-redirect barrier"
+    release_redirected_delete "$kind" "$victim_parent"
+  done
+  wait_for_probe "$expected_status" "$probe_output_path"
+  if [ "${#redirect_failures[@]}" -ne 0 ]; then
+    printf '%s\n' "${redirect_failures[@]}" >&2
+    return 1
+  fi
+}
+
 run_pre_move_case cleanup_promotes_success 0 1
 run_pre_move_case cleanup_preserves_primary_failure 42 42
 run_post_validation_case quarantine_preserves_replacements 0 0
 run_post_validation_case quarantine_preserves_failure_status 42 42
+run_root_redirect_case pinned_quarantine_preserves_victims 0 0
+run_root_redirect_case pinned_quarantine_preserves_failure_status 42 42
 
 printf 'actual probe cleanup quarantine checks passed\n'
