@@ -1,4 +1,6 @@
 from datetime import UTC, datetime, timedelta
+import json
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -23,9 +25,14 @@ from app.services.forwarding_verification_service import ForwardingVerificationS
 SOURCE_NUMBER = "+33199000000"
 ALTERNATE_SOURCE_NUMBER = "+33199000001"
 PRESVO_NUMBER = "+33999000000"
+FIXTURES = Path(__file__).parents[4] / "libs/shared/tests/fixtures/v1"
 
 
-async def _seed_claimed_verification(database_url: str) -> tuple[str, str]:
+async def _seed_claimed_verification(
+    database_url: str,
+    *,
+    fixed_session_id: str | None = None,
+) -> tuple[str, str]:
     now = datetime.now(UTC)
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -81,9 +88,47 @@ async def _seed_claimed_verification(database_url: str) -> tuple[str, str]:
             called_number=PRESVO_NUMBER,
             room_name="verification-completion-room",
         )
-        result = (claim.session_id, str(user.id))
+        session_id = claim.session_id
+        if fixed_session_id is not None:
+            activation = await session.scalar(
+                select(CustomerActivation).where(
+                    CustomerActivation.user_id == user.id
+                )
+            )
+            assert activation is not None
+            activation.verification_session_id = fixed_session_id
+            await session.commit()
+            session_id = fixed_session_id
+        result = (session_id, str(user.id))
     await engine.dispose()
     return result
+
+
+@pytest.mark.anyio
+async def test_actual_verification_route_matches_golden_contracts(
+    async_client,
+    client_database_url: str,
+) -> None:
+    request_fixture = json.loads(
+        (FIXTURES / "verification_completion_request.json").read_text()
+    )
+    acknowledgement_fixture = json.loads(
+        (FIXTURES / "verification_completion_acknowledgement.json").read_text()
+    )
+    session_id, user_id = await _seed_claimed_verification(
+        client_database_url,
+        fixed_session_id=acknowledgement_fixture["session_id"],
+    )
+    token = create_verification_token(session_id=session_id, user_id=user_id)
+
+    response = await async_client.post(
+        f"/api/activation/verification/{session_id}/complete",
+        headers={"x-verification-token": token},
+        json=request_fixture,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == acknowledgement_fixture
 
 
 async def _load_artifact_counts(database_url: str) -> dict[str, int]:

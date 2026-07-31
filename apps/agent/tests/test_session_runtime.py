@@ -10,10 +10,11 @@ from presvo_contracts import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
     CustomerCallDispatch,
+    TranscriptAppendAcknowledgement,
+    TranscriptSegment,
     create_contract,
 )
 
-from presvo_contracts import TranscriptSegment as CallTranscriptItem
 from agent.session_runtime import (
     MAX_TRANSCRIPT_ITEMS,
     SessionRuntime,
@@ -32,7 +33,7 @@ class FakeEventPublisher:
 class FakeApiClient:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
-        self.appends: list[CallTranscriptItem] = []
+        self.appends: list[TranscriptSegment] = []
 
     async def complete_call(self, call_id, dispatch_token, request: CallCompletionRequest):
         self.calls.append((call_id, dispatch_token, request))
@@ -47,10 +48,14 @@ class FakeApiClient:
         self,
         _call_id: str,
         _dispatch_token: str,
-        item: CallTranscriptItem,
-    ) -> dict:
+        item: TranscriptSegment,
+    ) -> TranscriptAppendAcknowledgement:
         self.appends.append(item)
-        return {"status": "stored", "sequence_number": item.sequence_number}
+        return create_contract(
+            TranscriptAppendAcknowledgement,
+            status="stored",
+            sequence_number=item.sequence_number,
+        )
 
 
 def make_metadata(**overrides) -> CustomerCallDispatch:
@@ -170,8 +175,8 @@ class OrderedAppendClient(FakeApiClient):
         self,
         _call_id: str,
         _dispatch_token: str,
-        item: CallTranscriptItem,
-    ) -> dict:
+        item: TranscriptSegment,
+    ) -> TranscriptAppendAcknowledgement:
         self.appended.append(item.sequence_number)
         self.active_requests += 1
         self.maximum_active_requests = max(
@@ -181,7 +186,11 @@ class OrderedAppendClient(FakeApiClient):
         try:
             if item.sequence_number == self.blocked_sequence:
                 await self.release.wait()
-            return {"status": "stored", "sequence_number": item.sequence_number}
+            return create_contract(
+                TranscriptAppendAcknowledgement,
+                status="stored",
+                sequence_number=item.sequence_number,
+            )
         finally:
             self.active_requests -= 1
 
@@ -226,12 +235,16 @@ async def test_retryable_append_keeps_head_and_uses_capped_backoff() -> None:
             self,
             _call_id: str,
             _dispatch_token: str,
-            item: CallTranscriptItem,
-        ) -> dict:
+            item: TranscriptSegment,
+        ) -> TranscriptAppendAcknowledgement:
             self.attempts += 1
             if self.attempts <= 5:
                 raise TranscriptAppendRetryableError("retryable")
-            return {"status": "duplicate", "sequence_number": item.sequence_number}
+            return create_contract(
+                TranscriptAppendAcknowledgement,
+                status="duplicate",
+                sequence_number=item.sequence_number,
+            )
 
     client = RetryClient()
     runtime = SessionRuntime(
@@ -299,7 +312,7 @@ async def test_finalize_sends_only_unacknowledged_original_sequence_items() -> N
     await runtime.finalize(metadata, duration_seconds=3)
 
     assert api_client.calls[0][2].transcript == (
-        CallTranscriptItem(sequence_number=3, speaker="CALLER", text="three"),
+        TranscriptSegment(sequence_number=3, speaker="CALLER", text="three"),
     )
     assert runtime.pending_transcript == ()
     assert runtime.flusher_task is not None

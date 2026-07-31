@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from presvo_contracts import TranscriptSegment as TranscriptAppendRequest
+from presvo_contracts import TranscriptSegment
 from app.services.transcript_service import (
     TranscriptAuthorizationError,
     TranscriptService,
@@ -54,7 +54,7 @@ async def test_locked_call_owner_change_rejects_stale_authenticated_claims() -> 
     with pytest.raises(TranscriptAuthorizationError):
         await service.append(
             call_id=call_id,
-            item=TranscriptAppendRequest(
+            item=TranscriptSegment(
                 sequence_number=1,
                 speaker="CALLER",
                 text="Must not persist",

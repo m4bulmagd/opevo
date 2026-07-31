@@ -14,7 +14,7 @@ from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.user import User
 from app.repositories.call_repository import CallRepository
 from app.repositories.message_repository import MessageRepository
-from presvo_contracts import TranscriptSegment as TranscriptAppendRequest
+from presvo_contracts import TranscriptSegment
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.call_history_service import CallHistoryService
 from app.services.recording_service import RecordingService
@@ -863,7 +863,7 @@ async def test_deleted_call_rejects_delayed_transcript_and_lifecycle_writers(
         await TranscriptService(db_session).merge_recovery(
             call_id=call.id,
             transcript=[
-                TranscriptAppendRequest(
+                TranscriptSegment(
                     sequence_number=1,
                     speaker="CALLER",
                     text="Delayed transcript must not return",
