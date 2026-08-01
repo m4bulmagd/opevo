@@ -361,7 +361,7 @@ git commit -m "fix(api): isolate test settings from dotenv"
 
 **Interfaces:**
 - Consumes: Task 1's effective pre-dotenv `APP_ENV=test` behavior.
-- Produces: `_construction_settings_environment() -> dict[str, str]`, `pytest_configure(_config: pytest.Config) -> None`, and a collection-time `app.main.app` configured with exactly one JWKS source and no initialized auth provider.
+- Produces: `_construction_settings_environment() -> dict[str, str]`, `pytest_configure(config: pytest.Config) -> None`, and a collection-time `app.main.app` configured with exactly one JWKS source and no initialized auth provider.
 
 - [ ] **Step 1: Add a collection-time application regression**
 
@@ -458,7 +458,7 @@ Using `TEST_DATABASE_URL` and `TEST_REDIS_URL` when present keeps the same expli
 Add this hook immediately after `_construction_settings_environment`:
 
 ```python
-def pytest_configure(_config: pytest.Config) -> None:
+def pytest_configure(config: pytest.Config) -> None:
     os.environ.update(_construction_settings_environment())
     os.environ.pop("CLERK_JWT_KEY", None)
 ```
