@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from app.core.auth import ClerkAuthProvider
+from app.core.auth import AuthProvider, UserIdentity
 from app.core.redis import RedisEventBus
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import WebSocketManager
@@ -34,6 +34,11 @@ class _Observability:
         pass
 
 
+class _AuthProvider(AuthProvider):
+    async def verify_token(self, token: str) -> UserIdentity:
+        return UserIdentity(clerk_user_id="user_contract_test")
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("method", "kwargs", "fixture"),
@@ -59,7 +64,7 @@ async def test_api_realtime_producers_match_golden_contracts(
 ) -> None:
     redis = _Redis()
     service = RealtimeService(
-        auth_provider=ClerkAuthProvider(),
+        auth_provider=_AuthProvider(),
         event_bus=RedisEventBus(redis_client=redis),
         websocket_manager=WebSocketManager(),
         observability=_Observability(),

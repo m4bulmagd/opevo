@@ -27,15 +27,16 @@ does not exist on ``UserIdentity``; it has been corrected to
 """
 
 import asyncio
+from collections.abc import Callable
+from pathlib import Path
 import threading
-import tempfile
 
-import jwt as _jwt
 import pytest
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect as StarletteWebSocketDisconnect
 
 from app.core.auth import AuthProvider, UserIdentity
+from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
 from app.core.database import get_session
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import WebSocketManager
@@ -47,11 +48,14 @@ from app.websockets.manager import WebSocketManager
 
 
 class FakeAuthProvider(AuthProvider):
-    """Accepts only the literal string ``'valid-token'``; rejects everything else."""
+    def __init__(self, failure: Exception | None = None) -> None:
+        self.failure = failure
 
-    def verify_token(self, token: str) -> UserIdentity:
+    async def verify_token(self, token: str) -> UserIdentity:
+        if self.failure is not None:
+            raise self.failure
         if token != "valid-token":
-            raise _jwt.InvalidTokenError("bad token")
+            raise TokenRejected("signature")
         return UserIdentity(clerk_user_id="user_ws_test")
 
 
@@ -77,60 +81,73 @@ class FakeObservability:
 # ---------------------------------------------------------------------------
 
 
+class ManagerSpy(WebSocketManager):
+    def __init__(self) -> None:
+        super().__init__()
+        self.disconnect_calls: list[tuple[str, object]] = []
+
+    async def disconnect(self, user_id: str, websocket) -> None:
+        self.disconnect_calls.append((user_id, websocket))
+        await super().disconnect(user_id, websocket)
+
+
 @pytest.fixture()
-def ws_app(settings_env):  # settings_env auto-use fixture sets env vars
+def ws_app_factory(
+    settings_env,
+    tmp_path: Path,
+) -> Callable[..., tuple[object, WebSocketManager]]:
     """
     Stand-alone synchronous fixture.
 
-    Sets up an in-memory SQLite database, installs a ``FakeRealtimeService`` on
-    ``app.state``, and yields a (app, ws_manager) tuple.
-
-    Uses ``asyncio.run()`` for async setup so it works outside any event loop.
-    Does **not** use the async ``test_app`` fixture to avoid cross-loop conflicts
-    with Starlette's TestClient.
+    Gives every app a ``tmp_path``-scoped SQLite session override, installs a
+    ``RealtimeService`` on ``app.state``, and returns an (app, ws_manager) tuple.
+    It does **not** use the async ``test_app`` fixture, avoiding cross-loop
+    conflicts with Starlette's TestClient.
     """
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-    from app.models import Base
     from app.core.config import get_settings
     from app.main import create_app
 
-    app = create_app(
-        get_settings().model_copy(update={"realtime_enabled": True})
-    )
+    apps: list[object] = []
 
-    tmp = tempfile.mkdtemp()
-    db_url = f"sqlite+aiosqlite:///{tmp}/ws_test.db"
+    def _factory(
+        *,
+        auth_provider: AuthProvider | None = None,
+        websocket_manager: WebSocketManager | None = None,
+    ) -> tuple[object, WebSocketManager]:
+        app = create_app(
+            get_settings().model_copy(update={"realtime_enabled": True})
+        )
+        db_path = tmp_path / f"ws_test_{len(apps)}.db"
+        db_url = f"sqlite+aiosqlite:///{db_path}"
 
-    async def _setup_db() -> None:
-        engine = create_async_engine(db_url)
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        await engine.dispose()
+        async def _override_get_session():
+            engine = create_async_engine(db_url)
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as session:
+                yield session
+            await engine.dispose()
 
-    asyncio.run(_setup_db())
+        app.dependency_overrides[get_session] = _override_get_session
+        manager = websocket_manager or WebSocketManager()
+        app.state.realtime_service = RealtimeService(
+            auth_provider=auth_provider or FakeAuthProvider(),
+            event_bus=FakeEventBus(),
+            websocket_manager=manager,
+            observability=FakeObservability(),
+        )
+        apps.append(app)
+        return app, manager
 
-    async def _override_get_session():
-        engine = create_async_engine(db_url)
-        factory = async_sessionmaker(engine, expire_on_commit=False)
-        async with factory() as session:
-            yield session
-        await engine.dispose()
+    yield _factory
 
-    app.dependency_overrides[get_session] = _override_get_session
+    for app in apps:
+        app.dependency_overrides.pop(get_session, None)
 
-    ws_manager = WebSocketManager()
-    fake_service = RealtimeService(
-        auth_provider=FakeAuthProvider(),
-        event_bus=FakeEventBus(),
-        websocket_manager=ws_manager,
-        observability=FakeObservability(),
-    )
-    # Override the service that the lifespan installs.
-    app.state.realtime_service = fake_service
 
-    yield app, ws_manager
-
-    app.dependency_overrides.pop(get_session, None)
+@pytest.fixture()
+def ws_app(ws_app_factory) -> tuple[object, WebSocketManager]:
+    return ws_app_factory()
 
 
 def test_disabled_app_does_not_register_or_accept_websocket(settings_env) -> None:
@@ -249,32 +266,60 @@ def test_wrong_message_type_receives_error_and_close(ws_app) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2c. Invalid JWT token — server exception closes connection silently
+# 2c. Typed verifier failures — safe frame and transport-specific close
 # ---------------------------------------------------------------------------
 
 
-def test_invalid_jwt_token_closes_connection_without_error_frame(ws_app) -> None:
-    """
-    When the token is present but cannot be verified, ``FakeAuthProvider``
-    raises ``jwt.InvalidTokenError``.  The router's
-    ``except (WebSocketDisconnect, jwt.PyJWTError)`` handler fires; no
-    application-level error frame is sent and the connection closes silently.
+@pytest.mark.parametrize(
+    ("failure", "detail", "close_code"),
+    [
+        (TokenRejected("authorized_party"), "invalid_token", 1008),
+        (AuthenticationUnavailable("jwks_timeout"), "auth_unavailable", 1013),
+    ],
+)
+def test_websocket_maps_typed_auth_failure_to_safe_frame_and_close(
+    ws_app_factory, failure: Exception, detail: str, close_code: int
+) -> None:
+    app, _ = ws_app_factory(auth_provider=FakeAuthProvider(failure))
+    with TestClient(app).websocket_connect("/ws") as websocket:
+        websocket.send_json({"type": "auth", "token": "TOKEN_SENTINEL"})
+        assert websocket.receive_json() == {"type": "error", "detail": detail}
+        with pytest.raises(StarletteWebSocketDisconnect) as exc_info:
+            websocket.receive_json()
+    assert exc_info.value.code == close_code
 
-    We verify that the WS context exits cleanly without any application
-    message being received — we deliberately do *not* call ``receive_json()``
-    after the bad auth because that would block forever (server sends nothing).
-    """
-    app, _ = ws_app
-    client = TestClient(app, raise_server_exceptions=True)
 
-    messages_received: list[dict] = []
+def test_authenticated_client_disconnects_from_service_manager_exactly_once(
+    ws_app_factory,
+) -> None:
+    manager = ManagerSpy()
+    app, _ = ws_app_factory(websocket_manager=manager)
 
-    # Just verify the context exits without error.
-    with client.websocket_connect("/ws") as ws:
-        ws.send_json({"type": "auth", "token": "THIS-IS-NOT-VALID"})
-        # Intentionally no receive_json() call — the server has already exited.
+    with TestClient(app).websocket_connect("/ws") as websocket:
+        websocket.send_json({"type": "auth", "token": "valid-token"})
+        websocket.send_json({"type": "ping"})
+        assert websocket.receive_json() == {"type": "pong"}
 
-    assert messages_received == []
+    assert len(manager.disconnect_calls) == 1
+    assert manager.disconnect_calls[0][0] == "user_ws_test"
+
+
+def test_auth_failure_does_not_disconnect_before_identity_is_established(
+    ws_app_factory,
+) -> None:
+    manager = ManagerSpy()
+    app, _ = ws_app_factory(
+        auth_provider=FakeAuthProvider(TokenRejected("signature")),
+        websocket_manager=manager,
+    )
+
+    with TestClient(app).websocket_connect("/ws") as websocket:
+        websocket.send_json({"type": "auth", "token": "TOKEN_SENTINEL"})
+        assert websocket.receive_json() == {"type": "error", "detail": "invalid_token"}
+        with pytest.raises(StarletteWebSocketDisconnect):
+            websocket.receive_json()
+
+    assert manager.disconnect_calls == []
 
 
 # ---------------------------------------------------------------------------
