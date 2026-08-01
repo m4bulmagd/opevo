@@ -156,7 +156,7 @@ def unsigned_token(*, headers: dict[str, object]) -> str:
 
 def resolver_for(
     *,
-    transport: httpx.AsyncBaseTransport,
+    transport: httpx.AsyncBaseTransport | None = None,
     monotonic: Callable[[], float] | None = None,
     total_timeout_seconds: float = 2.0,
     observability: Observability | None = None,
@@ -176,6 +176,42 @@ def resolver_for(
         transport=transport,
         **({} if monotonic is None else {"monotonic": monotonic}),
     )
+
+
+@pytest.mark.anyio
+async def test_default_resolver_honors_https_proxy_and_no_proxy_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy_url = "http://proxy.example.com:8080"
+
+    def transport_factory(**kwargs: object) -> CountingTransport:
+        kid = "proxy-kid" if kwargs.get("proxy") == proxy_url else "direct-kid"
+        return CountingTransport(valid_jwks_response(kids=(kid,)))
+
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", transport_factory)
+    monkeypatch.setenv("HTTPS_PROXY", proxy_url)
+
+    proxied_resolver = resolver_for()
+    proxy_token = unsigned_token(headers={"alg": "RS256", "kid": "proxy-kid"})
+    assert await proxied_resolver.resolve_key(proxy_token)
+    await proxied_resolver.aclose()
+
+    monkeypatch.setenv("NO_PROXY", "clerk.example.com")
+    direct_resolver = resolver_for()
+    direct_token = unsigned_token(headers={"alg": "RS256", "kid": "direct-kid"})
+    assert await direct_resolver.resolve_key(direct_token)
+    await direct_resolver.aclose()
 
 
 @pytest.mark.anyio

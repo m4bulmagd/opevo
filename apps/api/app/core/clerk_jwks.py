@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Protocol
+from urllib.request import getproxies
 
 import httpx
 import jwt
@@ -48,6 +50,60 @@ class _InvalidJwksDocument(Exception):
     pass
 
 
+def _environment_proxy_url(url: str) -> str | None:
+    """Select the fixed endpoint's route using HTTPX environment semantics."""
+    target = httpx.URL(url)
+    proxy_info = getproxies()
+    no_proxy = proxy_info.get("no", "")
+    if any(
+        _no_proxy_host_matches(target, host.strip())
+        for host in no_proxy.split(",")
+        if host.strip()
+    ):
+        return None
+
+    proxy_url = proxy_info.get(target.scheme) or proxy_info.get("all")
+    if not proxy_url:
+        return None
+    return proxy_url if "://" in proxy_url else f"http://{proxy_url}"
+
+
+def _no_proxy_host_matches(target: httpx.URL, host: str) -> bool:
+    if host == "*":
+        return True
+    if "://" in host:
+        pattern = httpx.URL(host)
+    else:
+        try:
+            address = ipaddress.ip_address(host.split("/", maxsplit=1)[0])
+        except ValueError:
+            address = None
+        if isinstance(address, ipaddress.IPv6Address):
+            pattern = httpx.URL(f"all://[{host}]")
+        elif address is not None or host.lower() == "localhost":
+            pattern = httpx.URL(f"all://{host}")
+        else:
+            pattern = httpx.URL(f"all://*{host}")
+    return _url_matches_pattern(target, pattern)
+
+
+def _url_matches_pattern(target: httpx.URL, pattern: httpx.URL) -> bool:
+    if pattern.scheme not in ("", "all", target.scheme):
+        return False
+    if pattern.port is not None and pattern.port != target.port:
+        return False
+
+    host = pattern.host
+    if not host or host == "*":
+        return True
+    if host.startswith("*."):
+        return target.host.endswith(host[1:]) and target.host != host[2:]
+    if host.startswith("*"):
+        domain = host[1:]
+        return target.host == domain or target.host.endswith(f".{domain}")
+    return target.host == host
+
+
 class StaticSigningKeyResolver:
     def __init__(self, verification_key: VerificationKey) -> None:
         self._verification_key = verification_key
@@ -82,7 +138,9 @@ class JwksSigningKeyResolver:
         self._observability = observability
         self._monotonic = monotonic
         self._transport = (
-            transport if transport is not None else httpx.AsyncHTTPTransport()
+            transport
+            if transport is not None
+            else httpx.AsyncHTTPTransport(proxy=_environment_proxy_url(jwks_url))
         )
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(
