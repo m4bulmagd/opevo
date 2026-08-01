@@ -19,7 +19,7 @@
 - Do not add a general clock abstraction, a dependency, DOM rewriting, API mocking, relative SQL timestamps, or broad snapshot masking.
 - Do not change API response schemas or `scripts/seed-local-e2e-calls.sql`.
 - Keep realtime disabled and preserve accepted review choices 11C, 12C, and 18A.
-- Refresh only snapshots proven stale because of the fixed-time correction or already-approved workspace header/navigation changes. Entry/activation and configuration snapshots must remain byte-for-byte unchanged.
+- Refresh only snapshots proven stale because of the fixed-time correction or already-approved workspace header/navigation changes. Entry/activation snapshots remain byte-for-byte unchanged. The original expectation that every configuration snapshot remain unchanged is superseded only for the four images named in the approved execution addendum below.
 - Do not weaken API, agent, or shared-library coverage ratchets.
 - Preserve the user's untracked `Presvo_frontend/` directory. Never add, inspect recursively, modify, delete, or commit it.
 - Use `UV_CACHE_DIR=/tmp/uv-cache` for local uv commands; this changes only uv's disposable cache location.
@@ -388,6 +388,41 @@ git commit -m "test(web): refresh deterministic workspace visuals"
 
 It is harmless if `git add` names an unchanged file; Git stages only changed content. The cached name list must contain no unreviewed files.
 
+## Approved Execution Addendum — 21A / 22A / 23A
+
+Task 3 produced new evidence after the original diagnosis and the user approved
+three narrow follow-ons. This section explicitly supersedes the conflicting
+Task 3 snapshot restrictions and affected assertions above; the original RED
+procedure and diagnosis remain as historical context.
+
+- **21A:** install and pause Playwright's clock at
+  `2026-07-29T12:00:00Z` before navigating only the two live-preview visual
+  cases, and assert exact seeded `01:42` in `Preview call overview`. Do not mask
+  the timer or alter production timer behavior.
+- **22A:** use route-specific semantic sentinels, substantive main-content and
+  geometry checks, and saved/default-state assertions before configuration
+  screenshots. Refresh exactly `assistant-desktop-light.png`,
+  `assistant-preview-mobile-dark.png`, `billing-desktop-light.png`, and
+  `billing-mobile-dark.png`; account and entry/activation configuration images
+  remain unchanged.
+- **23A:** replace the invalid inactive-heading locator with exact lifecycle
+  assertions inside the semantic `Account status` region. Keep the browser
+  back/forward assertion. Because its failure repeated, fix the production
+  URL-owned state defect by synchronizing call-history draft query, status, and
+  range from changed server props.
+
+The final accepted update therefore contains fourteen PNGs: four dashboard,
+six calls/detail/live-preview, and the four configuration images above. After
+the successful update run, acceptance requires two consecutive complete
+non-update runner invocations; interrupted or partial runs do not count. Both
+proofs passed all 46 checks and performed project-scoped cleanup.
+
+Task 4's initially written `mypy app tests` and `mypy agent tests` commands also
+overreached the repository's configured static-analysis boundaries. The
+authoritative CI gates are `mypy app` and `mypy agent`; tests are exercised by
+their complete pytest/coverage gates. No package markers, ignores, flags, or
+test-double rewrites are authorized to make the exploratory commands pass.
+
 ---
 
 ### Task 4: Record the decision, run full regression gates, review, and clean up
@@ -453,7 +488,7 @@ DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55432/ai_call \
 TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55432/ai_call \
 REDIS_URL=redis://127.0.0.1:56379/0 \
 TEST_REDIS_URL=redis://127.0.0.1:56379/0 \
-UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app tests
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
 
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55432/ai_call \
 TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55432/ai_call \
@@ -471,7 +506,7 @@ Run:
 ```bash
 cd apps/agent
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check .
-UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent tests
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
 ```
 
