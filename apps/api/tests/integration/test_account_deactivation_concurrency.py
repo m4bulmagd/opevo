@@ -1590,6 +1590,7 @@ async def test_stale_go_live_command_preserves_activation_config_and_outbox(
 async def test_completion_removes_only_number_projections_and_preserves_history(
     account_session_factory: async_sessionmaker[AsyncSession],
     rs256_clerk_token_for,
+    settings,
 ) -> None:
     seeded = await _seed_active_account(
         account_session_factory,
@@ -2067,31 +2068,46 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
                 recording_service=_RetainedRecordingPlayback(),
             )
 
+    from app.core.auth import build_auth_provider
+    from app.core.observability import get_observability
+
+    auth_provider = build_auth_provider(
+        settings=settings,
+        observability=get_observability(),
+    )
     app = FastAPI()
+    app.state.auth_provider = auth_provider
     app.include_router(calls_router)
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_call_history_service] = override_history_service
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-    ) as client:
-        owner_headers = {
-            "Authorization": f"Bearer {rs256_clerk_token_for(owner_clerk_user_id)}"
-        }
-        other_headers = {
-            "Authorization": f"Bearer {rs256_clerk_token_for(other_clerk_user_id)}"
-        }
-        owner_list = await client.get("/api/calls", headers=owner_headers)
-        owner_detail = await client.get(
-            f"/api/calls/{retained_ids['call']}",
-            headers=owner_headers,
-        )
-        other_list = await client.get("/api/calls", headers=other_headers)
-        other_detail = await client.get(
-            f"/api/calls/{retained_ids['call']}",
-            headers=other_headers,
-        )
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            owner_headers = {
+                "Authorization": (
+                    f"Bearer {rs256_clerk_token_for(owner_clerk_user_id)}"
+                )
+            }
+            other_headers = {
+                "Authorization": (
+                    f"Bearer {rs256_clerk_token_for(other_clerk_user_id)}"
+                )
+            }
+            owner_list = await client.get("/api/calls", headers=owner_headers)
+            owner_detail = await client.get(
+                f"/api/calls/{retained_ids['call']}",
+                headers=owner_headers,
+            )
+            other_list = await client.get("/api/calls", headers=other_headers)
+            other_detail = await client.get(
+                f"/api/calls/{retained_ids['call']}",
+                headers=other_headers,
+            )
+    finally:
+        await auth_provider.aclose()
 
     assert owner_list.status_code == 200
     assert [UUID(item["id"]) for item in owner_list.json()["calls"]] == [
