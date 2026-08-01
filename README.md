@@ -1,4 +1,4 @@
-# Presvo
+# Presvo (WIP)
 
 > An open-source, France-first AI voice assistant for handling inbound business calls.
 
@@ -11,8 +11,8 @@
 Presvo gives professionals and small businesses a configurable AI receptionist and a dedicated French phone number. It can:
 
 - answer conditionally forwarded calls with business-specific context;
-- manage subscriptions, number setup, forwarding verification, and go-live;
-- preserve transcripts, summaries, private recordings, and minute usage; and
+- manage subscriptions, number setup, forwarding verification, and live-call monitoring;
+- preserve transcripts, summaries, private recordings, and minute usage;
 - provide a responsive dashboard for reviewing calls and configuring the assistant.
 
 ## Project progress
