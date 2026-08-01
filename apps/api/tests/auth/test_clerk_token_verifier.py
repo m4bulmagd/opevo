@@ -168,6 +168,67 @@ async def test_verifier_maps_invalid_security_claims_to_bounded_reasons(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("claim", "value"),
+    [
+        pytest.param("exp", None, id="exp-null"),
+        pytest.param("exp", True, id="exp-bool"),
+        pytest.param("exp", [], id="exp-list"),
+        pytest.param(
+            "exp",
+            {"private": "NUMERIC_DATE_SENTINEL"},
+            id="exp-object",
+        ),
+        pytest.param("exp", "NUMERIC_DATE_SENTINEL", id="exp-string"),
+        pytest.param("exp", float("inf"), id="exp-positive-overflow"),
+        pytest.param("exp", float("-inf"), id="exp-negative-overflow"),
+        pytest.param("exp", float("nan"), id="exp-not-a-number"),
+        pytest.param("nbf", None, id="nbf-null"),
+        pytest.param("nbf", False, id="nbf-bool"),
+        pytest.param("nbf", [], id="nbf-list"),
+        pytest.param(
+            "nbf",
+            {"private": "NUMERIC_DATE_SENTINEL"},
+            id="nbf-object",
+        ),
+        pytest.param("nbf", "NUMERIC_DATE_SENTINEL", id="nbf-string"),
+        pytest.param("nbf", float("inf"), id="nbf-positive-overflow"),
+        pytest.param("nbf", float("-inf"), id="nbf-negative-overflow"),
+        pytest.param("nbf", float("nan"), id="nbf-not-a-number"),
+    ],
+)
+async def test_verifier_normalizes_hostile_numeric_date_types_without_leakage(
+    clerk_provider,
+    token_with_claims,
+    recording_observability: RecordingObservability,
+    caplog: pytest.LogCaptureFixture,
+    claim: str,
+    value: object,
+) -> None:
+    token = token_with_claims(
+        **{claim: value, "private": "CLAIM_SENTINEL"}
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(Exception) as exc_info:
+            await clerk_provider.verify_token(token)
+
+    assert type(exc_info.value) is TokenRejected
+    assert exc_info.value.reason == "claims"
+    assert recording_observability.verifications == [("rejected", "claims")]
+    exposed = " ".join(
+        (
+            str(exc_info.value),
+            repr(exc_info.value),
+            caplog.text,
+            repr(recording_observability.verifications),
+        )
+    )
+    for sentinel in ("NUMERIC_DATE_SENTINEL", "CLAIM_SENTINEL", token):
+        assert sentinel not in exposed
+
+
+@pytest.mark.anyio
 async def test_verifier_enforces_configured_audience(
     settings,
     clerk_key_material: dict[str, str | bytes],

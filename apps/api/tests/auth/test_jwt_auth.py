@@ -90,6 +90,49 @@ async def request_protected_route(app: FastAPI, *, token: str) -> httpx.Response
         )
 
 
+async def request_protected_route_with_authorization(
+    app: FastAPI,
+    *,
+    authorization: str | None,
+) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    headers = {} if authorization is None else {"Authorization": authorization}
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        return await client.get("/api/agent/config", headers=headers)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "authorization",
+    [
+        pytest.param(None, id="absent"),
+        pytest.param("Basic CREDENTIAL_SENTINEL", id="wrong-scheme"),
+        pytest.param("CREDENTIAL_SENTINEL", id="missing-scheme"),
+        pytest.param("Bearer", id="missing-value"),
+        pytest.param("Bearer ", id="empty-value"),
+        pytest.param("Bearer    ", id="whitespace-value"),
+        pytest.param("   ", id="whitespace-header"),
+        pytest.param("Bearer\tCREDENTIAL_SENTINEL", id="tab-separator"),
+    ],
+)
+async def test_rest_maps_missing_or_unusable_credentials_to_generic_401(
+    test_app,
+    authorization: str | None,
+) -> None:
+    response = await request_protected_route_with_authorization(
+        test_app,
+        authorization=authorization,
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid token"}
+    if authorization and authorization.strip():
+        assert authorization not in response.text
+
+
 @pytest.mark.anyio
 async def test_rest_maps_rejected_token_to_generic_401(test_app) -> None:
     original_provider = test_app.state.auth_provider
@@ -345,3 +388,4 @@ async def test_protected_route_rejects_token_without_local_user(
     )
 
     assert response.status_code == 401
+    assert response.json() == {"detail": "User not synced"}

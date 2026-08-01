@@ -1,5 +1,6 @@
 import hmac
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -85,7 +86,27 @@ class ClerkAuthProvider(AuthProvider):
             }
             if configured_audience_is_present:
                 decode_kwargs["audience"] = self.settings.clerk_audience
-            payload = jwt.decode(token, **decode_kwargs)
+            try:
+                payload = jwt.decode(token, **decode_kwargs)
+            except jwt.DecodeError as error:
+                if type(error) is not jwt.DecodeError:
+                    raise
+                relaxed_decode_kwargs = {
+                    **decode_kwargs,
+                    "options": {
+                        **decode_kwargs["options"],
+                        "verify_exp": False,
+                        "verify_nbf": False,
+                    },
+                }
+                relaxed_payload = jwt.decode(token, **relaxed_decode_kwargs)
+                if not self._has_valid_numeric_date_types(relaxed_payload):
+                    raise TokenRejected("claims") from None
+                raise
+            except (TypeError, ValueError, OverflowError):
+                raise TokenRejected("claims") from None
+            if not self._has_valid_numeric_date_types(payload):
+                raise TokenRejected("claims")
             subject: object = payload.get("sub")
             if (
                 not isinstance(subject, str)
@@ -134,6 +155,17 @@ class ClerkAuthProvider(AuthProvider):
 
         self._observability.record_auth_verification("accepted", "none")
         return identity
+
+    @staticmethod
+    def _has_valid_numeric_date_types(payload: dict[str, Any]) -> bool:
+        for claim in ("exp", "nbf"):
+            value = payload.get(claim)
+            if type(value) is int:
+                continue
+            if type(value) is float and math.isfinite(value):
+                continue
+            return False
+        return True
 
     def _raise_token_rejected(self, reason: TokenRejectionReason) -> None:
         self._observability.record_auth_verification("rejected", reason)
@@ -217,7 +249,10 @@ async def require_user_identity(
     auth_provider: AuthProvider = Depends(get_auth_provider),
 ) -> AuthenticatedUserIdentity:
     if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+        )
 
     try:
         identity = await auth_provider.verify_token(credentials.credentials)
