@@ -1110,6 +1110,203 @@ than silently expanded into this change:
 
 Neither minor is a functional blocker for the shared-contract change.
 
+### Issue 20 — Dashboard Visual Baselines Drift With Calendar Time
+
+#### Concrete problem and evidence
+
+The local browser journey seeds call rows at fixed July 24–28, 2026 timestamps,
+but `DashboardMetricsService` evaluated its seven-day window against the real
+UTC clock. Calls therefore aged out as the calendar advanced: the same fixture
+and application revision rendered different totals and activity bars. A
+snapshot refresh alone could only move the failure forward in time.
+
+The snapshots were also older than the already-approved stable `Agent`
+navigation label and active-caller workspace header. The important distinction
+was therefore between expected UI changes and the independently recurring
+metrics-time drift; both had to be made explicit rather than hidden in one
+unreviewed bulk update.
+
+#### Options and tradeoffs
+
+| Option | Effort | Risk | Impact on other code | Ongoing maintenance |
+|---|---:|---:|---|---|
+| **20A — Selected:** pass one fail-closed local/test reference time through the existing dashboard service `now` seam | Low–medium | Low; a narrowly scoped configuration boundary must reject unsafe environments | API settings and route, development Compose API service, disposable E2E runner, focused tests | Low; one explicit seam and fixed fixture instant |
+| **20B:** rewrite SQL fixtures to use dates relative to each run | Medium | Couples call-history/detail fixtures to wall time and can conceal timestamp-boundary regressions | Seed SQL plus every consumer of the shared call fixtures | Medium; relative data must stay mutually consistent |
+| **20C:** refresh snapshots periodically, mock/rewrite the dashboard response, or mask the changing chart | Low initially | High false confidence; bypasses the real API/rendering path or accepts recurring expiry | Visual harness and repeated baseline churn | High and nondiagnostic |
+
+#### Recorded decision and implemented solution — 20A
+
+The user selected 20A. `Settings.dashboard_metrics_reference_time` is an
+optional Pydantic `AwareDatetime` exposed as
+`DASHBOARD_METRICS_REFERENCE_TIME`. Its default is `None`; when absent,
+`DashboardMetricsService` retains the real UTC clock. When present, a separate
+validator accepts only exact `development` or `test` environments. Staging,
+production, preview, unknown environment names, malformed datetimes, and naive
+datetimes fail closed. Validation errors do not echo the raw supplied value.
+
+The dashboard route receives `Settings` through its normal dependency boundary
+and passes the validated value to the existing
+`DashboardMetricsService.get_metrics(..., now=...)` parameter. There is no
+module-global clock, service rewrite, alternate response, or Playwright API
+mock. The route test overrides the dependency, calls the real service, checks
+the exact response, and independently records the forwarded instant.
+
+The disposable runner exports `2026-07-29T12:00:00Z` and development Compose
+passes the variable through only to the API service. The Compose value has no
+fallback, so ordinary local development remains on the real clock when the
+caller omits it. Migration, worker, agent, web, and production Compose never
+receive the key. Fixed SQL call fixtures and every non-dashboard clock remain
+unchanged.
+
+Production impact is deliberately fail-safe: production Compose cannot select
+the reference time, production startup rejects it if injected through another
+mechanism, and the normal dashboard path continues to use current UTC time.
+Realtime remains disabled; accepted decisions 11C, 12C, and 18A are unchanged.
+
+### Issue 21 — The Live-Preview Screenshot Contained a Running One-Second Timer
+
+#### Concrete problem and evidence
+
+The preview starts from seeded elapsed time `102` seconds (`01:42`) and its
+production component increments that value every second. Screenshot setup
+could cross the next tick and capture `01:43`. One update candidate did so,
+making strict pixel comparison timing-dependent even after Issue 20 fixed API
+metrics.
+
+#### Options and tradeoffs
+
+| Option | Effort | Risk | Tradeoff |
+|---|---:|---:|---|
+| **21A — Selected:** freeze the Playwright page clock for only the live-preview visual cases and assert exact `01:42` | Low | Low | Preserves the real component and strict pixels without changing production |
+| **21B:** mask the timer | Low | Medium | Stable pixels, but the test stops proving timer placement/content |
+| **21C:** accept either value or repeatedly refresh the baseline | Low | High | Leaves a nondeterministic visual contract and ongoing churn |
+
+#### Recorded decision and implemented solution — 21A
+
+The visual setup installs and pauses Playwright's clock at
+`2026-07-29T12:00:00Z` before navigation only for the desktop and mobile
+`/dashboard/live-call` cases. It then asserts exact `01:42` inside the semantic
+`Preview call overview` region before capture. No screenshot mask,
+production-only visual mode, or production timer behavior changed.
+
+### Issue 22 — Configuration Captures Lacked a Strong Readiness Contract
+
+#### Concrete problem and evidence
+
+The original plan asserted that every configuration baseline was current.
+Execution disproved that assumption: four images predated the stable `Agent`
+navigation label and active-caller header. Early batched inspection also made
+the two tall mobile documents look blank, while individual image and pixel
+inspection proved they were complete and that changes were confined to the
+header. A heading-plus-font wait was still too weak to distinguish a fully
+ready route from its shell.
+
+#### Options and tradeoffs
+
+| Option | Effort | Risk | Tradeoff |
+|---|---:|---:|---|
+| **22A — Selected:** add condition-based route readiness, inspect images individually, and refresh only four proven-stale baselines | Medium | Low | More explicit test code, but captures meaningful loaded/default state |
+| **22B:** preserve every configuration PNG | None | Medium | Keeps known-stale baselines and blocks a truthful full-suite pass |
+| **22C:** trust update mode and accept every regenerated configuration image | Low | High | Can commit shell, loading, wrong-state, or unrelated visual output |
+
+#### Recorded decision and implemented solution — 22A
+
+Each configuration route now requires a route-specific semantic sentinel,
+substantive main text and scroll geometry, exactly one rendered sentinel, and
+the relevant saved/default state before capture. A shell-only diagnostic first
+failed and then passed after this predicate was introduced.
+
+The four approved configuration images are exactly:
+
+- `apps/web/tests/e2e/configuration-visual.spec.ts-snapshots/assistant-desktop-light.png`
+- `apps/web/tests/e2e/configuration-visual.spec.ts-snapshots/assistant-preview-mobile-dark.png`
+- `apps/web/tests/e2e/configuration-visual.spec.ts-snapshots/billing-desktop-light.png`
+- `apps/web/tests/e2e/configuration-visual.spec.ts-snapshots/billing-mobile-dark.png`
+
+Account configuration desktop/mobile and every entry/activation baseline are
+byte-for-byte unchanged.
+
+### Issue 23 — Lifecycle Semantics and URL-Owned Filter State Were Misrepresented
+
+#### Concrete problem and evidence
+
+The restart/resume journey looked for `Presvo is inactive` as a heading, but
+production correctly renders it as a paragraph inside the `Account status`
+region. Separately, the calls browser-history check failed once and passed on
+an immediate retry. Per the approved decision, the assertion was retained and
+diagnosis was deferred unless the failure repeated. It did repeat: after
+`page.goBack()`, the URL and server-derived props reset, but the controlled
+status draft remained `completed` for 30 seconds.
+
+#### Options and tradeoffs
+
+| Option | Effort | Risk | Tradeoff |
+|---|---:|---:|---|
+| **23A — Selected:** use the real lifecycle semantics, retain the history contract, and fix state synchronization only after repeat evidence | Low–medium | Low | Tests the accessible UI and corrects a user-visible navigation defect |
+| **23B:** remove or loosen the failing assertions | Low | High | Makes the suite green while losing lifecycle/history guarantees |
+| **23C:** change production markup to satisfy the old heading locator or remount the whole control on navigation | Medium | Medium | Distorts semantics or discards local control state more broadly than necessary |
+
+#### Recorded decision and implemented solution — 23A
+
+The lifecycle journey scopes exact `Inactive`, exact `Presvo is inactive`, and
+the `Reactivate Presvo` button to the semantic `Account status` region.
+
+The repeated browser-history failure was a production defect, not a visual
+test accommodation. `CallHistorySearch` initializes draft query/status/range
+from URL-owned props and now uses an effect to resynchronize all three when
+those props change. Local editing remains local until submit; browser back and
+forward now restore both URL and controls. The original back/forward E2E
+assertion remains intact and passed in update mode and both final proof runs.
+
+### Final Visual Scope, Rejected Candidates, and Verification
+
+Exactly fourteen PNGs changed:
+
+- `apps/web/tests/e2e/dashboard-visual.spec.ts-snapshots/dashboard-desktop-dark.png`
+- `apps/web/tests/e2e/dashboard-visual.spec.ts-snapshots/dashboard-desktop-light.png`
+- `apps/web/tests/e2e/dashboard-visual.spec.ts-snapshots/dashboard-mobile-dark.png`
+- `apps/web/tests/e2e/dashboard-visual.spec.ts-snapshots/dashboard-mobile-light.png`
+- `apps/web/tests/e2e/dashboard-calls-visual.spec.ts-snapshots/calls-desktop-light.png`
+- `apps/web/tests/e2e/dashboard-calls-visual.spec.ts-snapshots/calls-mobile-light.png`
+- `apps/web/tests/e2e/dashboard-calls-visual.spec.ts-snapshots/call-detail-desktop-light.png`
+- `apps/web/tests/e2e/dashboard-calls-visual.spec.ts-snapshots/call-detail-mobile-light.png`
+- `apps/web/tests/e2e/dashboard-calls-visual.spec.ts-snapshots/live-call-preview-desktop-light.png`
+- `apps/web/tests/e2e/dashboard-calls-visual.spec.ts-snapshots/live-call-preview-mobile-dark.png`
+- the four Issue 22 configuration paths listed above.
+
+Before the execution addendum, candidates were rejected when the preview timer
+captured `01:43`, when a dashboard mobile capture was incomplete, or when a
+configuration image had not yet been individually proven complete. Those
+candidates and the four then-forbidden configuration updates were restored
+before implementing 21A–23A. The first approved update attempt then stopped on
+the repeated browser-history failure; only after the production state fix did
+a complete update pass succeed. No loading/error state, missing data, clipping,
+or unexplained pixel change was accepted.
+
+The successful update and each of two consecutive complete non-update proofs
+passed the same 46 checks: 4 entry/activation visuals, 1 activation journey, 10
+dashboard checks, 13 calls/detail/preview checks, 16 configuration checks, 1
+deactivation start, and 1 restart/resume journey. Dashboard values were
+`0 / 4 / 2 / 1m 40s`, activity bars were Fri/Sun/Mon/Tue, both preview captures
+showed `01:42`, browser history restored controls, and project-scoped cleanup
+ran after both proofs. An externally interrupted earlier run was not counted.
+
+Final branch gates passed with 184 shared tests; 2,181 API tests and API coverage
+ratchets of 89.79% line and 77.16% branch; 664 provider-free agent tests with
+four credentialed LiveKit evaluations deselected and coverage ratchets of
+88.50% line and 72.70% branch; 108 deployment-readiness tests; both Compose
+renders; all three root-context cleanup probes; and monorepo-root API/agent
+runtime image builds plus shared-contract import/schema-v1 probes. Ruff and the
+repository's production-source mypy gates passed for all three Python
+projects. No test was skipped in the shared or API suites, and no coverage
+threshold was weakened.
+
+Cleanup removed only the exact disposable PostgreSQL and Redis containers, the
+two explicitly tagged verification images, `apps/web/node_modules`, the task's
+npm/Playwright/uv caches and snapshot-review directory, and generated coverage
+reports. No `presvo-e2e` container, network, or volume remains. No global Docker
+prune or user-resource cleanup was performed.
+
 ## Implementation Authorization Boundary
 
 This document records review outcomes only. It does not authorize source,
@@ -1119,6 +1316,9 @@ The first prepared implementation wave covered **9A-1R and 10A**:
 [Python Test Foundation Implementation Plan](../superpowers/plans/2026-07-30-python-test-foundation.md).
 Issue **2A** was subsequently implemented by the
 [Shared Wire Contracts Implementation Plan](../superpowers/plans/2026-07-31-shared-wire-contracts.md),
-including the authorized implementation follow-ups 17A and 18A. Every later
-wave should receive its own reviewed implementation plan, preserve the issue
-numbers above, and state which accepted risks remain unchanged.
+including the authorized implementation follow-ups 17A and 18A. Issue **20A**
+and the execution follow-ups **21A, 22A, and 23A** were subsequently implemented
+by the
+[Deterministic Dashboard Visual E2E Implementation Plan](../superpowers/plans/2026-08-01-deterministic-dashboard-visual-e2e.md).
+Every later wave should receive its own reviewed implementation plan, preserve
+the issue numbers above, and state which accepted risks remain unchanged.

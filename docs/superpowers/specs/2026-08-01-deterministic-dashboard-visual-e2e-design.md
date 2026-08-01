@@ -1,7 +1,7 @@
 # Deterministic Dashboard Visual E2E Design
 
 **Date:** 2026-08-01
-**Decision:** 20A
+**Decision:** 20A, with approved execution follow-ups 21A, 22A, and 23A
 **Status:** Approved
 
 ## Problem
@@ -116,7 +116,9 @@ tests, Ruff, and mypy run before any snapshot update.
    dashboard call/detail/preview baselines were also captured before the same
    workspace header/navigation commits and may change only where visual
    comparison proves that direct relationship. Entry/activation and later
-   configuration baselines must remain unchanged.
+   configuration baselines were initially expected to remain unchanged; that
+   expectation is superseded for four named configuration images by the
+   approved execution addendum below.
 4. Run the complete E2E suite again without update mode. All visual, semantic,
    overflow, navigation, activation, deactivation, and restart/resume cases
    must pass.
@@ -135,3 +137,45 @@ tests, Ruff, and mypy run before any snapshot update.
 
 The credentialed LiveKit evaluation and a real agent-process E2E remain
 explicitly excluded under accepted decisions 11C and 12C.
+
+## Approved Execution Addendum — 21A / 22A / 23A
+
+This addendum records evidence found while executing the approved 20A design.
+It supersedes only the original configuration-baseline restriction and the
+affected visual-test steps; it does not rewrite the calendar-drift diagnosis,
+broaden the production clock override, enable realtime, or alter accepted
+decisions 11C, 12C, or 18A.
+
+- **21A — deterministic preview timer.** The live-call preview starts from the
+  seeded `01:42` value and advances once per second. Screenshot preparation was
+  long enough to capture `01:43` intermittently. The visual test now installs
+  and pauses Playwright's clock at `2026-07-29T12:00:00Z` before navigating only
+  the two `/dashboard/live-call` visual cases, then requires exact `01:42`
+  inside the `Preview call overview` region. No mask, production-only visual
+  mode, or production timer change was introduced.
+- **22A — configuration readiness and four approved baselines.** Execution
+  proved that these four images predated the stable `Agent` label and active
+  caller header: `assistant-desktop-light.png`,
+  `assistant-preview-mobile-dark.png`, `billing-desktop-light.png`, and
+  `billing-mobile-dark.png`. Their refresh is approved. Capture readiness now
+  checks a route-specific semantic sentinel, substantial main content,
+  rendered geometry, and saved/default state. Account configuration images and
+  all entry/activation images remain byte-for-byte unchanged.
+- **23A — semantic lifecycle state and repeated history defect.** The inactive
+  copy is a paragraph within the `Account status` region, not a heading. The
+  restart/resume journey therefore scopes exact `Inactive`, `Presvo is
+  inactive`, and `Reactivate Presvo` assertions to that region. The initially
+  intermittent browser-history failure repeated: after `page.goBack()`, URL
+  props reset while the controlled status draft stayed `completed`. Production
+  `CallHistorySearch` now synchronizes its query, status, and range drafts from
+  changed URL-owned props in an effect; the original back/forward assertion is
+  retained.
+
+The accepted snapshot set is exactly fourteen images: the four dashboard
+images, six calls/detail/live-preview images, and the four configuration images
+named above. Every candidate was inspected; incomplete or nondeterministic
+candidates from failed update attempts were rejected. Acceptance required two
+consecutive, complete invocations of the non-update E2E runner. Both passed all
+46 checks (`4 + 1 + 10 + 13 + 16 + 1 + 1`), including exact `01:42`, browser
+back/forward restoration, configuration readiness, service restart, and
+restart/resume cleanup.
