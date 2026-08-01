@@ -43,7 +43,7 @@ The recommendations use these agreed priorities:
 |---|---|---|---|
 | 1 | Realtime correctness | **1A** — API-authoritative realtime observer with resynchronization | Accepted |
 | 2 | Cross-app contracts | **2A** — small, versioned shared wire-contract package | Accepted; implemented |
-| 3 | Authentication boundary | **3A** — validate Clerk authorized parties | Accepted |
+| 3 | Authentication boundary | **3A** — validate Clerk authorized parties | Accepted; implemented |
 | 4 | Worker isolation | **4A + 4B** — split critical/background queues and add explicit limits, metrics, and load criteria | Accepted |
 | 5 | Outbox structure | **5A** — split the topic god module by cohesive topic family | Accepted |
 | 6 | Dependency construction | **6A** — explicit, thin composition roots with typed dependencies | Accepted |
@@ -53,7 +53,7 @@ The recommendations use these agreed priorities:
 | 10 | Coverage | **10A** — measured line and branch coverage ratchets | Accepted; implemented |
 | 11 | Voice behavior evaluation | **11C** — retain credential-gated manual evaluations | Accepted risk |
 | 12 | Agent-process E2E | **12C** — retain current provider-free E2E boundary | Accepted risk |
-| 13 | Authentication performance | **13A** — application-scoped, cached, nonblocking, bounded Clerk verifier | Accepted |
+| 13 | Authentication performance | **13A** — application-scoped, cached, nonblocking, bounded Clerk verifier | Accepted; implemented |
 | 14 | Realtime scaling | **14A** — per-active-user subscriptions and bounded socket delivery | Accepted |
 | 15 | Transcript ingest | **15A** — preserve per-segment durability while removing redundant work | Accepted |
 | 16 | Performance governance | **16A** — measure first, then set explicit budgets and thresholds | Accepted |
@@ -249,7 +249,7 @@ a broader acceptance boundary than intended.
 | **3B:** rely on audience validation alone | Low | Medium; audience and presenting party solve different boundaries | Minimal configuration | Low, but leaves the party-binding gap |
 | **3C:** retain issuer/signature-only behavior | None | Medium–high token replay/acceptance risk | None | Low code burden; higher security review burden |
 
-### Recorded decision and proposed solution — 3A
+### Recorded decision and implemented solution — 3A
 
 1. Add an explicit list of canonical authorized parties for each environment.
 2. Fail closed outside a clearly identified local-development mode when the
@@ -260,6 +260,14 @@ a broader acceptance boundary than intended.
    the shared verifier described in 13A.
 5. Log only safe failure categories; never log raw bearer tokens or complete
    claims.
+
+Implemented by the
+[Application-Scoped Clerk Authentication Verifier Design](../superpowers/specs/2026-08-01-clerk-auth-verifier-design.md)
+and
+[Implementation Plan](../superpowers/plans/2026-08-01-clerk-auth-verifier.md).
+Clerk mode now requires explicit canonical authorized parties and every session
+token requires an exact approved `azp`. REST and the dormant websocket path use
+the same typed, redacted policy. Realtime remains disabled.
 
 ### Required validation
 
@@ -800,7 +808,7 @@ an API-wide latency and availability problem.
 | **13B:** retain per-request providers but use a module-global cached JWK helper | Low–medium | Global test leakage and less explicit lifecycle | Auth module/tests | Medium |
 | **13C:** retain per-request synchronous verification | None | High tail-latency/event-loop and repeated-fetch risk | None | High incident risk |
 
-### Recorded decision and proposed solution — 13A
+### Recorded decision and implemented solution — 13A
 
 1. Construct one `AuthProvider` in the API composition root and inject it into
    REST and websocket authentication.
@@ -813,6 +821,16 @@ an API-wide latency and availability problem.
 6. Fail closed when a key cannot be verified. Any stale-key allowance must be
    narrowly specified and must never accept an unknown key.
 7. Implement 3A in the same verifier so REST and websocket policy cannot drift.
+
+Implemented by the
+[Application-Scoped Clerk Authentication Verifier Design](../superpowers/specs/2026-08-01-clerk-auth-verifier-design.md)
+and
+[Implementation Plan](../superpowers/plans/2026-08-01-clerk-auth-verifier.md).
+The API lifespan owns one asynchronous verifier and one HTTP client per
+replica. Static-key mode creates no client. JWKS mode coalesces refreshes,
+enforces connect/read/pool/total deadlines, retains a five-minute fresh cache
+plus ten minutes of known-key-only stale grace, and rate-limits completed
+refresh attempts to one per five seconds. Unknown keys never use stale data.
 
 ### Required validation
 
@@ -1365,6 +1383,58 @@ npm/Playwright/uv caches and snapshot-review directory, and generated coverage
 reports. No `presvo-e2e` container, network, or volume remains. No global Docker
 prune or user-resource cleanup was performed.
 
+## Clerk Authentication Implementation Evidence — 3A + 13A
+
+The approved Clerk design and implementation plan completed on the
+`feat/clerk-auth-verifier` branch. The implementation requires an exact
+canonical authorized-party match, fixes JWT verification to `RS256`, requires
+`exp`, `nbf`, `sub`, and `azp`, and shares one application-scoped provider
+between REST and the dormant websocket path. Invalid credentials map to generic
+`401`/`1008` results, while bounded JWKS unavailability maps to generic
+`503`/`1013` results. Tokens, claims, subjects, `azp`, `kid`, JWKS bodies, URLs,
+key material, response bodies, and raw provider exceptions are not emitted in
+responses or telemetry labels.
+
+Final verification evidence:
+
+- API: Ruff, mypy, and **2,362 tests passed with zero skips** against the CI
+  PostgreSQL/Redis contract. Coverage measured **89.96% line** and **77.43%
+  branch**; following the repository's round-down rule, the ratchets rose from
+  89.54%/76.46% to 89.95%/77.43% rather than being weakened.
+- Shared contracts: Ruff, mypy, and **184 tests passed**.
+- Agent: Ruff, mypy, and **664 tests passed**; the existing four
+  credential-gated LiveKit evaluations remained the only intentional skips.
+  Coverage remained above its ratchets at 88.50% line and 72.70% branch.
+- Web: formatting/lint, type checking, and **481 tests passed**. The complete
+  local E2E runner passed twice with snapshot updates disabled: **47 tests per
+  run**, including local activation, visual baselines, deactivation, service
+  restart, and resume.
+- Development and production Compose rendered successfully. Production Clerk
+  verifier settings are API-only; local Compose contains no Clerk verifier
+  settings; every realtime setting/default remains false.
+- The monorepo-root API runtime image built successfully and imported both
+  `httpx` and the installed `presvo_contracts` package.
+
+Task 6 also repaired two stale test harnesses that bypassed FastAPI lifespan:
+they now construct, attach, and always close one scoped verifier instead of
+relying on the removed per-request construction behavior.
+
+An additional test-infrastructure limitation was confirmed but is not part of
+3A/13A: forcing every function-scoped HTTP client fixture to reuse one
+`CLIENT_TEST_DATABASE_URL` PostgreSQL database leaks committed rows between
+parameterized cases because that optional fixture path does not reset the
+schema. The authoritative CI contract intentionally uses per-test SQLite for
+those general client tests and `TEST_DATABASE_URL` PostgreSQL for the dedicated
+PostgreSQL integration/concurrency proofs; that contract passed with zero API
+skips. If shared-PostgreSQL client fixtures become a required gate, the
+recommended separate change is explicit per-test schema/database isolation,
+not ad hoc row deletion.
+
+No deployment, remote push, merge, or realtime activation occurred. Issues 4,
+5, 6, 7, and 8 remain the agreed next order. Issues 1A and 14A remain deferred
+until realtime work resumes; Issues 15 and 16 also remain accepted but not
+implemented. Accepted risks 11C, 12C, and 18A are unchanged.
+
 ## Implementation Authorization Boundary
 
 This document records review outcomes only. It does not authorize source,
@@ -1378,5 +1448,7 @@ including the authorized implementation follow-ups 17A and 18A. Issue **20A**
 and the execution follow-ups **21A, 22A, and 23A** were subsequently implemented
 by the
 [Deterministic Dashboard Visual E2E Implementation Plan](../superpowers/plans/2026-08-01-deterministic-dashboard-visual-e2e.md).
+Issues **3A and 13A** were subsequently implemented by the
+[Application-Scoped Clerk Authentication Verifier Implementation Plan](../superpowers/plans/2026-08-01-clerk-auth-verifier.md).
 Every later wave should receive its own reviewed implementation plan, preserve
 the issue numbers above, and state which accepted risks remain unchanged.

@@ -1,8 +1,13 @@
 from collections.abc import Sequence
 
+from app.core.clerk_verification_source import select_clerk_verification_source
 from app.core.config import Settings
 from app.core.dispatch_token import is_dispatch_secret_safe
-from app.core.http_origin import parse_http_origin
+from app.core.http_origin import (
+    parse_canonical_http_origins,
+    parse_http_origin,
+    validate_absolute_https_url,
+)
 
 
 PRODUCTION_REQUIRED_SETTINGS = (
@@ -65,6 +70,30 @@ def _require(settings: Settings, names: Sequence[str]) -> list[str]:
 
 def validate_api_runtime(settings: Settings) -> None:
     environment = settings.app_env.strip().lower()
+    if settings.auth_mode == "clerk":
+        invalid_clerk: list[str] = []
+        if _is_missing(settings.clerk_issuer):
+            invalid_clerk.append("CLERK_ISSUER")
+        try:
+            parse_canonical_http_origins(settings.clerk_authorized_parties)
+        except ValueError:
+            invalid_clerk.append("CLERK_AUTHORIZED_PARTIES")
+        verification_source = select_clerk_verification_source(
+            jwt_key=settings.clerk_jwt_key,
+            jwks_url=settings.clerk_jwks_url,
+        )
+        if verification_source is None:
+            invalid_clerk.append("exactly one of CLERK_JWT_KEY or CLERK_JWKS_URL")
+        elif verification_source.kind == "jwks":
+            try:
+                validate_absolute_https_url(verification_source.value)
+            except ValueError:
+                invalid_clerk.append("CLERK_JWKS_URL")
+        if invalid_clerk:
+            raise RuntimeError(
+                "Missing or invalid required runtime settings: "
+                + ", ".join(invalid_clerk)
+            )
     if environment == "development":
         return
 

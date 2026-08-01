@@ -230,6 +230,38 @@ def test_account_deactivation_instruments_and_attributes_are_bounded() -> None:
     ].measurements == [(12.5, {"trigger": "owner_request"})]
 
 
+def test_authentication_instruments_and_attributes_are_bounded() -> None:
+    meter = _SpecificationMeter()
+    telemetry = _observability(meter=meter)
+
+    assert meter.specifications["presvo.auth.verifications"] == ("counter", None)
+    assert meter.specifications["presvo.auth.jwks.refreshes"] == ("counter", None)
+    assert meter.specifications["presvo.auth.jwks.refresh.duration"] == (
+        "histogram",
+        "s",
+    )
+    telemetry.record_auth_verification("rejected", "authorized_party")
+    telemetry.record_auth_verification("PRIVATE_OUTCOME", "PRIVATE_REASON")
+    telemetry.record_jwks_refresh("success", 0.25)
+    telemetry.record_jwks_coalesced_wait()
+    telemetry.record_jwks_stale_key_use()
+    telemetry.record_jwks_refresh_cooldown("rejected")
+
+    assert meter.instruments["presvo.auth.verifications"].measurements == [
+        (1, {"outcome": "rejected", "reason": "authorized_party"}),
+        (1, {"outcome": "other", "reason": "other"}),
+    ]
+    assert "PRIVATE_OUTCOME" not in repr(meter.instruments)
+    assert "PRIVATE_REASON" not in repr(meter.instruments)
+
+
+def test_authentication_telemetry_failures_never_break_authentication(caplog) -> None:
+    telemetry = _observability(meter=_Meter(failure=RuntimeError("METRIC_SECRET")))
+    telemetry.record_auth_verification("rejected", "claims")
+    telemetry.record_jwks_refresh("timeout", 1.0)
+    assert "METRIC_SECRET" not in caplog.text
+
+
 def test_account_deactivation_snapshot_zeros_vacated_status_and_attention() -> None:
     meter = _Meter()
     telemetry = _observability(meter=meter)
