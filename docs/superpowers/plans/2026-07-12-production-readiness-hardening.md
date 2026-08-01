@@ -1149,8 +1149,6 @@ git add -- \
 
 # Never stage these user-owned files:
 # docs/Verdict.md
-# docs/landing_page.png
-# docs/landing_page.webp
 git diff --cached --name-status
 git commit -m "feat: reconcile calls through a durable state machine"
 ```

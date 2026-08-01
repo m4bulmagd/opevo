@@ -4,7 +4,7 @@
 
 **Status:** Working MVP in active development. Locally verified, but not yet production-certified.
 
-![Presvo landing page](docs/landing_page.webp)
+![Presvo landing page](docs/dashboard.png)
 
 ## What Presvo does
 

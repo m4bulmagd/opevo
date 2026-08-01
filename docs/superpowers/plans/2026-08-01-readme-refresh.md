@@ -12,7 +12,7 @@
 
 - Target approximately 100–130 lines in `README.md`.
 - Keep the current product name during this documentation-only change; the broader Presvo-to-Opevo rename remains separate work.
-- Keep `docs/landing_page.webp` as the README screenshot.
+- Keep `docs/dashboard.png` as the README screenshot.
 - Treat `docs/PROJECT_STATUS.md` as canonical for status and roadmap claims.
 - Preserve the current Docker Compose core-stack and disposable browser-proof commands.
 - Do not inspect recursively, modify, delete, stage, or commit the user's untracked `Presvo_frontend/` directory.
@@ -27,7 +27,7 @@
 - Reference: `docs/PROJECT_STATUS.md`
 - Reference: `docs/superpowers/specs/2026-08-01-readme-refresh-design.md`
 - Verify: `compose.dev.yaml`
-- Verify: `docs/landing_page.webp`
+- Verify: `docs/dashboard.png`
 
 **Interfaces:**
 - Consumes: the evidence-based status vocabulary and feature state in `docs/PROJECT_STATUS.md`; the local service names, ports, and modes in `compose.dev.yaml`
@@ -39,7 +39,7 @@ Run:
 
 ```bash
 git status --short --branch
-test -f docs/landing_page.webp
+test -f docs/dashboard.png
 test -f docs/PROJECT_STATUS.md
 docker compose -f compose.dev.yaml config --services
 ```
@@ -57,7 +57,7 @@ Write this exact document:
 
 **Status:** Working MVP in active development. Locally verified, but not yet production-certified.
 
-![Presvo landing page](docs/landing_page.webp)
+![Presvo Dashboard](docs/dashboard.png)
 
 ## What Presvo does
 
@@ -200,7 +200,7 @@ Expected: the README is approximately 100–130 lines; all nine required heading
 Run:
 
 ```bash
-for target in docs/landing_page.webp docs/PROJECT_STATUS.md docs/architecture/staging-smoke-runbook.md docs/architecture/backend-context.md docs/architecture/integration-endpoints.md CONTRIBUTING.md SECURITY.md LICENSE; do test -e "$target" || exit 1; done
+for target in docs/dashboard.png docs/PROJECT_STATUS.md docs/architecture/staging-smoke-runbook.md docs/architecture/backend-context.md docs/architecture/integration-endpoints.md CONTRIBUTING.md SECURITY.md LICENSE; do test -e "$target" || exit 1; done
 docker compose -f compose.dev.yaml config --quiet
 git diff --check
 ```
