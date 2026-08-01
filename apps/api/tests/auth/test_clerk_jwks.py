@@ -102,6 +102,16 @@ class FailingCloseTransport(CountingTransport):
             raise RuntimeError("CLIENT_CLOSE_SENTINEL")
 
 
+class DistinctExitCloseTransport(FailingCloseTransport):
+    def __init__(self, outcome: httpx.Response | BaseException) -> None:
+        super().__init__(outcome)
+        self.exit_count = 0
+
+    async def __aexit__(self, *args: object) -> None:
+        del args
+        self.exit_count += 1
+
+
 class CancellableCloseTransport(CountingTransport):
     def __init__(self, outcome: httpx.Response | BaseException) -> None:
         super().__init__(outcome)
@@ -716,6 +726,24 @@ async def test_aclose_retries_client_close_after_exception() -> None:
     assert transport.close_count == 2
     await resolver.aclose()
     assert transport.close_count == 2
+
+
+@pytest.mark.anyio
+async def test_aclose_retry_uses_actual_close_not_transport_context_exit() -> None:
+    transport = DistinctExitCloseTransport(valid_jwks_response())
+    resolver = resolver_for(transport=transport)
+
+    with pytest.raises(RuntimeError, match="CLIENT_CLOSE_SENTINEL"):
+        await resolver.aclose()
+    assert transport.close_count == 1
+    assert transport.exit_count == 0
+
+    await resolver.aclose()
+    assert transport.close_count == 2
+    assert transport.exit_count == 0
+    await resolver.aclose()
+    assert transport.close_count == 2
+    assert transport.exit_count == 0
 
 
 @pytest.mark.anyio
