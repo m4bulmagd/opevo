@@ -18,7 +18,6 @@
 - Do not claim that the provider-backed voice path works without hosted credentials.
 - Do not add roadmap dates, production-readiness claims, private contact details, secrets, customer content, or full real phone numbers.
 - Preserve historical specs, plans, and the audit; label historical material instead of rewriting its point-in-time claims.
-- Use the existing `docs/landing_page.webp` asset in the README, not the larger PNG.
 - Limit implementation changes to documentation and open-source metadata.
 
 ---
@@ -496,7 +495,7 @@ git commit -m "docs: publish Presvo project status and roadmap"
 - Modify: `README.md:1-379`
 
 **Interfaces:**
-- Consumes: `docs/landing_page.webp`, `docs/PROJECT_STATUS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, the application `.env.example` files, and current operational docs.
+- Consumes: `docs/dashboard.png`, `docs/PROJECT_STATUS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, the application `.env.example` files, and current operational docs.
 - Produces: the repository's self-contained public landing page and links into all deeper documentation.
 
 - [ ] **Step 1: Capture the old README baseline**
@@ -505,7 +504,7 @@ Run:
 
 ```bash
 rg -n '^# AI Call Assistant$|^## Required GitHub branch protection$|^## Staging Checklist$' README.md
-! rg -n '^# Presvo$|docs/landing_page.webp|docs/PROJECT_STATUS.md' README.md
+! rg -n '^# Presvo$|docs/dashboard.png|docs/PROJECT_STATUS.md' README.md
 ```
 
 Expected: the old operations-first headings are found and the new portfolio
@@ -526,7 +525,7 @@ production-oriented architecture. Work is progressing toward a controlled
 beta, with onboarding, compliance, recovery testing, and real-provider
 certification still in progress.
 
-![Presvo landing page](docs/landing_page.webp)
+![Presvo Dashboard](docs/dashboard.png)
 
 ## What Presvo does
 
@@ -742,7 +741,7 @@ Run:
 
 ```bash
 rg -n '^# Presvo$|^## (What Presvo does|Current scope and limitations|Architecture|Engineering highlights|Technology stack|Local development|Repository structure|Documentation|Contributing and security|License)$' README.md
-rg -n 'docs/landing_page.webp|docs/PROJECT_STATUS.md|CONTRIBUTING.md|SECURITY.md|\[MIT License\]\(LICENSE\)' README.md
+rg -n 'docs/dashboard.png|docs/PROJECT_STATUS.md|CONTRIBUTING.md|SECURITY.md|\[MIT License\]\(LICENSE\)' README.md
 ! rg -n '^# AI Call Assistant$|^## Required GitHub branch protection$|^## Staging Checklist$' README.md
 git diff --check -- README.md
 ```
