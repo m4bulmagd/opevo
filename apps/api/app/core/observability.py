@@ -181,6 +181,28 @@ _CONTRACT_CODES = frozenset(
     }
 )
 _CONTRACT_TRANSPORTS = frozenset({"http", "livekit", "redis"})
+_AUTH_OUTCOMES = frozenset({"accepted", "rejected", "unavailable"})
+_AUTH_REASONS = frozenset(
+    {
+        "none",
+        "malformed",
+        "algorithm",
+        "signature",
+        "issuer",
+        "audience",
+        "claims",
+        "authorized_party",
+        "signing_key",
+        "jwks_timeout",
+        "jwks_http",
+        "jwks_invalid",
+        "jwks_closed",
+    }
+)
+_JWKS_REFRESH_OUTCOMES = frozenset(
+    {"success", "timeout", "http_error", "invalid", "cancelled"}
+)
+_JWKS_COOLDOWN_OUTCOMES = frozenset({"rejected", "unavailable"})
 
 
 def _safe_failure(event: str, operation: str, error: BaseException) -> None:
@@ -242,8 +264,13 @@ def _safe_trace_call(operation: str, callback: Callable[[], Any]) -> bool:
     return True
 
 
-def _safe_label(value: str, allowed: frozenset[str]) -> str:
-    return value if value in allowed else "unknown"
+def _safe_label(
+    value: str,
+    allowed: frozenset[str],
+    *,
+    fallback: str = "unknown",
+) -> str:
+    return value if value in allowed else fallback
 
 
 def _provider_labels(provider: str, operation: str) -> tuple[str, str]:
@@ -485,6 +512,21 @@ class Observability:
         self.invalid_contract_messages = meter.create_counter(
             "presvo.contract.invalid_messages"
         )
+        self.auth_verifications = meter.create_counter("presvo.auth.verifications")
+        self.jwks_refreshes = meter.create_counter("presvo.auth.jwks.refreshes")
+        self.jwks_refresh_duration = meter.create_histogram(
+            "presvo.auth.jwks.refresh.duration",
+            unit="s",
+        )
+        self.jwks_coalesced_waits = meter.create_counter(
+            "presvo.auth.jwks.coalesced_waits"
+        )
+        self.jwks_stale_key_uses = meter.create_counter(
+            "presvo.auth.jwks.stale_key_uses"
+        )
+        self.jwks_refresh_cooldowns = meter.create_counter(
+            "presvo.auth.jwks.refresh_cooldowns"
+        )
 
     def record_invalid_contract(
         self,
@@ -501,6 +543,66 @@ class Observability:
         _safe_call(
             "record_invalid_contract",
             lambda: self.invalid_contract_messages.add(1, attributes),
+        )
+
+    def record_auth_verification(self, outcome: str, reason: str) -> None:
+        attributes = {
+            "outcome": _safe_label(
+                outcome,
+                _AUTH_OUTCOMES,
+                fallback="other",
+            ),
+            "reason": _safe_label(
+                reason,
+                _AUTH_REASONS,
+                fallback="other",
+            ),
+        }
+        _safe_call(
+            "record_auth_verification",
+            lambda: self.auth_verifications.add(1, attributes),
+        )
+
+    def record_jwks_refresh(self, outcome: str, duration_seconds: float) -> None:
+        attributes = {
+            "outcome": _safe_label(
+                outcome,
+                _JWKS_REFRESH_OUTCOMES,
+                fallback="other",
+            )
+        }
+        _safe_call(
+            "record_jwks_refresh",
+            lambda: self.jwks_refreshes.add(1, attributes),
+        )
+        _safe_call(
+            "record_jwks_refresh_duration",
+            lambda: self.jwks_refresh_duration.record(duration_seconds, attributes),
+        )
+
+    def record_jwks_coalesced_wait(self) -> None:
+        _safe_call(
+            "record_jwks_coalesced_wait",
+            lambda: self.jwks_coalesced_waits.add(1),
+        )
+
+    def record_jwks_stale_key_use(self) -> None:
+        _safe_call(
+            "record_jwks_stale_key_use",
+            lambda: self.jwks_stale_key_uses.add(1),
+        )
+
+    def record_jwks_refresh_cooldown(self, outcome: str) -> None:
+        attributes = {
+            "outcome": _safe_label(
+                outcome,
+                _JWKS_COOLDOWN_OUTCOMES,
+                fallback="other",
+            )
+        }
+        _safe_call(
+            "record_jwks_refresh_cooldown",
+            lambda: self.jwks_refresh_cooldowns.add(1, attributes),
         )
 
     def record_http_request(

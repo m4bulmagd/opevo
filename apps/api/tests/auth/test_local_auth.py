@@ -8,7 +8,6 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -17,6 +16,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.auth import LocalAuthProvider
+from app.core.auth_failures import TokenRejected
 from app.core.config import Settings
 from app.core.database import get_session
 from app.models import Base
@@ -86,8 +86,19 @@ def local_settings() -> Settings:
 async def local_client(
     tmp_path: Path,
     local_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, str]]:
-    from app.main import create_app
+    from app import main as main_module
+
+    class NoopPool:
+        async def aclose(self) -> None:
+            pass
+
+    async def create_pool(redis_url: str) -> NoopPool:
+        del redis_url
+        return NoopPool()
+
+    monkeypatch.setattr(main_module, "create_arq_pool", create_pool)
 
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'local_auth.db'}"
     engine = create_async_engine(database_url, future=True)
@@ -95,7 +106,7 @@ async def local_client(
         await connection.run_sync(Base.metadata.create_all)
     await engine.dispose()
 
-    application = create_app(local_settings)
+    application = main_module.create_app(local_settings)
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
         request_engine = create_async_engine(database_url, future=True)
@@ -106,24 +117,26 @@ async def local_client(
 
     application.dependency_overrides[get_session] = override_get_session
     transport = httpx.ASGITransport(app=application)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-    ) as client:
-        yield client, database_url
+    async with application.router.lifespan_context(application):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            yield client, database_url
 
 
-def test_local_auth_accepts_only_exact_configured_token() -> None:
+@pytest.mark.anyio
+async def test_local_auth_accepts_only_exact_configured_token() -> None:
     provider = LocalAuthProvider(token=LOCAL_TOKEN)
 
-    identity = provider.verify_token(LOCAL_TOKEN)
+    identity = await provider.verify_token(LOCAL_TOKEN)
 
     assert identity.clerk_user_id == LOCAL_EXTERNAL_USER_ID
     for rejected_token in ("", "wrong-local-token", "é"):
-        with pytest.raises(HTTPException) as error:
-            provider.verify_token(rejected_token)
-        assert error.value.status_code == 401
-        message = str(error.value.detail)
+        with pytest.raises(TokenRejected) as error:
+            await provider.verify_token(rejected_token)
+        assert error.value.reason == "signature"
+        message = str(error.value)
         assert LOCAL_TOKEN not in message
         if rejected_token:
             assert rejected_token not in message

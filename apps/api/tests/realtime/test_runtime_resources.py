@@ -34,8 +34,19 @@ async def test_app_runtime_dependencies_use_captured_settings(
     pool = _Pool()
 
     class CapturingAuthProvider:
-        def __init__(self, settings=None) -> None:
-            observed["auth_settings"] = settings
+        def __init__(self) -> None:
+            self.closed = 0
+
+        async def aclose(self) -> None:
+            self.closed += 1
+            observed.setdefault("shutdown_order", []).append("auth_provider")
+
+    provider = CapturingAuthProvider()
+
+    def build_auth_provider(*, settings, observability):
+        observed["auth_settings"] = settings
+        observed["auth_observability"] = observability
+        return provider
 
     class CapturingBus:
         def __init__(self, *, redis_url=None) -> None:
@@ -59,20 +70,30 @@ async def test_app_runtime_dependencies_use_captured_settings(
         observed["arq_redis_url"] = redis_url
         return pool
 
-    monkeypatch.setattr(main_module, "ClerkAuthProvider", CapturingAuthProvider)
+    async def shutdown_observability(observability) -> None:
+        observed["shutdown_observability"] = observability
+        observed.setdefault("shutdown_order", []).append("observability")
+
+    monkeypatch.setattr(main_module, "build_auth_provider", build_auth_provider)
     monkeypatch.setattr(main_module, "RedisEventBus", CapturingBus)
     monkeypatch.setattr(main_module, "RealtimeService", WaitingRealtimeService)
     monkeypatch.setattr(main_module, "create_arq_pool", create_pool)
+    monkeypatch.setattr(main_module, "shutdown_observability", shutdown_observability)
 
     app = main_module.create_app(configured)
     async with app.router.lifespan_context(app):
         assert app.state.settings is configured
+        assert app.state.auth_provider is provider
+        assert observed["auth_provider"] is provider
+        assert observed["auth_observability"] is app.state.observability
 
     assert observed["auth_settings"] is configured
     assert observed["redis_url"] == configured.redis_url
     assert observed["arq_redis_url"] == configured.redis_url
     assert observed["bus_closed"] == 1
     assert pool.closed == 1
+    assert provider.closed == 1
+    assert observed["shutdown_order"] == ["auth_provider", "observability"]
 
 
 @pytest.mark.anyio
@@ -162,6 +183,21 @@ async def test_lifespan_closes_arq_pool_when_later_startup_fails(
         }
     )
     pool = _Pool()
+    shutdown_order: list[str] = []
+
+    class Provider:
+        def __init__(self) -> None:
+            self.closed = 0
+
+        async def aclose(self) -> None:
+            self.closed += 1
+            shutdown_order.append("auth_provider")
+
+    provider = Provider()
+
+    def build_auth_provider(*, settings, observability):
+        del settings, observability
+        return provider
 
     async def create_pool(redis_url=None):
         return pool
@@ -170,7 +206,13 @@ async def test_lifespan_closes_arq_pool_when_later_startup_fails(
         def __init__(self, *_args, **_kwargs) -> None:
             raise RuntimeError("STARTUP_PROVIDER_SECRET transcript")
 
+    async def shutdown_observability(observability) -> None:
+        del observability
+        shutdown_order.append("observability")
+
+    monkeypatch.setattr(main_module, "build_auth_provider", build_auth_provider)
     monkeypatch.setattr(main_module, "create_arq_pool", create_pool)
+    monkeypatch.setattr(main_module, "shutdown_observability", shutdown_observability)
     monkeypatch.setattr(livekit_api_module, "TokenVerifier", FailingVerifier)
 
     app = main_module.create_app(configured)
@@ -179,6 +221,9 @@ async def test_lifespan_closes_arq_pool_when_later_startup_fails(
             pass
 
     assert pool.closed == 1
+    assert app.state.auth_provider is provider
+    assert provider.closed == 1
+    assert shutdown_order == ["auth_provider", "observability"]
 
 
 @pytest.mark.anyio

@@ -1,8 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-import jwt
 
+from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
 from app.services.realtime_service import RealtimeService
-from app.websockets.manager import manager
 
 
 router = APIRouter(tags=["websocket"])
@@ -22,6 +21,14 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             message = await websocket.receive_json()
             if message.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
-    except (WebSocketDisconnect, jwt.PyJWTError):
+    except TokenRejected:
+        await websocket.send_json({"type": "error", "detail": "invalid_token"})
+        await websocket.close(code=1008)
+    except AuthenticationUnavailable:
+        await websocket.send_json({"type": "error", "detail": "auth_unavailable"})
+        await websocket.close(code=1013)
+    except WebSocketDisconnect:
+        pass
+    finally:
         if user_id is not None:
-            await manager.disconnect(user_id, websocket)
+            await realtime_service.websocket_manager.disconnect(user_id, websocket)

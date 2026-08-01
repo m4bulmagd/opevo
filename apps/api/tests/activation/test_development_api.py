@@ -41,6 +41,8 @@ async def _api_client(
     verification_ready: bool = False,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, async_sessionmaker, dict[str, User]]]:
     from app import main as main_module
+    from app.core.auth import build_auth_provider
+    from app.core.observability import get_observability
 
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'development-api.db'}"
     engine = create_async_engine(database_url, future=True)
@@ -155,6 +157,11 @@ async def _api_client(
         }
     )
     application = main_module.create_app(configured)
+    auth_provider = build_auth_provider(
+        settings=configured,
+        observability=get_observability(),
+    )
+    application.state.auth_provider = auth_provider
 
     async def override_get_session():
         async with session_factory() as session:
@@ -170,6 +177,7 @@ async def _api_client(
             yield client, session_factory, users
     finally:
         application.dependency_overrides.clear()
+        await auth_provider.aclose()
         await engine.dispose()
 
 
