@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -29,6 +29,12 @@ export function CallHistorySearch({
   const [draftStatus, setDraftStatus] = useState(status);
   const [draftRange, setDraftRange] = useState(range);
   const hasFilters = Boolean(query) || status !== "all" || range !== "all";
+
+  useEffect(() => {
+    setDraftQuery(query);
+    setDraftStatus(status);
+    setDraftRange(range);
+  }, [query, status, range]);
 
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
