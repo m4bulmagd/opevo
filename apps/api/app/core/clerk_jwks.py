@@ -81,6 +81,9 @@ class JwksSigningKeyResolver:
         self._total_timeout_seconds = total_timeout_seconds
         self._observability = observability
         self._monotonic = monotonic
+        self._transport = (
+            transport if transport is not None else httpx.AsyncHTTPTransport()
+        )
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(
                 connect=connect_timeout_seconds,
@@ -89,7 +92,7 @@ class JwksSigningKeyResolver:
                 pool=pool_timeout_seconds,
             ),
             follow_redirects=False,
-            transport=transport,
+            transport=self._transport,
         )
         self._generation: _KeyGeneration | None = None
         self._refresh_task: asyncio.Task[_KeyGeneration] | None = None
@@ -174,7 +177,7 @@ class JwksSigningKeyResolver:
                 if self._refresh_task is refresh_task:
                     self._refresh_task = None
                 if self._client_close_attempted:
-                    await self._client.__aexit__(None, None, None)
+                    await self._transport.aclose()
                 else:
                     self._client_close_attempted = True
                     await self._client.aclose()
