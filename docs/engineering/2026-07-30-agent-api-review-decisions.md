@@ -10,11 +10,10 @@
   authorized changes unless marked otherwise below.
 - **Review mode:** Big change, four sections, at most four top issues per section
 
-This document is the durable record of 22 numbered issues: the 16 issues
+This document is the durable record of 23 numbered issues: the 16 issues
 reviewed interactively, two shared-contract implementation-review follow-ups
-(17–18), and four dashboard/E2E execution decisions (20–23). Issue 19 was not
-assigned in this record and is therefore neither counted nor represented by a
-synthetic ledger row. The record preserves the evidence, alternatives,
+(17–18), one visual-baseline audit decision (19), and four dashboard/E2E
+execution decisions (20–23). The record preserves the evidence, alternatives,
 concrete tradeoffs, accepted directions, proposed solutions, dependencies, and
 validation gates so that the conversation is not the only source of truth.
 
@@ -60,6 +59,7 @@ The recommendations use these agreed priorities:
 | 16 | Performance governance | **16A** — measure first, then set explicit budgets and thresholds | Accepted |
 | 17 | Docker context-probe cleanup | **17A** — quarantine and physically anchor recursive cleanup | Accepted; implemented |
 | 18 | Same-UID quarantine capture race | **18A** — document and accept the narrow CI-only residual risk | Accepted risk |
+| 19 | Workspace visual baselines | **19A** — audit expected/actual/diff output, refresh only directly affected baselines, then prove the complete suite update-off | Accepted; implemented — 14 audited images, two complete proofs |
 | 20 | Dashboard visual determinism | **20A** — fail-closed development/test reference time through the existing API service seam | Accepted; implemented |
 | 21 | Live-preview visual timer | **21A** — freeze the Playwright clock for preview captures and assert exact seeded time | Accepted; implemented |
 | 22 | Configuration visual readiness | **22A** — semantic readiness gates and four proven-stale configuration baselines | Accepted; implemented |
@@ -68,9 +68,6 @@ The recommendations use these agreed priorities:
 Decisions **11C** and **12C** deliberately retain test gaps. They must not be
 described as solved by later work unless the user explicitly selects a
 different option.
-
-Issue **19** has no section or recorded decision in this document. The numbering
-gap is intentional: the approved dashboard sequence begins at Issue 20.
 
 ## System Boundary Summary
 
@@ -1121,6 +1118,55 @@ than silently expanded into this change:
   unknown-label behavior is already covered.
 
 Neither minor is a functional blocker for the shared-contract change.
+
+### Issue 19 — Workspace Visual Baselines Predated Approved Shell Changes
+
+#### Concrete problem and evidence
+
+The committed workspace screenshots were captured before the approved stable
+`Agent` navigation label and active-caller workspace header. The current UI and
+semantic assertions were correct, but the full non-update visual suite remained
+red because directly affected committed pixels still represented the older
+shell. A baseline update was therefore necessary, but update mode alone could
+not prove that every changed pixel was expected or that all affected routes had
+been found.
+
+Issue 19 is the authorization and review method for that known shell-driven
+visual delta. It is distinct from the calendar-time dashboard metrics drift
+discovered while executing the audit, which became Issue 20/20A. The same
+execution later exposed the running preview timer, configuration readiness,
+lifecycle semantics, and browser-history defects recorded separately as Issues
+21–23. Those later issues changed what could be accepted; they did not replace
+or retroactively broaden 19A without explicit approval.
+
+#### Options and tradeoffs
+
+| Option | Effort | Risk | Impact on other code | Ongoing maintenance |
+|---|---:|---:|---|---|
+| **19A — Selected:** inspect expected/actual/diff artifacts, refresh only directly affected baselines, audit every candidate, then run the complete suite with updates off | Medium | Low; unexpected output blocks acceptance instead of being normalized | Visual baselines and verification records; production code only if a separately diagnosed defect is approved | Low; durable images remain evidence-backed |
+| **19B:** update only the first reported mismatch without a complete candidate audit | Low | High concealment and under-scoping risk; the same shell change can affect later routes while update mode hides unrelated output | An arbitrary subset of screenshots | High; repeated failures and unexplained baseline churn |
+| **19C:** retain every existing baseline and accept the red suite | None | No false visual acceptance, but release verification remains unusable and known-approved UI changes stay unrecorded | No source changes | High operational friction; every full run remains red |
+
+#### Recorded decision and implemented solution — 19A
+
+The user selected 19A. Every expected/actual/diff triplet and later update
+candidate was reviewed rather than treating a successful update-mode run as
+approval. Changed paths were constrained to screenshots with a direct,
+explainable relationship to the stable navigation/header work or to a
+separately approved follow-on correction. Entry/activation and account
+configuration baselines stayed byte-for-byte unchanged.
+
+The audit initially rejected candidates that contained calendar-dependent
+dashboard data, a ticked preview timer, incomplete rendering, or changes beyond
+the then-approved scope. Issue 20 introduced the deterministic API reference
+time; Issues 21–23 resolved the additional evidenced defects and authorized the
+four legitimately stale configuration images. Only then did the 19A acceptance
+process approve the final fourteen-image set documented below.
+
+The acceptance gate was not the update run. Two consecutive, complete
+invocations of the full E2E runner with snapshot updates disabled both passed
+all 46 checks and completed project-scoped cleanup. Interrupted or partial runs
+did not count as proof.
 
 ### Issue 20 — Dashboard Visual Baselines Drift With Calendar Time
 
