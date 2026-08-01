@@ -95,6 +95,26 @@ class BarrierTransport(httpx.AsyncBaseTransport):
         self.close_count += 1
 
 
+class FailingCloseTransport(CountingTransport):
+    async def aclose(self) -> None:
+        self.close_count += 1
+        if self.close_count == 1:
+            raise RuntimeError("CLIENT_CLOSE_SENTINEL")
+
+
+class CancellableCloseTransport(CountingTransport):
+    def __init__(self, outcome: httpx.Response | BaseException) -> None:
+        super().__init__(outcome)
+        self.close_started = asyncio.Event()
+        self._first_close_blocker = asyncio.Event()
+
+    async def aclose(self) -> None:
+        self.close_count += 1
+        if self.close_count == 1:
+            self.close_started.set()
+            await self._first_close_blocker.wait()
+
+
 def _b64uint(value: int) -> str:
     width = (value.bit_length() + 7) // 8
     return jwt.utils.base64url_encode(value.to_bytes(width, "big")).decode()
@@ -681,3 +701,36 @@ async def test_aclose_cancels_refresh_and_closes_owned_client_exactly_once() -> 
         await resolver.resolve_key(token)
     assert exc_info.value.reason == "jwks_closed"
     assert transport.request_count == 1
+
+
+@pytest.mark.anyio
+async def test_aclose_retries_client_close_after_exception() -> None:
+    transport = FailingCloseTransport(valid_jwks_response())
+    resolver = resolver_for(transport=transport)
+
+    with pytest.raises(RuntimeError, match="CLIENT_CLOSE_SENTINEL"):
+        await resolver.aclose()
+    assert transport.close_count == 1
+
+    await resolver.aclose()
+    assert transport.close_count == 2
+    await resolver.aclose()
+    assert transport.close_count == 2
+
+
+@pytest.mark.anyio
+async def test_aclose_retries_client_close_after_cancellation() -> None:
+    transport = CancellableCloseTransport(valid_jwks_response())
+    resolver = resolver_for(transport=transport)
+    first_close = asyncio.create_task(resolver.aclose())
+    await transport.close_started.wait()
+
+    first_close.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_close
+    assert transport.close_count == 1
+
+    await resolver.aclose()
+    assert transport.close_count == 2
+    await resolver.aclose()
+    assert transport.close_count == 2
