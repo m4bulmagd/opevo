@@ -9,9 +9,10 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 
-from app.core.auth import ClerkAuthProvider, UserIdentity
+from app.core.auth import ClerkAuthProvider, UserIdentity, build_auth_provider
 from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
 from app.core.clerk_jwks import JwksSigningKeyResolver, StaticSigningKeyResolver
+from app.core.runtime_validation import validate_api_runtime
 
 
 APP_ORIGIN = "https://app.example.com"
@@ -42,9 +43,17 @@ class RecordingObservability:
 class JsonTransport(httpx.AsyncBaseTransport):
     def __init__(self, document: dict[str, object]) -> None:
         self.document = document
+        self.request_count = 0
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=self.document, request=request)
+        self.request_count += 1
+        content = json.dumps(self.document).encode()
+
+        class JsonStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield content
+
+        return httpx.Response(200, stream=JsonStream(), request=request)
 
 
 @pytest.fixture
@@ -105,6 +114,41 @@ async def test_static_verifier_accepts_complete_rs256_token(
     identity = await clerk_provider.verify_token(rs256_clerk_token_for("user_active"))
 
     assert identity == UserIdentity(clerk_user_id="user_active")
+
+
+@pytest.mark.anyio
+async def test_whitespace_static_key_selects_and_uses_configured_jwks(
+    settings,
+    clerk_key_material: dict[str, str | bytes],
+    recording_observability: RecordingObservability,
+    rs256_clerk_token_for,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_key = serialization.load_pem_private_key(
+        str(clerk_key_material["private_key_pem"]).encode(),
+        password=None,
+    )
+    jwk = jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
+    jwk.update({"kid": "test-key", "alg": "RS256", "use": "sig"})
+    transport = JsonTransport({"keys": [jwk]})
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_kwargs: transport)
+    jwks_settings = settings.model_copy(
+        update={"clerk_jwt_key": " \t\n", "clerk_jwks_url": JWKS_URL}
+    )
+    validate_api_runtime(jwks_settings)
+    provider = build_auth_provider(
+        settings=jwks_settings,
+        observability=recording_observability,  # type: ignore[arg-type]
+    )
+    token = rs256_clerk_token_for("user_active", headers={"kid": "test-key"})
+
+    try:
+        identity = await provider.verify_token(token)
+    finally:
+        await provider.aclose()
+
+    assert identity == UserIdentity(clerk_user_id="user_active")
+    assert transport.request_count == 1
 
 
 @pytest.mark.anyio

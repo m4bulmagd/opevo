@@ -123,6 +123,7 @@ def validate_absolute_https_url(value: str) -> None:
         or _has_unsafe_url_character(value)
         or "\\" in value
         or "*" in value
+        or "#" in value
     ):
         raise error
     try:
