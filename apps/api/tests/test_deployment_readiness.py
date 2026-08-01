@@ -73,10 +73,27 @@ CLERK_SESSION_VERIFIER_SETTINGS = (
 )
 
 
-def render_compose(compose_file: str, environment: dict[str, str]) -> dict:
+def render_compose(
+    compose_file: str | Path,
+    environment: dict[str, str],
+    *,
+    resolve_env_files: bool = True,
+    working_directory: Path = REPO_ROOT,
+) -> dict:
+    command = [
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "config",
+        "--format",
+        "json",
+    ]
+    if not resolve_env_files:
+        command.append("--no-env-resolution")
     result = subprocess.run(
-        ["docker", "compose", "-f", compose_file, "config", "--format", "json"],
-        cwd=REPO_ROOT,
+        command,
+        cwd=working_directory,
         capture_output=True,
         check=False,
         env={**os.environ, **environment},
@@ -95,8 +112,51 @@ def resolved_service_environment(document: dict, service: str) -> dict[str, str]
 
 
 def local_compose_service_environment(service: str) -> dict[str, str]:
-    document = render_compose("compose.dev.yaml", {})
+    document = render_compose(
+        "compose.dev.yaml",
+        {},
+        resolve_env_files=False,
+    )
     return resolved_service_environment(document, service)
+
+
+def test_compose_render_can_skip_service_env_file_resolution(tmp_path: Path) -> None:
+    compose_file = tmp_path / "compose.yaml"
+    service_env_file = tmp_path / "service.env"
+    compose_file.write_text(
+        """\
+services:
+  api:
+    image: example.invalid/presvo/api:test
+    env_file:
+      - ./service.env
+    environment:
+      EXPLICIT_SENTINEL: from-compose-model
+""",
+        encoding="utf-8",
+    )
+    service_env_file.write_text(
+        "ENV_FILE_SENTINEL=from-service-env-file\n",
+        encoding="utf-8",
+    )
+
+    resolved_document = render_compose(
+        compose_file,
+        {},
+        working_directory=tmp_path,
+    )
+    isolated_document = render_compose(
+        compose_file,
+        {},
+        resolve_env_files=False,
+        working_directory=tmp_path,
+    )
+    resolved_environment = resolved_service_environment(resolved_document, "api")
+    isolated_environment = resolved_service_environment(isolated_document, "api")
+
+    assert resolved_environment["ENV_FILE_SENTINEL"] == "from-service-env-file"
+    assert "ENV_FILE_SENTINEL" not in isolated_environment
+    assert isolated_environment["EXPLICIT_SENTINEL"] == "from-compose-model"
 
 
 def test_postgres_driver_is_available_without_development_dependencies() -> None:
