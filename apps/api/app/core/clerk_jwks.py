@@ -96,6 +96,7 @@ class JwksSigningKeyResolver:
         self._last_refresh_completed_at: float | None = None
         self._last_refresh_failure: AuthenticationUnavailableReason | None = None
         self._closed = False
+        self._client_close_attempted = False
         self._client_closed = False
         self._close_lock = asyncio.Lock()
 
@@ -172,8 +173,12 @@ class JwksSigningKeyResolver:
             finally:
                 if self._refresh_task is refresh_task:
                     self._refresh_task = None
+                if self._client_close_attempted:
+                    await self._client.__aexit__(None, None, None)
+                else:
+                    self._client_close_attempted = True
+                    await self._client.aclose()
                 self._client_closed = True
-                await self._client.aclose()
 
     def _extract_kid(self, token: str) -> str:
         try:
