@@ -89,6 +89,27 @@ test("configuration visual readiness rejects a shell-only main region", () => {
   ).toBe(false);
 });
 
+test("configuration visual readiness rejects non-seeded base Assistant state", async ({ page }) => {
+  const baseAssistantCase = VISUAL_CASES[0];
+
+  for (const state of [
+    { agentName: "Wrong assistant", unsavedChanges: false },
+    { agentName: "Lea", unsavedChanges: true },
+  ]) {
+    await page.setContent(`
+      <main style="min-height: 240px">
+        <button role="tab">Advanced <span>Preview</span></button>
+        <label>Agent name <input value="${state.agentName}" /></label>
+        <label>Owner context <textarea>Seeded owner context with enough text for a complete configuration route readiness diagnostic.</textarea></label>
+        ${state.unsavedChanges ? '<div role="status" aria-label="Unsaved changes">Unsaved changes</div>' : ""}
+        <p>Additional seeded Assistant content ensures this fixture represents a rendered route body rather than a shell.</p>
+      </main>
+    `);
+
+    await expect(expectConfigurationRouteReady(page, baseAssistantCase, 100)).rejects.toThrow();
+  }
+});
+
 async function setThemeBeforeNavigation(page: Page, theme: ThemeMode) {
   await page.context().clearCookies({ name: "theme_mode" });
   await page.context().addCookies([{ name: "theme_mode", value: theme, url: BASE_URL }]);
@@ -137,11 +158,19 @@ async function configurationReadinessDiagnostics(
   return { ...diagnostics, ready: isConfigurationRouteReady(diagnostics) };
 }
 
-async function expectConfigurationRouteReady(page: Page, visualCase: VisualCase) {
+async function expectConfigurationRouteReady(page: Page, visualCase: VisualCase, stateAssertionTimeout = 30_000) {
   const sentinel = configurationReadinessSentinel(page, visualCase);
 
   if (visualCase.route.startsWith("/dashboard/agent")) {
     await expect(page.getByRole("tab", { name: "Advanced Preview" })).toBeVisible();
+  }
+  if (visualCase.route === "/dashboard/agent") {
+    await expect(page.getByRole("textbox", { name: "Agent name" })).toHaveValue("Lea", {
+      timeout: stateAssertionTimeout,
+    });
+    await expect(page.getByRole("status", { name: "Unsaved changes" })).toHaveCount(0, {
+      timeout: stateAssertionTimeout,
+    });
   }
   if (visualCase.route.includes("tab=preview")) {
     await expect(page.getByRole("region", { name: "Advanced assistant Preview" })).toBeVisible();
