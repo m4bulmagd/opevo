@@ -10,9 +10,20 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import Settings, get_settings
+from app.core.auth_failures import (
+    AuthenticationUnavailable,
+    TokenRejected,
+    TokenRejectionReason,
+)
+from app.core.clerk_jwks import (
+    JwksSigningKeyResolver,
+    SigningKeyResolver,
+    StaticSigningKeyResolver,
+)
+from app.core.config import Settings
 from app.core.database import get_session
-from app.core.logging import report_safe_exception
+from app.core.http_origin import parse_canonical_http_origins
+from app.core.observability import Observability
 from app.repositories.user_repository import UserRepository
 from app.services.user_bootstrap_service import UserBootstrapService
 
@@ -35,45 +46,101 @@ class AuthenticatedUserIdentity:
 
 class AuthProvider(ABC):
     @abstractmethod
-    def verify_token(self, token: str) -> UserIdentity:
+    async def verify_token(self, token: str) -> UserIdentity:
         raise NotImplementedError
 
-    def get_user_id(self, token: str) -> str:
-        return self.verify_token(token).clerk_user_id
+    async def get_user_id(self, token: str) -> str:
+        return (await self.verify_token(token)).clerk_user_id
+
+    async def aclose(self) -> None:
+        return None
 
 
 class ClerkAuthProvider(AuthProvider):
     def __init__(
         self,
         *,
-        settings: Settings | None = None,
-        jwk_client: jwt.PyJWKClient | None = None,
+        settings: Settings,
+        authorized_parties: frozenset[str],
+        signing_key_resolver: SigningKeyResolver,
+        observability: Observability,
     ) -> None:
-        self.settings = settings or get_settings()
-        self._jwk_client = jwk_client
+        self.settings = settings
+        self._authorized_parties = authorized_parties
+        self._signing_key_resolver = signing_key_resolver
+        self._observability = observability
 
-    def verify_token(self, token: str) -> UserIdentity:
-        decode_kwargs: dict[str, Any] = {
-            "algorithms": ["RS256"],
-            "issuer": self.settings.clerk_issuer,
-        }
-        if self.settings.clerk_jwt_key:
-            decode_kwargs["key"] = self.settings.clerk_jwt_key
-        else:
-            jwks_url = self._resolve_jwks_url()
-            signing_key = self._get_jwk_client(jwks_url).get_signing_key_from_jwt(token)
-            decode_kwargs["key"] = signing_key.key
-        if self.settings.clerk_audience:
-            decode_kwargs["audience"] = self.settings.clerk_audience
-        else:
-            decode_kwargs["options"] = {"verify_aud": False}
+    async def verify_token(self, token: str) -> UserIdentity:
+        try:
+            signing_key = await self._signing_key_resolver.resolve_key(token)
+            configured_audience_is_present = bool(self.settings.clerk_audience)
+            decode_kwargs: dict[str, Any] = {
+                "key": signing_key,
+                "algorithms": ["RS256"],
+                "issuer": self.settings.clerk_issuer,
+                "options": {
+                    "require": ["exp", "nbf", "sub", "azp"],
+                    "verify_aud": configured_audience_is_present,
+                },
+            }
+            if configured_audience_is_present:
+                decode_kwargs["audience"] = self.settings.clerk_audience
+            payload = jwt.decode(token, **decode_kwargs)
+            subject: object = payload.get("sub")
+            if (
+                not isinstance(subject, str)
+                or type(subject) is not str
+                or not subject
+            ):
+                raise TokenRejected("claims")
+            authorized_party = payload.get("azp")
+            if (
+                type(authorized_party) is not str
+                or authorized_party not in self._authorized_parties
+            ):
+                raise TokenRejected("authorized_party")
+            identity = UserIdentity(clerk_user_id=subject)
+        except AuthenticationUnavailable as error:
+            self._observability.record_auth_verification(
+                "unavailable", error.reason
+            )
+            raise
+        except TokenRejected as error:
+            self._observability.record_auth_verification("rejected", error.reason)
+            raise
+        except jwt.InvalidAlgorithmError:
+            self._raise_token_rejected("algorithm")
+        except (jwt.InvalidSignatureError, jwt.InvalidKeyError):
+            self._raise_token_rejected("signature")
+        except jwt.InvalidIssuerError:
+            self._raise_token_rejected("issuer")
+        except jwt.InvalidAudienceError:
+            self._raise_token_rejected("audience")
+        except jwt.MissingRequiredClaimError as error:
+            self._raise_token_rejected(
+                "authorized_party" if error.claim == "azp" else "claims"
+            )
+        except (
+            jwt.ExpiredSignatureError,
+            jwt.ImmatureSignatureError,
+            jwt.InvalidIssuedAtError,
+            jwt.exceptions.InvalidSubjectError,
+        ):
+            self._raise_token_rejected("claims")
+        except jwt.DecodeError:
+            self._raise_token_rejected("malformed")
+        except jwt.PyJWTError:
+            self._raise_token_rejected("malformed")
 
-        payload = jwt.decode(token, **decode_kwargs)
-        subject = payload.get("sub")
-        if not subject:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing subject")
+        self._observability.record_auth_verification("accepted", "none")
+        return identity
 
-        return UserIdentity(clerk_user_id=subject)
+    def _raise_token_rejected(self, reason: TokenRejectionReason) -> None:
+        self._observability.record_auth_verification("rejected", reason)
+        raise TokenRejected(reason) from None
+
+    async def aclose(self) -> None:
+        await self._signing_key_resolver.aclose()
 
     def verify_webhook(self, payload: bytes, headers: dict[str, str]) -> str:
         if not self.settings.clerk_webhook_secret:
@@ -87,30 +154,14 @@ class ClerkAuthProvider(AuthProvider):
             headers=headers,
         )
 
-    def _resolve_jwks_url(self) -> str:
-        if self.settings.clerk_jwks_url:
-            return self.settings.clerk_jwks_url
-        if self.settings.clerk_issuer:
-            return self.settings.clerk_issuer.rstrip("/") + "/.well-known/jwks.json"
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="JWT key not configured")
-
-    def _get_jwk_client(self, jwks_url: str) -> jwt.PyJWKClient:
-        if self._jwk_client is not None:
-            return self._jwk_client
-        self._jwk_client = jwt.PyJWKClient(jwks_url)
-        return self._jwk_client
-
 
 class LocalAuthProvider(AuthProvider):
     def __init__(self, *, token: str) -> None:
         self._token = token.encode("utf-8")
 
-    def verify_token(self, token: str) -> UserIdentity:
+    async def verify_token(self, token: str) -> UserIdentity:
         if not hmac.compare_digest(token.encode("utf-8"), self._token):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token",
-            )
+            raise TokenRejected("signature")
         return UserIdentity(clerk_user_id=LOCAL_USER_EXTERNAL_ID)
 
 
@@ -118,10 +169,46 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_auth_provider(request: Request) -> AuthProvider:
-    settings = getattr(request.app.state, "settings", None) or get_settings()
+    auth_provider = getattr(request.app.state, "auth_provider", None)
+    if auth_provider is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication provider not initialized",
+        )
+    return auth_provider
+
+
+def build_auth_provider(
+    *,
+    settings: Settings,
+    observability: Observability,
+) -> AuthProvider:
     if settings.auth_mode == "local":
         return LocalAuthProvider(token=settings.local_auth_token)
-    return ClerkAuthProvider(settings=settings)
+    authorized_parties = frozenset(
+        parse_canonical_http_origins(settings.clerk_authorized_parties)
+    )
+    if settings.clerk_jwt_key:
+        resolver: SigningKeyResolver = StaticSigningKeyResolver(
+            settings.clerk_jwt_key
+        )
+    else:
+        resolver = JwksSigningKeyResolver(
+            jwks_url=str(settings.clerk_jwks_url),
+            cache_ttl_seconds=settings.clerk_jwks_cache_ttl_seconds,
+            stale_grace_seconds=settings.clerk_jwks_stale_grace_seconds,
+            connect_timeout_seconds=settings.clerk_jwks_connect_timeout_seconds,
+            read_timeout_seconds=settings.clerk_jwks_read_timeout_seconds,
+            pool_timeout_seconds=settings.clerk_jwks_pool_timeout_seconds,
+            total_timeout_seconds=settings.clerk_jwks_total_timeout_seconds,
+            observability=observability,
+        )
+    return ClerkAuthProvider(
+        settings=settings,
+        authorized_parties=authorized_parties,
+        signing_key_resolver=resolver,
+        observability=observability,
+    )
 
 
 async def require_user_identity(
@@ -133,18 +220,24 @@ async def require_user_identity(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
 
     try:
-        identity = auth_provider.verify_token(credentials.credentials)
-    except jwt.PyJWTError as exc:
-        report_safe_exception(
-            logger,
-            event="clerk_token_rejected",
-            operation="verify_token",
-            error=exc,
-            level=logging.WARNING,
+        identity = await auth_provider.verify_token(credentials.credentials)
+    except TokenRejected as error:
+        logger.warning(
+            "event=clerk_token_rejected operation=verify_token reason=%s",
+            error.reason,
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
+        ) from None
+    except AuthenticationUnavailable as error:
+        logger.warning(
+            "event=authentication_unavailable operation=verify_token reason=%s",
+            error.reason,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication temporarily unavailable",
         ) from None
 
     if isinstance(auth_provider, LocalAuthProvider):

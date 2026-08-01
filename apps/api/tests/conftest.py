@@ -216,15 +216,26 @@ def signed_clerk_headers(
 def rs256_clerk_token_for(clerk_key_material: dict[str, str | bytes]):
     private_key_pem = str(clerk_key_material["private_key_pem"])
 
-    def _build(clerk_user_id: str) -> str:
+    def _build(
+        clerk_user_id: str,
+        *,
+        claims: dict[str, object] | None = None,
+        headers: dict[str, object] | None = None,
+    ) -> str:
+        payload: dict[str, object] = {
+            "sub": clerk_user_id,
+            "iss": "https://clerk.example.com",
+            "exp": 4102444800,
+            "nbf": 0,
+            "azp": TEST_CLERK_AUTHORIZED_PARTY,
+        }
+        if claims:
+            payload.update(claims)
         return jwt.encode(
-            {
-                "sub": clerk_user_id,
-                "iss": "https://clerk.example.com",
-                "exp": 4102444800,
-            },
+            payload,
             private_key_pem,
             algorithm="RS256",
+            headers=headers,
         )
 
     return _build

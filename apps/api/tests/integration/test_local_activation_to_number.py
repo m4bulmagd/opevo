@@ -82,10 +82,21 @@ def _complete_profile_payload() -> dict[str, object]:
 @pytest_asyncio.fixture
 async def local_client(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[
     tuple[httpx.AsyncClient, async_sessionmaker[AsyncSession], FastAPI]
 ]:
-    from app.main import create_app
+    from app import main as main_module
+
+    class NoopPool:
+        async def aclose(self) -> None:
+            pass
+
+    async def create_pool(redis_url: str) -> NoopPool:
+        del redis_url
+        return NoopPool()
+
+    monkeypatch.setattr(main_module, "create_arq_pool", create_pool)
 
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'local-activation.db'}"
     engine = create_async_engine(database_url, future=True)
@@ -104,7 +115,7 @@ async def local_client(
         carrier_lookup_mode="fake",
         telephony_mode="fake",
     )
-    application = create_app(settings)
+    application = main_module.create_app(settings)
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -124,11 +135,12 @@ async def local_client(
     )
     transport = httpx.ASGITransport(app=application)
     try:
-        async with httpx.AsyncClient(
-            transport=transport,
-            base_url="http://testserver",
-        ) as client:
-            yield client, session_factory, application
+        async with application.router.lifespan_context(application):
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as client:
+                yield client, session_factory, application
     finally:
         application.dependency_overrides.clear()
         await engine.dispose()
@@ -487,7 +499,7 @@ async def test_call_drain_fixture_rejects_clerk_auth_before_mutation(
         await session.commit()
 
     class AuthenticatedClerkProvider(AuthProvider):
-        def verify_token(self, token: str) -> UserIdentity:
+        async def verify_token(self, token: str) -> UserIdentity:
             assert token == "authenticated-clerk-fixture-test-token"
             return UserIdentity(clerk_user_id=clerk_user.clerk_user_id)
 

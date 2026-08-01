@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.core.auth import ClerkAuthProvider
+from app.core.auth import build_auth_provider
 from app.core.config import Settings, get_settings
 from app.core.logging import report_safe_exception, setup_logging
 from app.core.observability import (
@@ -100,6 +100,7 @@ def _lifespan(settings: Settings):
     async def lifespan(app: FastAPI):
         setup_logging()
         app.state.settings = settings
+        app.state.auth_provider = None
         app.state.realtime_service = None
         app.state.call_finalization_queue = None
         app.state.livekit_webhook_receiver = None
@@ -113,11 +114,15 @@ def _lifespan(settings: Settings):
         call_finalization_pool = None
         realtime_event_bus = None
         try:
+            app.state.auth_provider = build_auth_provider(
+                settings=settings,
+                observability=app.state.observability,
+            )
             app.state.readiness_checks = await create_readiness_checks(settings)
             if settings.realtime_enabled:
                 realtime_event_bus = RedisEventBus(redis_url=settings.redis_url)
                 app.state.realtime_service = RealtimeService(
-                    auth_provider=ClerkAuthProvider(settings=settings),
+                    auth_provider=app.state.auth_provider,
                     event_bus=realtime_event_bus,
                     websocket_manager=websocket_manager,
                     observability=app.state.observability,
@@ -150,6 +155,11 @@ def _lifespan(settings: Settings):
         finally:
             await _stop_realtime_fanout(relay_task)
             await _close_runtime_resource(
+                app.state.auth_provider,
+                event="auth_provider_close_failed",
+                operation="close_auth_provider",
+            )
+            await _close_runtime_resource(
                 app.state.readiness_checks,
                 event="readiness_checks_close_failed",
                 operation="close_readiness_checks",
@@ -175,6 +185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(lifespan=_lifespan(configured_settings))
     application.state.settings = configured_settings
+    application.state.auth_provider = None
     install_http_observability(application)
     application.state.limiter = configure_rate_limiter(configured_settings)
     application.add_exception_handler(
