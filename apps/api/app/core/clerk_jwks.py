@@ -162,17 +162,18 @@ class JwksSigningKeyResolver:
             if self._client_closed:
                 return
             refresh_task = self._refresh_task
-            if refresh_task is not None:
-                if not refresh_task.done():
-                    refresh_task.cancel()
-                try:
+            try:
+                if refresh_task is not None:
+                    if not refresh_task.done():
+                        refresh_task.cancel()
                     await refresh_task
-                except (asyncio.CancelledError, AuthenticationUnavailable):
-                    pass
+            except (asyncio.CancelledError, AuthenticationUnavailable):
+                pass
+            finally:
                 if self._refresh_task is refresh_task:
                     self._refresh_task = None
-            await self._client.aclose()
-            self._client_closed = True
+                self._client_closed = True
+                await self._client.aclose()
 
     def _extract_kid(self, token: str) -> str:
         try:
@@ -264,7 +265,7 @@ class JwksSigningKeyResolver:
                 body.extend(chunk)
         try:
             document = json.loads(body)
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        except (UnicodeDecodeError, ValueError, RecursionError):
             raise _InvalidJwksDocument from None
         keys = self._parse_keys(document)
         fetched_at = self._monotonic()
@@ -301,6 +302,14 @@ class JwksSigningKeyResolver:
             ):
                 raise _InvalidJwksDocument
             seen_kids.add(kid)
+            if "key_ops" in raw_key:
+                key_ops = raw_key["key_ops"]
+                if (
+                    not isinstance(key_ops, list)
+                    or not all(isinstance(operation, str) for operation in key_ops)
+                    or "verify" not in key_ops
+                ):
+                    raise _InvalidJwksDocument
             if (
                 raw_key.get("kty") != "RSA"
                 or raw_key.get("alg") != "RS256"

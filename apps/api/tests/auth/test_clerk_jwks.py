@@ -278,6 +278,85 @@ async def test_invalid_provider_document_is_bounded_failure(
 
 
 @pytest.mark.anyio
+async def test_huge_json_integer_is_safe_and_releases_refresh_for_retry() -> None:
+    clock = FakeMonotonic(100.0)
+    sentinel = "HUGE_INTEGER_BODY_SENTINEL"
+    huge_integer_body = (
+        b'{"number":'
+        + b"9" * 10_000
+        + b',"sentinel":"'
+        + sentinel.encode()
+        + b'","keys":[]}'
+    )
+    transport = CountingTransport(httpx.Response(200, content=huge_integer_body))
+    resolver = resolver_for(transport=transport, monotonic=clock)
+    token = unsigned_token(headers={"alg": "RS256", "kid": "kid-a"})
+
+    for _ in range(2):
+        with pytest.raises(AuthenticationUnavailable) as exc_info:
+            await resolver.resolve_key(token)
+        assert exc_info.value.reason == "jwks_invalid"
+        assert sentinel not in str(exc_info.value)
+        assert sentinel not in repr(exc_info.value)
+        assert "integer string conversion" not in str(exc_info.value)
+        assert "4300 digits" not in repr(exc_info.value)
+    assert transport.request_count == 1
+
+    clock.advance(5.001)
+    transport.outcome = valid_jwks_response(kids=("kid-a",))
+    assert await resolver.resolve_key(token)
+    assert transport.request_count == 2
+
+    await asyncio.gather(resolver.aclose(), resolver.aclose())
+    await resolver.aclose()
+    assert transport.close_count == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "key_ops",
+    [
+        pytest.param(["encrypt"], id="lacks-verify"),
+        pytest.param([], id="empty-list"),
+        pytest.param("verify", id="non-list"),
+        pytest.param(["verify", 7], id="non-string-member"),
+        pytest.param(None, id="null"),
+    ],
+)
+async def test_jwks_rejects_invalid_verification_key_ops(key_ops: object) -> None:
+    transport = CountingTransport(
+        httpx.Response(
+            200,
+            json={"keys": [rsa_jwk("kid-a", key_ops=key_ops)]},
+        )
+    )
+    resolver = resolver_for(transport=transport)
+    token = unsigned_token(headers={"alg": "RS256", "kid": "kid-a"})
+
+    with pytest.raises(AuthenticationUnavailable) as exc_info:
+        await resolver.resolve_key(token)
+    assert exc_info.value.reason == "jwks_invalid"
+    assert transport.request_count == 1
+    await resolver.aclose()
+
+
+@pytest.mark.anyio
+async def test_jwks_accepts_key_ops_with_verify() -> None:
+    transport = CountingTransport(
+        httpx.Response(
+            200,
+            json={"keys": [rsa_jwk("kid-a", key_ops=["verify"])]},
+        )
+    )
+    resolver = resolver_for(transport=transport)
+    token = unsigned_token(headers={"alg": "RS256", "kid": "kid-a"})
+
+    assert await resolver.resolve_key(token)
+    assert transport.request_count == 1
+    await resolver.aclose()
+
+
+@pytest.mark.anyio
 async def test_many_concurrent_cold_requests_share_one_refresh() -> None:
     transport = BarrierTransport(valid_jwks_response(kids=("kid-a",)))
     resolver = resolver_for(transport=transport)
