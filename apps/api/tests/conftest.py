@@ -17,6 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.models import Base
 
 
+TEST_CLERK_AUTHORIZED_PARTY = "https://app.example.com"
+
+
 @pytest.fixture
 def clerk_key_material() -> dict[str, str | bytes]:
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -46,7 +49,9 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, clerk_key_material: dict[str, 
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("CLERK_ISSUER", "https://clerk.example.com")
     monkeypatch.setenv("CLERK_AUDIENCE", "")
+    monkeypatch.setenv("CLERK_AUTHORIZED_PARTIES", TEST_CLERK_AUTHORIZED_PARTY)
     monkeypatch.setenv("CLERK_JWT_KEY", str(clerk_key_material["public_key_pem"]))
+    monkeypatch.delenv("CLERK_JWKS_URL", raising=False)
     monkeypatch.setenv("CLERK_WEBHOOK_SECRET", str(clerk_key_material["webhook_secret"]))
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "test-stripe-secret")
     monkeypatch.setenv(

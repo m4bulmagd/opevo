@@ -18,8 +18,27 @@ class Settings(BaseSettings):
     local_auth_token: str = "presvo-local-development-token"
     clerk_issuer: str = ""
     clerk_audience: str | None = None
+    clerk_authorized_parties: str | None = None
     clerk_jwt_key: str | None = None
     clerk_jwks_url: str | None = None
+    clerk_jwks_cache_ttl_seconds: float = Field(
+        default=300.0, ge=30.0, le=3600.0, allow_inf_nan=False
+    )
+    clerk_jwks_stale_grace_seconds: float = Field(
+        default=600.0, ge=1.0, le=3600.0, allow_inf_nan=False
+    )
+    clerk_jwks_connect_timeout_seconds: float = Field(
+        default=0.5, ge=0.05, le=10.0, allow_inf_nan=False
+    )
+    clerk_jwks_read_timeout_seconds: float = Field(
+        default=1.0, ge=0.05, le=10.0, allow_inf_nan=False
+    )
+    clerk_jwks_pool_timeout_seconds: float = Field(
+        default=0.25, ge=0.05, le=10.0, allow_inf_nan=False
+    )
+    clerk_jwks_total_timeout_seconds: float = Field(
+        default=2.0, ge=0.05, le=10.0, allow_inf_nan=False
+    )
     clerk_webhook_secret: str | None = None
     livekit_url: str | None = None
     livekit_api_key: str | None = None
