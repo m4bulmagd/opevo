@@ -21,6 +21,7 @@ from app.core.clerk_jwks import (
     SigningKeyResolver,
     StaticSigningKeyResolver,
 )
+from app.core.clerk_verification_source import select_clerk_verification_source
 from app.core.config import Settings
 from app.core.database import get_session
 from app.core.http_origin import parse_canonical_http_origins
@@ -220,13 +221,22 @@ def build_auth_provider(
     authorized_parties = frozenset(
         parse_canonical_http_origins(settings.clerk_authorized_parties)
     )
-    if settings.clerk_jwt_key:
+    verification_source = select_clerk_verification_source(
+        jwt_key=settings.clerk_jwt_key,
+        jwks_url=settings.clerk_jwks_url,
+    )
+    if verification_source is None:
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: "
+            "exactly one of CLERK_JWT_KEY or CLERK_JWKS_URL"
+        )
+    if verification_source.kind == "static":
         resolver: SigningKeyResolver = StaticSigningKeyResolver(
-            settings.clerk_jwt_key
+            verification_source.value
         )
     else:
         resolver = JwksSigningKeyResolver(
-            jwks_url=str(settings.clerk_jwks_url),
+            jwks_url=verification_source.value,
             cache_ttl_seconds=settings.clerk_jwks_cache_ttl_seconds,
             stale_grace_seconds=settings.clerk_jwks_stale_grace_seconds,
             connect_timeout_seconds=settings.clerk_jwks_connect_timeout_seconds,

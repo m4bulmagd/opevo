@@ -50,6 +50,11 @@ class _InvalidJwksDocument(Exception):
     pass
 
 
+def _reject_json_constant(value: str) -> None:
+    del value
+    raise ValueError
+
+
 def _environment_proxy_url(url: str) -> str | None:
     """Select the fixed endpoint's route using HTTPX environment semantics."""
     target = httpx.URL(url)
@@ -174,13 +179,9 @@ class JwksSigningKeyResolver:
 
         cooldown_failure = self._cooldown_failure(now)
         if cooldown_failure is not None:
-            if (
-                known_key is not None
-                and generation is not None
-                and now <= generation.stale_until
-            ):
-                self._observability.record_jwks_stale_key_use()
-                return known_key
+            stale_key = self._known_stale_key(generation, known_key, now)
+            if stale_key is not None:
+                return stale_key
             self._observability.record_jwks_refresh_cooldown("unavailable")
             raise AuthenticationUnavailable(cooldown_failure)
         if self._in_successful_cooldown(now):
@@ -199,13 +200,9 @@ class JwksSigningKeyResolver:
             await asyncio.shield(refresh_task)
         except AuthenticationUnavailable:
             now = self._monotonic()
-            if (
-                known_key is not None
-                and generation is not None
-                and now <= generation.stale_until
-            ):
-                self._observability.record_jwks_stale_key_use()
-                return known_key
+            stale_key = self._known_stale_key(generation, known_key, now)
+            if stale_key is not None:
+                return stale_key
             raise
         finally:
             if refresh_task.done() and self._refresh_task is refresh_task:
@@ -262,6 +259,21 @@ class JwksSigningKeyResolver:
         if not self._in_refresh_cooldown(now):
             return None
         return self._last_refresh_failure
+
+    def _known_stale_key(
+        self,
+        generation: _KeyGeneration | None,
+        known_key: VerificationKey | None,
+        now: float,
+    ) -> VerificationKey | None:
+        if (
+            generation is None
+            or known_key is None
+            or now > generation.stale_until
+        ):
+            return None
+        self._observability.record_jwks_stale_key_use()
+        return known_key
 
     def _in_successful_cooldown(self, now: float) -> bool:
         return self._in_refresh_cooldown(now) and self._last_refresh_failure is None
@@ -322,15 +334,25 @@ class JwksSigningKeyResolver:
         return generation
 
     async def _fetch_generation(self) -> _KeyGeneration:
-        async with self._client.stream("GET", self._jwks_url) as response:
+        async with self._client.stream(
+            "GET",
+            self._jwks_url,
+            headers={"Accept-Encoding": "identity"},
+        ) as response:
             response.raise_for_status()
+            content_encoding = response.headers.get("content-encoding")
+            if (
+                content_encoding is not None
+                and content_encoding.strip().lower() != "identity"
+            ):
+                raise _InvalidJwksDocument
             body = bytearray()
-            async for chunk in response.aiter_bytes():
+            async for chunk in response.aiter_raw():
                 if len(body) + len(chunk) > MAX_JWKS_BODY_BYTES:
                     raise _InvalidJwksDocument
                 body.extend(chunk)
         try:
-            document = json.loads(body)
+            document = json.loads(body, parse_constant=_reject_json_constant)
         except (UnicodeDecodeError, ValueError, RecursionError):
             raise _InvalidJwksDocument from None
         keys = self._parse_keys(document)

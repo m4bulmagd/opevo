@@ -12,12 +12,12 @@ Design constraints
   to run nested loops.
 * The existing ``test_app`` fixture is async (pytest_asyncio), so we cannot
   use it directly from synchronous tests.
-* Solution: a dedicated *synchronous* ``ws_app`` fixture (plain ``@pytest.fixture``)
-  that sets up the database and installs a fake RealtimeService entirely using
-  synchronous asyncio.run() calls, outside of any running anyio loop.
-  TestClient is then used *without* the ``with TestClient(app):`` context
-  manager so the lifespan is not re-entered (the fixture already set up
-  ``app.state.realtime_service``).
+* Solution: a dedicated *synchronous* ``ws_app`` fixture (plain
+  ``@pytest.fixture``) installs an on-demand async session override. The
+  override creates and disposes its SQLite engine inside TestClient's event
+  loop, while the fixture installs a fake RealtimeService directly on app
+  state. TestClient is used *without* the ``with TestClient(app):`` context
+  manager so lifespan does not replace those focused test resources.
 
 Bug fixed during writing these tests
 --------------------------------------

@@ -28,17 +28,38 @@ class FakeMonotonic:
         self.value += seconds
 
 
+class BytesStream(httpx.AsyncByteStream):
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+
+    async def __aiter__(self):
+        yield self.content
+
+
+def as_network_response(response: httpx.Response) -> httpx.Response:
+    if not response.is_stream_consumed:
+        return response
+    return httpx.Response(
+        response.status_code,
+        headers=response.headers,
+        stream=BytesStream(response.content),
+        extensions=response.extensions,
+    )
+
+
 class CountingTransport(httpx.AsyncBaseTransport):
     def __init__(self, outcome: httpx.Response | BaseException) -> None:
         self.outcome = outcome
         self.request_count = 0
         self.close_count = 0
+        self.requests: list[httpx.Request] = []
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         self.request_count += 1
+        self.requests.append(request)
         if isinstance(self.outcome, BaseException):
             raise self.outcome
-        return self.outcome
+        return as_network_response(self.outcome)
 
     async def aclose(self) -> None:
         self.close_count += 1
@@ -60,7 +81,7 @@ class SequencedTransport(httpx.AsyncBaseTransport):
         outcome = self._last_outcome
         if isinstance(outcome, BaseException):
             raise outcome
-        return outcome
+        return as_network_response(outcome)
 
     async def aclose(self) -> None:
         self.close_count += 1
@@ -83,7 +104,7 @@ class BarrierTransport(httpx.AsyncBaseTransport):
         except asyncio.CancelledError:
             self.cancel_count += 1
             raise
-        return self.response
+        return as_network_response(self.response)
 
     async def wait_until_requested(self) -> None:
         await self._requested.wait()
@@ -123,6 +144,35 @@ class CancellableCloseTransport(CountingTransport):
         if self.close_count == 1:
             self.close_started.set()
             await self._first_close_blocker.wait()
+
+
+class IterationGuardStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.iteration_count = 0
+        self.close_count = 0
+
+    async def __aiter__(self):
+        self.iteration_count += 1
+        raise AssertionError("encoded response body must not be iterated")
+        yield b""  # pragma: no cover
+
+    async def aclose(self) -> None:
+        self.close_count += 1
+
+
+class ContinuousSmallChunkStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.chunk_count = 0
+        self.close_count = 0
+
+    async def __aiter__(self):
+        while self.chunk_count < 200:
+            self.chunk_count += 1
+            yield b" "
+            await asyncio.sleep(0.001)
+
+    async def aclose(self) -> None:
+        self.close_count += 1
 
 
 def _b64uint(value: int) -> str:
@@ -267,6 +317,40 @@ async def test_jwks_mode_requires_rs256_algorithm_without_fetch(alg: object) -> 
     await resolver.aclose()
 
 
+@pytest.mark.anyio
+async def test_jwks_request_requires_identity_content_encoding() -> None:
+    transport = CountingTransport(valid_jwks_response())
+    resolver = resolver_for(transport=transport)
+    token = unsigned_token(headers={"alg": "RS256", "kid": "kid-a"})
+
+    assert await resolver.resolve_key(token)
+
+    assert transport.requests[0].headers["accept-encoding"] == "identity"
+    await resolver.aclose()
+
+
+@pytest.mark.anyio
+async def test_encoded_jwks_response_is_rejected_before_body_iteration() -> None:
+    stream = IterationGuardStream()
+    transport = CountingTransport(
+        httpx.Response(
+            200,
+            headers={"content-encoding": "gzip"},
+            stream=stream,
+        )
+    )
+    resolver = resolver_for(transport=transport)
+    token = unsigned_token(headers={"alg": "RS256", "kid": "kid-a"})
+
+    with pytest.raises(AuthenticationUnavailable) as exc_info:
+        await resolver.resolve_key(token)
+
+    assert exc_info.value.reason == "jwks_invalid"
+    assert stream.iteration_count == 0
+    assert stream.close_count == 1
+    await resolver.aclose()
+
+
 def _invalid_document_cases() -> list[tuple[str, httpx.Response]]:
     duplicate = rsa_jwk("kid-a")
     return [
@@ -340,6 +424,30 @@ async def test_invalid_provider_document_is_bounded_failure(
     assert exc_info.value.reason == "jwks_invalid"
     assert BODY_SENTINEL not in str(exc_info.value)
     assert BODY_SENTINEL not in repr(exc_info.value)
+    await resolver.aclose()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+async def test_jwks_rejects_nonstandard_json_numeric_constants(
+    constant: str,
+) -> None:
+    body = (
+        b'{"ignored":'
+        + constant.encode()
+        + b',"keys":['
+        + json.dumps(rsa_jwk("kid-a"), separators=(",", ":")).encode()
+        + b"]}"
+    )
+    transport = CountingTransport(httpx.Response(200, content=body))
+    resolver = resolver_for(transport=transport)
+    token = unsigned_token(headers={"alg": "RS256", "kid": "kid-a"})
+
+    with pytest.raises(AuthenticationUnavailable) as exc_info:
+        await resolver.resolve_key(token)
+
+    assert exc_info.value.reason == "jwks_invalid"
+    assert transport.request_count == 1
     await resolver.aclose()
 
 
@@ -653,6 +761,48 @@ async def test_successful_refresh_cooldown_rejects_unknown_key_without_http() ->
 
 
 @pytest.mark.anyio
+async def test_successful_refresh_cooldown_ends_at_exactly_five_seconds() -> None:
+    clock = FakeMonotonic(100.0)
+    transport = SequencedTransport(
+        [valid_jwks_response(kids=("kid-a",)), valid_jwks_response(kids=("kid-b",))]
+    )
+    resolver = resolver_for(transport=transport, monotonic=clock)
+    await resolver.resolve_key(unsigned_token(headers={"alg": "RS256", "kid": "kid-a"}))
+    unknown = unsigned_token(headers={"alg": "RS256", "kid": "kid-b"})
+
+    clock.value = 104.999
+    with pytest.raises(TokenRejected) as exc_info:
+        await resolver.resolve_key(unknown)
+    assert exc_info.value.reason == "signing_key"
+    assert transport.request_count == 1
+
+    clock.value = 105.0
+    assert await resolver.resolve_key(unknown)
+    assert transport.request_count == 2
+    await resolver.aclose()
+
+
+@pytest.mark.anyio
+async def test_successful_refresh_without_unknown_key_rejects_after_one_fetch() -> None:
+    clock = FakeMonotonic(100.0)
+    transport = SequencedTransport(
+        [valid_jwks_response(kids=("kid-a",)), valid_jwks_response(kids=("kid-a",))]
+    )
+    resolver = resolver_for(transport=transport, monotonic=clock)
+    await resolver.resolve_key(unsigned_token(headers={"alg": "RS256", "kid": "kid-a"}))
+    clock.value = 105.0
+
+    with pytest.raises(TokenRejected) as exc_info:
+        await resolver.resolve_key(
+            unsigned_token(headers={"alg": "RS256", "kid": "kid-b"})
+        )
+
+    assert exc_info.value.reason == "signing_key"
+    assert transport.request_count == 2
+    await resolver.aclose()
+
+
+@pytest.mark.anyio
 async def test_failed_refresh_cooldown_replays_bounded_failure_without_http() -> None:
     clock = FakeMonotonic(100.0)
     transport = SequencedTransport([httpx.ConnectTimeout(PROVIDER_SENTINEL)])
@@ -664,6 +814,54 @@ async def test_failed_refresh_cooldown_replays_bounded_failure_without_http() ->
         assert exc_info.value.reason == "jwks_timeout"
         assert PROVIDER_SENTINEL not in repr(exc_info.value)
     assert transport.request_count == 1
+    await resolver.aclose()
+
+
+@pytest.mark.anyio
+async def test_failed_refresh_cooldown_ends_at_exactly_five_seconds() -> None:
+    clock = FakeMonotonic(100.0)
+    transport = SequencedTransport(
+        [
+            httpx.ConnectTimeout(PROVIDER_SENTINEL),
+            valid_jwks_response(kids=("kid-a",)),
+        ]
+    )
+    resolver = resolver_for(transport=transport, monotonic=clock)
+    token = unsigned_token(headers={"alg": "RS256", "kid": "kid-a"})
+    with pytest.raises(AuthenticationUnavailable):
+        await resolver.resolve_key(token)
+
+    clock.value = 104.999
+    with pytest.raises(AuthenticationUnavailable) as exc_info:
+        await resolver.resolve_key(token)
+    assert exc_info.value.reason == "jwks_timeout"
+    assert transport.request_count == 1
+
+    clock.value = 105.0
+    assert await resolver.resolve_key(token)
+    assert transport.request_count == 2
+    await resolver.aclose()
+
+
+@pytest.mark.anyio
+async def test_known_stale_key_is_reused_during_active_failed_cooldown() -> None:
+    clock = FakeMonotonic(100.0)
+    transport = SequencedTransport(
+        [valid_jwks_response(kids=("kid-a",)), httpx.ReadTimeout(PROVIDER_SENTINEL)]
+    )
+    resolver = resolver_for(transport=transport, monotonic=clock)
+    token = unsigned_token(headers={"alg": "RS256", "kid": "kid-a"})
+    fresh_key = await resolver.resolve_key(token)
+
+    clock.value = 400.001
+    post_failure_key = await resolver.resolve_key(token)
+    assert post_failure_key is fresh_key
+    assert transport.request_count == 2
+
+    clock.value = 401.0
+    cooldown_key = await resolver.resolve_key(token)
+    assert cooldown_key is fresh_key
+    assert transport.request_count == 2
     await resolver.aclose()
 
 
@@ -696,13 +894,18 @@ async def test_transport_failures_map_to_bounded_reason(
 
 @pytest.mark.anyio
 async def test_total_deadline_maps_to_bounded_timeout_reason() -> None:
-    transport = BarrierTransport(valid_jwks_response(kids=("kid-a",)))
-    resolver = resolver_for(transport=transport, total_timeout_seconds=0.0)
+    stream = ContinuousSmallChunkStream()
+    transport = CountingTransport(httpx.Response(200, stream=stream))
+    resolver = resolver_for(transport=transport, total_timeout_seconds=0.05)
     token = unsigned_token(headers={"alg": "RS256", "kid": "kid-a"})
+
     with pytest.raises(AuthenticationUnavailable) as exc_info:
         await resolver.resolve_key(token)
+
     assert exc_info.value.reason == "jwks_timeout"
-    assert transport.request_count <= 1
+    assert transport.request_count == 1
+    assert stream.chunk_count >= 1
+    assert stream.close_count == 1
     await resolver.aclose()
 
 

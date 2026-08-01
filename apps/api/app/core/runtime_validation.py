@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 
+from app.core.clerk_verification_source import select_clerk_verification_source
 from app.core.config import Settings
 from app.core.dispatch_token import is_dispatch_secret_safe
 from app.core.http_origin import (
@@ -77,13 +78,15 @@ def validate_api_runtime(settings: Settings) -> None:
             parse_canonical_http_origins(settings.clerk_authorized_parties)
         except ValueError:
             invalid_clerk.append("CLERK_AUTHORIZED_PARTIES")
-        has_static_key = not _is_missing(settings.clerk_jwt_key)
-        has_jwks_url = not _is_missing(settings.clerk_jwks_url)
-        if has_static_key == has_jwks_url:
+        verification_source = select_clerk_verification_source(
+            jwt_key=settings.clerk_jwt_key,
+            jwks_url=settings.clerk_jwks_url,
+        )
+        if verification_source is None:
             invalid_clerk.append("exactly one of CLERK_JWT_KEY or CLERK_JWKS_URL")
-        if has_jwks_url:
+        elif verification_source.kind == "jwks":
             try:
-                validate_absolute_https_url(str(settings.clerk_jwks_url))
+                validate_absolute_https_url(verification_source.value)
             except ValueError:
                 invalid_clerk.append("CLERK_JWKS_URL")
         if invalid_clerk:

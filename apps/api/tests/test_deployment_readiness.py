@@ -37,6 +37,7 @@ PRODUCTION_COMPOSE_ENVIRONMENT = {
     "NEXT_PUBLIC_API_BASE_URL": "https://api.example.invalid",
     "NEXT_PUBLIC_APP_URL": "https://app.example.com",
     "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_disposable",
+    "NEXT_PUBLIC_REALTIME_ENABLED": "false",
     "REDIS_URL": "redis://redis:6379/0",
     "S3_ACCESS_KEY": "test-only-s3-key",
     "S3_ENDPOINT_URL": "https://s3.example.invalid",
@@ -654,6 +655,21 @@ def test_production_compose_scopes_clerk_session_verifier_settings_to_api() -> N
     migration_compose = (REPO_ROOT / "compose.migrate.yaml").read_text()
     for setting in CLERK_SESSION_VERIFIER_SETTINGS:
         assert setting not in migration_compose
+
+
+def test_production_compose_render_ignores_external_realtime_enablement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEXT_PUBLIC_REALTIME_ENABLED", "true")
+
+    document = load_compose_yaml()
+
+    assert (
+        resolved_service_environment(document, "web")[
+            "NEXT_PUBLIC_REALTIME_ENABLED"
+        ]
+        == "false"
+    )
 
 
 def test_production_compose_renders_exactly_one_nonempty_clerk_key_source() -> None:

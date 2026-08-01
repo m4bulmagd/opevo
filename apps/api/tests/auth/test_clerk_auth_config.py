@@ -2,6 +2,7 @@ import math
 
 import pytest
 
+from app.core.clerk_verification_source import select_clerk_verification_source
 from app.core.config import Settings
 from app.core.http_origin import (
     parse_canonical_http_origin,
@@ -70,12 +71,26 @@ def test_authorized_parties_reject_missing_or_empty_entries(raw: str | None) -> 
         parse_canonical_http_origins(raw)
 
 
+def test_verification_source_presence_check_preserves_static_key_bytes() -> None:
+    configured_key = "\nPEM_BODY_SENTINEL\n"
+
+    source = select_clerk_verification_source(
+        jwt_key=configured_key,
+        jwks_url=None,
+    )
+
+    assert source is not None
+    assert source.kind == "static"
+    assert source.value == configured_key
+
+
 @pytest.mark.parametrize(
     "url",
     [
         "http://clerk.example.com/.well-known/jwks.json",
         "https://user@clerk.example.com/jwks.json",
         "https://clerk.example.com/jwks.json#fragment",
+        "https://clerk.example.com/jwks.json#",
         "//clerk.example.com/jwks.json",
         "JWKS_ENDPOINT_SENTINEL",
     ],
