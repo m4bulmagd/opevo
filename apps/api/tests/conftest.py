@@ -17,7 +17,43 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.models import Base
 
 
+DEFAULT_TEST_DATABASE_URL = (
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/ai_call_test"
+)
+DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/0"
 TEST_CLERK_AUTHORIZED_PARTY = "https://app.example.com"
+TEST_CLERK_ISSUER = "https://clerk.example.com"
+TEST_CLERK_JWKS_URL = "https://clerk.example.com/.well-known/jwks.json"
+TEST_CLERK_WEBHOOK_SECRET_BYTES = b"test-webhook-secret"
+TEST_CLERK_WEBHOOK_SECRET = "whsec_" + base64.b64encode(
+    TEST_CLERK_WEBHOOK_SECRET_BYTES
+).decode("utf-8")
+TEST_DISPATCH_JWT_SECRET = "shared-test-dispatch-secret-with-at-least-32-bytes"
+
+
+def _construction_settings_environment() -> dict[str, str]:
+    return {
+        "APP_ENV": "test",
+        "DATABASE_URL": os.environ.get(
+            "TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL
+        ),
+        "REDIS_URL": os.environ.get("TEST_REDIS_URL", DEFAULT_TEST_REDIS_URL),
+        "REALTIME_ENABLED": "false",
+        "ACTIVATION_FLOW_ENABLED": "false",
+        "AUTH_MODE": "clerk",
+        "CLERK_ISSUER": TEST_CLERK_ISSUER,
+        "CLERK_AUDIENCE": "",
+        "CLERK_AUTHORIZED_PARTIES": TEST_CLERK_AUTHORIZED_PARTY,
+        "CLERK_JWKS_URL": TEST_CLERK_JWKS_URL,
+        "CLERK_WEBHOOK_SECRET": TEST_CLERK_WEBHOOK_SECRET,
+        "STRIPE_WEBHOOK_SECRET": "test-stripe-secret",
+        "AGENT_DISPATCH_JWT_SECRET": TEST_DISPATCH_JWT_SECRET,
+    }
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    os.environ.update(_construction_settings_environment())
+    os.environ.pop("CLERK_JWT_KEY", None)
 
 
 @pytest.fixture
@@ -32,8 +68,8 @@ def clerk_key_material() -> dict[str, str | bytes]:
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("utf-8")
-    webhook_secret_bytes = b"test-webhook-secret"
-    webhook_secret = "whsec_" + base64.b64encode(webhook_secret_bytes).decode("utf-8")
+    webhook_secret_bytes = TEST_CLERK_WEBHOOK_SECRET_BYTES
+    webhook_secret = TEST_CLERK_WEBHOOK_SECRET
     return {
         "private_key_pem": private_key_pem,
         "public_key_pem": public_key_pem,
@@ -44,20 +80,10 @@ def clerk_key_material() -> dict[str, str | bytes]:
 
 @pytest.fixture(autouse=True)
 def settings_env(monkeypatch: pytest.MonkeyPatch, clerk_key_material: dict[str, str | bytes]):
-    monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/ai_call_test")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-    monkeypatch.setenv("CLERK_ISSUER", "https://clerk.example.com")
-    monkeypatch.setenv("CLERK_AUDIENCE", "")
-    monkeypatch.setenv("CLERK_AUTHORIZED_PARTIES", TEST_CLERK_AUTHORIZED_PARTY)
+    for name, value in _construction_settings_environment().items():
+        monkeypatch.setenv(name, value)
     monkeypatch.setenv("CLERK_JWT_KEY", str(clerk_key_material["public_key_pem"]))
     monkeypatch.delenv("CLERK_JWKS_URL", raising=False)
-    monkeypatch.setenv("CLERK_WEBHOOK_SECRET", str(clerk_key_material["webhook_secret"]))
-    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "test-stripe-secret")
-    monkeypatch.setenv(
-        "AGENT_DISPATCH_JWT_SECRET",
-        "shared-test-dispatch-secret-with-at-least-32-bytes",
-    )
 
     from app.core.config import get_settings
     from app.core.database import get_engine, get_session_factory
