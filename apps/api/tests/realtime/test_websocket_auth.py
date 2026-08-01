@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.auth import ClerkAuthProvider
+from app.core.auth import AuthProvider, UserIdentity
 from app.core.redis import RedisEventBus
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import WebSocketManager
@@ -26,12 +26,17 @@ class FakeObservability:
         pass
 
 
+class FakeAuthProvider(AuthProvider):
+    async def verify_token(self, token: str) -> UserIdentity:
+        return UserIdentity(clerk_user_id="user_ws_test")
+
+
 @pytest.mark.anyio
 async def test_websocket_requires_auth_message_before_events() -> None:
     websocket = FakeWebSocket()
 
     service = RealtimeService(
-        auth_provider=ClerkAuthProvider(),
+        auth_provider=FakeAuthProvider(),
         event_bus=RedisEventBus(),
         websocket_manager=WebSocketManager(),
         observability=FakeObservability(),

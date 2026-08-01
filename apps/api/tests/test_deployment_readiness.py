@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,87 @@ from app.core.runtime_validation import validate_api_runtime, validate_worker_ru
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+PRODUCTION_COMPOSE_ENVIRONMENT = {
+    "ACTIVATION_FLOW_ENABLED": "true",
+    "AGENT_DISPATCH_JWT_SECRET": "test-only-test-only-test-only-test-only",
+    "AGENT_IMAGE": "presvo-agent:verification",
+    "API_BASE_URL": "https://api.example.invalid",
+    "API_IMAGE": "presvo-api:verification",
+    "CLERK_AUTHORIZED_PARTIES": "https://app.example.com",
+    "CLERK_ISSUER": "https://clerk.example.com",
+    "CLERK_JWT_KEY": "",
+    "CLERK_JWKS_URL": "https://clerk.example.com/.well-known/jwks.json",
+    "CLERK_SECRET_KEY": "disposable-clerk-secret",
+    "CLERK_WEBHOOK_SECRET": "disposable-webhook-secret",
+    "CORS_ALLOWED_ORIGINS": "https://app.example.com",
+    "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call",
+    "GEMINI_API_KEY": "disposable-gemini-key",
+    "LIVEKIT_API_KEY": "disposable-livekit-key",
+    "LIVEKIT_API_SECRET": "disposable-livekit-secret",
+    "LIVEKIT_URL": "wss://livekit.example.invalid",
+    "NEXT_PUBLIC_API_BASE_URL": "https://api.example.invalid",
+    "NEXT_PUBLIC_APP_URL": "https://app.example.com",
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_disposable",
+    "REDIS_URL": "redis://redis:6379/0",
+    "S3_ACCESS_KEY": "test-only-s3-key",
+    "S3_ENDPOINT_URL": "https://s3.example.invalid",
+    "S3_REGION": "us-east-1",
+    "S3_SECRET_KEY": "test-only-s3-secret",
+    "SPEECHMATICS_API_KEY": "disposable-speechmatics-key",
+    "STORAGE_BUCKET_NAME": "recordings",
+    "STRIPE_BILLING_PORTAL_CONFIGURATION_ID": "bpc_disposable",
+    "STRIPE_BILLING_PORTAL_RETURN_URL": "https://app.example.com/dashboard/billing",
+    "STRIPE_CHECKOUT_CANCEL_URL": "https://app.example.com/billing/cancel",
+    "STRIPE_CHECKOUT_SUCCESS_URL": "https://app.example.com/billing/success",
+    "STRIPE_PRICE_STARTER": "price_disposable",
+    "STRIPE_SECRET_KEY": "stripe-test-fixture",
+    "STRIPE_WEBHOOK_SECRET": "whsec_disposable",
+    "SUMMARY_MODEL": "gemini-2.5-flash",
+    "SUMMARY_PROVIDER": "gemini",
+    "TELNYX_ACTIVE_CONNECTION_ID": "disposable-active-connection",
+    "TELNYX_API_KEY": "disposable-telnyx-key",
+    "TELNYX_DISABLED_CONNECTION_ID": "disposable-disabled-connection",
+    "TELNYX_ORDERING_ENABLED": "true",
+    "WEB_IMAGE": "presvo-web:verification",
+}
+CLERK_SESSION_VERIFIER_SETTINGS = (
+    "CLERK_AUTHORIZED_PARTIES",
+    "CLERK_JWT_KEY",
+    "CLERK_JWKS_URL",
+    "CLERK_JWKS_CACHE_TTL_SECONDS",
+    "CLERK_JWKS_STALE_GRACE_SECONDS",
+    "CLERK_JWKS_CONNECT_TIMEOUT_SECONDS",
+    "CLERK_JWKS_READ_TIMEOUT_SECONDS",
+    "CLERK_JWKS_POOL_TIMEOUT_SECONDS",
+    "CLERK_JWKS_TOTAL_TIMEOUT_SECONDS",
+)
+
+
+def render_compose(compose_file: str, environment: dict[str, str]) -> dict:
+    result = subprocess.run(
+        ["docker", "compose", "-f", compose_file, "config", "--format", "json"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+        env={**os.environ, **environment},
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def load_compose_yaml() -> dict:
+    return render_compose("compose.yaml", PRODUCTION_COMPOSE_ENVIRONMENT)
+
+
+def resolved_service_environment(document: dict, service: str) -> dict[str, str]:
+    return document["services"][service].get("environment", {})
+
+
+def local_compose_service_environment(service: str) -> dict[str, str]:
+    document = render_compose("compose.dev.yaml", {})
+    return resolved_service_environment(document, service)
 
 
 def test_postgres_driver_is_available_without_development_dependencies() -> None:
@@ -551,6 +633,85 @@ def test_compose_separates_required_production_inputs_from_local_services() -> N
     assert 'MINIO_ROOT_PASSWORD: minioadmin' in compose_dev
     assert "migrate:" in compose_dev
     assert "service_completed_successfully" in compose_dev
+
+
+def test_production_compose_scopes_clerk_session_verifier_settings_to_api() -> None:
+    document = load_compose_yaml()
+    api_environment = resolved_service_environment(document, "api")
+
+    for setting in CLERK_SESSION_VERIFIER_SETTINGS:
+        assert setting in api_environment
+    assert api_environment.get("REALTIME_ENABLED", "false") == "false"
+    for service in ("worker", "agent", "web"):
+        environment = resolved_service_environment(document, service)
+        for setting in CLERK_SESSION_VERIFIER_SETTINGS:
+            assert setting not in environment
+    assert (
+        resolved_service_environment(document, "web")["NEXT_PUBLIC_REALTIME_ENABLED"]
+        == "false"
+    )
+
+    migration_compose = (REPO_ROOT / "compose.migrate.yaml").read_text()
+    for setting in CLERK_SESSION_VERIFIER_SETTINGS:
+        assert setting not in migration_compose
+
+
+def test_production_compose_renders_exactly_one_nonempty_clerk_key_source() -> None:
+    api_environment = resolved_service_environment(load_compose_yaml(), "api")
+
+    assert api_environment["CLERK_JWT_KEY"] == ""
+    assert api_environment["CLERK_JWKS_URL"] == (
+        "https://clerk.example.com/.well-known/jwks.json"
+    )
+    assert sum(
+        bool(api_environment[setting])
+        for setting in ("CLERK_JWT_KEY", "CLERK_JWKS_URL")
+    ) == 1
+
+
+def test_local_compose_keeps_local_auth_and_realtime_disabled() -> None:
+    api_environment = local_compose_service_environment("api")
+
+    assert api_environment["AUTH_MODE"] == "local"
+    assert api_environment.get("REALTIME_ENABLED", "false") == "false"
+    for setting in CLERK_SESSION_VERIFIER_SETTINGS:
+        assert setting not in api_environment
+
+
+def test_clerk_example_documents_session_verifier_without_real_origin() -> None:
+    example = (REPO_ROOT / "apps" / "api" / ".env.example").read_text()
+    expected_settings = {
+        "CLERK_AUTHORIZED_PARTIES": "https://your-app.example.com",
+        "CLERK_JWT_KEY": "",
+        "CLERK_JWKS_URL": "",
+        "CLERK_JWKS_CACHE_TTL_SECONDS": "300",
+        "CLERK_JWKS_STALE_GRACE_SECONDS": "600",
+        "CLERK_JWKS_CONNECT_TIMEOUT_SECONDS": "0.5",
+        "CLERK_JWKS_READ_TIMEOUT_SECONDS": "1.0",
+        "CLERK_JWKS_POOL_TIMEOUT_SECONDS": "0.25",
+        "CLERK_JWKS_TOTAL_TIMEOUT_SECONDS": "2.0",
+    }
+
+    for setting, value in expected_settings.items():
+        assert f"{setting}={value}" in example
+    assert [
+        line
+        for line in example.splitlines()
+        if line.startswith("CLERK_AUTHORIZED_PARTIES=")
+    ] == ["CLERK_AUTHORIZED_PARTIES=https://your-app.example.com"]
+
+
+def test_api_ci_supplies_network_free_clerk_construction_values() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    api_job = workflow.split("\n  api:", 1)[1].split("\n  agent:", 1)[0]
+
+    assert "CLERK_ISSUER: https://clerk.example.com" in api_job
+    assert "CLERK_AUTHORIZED_PARTIES: https://app.example.com" in api_job
+    assert (
+        "CLERK_JWKS_URL: https://clerk.example.com/.well-known/jwks.json"
+        in api_job
+    )
+    assert "CLERK_JWT_KEY:" not in api_job
 
 
 def test_compose_requires_explicit_telnyx_ordering_for_worker_and_api() -> None:
