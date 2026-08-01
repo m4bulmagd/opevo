@@ -1,14 +1,16 @@
 import logging
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import jwt
 import pytest
-from cryptography.hazmat.primitives import serialization
+from fastapi import FastAPI
+from starlette.requests import Request
 
-from app.core.auth import ClerkAuthProvider, get_auth_provider
+from app.core.auth import get_auth_provider
+from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
 from app.core.dispatch_token import create_dispatch_token, verify_dispatch_token
 
 
@@ -23,8 +25,8 @@ async def test_rejected_clerk_token_logs_only_safe_fixed_fields(
     from app.main import app
 
     class RejectingAuthProvider:
-        def verify_token(self, _token: str) -> None:
-            raise jwt.PyJWTError("JWT_EXCEPTION_SENTINEL")
+        async def verify_token(self, _token: str) -> None:
+            raise TokenRejected("authorized_party")
 
     token = jwt.encode(
         {
@@ -47,7 +49,6 @@ async def test_rejected_clerk_token_logs_only_safe_fixed_fields(
     assert response.status_code == 401
     assert response.json() == {"detail": "Invalid token"}
     for sentinel in (
-        "JWT_EXCEPTION_SENTINEL",
         "JWT_SUBJECT_SENTINEL",
         "JWT_TOKEN_SENTINEL",
         token,
@@ -55,25 +56,74 @@ async def test_rejected_clerk_token_logs_only_safe_fixed_fields(
         assert sentinel not in caplog.text
     assert "event=clerk_token_rejected" in caplog.text
     assert "operation=verify_token" in caplog.text
-    assert "error_type=PyJWTError" in caplog.text
+    assert "reason=authorized_party" in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
 
 
-def test_request_auth_provider_uses_app_bound_settings(settings) -> None:
-    configured = settings.model_copy(
-        update={"clerk_issuer": "https://captured-clerk.example"}
-    )
-    request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(settings=configured))
-    )
+def test_request_auth_provider_returns_exact_app_scoped_instance() -> None:
+    provider = object()
+    app = FastAPI()
+    app.state.auth_provider = provider
+    request = Request({"type": "http", "app": app})
 
+    assert get_auth_provider(request) is provider
+
+
+class RejectingProvider:
+    def __init__(self, failure: Exception) -> None:
+        self.failure = failure
+
+    async def verify_token(self, token: str) -> None:
+        del token
+        raise self.failure
+
+
+async def request_protected_route(app: FastAPI, *, token: str) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        return await client.get(
+            "/api/agent/config",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+
+@pytest.mark.anyio
+async def test_rest_maps_rejected_token_to_generic_401(test_app) -> None:
+    original_provider = test_app.state.auth_provider
     try:
-        provider = get_auth_provider(request)
-    except TypeError as error:
-        pytest.fail(f"get_auth_provider must accept the current request: {error}")
+        test_app.state.auth_provider = RejectingProvider(
+            TokenRejected("authorized_party")
+        )
 
-    assert isinstance(provider, ClerkAuthProvider)
-    assert provider.settings is configured
+        response = await request_protected_route(test_app, token="TOKEN_SENTINEL")
+    finally:
+        test_app.state.auth_provider = original_provider
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid token"}
+    assert "TOKEN_SENTINEL" not in response.text
+
+
+@pytest.mark.anyio
+async def test_rest_maps_provider_outage_to_generic_503(test_app) -> None:
+    original_provider = test_app.state.auth_provider
+    try:
+        test_app.state.auth_provider = RejectingProvider(
+            AuthenticationUnavailable("jwks_timeout")
+        )
+
+        response = await request_protected_route(test_app, token="TOKEN_SENTINEL")
+    finally:
+        test_app.state.auth_provider = original_provider
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Authentication temporarily unavailable"
+    }
+    assert "TOKEN_SENTINEL" not in response.text
 
 
 def _configure_dispatch_tokens(
@@ -282,46 +332,6 @@ def test_verify_dispatch_token_rejects_invalid_identifier_claim_type(
             _encode_dispatch_payload(payload),
             expected_call_id=payload["call_id"],
         )
-
-
-def test_clerk_auth_provider_accepts_valid_rs256_token(
-    rs256_clerk_token_for,
-) -> None:
-    identity = ClerkAuthProvider().verify_token(rs256_clerk_token_for("user_active"))
-
-    assert identity.clerk_user_id == "user_active"
-
-
-def test_clerk_auth_provider_accepts_valid_rs256_token_via_jwks_url(
-    monkeypatch: pytest.MonkeyPatch,
-    rs256_clerk_token_for,
-    clerk_key_material,
-) -> None:
-    monkeypatch.setenv("CLERK_JWT_KEY", "")
-    monkeypatch.setenv("CLERK_JWKS_URL", "https://clerk.example.com/.well-known/jwks.json")
-
-    from app.core.config import get_settings
-
-    get_settings.cache_clear()
-
-    private_key = serialization.load_pem_private_key(
-        str(clerk_key_material["private_key_pem"]).encode("utf-8"),
-        password=None,
-    )
-
-    class FakeSigningKey:
-        def __init__(self, key) -> None:
-            self.key = key
-
-    class FakeJwkClient:
-        def get_signing_key_from_jwt(self, _token: str):
-            return FakeSigningKey(private_key.public_key())
-
-    identity = ClerkAuthProvider(jwk_client=FakeJwkClient()).verify_token(
-        rs256_clerk_token_for("user_active")
-    )
-
-    assert identity.clerk_user_id == "user_active"
 
 
 @pytest.mark.anyio

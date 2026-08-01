@@ -43,7 +43,7 @@ class RealtimeService:
             await websocket.close(code=1008)
             return None
 
-        identity = self.auth_provider.verify_token(message["token"])
+        identity = await self.auth_provider.verify_token(message["token"])
         await self.websocket_manager.connect(identity.clerk_user_id, websocket)
         return identity.clerk_user_id
 
