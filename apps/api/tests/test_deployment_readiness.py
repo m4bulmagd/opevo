@@ -37,6 +37,8 @@ def base_settings() -> Settings:
         database_url="postgresql+asyncpg://db/ai_call",
         redis_url="rediss://redis/0",
         clerk_issuer="https://clerk.example.com",
+        clerk_authorized_parties="https://app.example.com",
+        clerk_jwt_key=None,
         clerk_jwks_url="https://clerk.example.com/.well-known/jwks.json",
         clerk_webhook_secret="clerk-webhook-secret",
         stripe_secret_key="stripe-secret-key",
@@ -113,9 +115,22 @@ def test_production_rejects_missing_required_api_setting(
         validate_api_runtime(settings)
 
 
-def test_production_rejects_missing_clerk_verification_source(base_settings: Settings) -> None:
+@pytest.mark.parametrize(
+    "verification_configuration",
+    [
+        {"clerk_jwt_key": "", "clerk_jwks_url": ""},
+        {
+            "clerk_jwt_key": "test-static-verification-key",
+            "clerk_jwks_url": "https://clerk.example.com/.well-known/jwks.json",
+        },
+    ],
+)
+def test_production_rejects_nonexclusive_clerk_verification_sources(
+    base_settings: Settings,
+    verification_configuration: dict[str, str],
+) -> None:
     settings = base_settings.model_copy(
-        update={"clerk_jwt_key": "", "clerk_jwks_url": ""}
+        update=verification_configuration
     )
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -123,7 +138,7 @@ def test_production_rejects_missing_clerk_verification_source(base_settings: Set
 
     message = str(exc_info.value)
     assert "CLERK_JWT_KEY" in message
-    assert "CLERK_JWKS_URL" in message
+    assert "test-static-verification-key" not in message
 
 
 def test_production_rejects_disabled_telnyx_ordering(
@@ -155,17 +170,25 @@ def test_production_rejects_unsafe_dispatch_hmac_secret(
         validate_api_runtime(settings)
 
 
-@pytest.mark.parametrize("verification_field", ["clerk_jwt_key", "clerk_jwks_url"])
+@pytest.mark.parametrize(
+    "verification_configuration",
+    [
+        {
+            "clerk_jwt_key": "test-static-verification-key",
+            "clerk_jwks_url": None,
+        },
+        {
+            "clerk_jwt_key": None,
+            "clerk_jwks_url": "https://clerk.example.com/.well-known/jwks.json",
+        },
+    ],
+)
 def test_production_accepts_either_clerk_verification_source(
     base_settings: Settings,
-    verification_field: str,
+    verification_configuration: dict[str, str | None],
 ) -> None:
     settings = base_settings.model_copy(
-        update={
-            "clerk_jwt_key": "",
-            "clerk_jwks_url": "",
-            verification_field: "usable-verification-source",
-        }
+        update=verification_configuration
     )
 
     validate_api_runtime(settings)
