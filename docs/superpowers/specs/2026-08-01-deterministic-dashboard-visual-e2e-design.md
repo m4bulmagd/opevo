@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-01
 **Decision:** 20A, with approved execution follow-ups 21A, 22A, and 23A
-**Status:** Approved
+**Status:** Implemented
 
 ## Problem
 

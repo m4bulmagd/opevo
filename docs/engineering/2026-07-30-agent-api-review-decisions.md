@@ -1,15 +1,20 @@
-# Agent/API Architecture and Engineering Review Decision Record
+# Agent/API/Web Architecture and Engineering Review Decision Record
 
 - **Date:** 2026-07-30
-- **Scope:** `apps/agent`, `apps/api`, and the shared contracts and
-  infrastructure that directly connect them
+- **Scope:** `apps/agent`, `apps/api`, `apps/web`, the shared contracts that
+  connect them, and the Docker, deployment, and browser-E2E infrastructure
+  used to verify those boundaries
 - **Status:** Review complete; directions and implementation follow-ups
-  recorded. Issue 2 is implemented; later issues still require their own
-  explicitly authorized changes unless marked otherwise below.
+  recorded. Issues marked implemented in the ledger have shipped on the
+  reviewed branch; all other issues still require their own explicitly
+  authorized changes unless marked otherwise below.
 - **Review mode:** Big change, four sections, at most four top issues per section
 
-This document is the durable record of the 16 issues reviewed interactively and
-two implementation-review follow-ups. It preserves the evidence, alternatives,
+This document is the durable record of 22 numbered issues: the 16 issues
+reviewed interactively, two shared-contract implementation-review follow-ups
+(17–18), and four dashboard/E2E execution decisions (20–23). Issue 19 was not
+assigned in this record and is therefore neither counted nor represented by a
+synthetic ledger row. The record preserves the evidence, alternatives,
 concrete tradeoffs, accepted directions, proposed solutions, dependencies, and
 validation gates so that the conversation is not the only source of truth.
 
@@ -55,10 +60,17 @@ The recommendations use these agreed priorities:
 | 16 | Performance governance | **16A** — measure first, then set explicit budgets and thresholds | Accepted |
 | 17 | Docker context-probe cleanup | **17A** — quarantine and physically anchor recursive cleanup | Accepted; implemented |
 | 18 | Same-UID quarantine capture race | **18A** — document and accept the narrow CI-only residual risk | Accepted risk |
+| 20 | Dashboard visual determinism | **20A** — fail-closed development/test reference time through the existing API service seam | Accepted; implemented |
+| 21 | Live-preview visual timer | **21A** — freeze the Playwright clock for preview captures and assert exact seeded time | Accepted; implemented |
+| 22 | Configuration visual readiness | **22A** — semantic readiness gates and four proven-stale configuration baselines | Accepted; implemented |
+| 23 | Lifecycle and browser-history state | **23A** — semantic lifecycle locator and URL-owned filter-state synchronization | Accepted; implemented |
 
 Decisions **11C** and **12C** deliberately retain test gaps. They must not be
 described as solved by later work unless the user explicitly selects a
 different option.
+
+Issue **19** has no section or recorded decision in this document. The numbering
+gap is intentional: the approved dashboard sequence begins at Issue 20.
 
 ## System Boundary Summary
 
