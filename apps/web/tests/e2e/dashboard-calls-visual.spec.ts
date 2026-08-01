@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://127.0.0.1:3300";
 const CALL_ID = "11111111-1111-4111-8111-111111111111";
+const LIVE_CALL_VISUAL_TIME = new Date("2026-07-29T12:00:00.000Z");
 
 type ThemeMode = "dark" | "light";
 
@@ -66,6 +67,10 @@ async function setThemeBeforeNavigation(page: Page, theme: ThemeMode) {
 async function prepareRoute(page: Page, visualCase: VisualCase) {
   await page.setViewportSize(visualCase.viewport);
   await setThemeBeforeNavigation(page, visualCase.theme);
+  if (visualCase.route === "/dashboard/live-call") {
+    await page.clock.install({ time: LIVE_CALL_VISUAL_TIME });
+    await page.clock.pauseAt(LIVE_CALL_VISUAL_TIME);
+  }
   await page.goto(visualCase.route);
   await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
   await expect(page.getByRole("heading", { level: 1, name: visualCase.heading })).toBeVisible();
@@ -102,7 +107,9 @@ for (const visualCase of VISUAL_CASES) {
       await expect(page.getByRole("region", { name: "Full transcript" })).toBeVisible();
     }
     if (visualCase.route === "/dashboard/live-call") {
+      const callOverview = page.getByRole("region", { name: "Preview call overview" });
       await expect(page.getByRole("main").getByText("Preview", { exact: true })).toBeVisible();
+      await expect(callOverview.getByText("01:42", { exact: true })).toBeVisible();
       await expect(page.getByRole("note")).toContainText("Nothing here places, answers, or ends a real call");
     }
 

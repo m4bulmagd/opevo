@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 
 test.describe.configure({ mode: "serial" });
 
@@ -13,6 +13,24 @@ type VisualCase = {
   theme: ThemeMode;
   viewport: { height: number; width: number };
 };
+
+type ConfigurationReadinessDiagnostics = {
+  documentScrollHeight: number;
+  mainScrollHeight: number;
+  mainTextLength: number;
+  sentinelCount: number;
+  sentinelRendered: boolean;
+};
+
+function isConfigurationRouteReady(diagnostics: ConfigurationReadinessDiagnostics) {
+  return (
+    diagnostics.documentScrollHeight >= diagnostics.mainScrollHeight &&
+    diagnostics.mainScrollHeight > 100 &&
+    diagnostics.mainTextLength > 100 &&
+    diagnostics.sentinelCount === 1 &&
+    diagnostics.sentinelRendered
+  );
+}
 
 const VISUAL_CASES: readonly VisualCase[] = [
   {
@@ -59,9 +77,102 @@ const VISUAL_CASES: readonly VisualCase[] = [
   },
 ];
 
+test("configuration visual readiness rejects a shell-only main region", () => {
+  expect(
+    isConfigurationRouteReady({
+      documentScrollHeight: 68,
+      mainScrollHeight: 0,
+      mainTextLength: 0,
+      sentinelCount: 0,
+      sentinelRendered: false,
+    }),
+  ).toBe(false);
+});
+
 async function setThemeBeforeNavigation(page: Page, theme: ThemeMode) {
   await page.context().clearCookies({ name: "theme_mode" });
   await page.context().addCookies([{ name: "theme_mode", value: theme, url: BASE_URL }]);
+}
+
+function configurationReadinessSentinel(page: Page, visualCase: VisualCase): Locator {
+  if (visualCase.route.includes("tab=preview")) {
+    return page.getByRole("button", { name: "Test assistant Preview" });
+  }
+  if (visualCase.route === "/dashboard/agent") {
+    return page.getByRole("textbox", { name: "Owner context" });
+  }
+  if (visualCase.route === "/dashboard/billing") {
+    return page.getByRole("region", { name: "Plan comparison Preview" });
+  }
+  return page.getByRole("region", { name: "Danger zone" });
+}
+
+async function configurationReadinessDiagnostics(
+  page: Page,
+  sentinel: Locator,
+): Promise<ConfigurationReadinessDiagnostics & { ready: boolean }> {
+  const main = page.getByRole("main");
+  const [documentScrollHeight, mainStats, sentinelStats] = await Promise.all([
+    page.evaluate(() => document.documentElement.scrollHeight),
+    main.evaluate((element) => ({
+      scrollHeight: element.scrollHeight,
+      textLength: element.textContent?.trim().length ?? 0,
+    })),
+    sentinel.evaluateAll((elements) => ({
+      count: elements.length,
+      rendered: elements.some((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      }),
+    })),
+  ]);
+  const diagnostics: ConfigurationReadinessDiagnostics = {
+    documentScrollHeight,
+    mainScrollHeight: mainStats.scrollHeight,
+    mainTextLength: mainStats.textLength,
+    sentinelCount: sentinelStats.count,
+    sentinelRendered: sentinelStats.rendered,
+  };
+  return { ...diagnostics, ready: isConfigurationRouteReady(diagnostics) };
+}
+
+async function expectConfigurationRouteReady(page: Page, visualCase: VisualCase) {
+  const sentinel = configurationReadinessSentinel(page, visualCase);
+
+  if (visualCase.route.startsWith("/dashboard/agent")) {
+    await expect(page.getByRole("tab", { name: "Advanced Preview" })).toBeVisible();
+  }
+  if (visualCase.route.includes("tab=preview")) {
+    await expect(page.getByRole("region", { name: "Advanced assistant Preview" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Professional/i })).toBeChecked();
+  }
+  if (visualCase.route === "/dashboard/billing") {
+    await expect(page.getByRole("region", { name: "Current period usage" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Manage billing" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Starter/i })).toBeChecked();
+  }
+  if (visualCase.route === "/dashboard/account") {
+    for (const regionName of [
+      "Profile",
+      "Assigned number",
+      "Account status",
+      "Notifications Preview",
+      "Privacy & recordings Preview",
+      "Security",
+      "Danger zone",
+    ]) {
+      await expect(page.getByRole("region", { name: regionName })).toBeVisible();
+    }
+    await expect(page.getByRole("status", { name: "Unsaved changes" })).toHaveCount(0);
+  }
+
+  await expect
+    .poll(() => configurationReadinessDiagnostics(page, sentinel), {
+      message: `configuration route did not reach visual readiness: ${visualCase.name}`,
+      timeout: 30_000,
+    })
+    .toMatchObject({ ready: true, sentinelCount: 1, sentinelRendered: true });
 }
 
 async function prepareRoute(page: Page, visualCase: VisualCase) {
@@ -80,6 +191,7 @@ async function prepareRoute(page: Page, visualCase: VisualCase) {
     `,
   });
   await expect(page.getByRole("heading", { level: 1, name: visualCase.heading })).toBeVisible();
+  await expectConfigurationRouteReady(page, visualCase);
   await page.evaluate(() => document.fonts.ready);
 }
 
@@ -130,29 +242,7 @@ for (const visualCase of VISUAL_CASES) {
     await expectNoHorizontalOverflow(page, visualCase.viewport.width);
     const screenshotMasks = [page.locator('[data-visual-billing-date="true"]')];
 
-    if (visualCase.route.startsWith("/dashboard/agent")) {
-      await expect(page.getByRole("tab", { name: "Advanced Preview" })).toBeVisible();
-    }
-    if (visualCase.route.includes("tab=preview")) {
-      await expect(page.getByRole("region", { name: "Advanced assistant Preview" })).toBeVisible();
-    }
-    if (visualCase.route === "/dashboard/billing") {
-      await expect(page.getByRole("region", { name: "Current period usage" })).toBeVisible();
-      await expect(page.getByRole("region", { name: "Plan comparison Preview" })).toBeVisible();
-    }
     if (visualCase.route === "/dashboard/account") {
-      for (const regionName of [
-        "Profile",
-        "Assigned number",
-        "Account status",
-        "Notifications Preview",
-        "Privacy & recordings Preview",
-        "Security",
-        "Danger zone",
-      ]) {
-        await expect(page.getByRole("region", { name: regionName })).toBeVisible();
-      }
-      await expect(page.getByRole("status", { name: "Unsaved changes" })).toHaveCount(0);
       screenshotMasks.push(page.getByRole("region", { name: "Assigned number" }).locator("p").first());
     }
 
