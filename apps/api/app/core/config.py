@@ -3,6 +3,23 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import PydanticBaseSettingsSource
+
+
+def _requests_test_mode(
+    init_settings: PydanticBaseSettingsSource,
+    env_settings: PydanticBaseSettingsSource,
+) -> bool:
+    init_values = init_settings()
+    effective_app_env = (
+        init_values["app_env"]
+        if "app_env" in init_values
+        else env_settings().get("app_env")
+    )
+    return (
+        isinstance(effective_app_env, str)
+        and effective_app_env.strip().casefold() == "test"
+    )
 
 
 class Settings(BaseSettings):
@@ -82,6 +99,19 @@ class Settings(BaseSettings):
         extra="ignore",
         hide_input_in_errors=True,
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        if _requests_test_mode(init_settings, env_settings):
+            return init_settings, env_settings, file_secret_settings
+        return init_settings, env_settings, dotenv_settings, file_secret_settings
 
     @model_validator(mode="after")
     def validate_connected_reconciliation_timeout(self) -> Self:
