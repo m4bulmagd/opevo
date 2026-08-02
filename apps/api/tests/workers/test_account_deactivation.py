@@ -30,7 +30,6 @@ from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
-from app.providers.subscriptions.base import SubscriptionProviderError
 from app.core.provider_failures import ProviderFailure
 from app.providers.telephony.telnyx import TelephonyTelnyx
 from app.repositories.account_deactivation_repository import (
@@ -776,8 +775,10 @@ async def test_restart_from_each_committed_timestamp_skips_completed_provider_wo
         ),
         (
             None,
-            SubscriptionProviderError(
-                "provider_retryable",
+            ProviderFailure(
+                provider="stripe",
+                operation="cancel_subscription",
+                disposition="retryable",
                 error_class="timeout",
             ),
             [
@@ -868,8 +869,10 @@ async def test_retryable_provider_failures_are_non_exhausting_and_committed(
         (
             1,
             None,
-            SubscriptionProviderError(
-                "provider_terminal",
+            ProviderFailure(
+                provider="stripe",
+                operation="cancel_subscription",
+                disposition="terminal",
                 error_class="authentication",
             ),
             "subscription_authentication",
@@ -877,8 +880,10 @@ async def test_retryable_provider_failures_are_non_exhausting_and_committed(
         (
             1,
             None,
-            SubscriptionProviderError(
-                "provider_terminal",
+            ProviderFailure(
+                provider="stripe",
+                operation="cancel_subscription",
+                disposition="terminal",
                 error_class="validation",
             ),
             "subscription_contract",

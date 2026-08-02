@@ -8,7 +8,6 @@ from app.models.outbox_event import OutboxEvent
 from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.user import User
 from app.core.provider_failures import ProviderFailure
-from app.providers.subscriptions.base import SubscriptionProviderError
 from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.services.outbox_service import OutboxService
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
@@ -43,8 +42,10 @@ class RecordingSubscriptions:
     async def cancel_immediately(self, subscription_id: str) -> None:
         self.calls.append(f"cancel:{subscription_id}")
         if self.fail:
-            raise SubscriptionProviderError(
-                "provider_retryable",
+            raise ProviderFailure(
+                provider="stripe",
+                operation="cancel_subscription",
+                disposition="retryable",
                 error_class="unavailable",
             )
 

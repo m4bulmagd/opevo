@@ -2,35 +2,20 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import NoReturn
 
 from app.core.config import get_settings
 from app.core.http_origin import parse_http_origin
 from app.core.observability import (
     get_observability,
     instrument_provider,
-    validated_error_class,
 )
+from app.core.provider_failures import ProviderFailure, ProviderOperation
+from app.providers.subscriptions import stripe as stripe_provider
 
 
 class BillingSessionStateError(ValueError):
     pass
-
-
-class BillingSessionProviderError(RuntimeError):
-    def __init__(
-        self,
-        category: str,
-        *,
-        error_class: str | None = None,
-    ) -> None:
-        if category not in {"provider_retryable", "provider_terminal"}:
-            raise ValueError("Unsafe billing provider category")
-        super().__init__(category)
-        self.category = category
-        self.retryable = category == "provider_retryable"
-        self.error_class = validated_error_class(
-            error_class or ("unavailable" if self.retryable else "unknown")
-        )
 
 
 class BillingPortalReturnUrlError(BillingSessionStateError):
@@ -95,7 +80,10 @@ class BillingSessionService:
             "plan_tier": plan_tier,
             "lifecycle_generation": str(lifecycle_generation),
         }
-        stripe = await asyncio.to_thread(self._get_client)
+        stripe = await asyncio.to_thread(
+            self._get_client,
+            operation="create_checkout_session",
+        )
         try:
             if existing_session_id is not None:
                 session = await asyncio.to_thread(
@@ -131,20 +119,20 @@ class BillingSessionService:
                     **idempotency_argument,
                 )
         except Exception as exc:
-            category, error_class = self._stripe_error_details(exc)
-            raise BillingSessionProviderError(
-                category,
-                error_class=error_class,
-            ) from None
+            self._raise_known_stripe_failure(exc, operation="create_checkout_session")
 
-        provider_session_id = getattr(session, "id", None)
-        if not isinstance(provider_session_id, str) or not provider_session_id:
-            raise BillingSessionProviderError(
-                "provider_terminal",
-                error_class="validation",
-            )
+        provider_session_id = self._required_response_string(
+            session,
+            field="id",
+            operation="create_checkout_session",
+        )
+        url = self._required_response_string(
+            session,
+            field="url",
+            operation="create_checkout_session",
+        )
         return HostedSession(
-            url=session.url,
+            url=url,
             provider_session_id=provider_session_id,
         )
 
@@ -179,7 +167,10 @@ class BillingSessionService:
             if caller_origin != configured_origin:
                 raise BillingPortalReturnUrlError("Invalid billing portal return URL")
 
-        stripe = await asyncio.to_thread(self._get_client)
+        stripe = await asyncio.to_thread(
+            self._get_client,
+            operation="create_portal_session",
+        )
         try:
             session = await asyncio.to_thread(
                 stripe.billing_portal.Session.create,
@@ -191,13 +182,15 @@ class BillingSessionService:
                 ),
             )
         except Exception as exc:
-            category, error_class = self._stripe_error_details(exc)
-            raise BillingSessionProviderError(
-                category,
-                error_class=error_class,
-            ) from None
+            self._raise_known_stripe_failure(exc, operation="create_portal_session")
 
-        return HostedSession(url=session.url)
+        return HostedSession(
+            url=self._required_response_string(
+                session,
+                field="url",
+                operation="create_portal_session",
+            )
+        )
 
     def _resolve_price_id(self, plan_tier: str) -> str:
         if plan_tier == "starter":
@@ -206,7 +199,11 @@ class BillingSessionService:
             )
         raise BillingSessionStateError(f"Unsupported plan tier: {plan_tier}")
 
-    def _get_client(self):
+    def _get_client(
+        self,
+        *,
+        operation: ProviderOperation = "create_checkout_session",
+    ):
         if self._stripe_client is not None:
             return self._stripe_client
 
@@ -214,13 +211,16 @@ class BillingSessionService:
             raise BillingSessionStateError("Stripe secret key is required")
 
         try:
+            stripe_provider._install_safe_stripe_sdk_logging()
             import stripe
             from stripe._http_client import RequestsClient
-        except ImportError:
-            raise BillingSessionProviderError(
-                "provider_terminal",
+        except ImportError as exc:
+            raise ProviderFailure(
+                provider="stripe",
+                operation=operation,
+                disposition="terminal",
                 error_class="validation",
-            ) from None
+            ) from exc
 
         stripe.api_key = self.secret_key
         stripe.max_network_retries = 2
@@ -230,46 +230,36 @@ class BillingSessionService:
         return stripe
 
     @staticmethod
-    def _stripe_error_details(error: Exception) -> tuple[str, str]:
-        import stripe
+    def _raise_known_stripe_failure(
+        error: Exception,
+        *,
+        operation: ProviderOperation,
+    ) -> NoReturn:
+        failure = stripe_provider.classify_stripe_exception(error, operation=operation)
+        if failure is None:
+            raise error
+        raise failure from error
 
-        if isinstance(error, stripe.error.APIConnectionError):
-            category = (
-                "provider_retryable"
-                if getattr(error, "should_retry", False) is True
-                else "provider_terminal"
-            )
-            return category, "unavailable"
-        if isinstance(error, stripe.error.RateLimitError):
-            return "provider_retryable", "rate_limited"
-        if isinstance(
-            error,
-            (
-                stripe.error.AuthenticationError,
-                stripe.error.PermissionError,
-            ),
-        ):
-            return "provider_terminal", "authentication"
-        if isinstance(error, stripe.error.InvalidRequestError):
-            return "provider_terminal", "validation"
-        if isinstance(error, stripe.error.APIError):
-            status = error.http_status
-            if status == 429:
-                return "provider_retryable", "rate_limited"
-            if status in {408, 504}:
-                return "provider_retryable", "timeout"
-            if status is not None and status >= 500:
-                return "provider_retryable", "unavailable"
-            if status in {401, 403}:
-                return "provider_terminal", "authentication"
-            if status == 409:
-                return "provider_terminal", "conflict"
-            if status in {400, 404, 405, 422}:
-                return "provider_terminal", "validation"
-            return "provider_terminal", "unknown"
-        if isinstance(error, stripe.error.StripeError):
-            return "provider_terminal", "unknown"
-        return "provider_retryable", "unknown"
+    @staticmethod
+    def _required_response_string(
+        response: object,
+        *,
+        field: str,
+        operation: ProviderOperation,
+    ) -> str:
+        value = (
+            response.get(field)
+            if isinstance(response, dict)
+            else getattr(response, field, None)
+        )
+        if isinstance(value, str) and value:
+            return value
+        raise ProviderFailure(
+            provider="stripe",
+            operation=operation,
+            disposition="terminal",
+            error_class="validation",
+        )
 
     @staticmethod
     def _require_config(value: str | None, message: str) -> str:

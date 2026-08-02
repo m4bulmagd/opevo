@@ -9,7 +9,6 @@ from app.core.database import get_session_factory
 from app.core.provider_failures import ProviderFailure
 from app.models.outbox_event import OutboxEvent
 from app.models.provider_cleanup_operation import ProviderCleanupOperation
-from app.providers.subscriptions.base import SubscriptionProviderError
 from app.providers.subscriptions.factory import build_subscription_provider
 from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
@@ -103,14 +102,17 @@ async def deliver_provider_cleanup(
             try:
                 provider_guard.assert_transaction_free()
                 await provider.cancel_immediately(snapshot.provider_resource_id)
-            except SubscriptionProviderError as error:
+            except ProviderFailure as error:
+                error_code = (
+                    "provider_retryable" if error.retryable else "provider_terminal"
+                )
                 await _record_failure(
                     session_factory,
                     operation_id,
-                    error.category,
+                    error_code,
                 )
                 raise OutboxDeliveryError(
-                    error.category,
+                    error_code,
                     retryable=error.retryable,
                     exhaustible=not error.retryable,
                 ) from None

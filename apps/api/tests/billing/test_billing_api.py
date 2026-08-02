@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.core.auth import UserIdentity
+from app.core.provider_failures import ProviderFailure
 from app.schemas.billing_api import (
     UsageLedgerEntryResponse,
     UsageLedgerListResponse,
@@ -259,6 +260,26 @@ class FakeUnsafePortalSessionService(FakeBillingSessionService):
         raise BillingPortalReturnUrlError("unsafe return URL")
 
 
+class FakeProviderFailingBillingSessionService(FakeBillingSessionService):
+    async def create_checkout_session(self, **_kwargs):
+        failure = ProviderFailure(
+            provider="stripe",
+            operation="create_checkout_session",
+            disposition="terminal",
+            error_class="validation",
+        )
+        raise failure from RuntimeError("RAW_STRIPE_BODY_AND_TOKEN_SENTINEL")
+
+    async def create_portal_session(self, **_kwargs):
+        failure = ProviderFailure(
+            provider="stripe",
+            operation="create_portal_session",
+            disposition="terminal",
+            error_class="validation",
+        )
+        raise failure from RuntimeError("RAW_STRIPE_BODY_AND_TOKEN_SENTINEL")
+
+
 class FakeEmptySubscriptionQueryService(FakeBillingQueryService):
     async def get_subscription(self, user_id):
         return None
@@ -310,6 +331,31 @@ async def test_create_checkout_session_returns_url() -> None:
     )
 
     assert response.url == "https://checkout.stripe.test/session"
+
+
+@pytest.mark.anyio
+async def test_checkout_provider_failure_keeps_the_http_response_safe() -> None:
+    from app.routers.billing import create_checkout_session
+    from app.schemas.billing_api import CheckoutSessionRequest
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_checkout_session(
+            request=_fake_request(),
+            payload=CheckoutSessionRequest(plan_tier="starter"),
+            identity=UserIdentity(
+                clerk_user_id="user_123",
+                internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            ),
+            service=FakeProviderFailingBillingSessionService(),
+            query_service=FakeEmptySubscriptionQueryService(),
+            user=type("User", (), {"email": "billing@example.com"})(),
+        )
+
+    assert (exc_info.value.status_code, exc_info.value.detail) == (
+        502,
+        "Failed to create Stripe checkout session",
+    )
+    assert "RAW_STRIPE_BODY_AND_TOKEN_SENTINEL" not in str(exc_info.value.detail)
 
 
 @pytest.mark.anyio
@@ -552,6 +598,30 @@ async def test_create_portal_session_returns_url() -> None:
     )
 
     assert response.url == "https://billing.stripe.test/session"
+
+
+@pytest.mark.anyio
+async def test_portal_provider_failure_keeps_the_http_response_safe() -> None:
+    from app.routers.billing import create_portal_session
+    from app.schemas.billing_api import PortalSessionRequest
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_portal_session(
+            request=_fake_request(),
+            payload=PortalSessionRequest(),
+            identity=UserIdentity(
+                clerk_user_id="user_123",
+                internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            ),
+            service=FakeProviderFailingBillingSessionService(),
+            query_service=FakeActiveSubscriptionQueryService(),
+        )
+
+    assert (exc_info.value.status_code, exc_info.value.detail) == (
+        502,
+        "Failed to create Stripe billing portal session",
+    )
+    assert "RAW_STRIPE_BODY_AND_TOKEN_SENTINEL" not in str(exc_info.value.detail)
 
 
 @pytest.mark.anyio

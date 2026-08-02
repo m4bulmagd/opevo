@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 import pytest
 import stripe
 
+from app.core.provider_failures import ProviderFailure
+
 
 class _Telemetry:
     def __init__(self) -> None:
@@ -82,14 +84,21 @@ class FailingCheckoutSessionAPI:
 
 
 class FailingStripeClient(FakeStripeClient):
-    def __init__(self, error: Exception) -> None:
+    def __init__(self, error: Exception, *, caller: str = "checkout") -> None:
         super().__init__()
         FailingCheckoutSessionAPI.error = error
-        self.checkout = type(
-            "CheckoutNamespace",
-            (),
-            {"Session": FailingCheckoutSessionAPI()},
-        )()
+        if caller == "checkout":
+            self.checkout = type(
+                "CheckoutNamespace",
+                (),
+                {"Session": FailingCheckoutSessionAPI()},
+            )()
+        else:
+            self.billing_portal = type(
+                "BillingPortalNamespace",
+                (),
+                {"Session": FailingCheckoutSessionAPI()},
+            )()
 
 
 @pytest.mark.anyio
@@ -335,66 +344,156 @@ def test_stripe_sdk_uses_bounded_network_policy(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("provider_error", "expected_category", "expected_error_class"),
+    ("provider_error", "expected_disposition", "expected_error_class"),
     [
+        (TimeoutError("timeout secret"), "retryable", "timeout"),
         (
             stripe.error.APIConnectionError(
                 "retryable connection secret",
                 should_retry=True,
             ),
-            "provider_retryable",
+            "retryable",
+            "unavailable",
+        ),
+        (
+            stripe.error.APIConnectionError(
+                "terminal connection secret",
+                should_retry=False,
+            ),
+            "terminal",
             "unavailable",
         ),
         (
             stripe.error.RateLimitError("rate limit secret"),
-            "provider_retryable",
+            "retryable",
             "rate_limited",
         ),
         (
             stripe.error.APIError("server secret", http_status=503),
-            "provider_retryable",
+            "retryable",
             "unavailable",
         ),
         (
+            stripe.error.APIError("gateway timeout secret", http_status=504),
+            "retryable",
+            "timeout",
+        ),
+        (
             stripe.error.AuthenticationError("auth secret"),
-            "provider_terminal",
+            "terminal",
             "authentication",
         ),
         (
             stripe.error.PermissionError("permission secret"),
-            "provider_terminal",
+            "terminal",
             "authentication",
         ),
         (
             stripe.error.InvalidRequestError("validation secret", "customer"),
-            "provider_terminal",
+            "terminal",
             "validation",
         ),
         (
             stripe.error.APIError("client secret", http_status=404),
-            "provider_terminal",
-            "validation",
+            "terminal",
+            "not_found",
         ),
+        (stripe.error.APIError("conflict secret", http_status=409), "terminal", "conflict"),
+        (stripe.error.APIError("validation secret", http_status=422), "terminal", "validation"),
+        (stripe.error.StripeError("base secret"), "terminal", "unknown"),
     ],
 )
-async def test_stripe_errors_use_safe_fixed_categories(
+@pytest.mark.parametrize(
+    ("caller", "operation"),
+    [
+        ("checkout", "create_checkout_session"),
+        ("portal", "create_portal_session"),
+    ],
+)
+async def test_hosted_session_errors_match_shared_stripe_contract(
     provider_error: Exception,
-    expected_category: str,
+    expected_disposition: str,
     expected_error_class: str,
+    caller: str,
+    operation: str,
 ) -> None:
-    from app.services.billing_session_service import (
-        BillingSessionProviderError,
-        BillingSessionService,
-    )
+    from app.services.billing_session_service import BillingSessionService
 
     service = BillingSessionService(
-        stripe_client=FailingStripeClient(provider_error),
+        stripe_client=FailingStripeClient(provider_error, caller=caller),
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
+    )
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        if caller == "checkout":
+            await service.create_checkout_session(
+                user_id="user_123",
+                customer_email="billing@example.com",
+                clerk_user_id="clerk_123",
+                plan_tier="starter",
+                lifecycle_generation=7,
+            )
+        else:
+            await service.create_portal_session(customer_id="cus_123")
+
+    assert exc_info.value.provider == "stripe"
+    assert exc_info.value.operation == operation
+    assert exc_info.value.disposition == expected_disposition
+    assert exc_info.value.error_class == expected_error_class
+    assert exc_info.value.__cause__ is provider_error
+    assert "secret" not in str(exc_info.value)
+    assert "secret" not in repr(exc_info.value)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("defect", [TypeError("TYPE_SENTINEL"), RuntimeError("RUNTIME_SENTINEL")])
+@pytest.mark.parametrize("caller", ["checkout", "portal"])
+async def test_hosted_session_arbitrary_defects_propagate_unchanged(
+    defect: Exception,
+    caller: str,
+) -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    service = BillingSessionService(
+        stripe_client=FailingStripeClient(defect, caller=caller),
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
+    )
+
+    with pytest.raises(type(defect)) as exc_info:
+        if caller == "checkout":
+            await service.create_checkout_session(
+                user_id="user_123",
+                customer_email="billing@example.com",
+                clerk_user_id="clerk_123",
+                plan_tier="starter",
+                lifecycle_generation=7,
+            )
+        else:
+            await service.create_portal_session(customer_id="cus_123")
+
+    assert exc_info.value is defect
+
+
+@pytest.mark.anyio
+async def test_hosted_session_cancellation_propagates_unchanged() -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    service = BillingSessionService(
+        stripe_client=FailingStripeClient(asyncio.CancelledError()),
         price_starter="price_starter_123",
         checkout_success_url="https://app.example.com/success",
         checkout_cancel_url="https://app.example.com/cancel",
     )
 
-    with pytest.raises(BillingSessionProviderError) as exc_info:
+    with pytest.raises(asyncio.CancelledError):
         await service.create_checkout_session(
             user_id="user_123",
             customer_email="billing@example.com",
@@ -403,6 +502,41 @@ async def test_stripe_errors_use_safe_fixed_categories(
             lifecycle_generation=7,
         )
 
-    assert exc_info.value.category == expected_category
-    assert exc_info.value.error_class == expected_error_class
-    assert str(exc_info.value) == expected_category
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("caller", ["checkout", "portal"])
+async def test_malformed_hosted_session_response_is_terminal_validation(caller: str) -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    client = FakeStripeClient()
+    malformed_api = type("MalformedSessionAPI", (), {"create": lambda self, **_kwargs: object()})()
+    if caller == "checkout":
+        client.checkout = type("CheckoutNamespace", (), {"Session": malformed_api})()
+    else:
+        client.billing_portal = type("BillingPortalNamespace", (), {"Session": malformed_api})()
+    service = BillingSessionService(
+        stripe_client=client,
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
+    )
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        if caller == "checkout":
+            await service.create_checkout_session(
+                user_id="user_123",
+                customer_email="billing@example.com",
+                clerk_user_id="clerk_123",
+                plan_tier="starter",
+                lifecycle_generation=7,
+            )
+        else:
+            await service.create_portal_session(customer_id="cus_123")
+
+    assert (exc_info.value.provider, exc_info.value.operation) == (
+        "stripe",
+        "create_checkout_session" if caller == "checkout" else "create_portal_session",
+    )
+    assert (exc_info.value.disposition, exc_info.value.error_class) == ("terminal", "validation")
