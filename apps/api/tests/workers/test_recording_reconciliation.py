@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.models.call import Call
 from app.models.outbox_event import OutboxEvent
 from app.models.recording_egress_operation import RecordingEgressOperation
+from app.core.provider_failures import ProviderFailure
 from app.providers.livekit_recording.base import (
     RecordingEgressResult,
     RecordingEgressSnapshot,
@@ -336,7 +337,12 @@ class FakeStorage:
         if self.result == "missing":
             raise FileNotFoundError(object_key)
         if self.result == "error":
-            raise RuntimeError("storage-secret-that-must-not-be-persisted")
+            raise ProviderFailure(
+                provider="s3",
+                operation="delete_object",
+                disposition="retryable",
+                error_class="unavailable",
+            )
 
 
 class ForcedConflictPersistenceReconciler(RecordingReconciler):
@@ -755,6 +761,42 @@ async def test_recording_reconciliation_matrix(
             assert call.recording_object_key is None
             assert call.recording_egress_id is None
             assert call.recording_url is None
+
+
+@pytest.mark.anyio
+async def test_recording_reconciliation_propagates_storage_defects(
+    db_session: AsyncSession,
+    active_user,
+) -> None:
+    case = MatrixCase(
+        name="storage defect",
+        start_state="started",
+        provider_egress_id="EG_known",
+        stop_requested=True,
+        delete_requested=True,
+        provider_terminal=True,
+    )
+    _, operation_id = await _persist_operation(
+        db_session,
+        user_id=active_user.id,
+        case=case,
+    )
+    tracker = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+
+    class DefectiveStorage(FakeStorage):
+        async def delete_object(self, *, object_key: str) -> None:
+            await super().delete_object(object_key=object_key)
+            raise RuntimeError("STORAGE_DEFECT_SENTINEL")
+
+    with pytest.raises(RuntimeError, match="STORAGE_DEFECT_SENTINEL"):
+        await RecordingReconciler(
+            tracker,
+            FakeProvider(tracker),
+            DefectiveStorage(tracker),
+            now_provider=lambda: NOW,
+        ).reconcile(operation_id)
 
 
 @pytest.mark.anyio

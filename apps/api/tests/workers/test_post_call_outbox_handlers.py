@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.models.outbox_event import OutboxEvent
+from app.core.provider_failures import ProviderFailure
 from app.providers.summaries.base import StructuredSummary
 from app.services.outbox_service import (
     REFERENCE_PAYLOAD_FIELDS,
@@ -68,7 +69,12 @@ class FakeSummaryProvider:
         assert self.factory.open_contexts == 0
         self.transcripts.append(transcript)
         if self.fail:
-            raise RuntimeError("gemini unavailable")
+            raise ProviderFailure(
+                provider="gemini",
+                operation="generate_summary",
+                disposition="retryable",
+                error_class="unavailable",
+            )
         return StructuredSummary(
             summary_text="A durable summary",
             caller_intent="Ask a question",
@@ -467,6 +473,81 @@ async def test_summary_handler_provider_failure_is_retryable(
         )
 
     assert exc_info.value.retryable is True
+
+
+@pytest.mark.anyio
+async def test_summary_handler_marks_malformed_provider_summary_terminal(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(user_id=active_user.id, status="completed", duration_seconds=1)
+    db_session.add(call)
+    await db_session.flush()
+    db_session.add(
+        CallMessage(
+            call_id=call.id,
+            sequence_number=1,
+            speaker="CALLER",
+            text="First",
+        )
+    )
+    await db_session.commit()
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+
+    class MalformedSummaryProvider:
+        async def generate_summary(self, transcript: list[dict]):
+            return {"summary_text": "missing schema"}
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_summary_generate(
+            {"session_factory": factory, "summary_provider": MalformedSummaryProvider()},
+            event(
+                call_id=call.id,
+                topic="summary.generate",
+                aggregate_type="call-summary",
+            ),
+        )
+
+    assert exc_info.value.error_code == "provider_terminal"
+    assert exc_info.value.retryable is False
+
+
+@pytest.mark.anyio
+async def test_summary_handler_propagates_injected_defects(
+    db_session,
+    active_user,
+) -> None:
+    call = Call(user_id=active_user.id, status="completed", duration_seconds=1)
+    db_session.add(call)
+    await db_session.flush()
+    db_session.add(
+        CallMessage(
+            call_id=call.id,
+            sequence_number=1,
+            speaker="CALLER",
+            text="First",
+        )
+    )
+    await db_session.commit()
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+
+    class DefectiveSummaryProvider:
+        async def generate_summary(self, transcript: list[dict]):
+            raise RuntimeError("SUMMARY_DEFECT_SENTINEL")
+
+    with pytest.raises(RuntimeError, match="SUMMARY_DEFECT_SENTINEL"):
+        await deliver_summary_generate(
+            {"session_factory": factory, "summary_provider": DefectiveSummaryProvider()},
+            event(
+                call_id=call.id,
+                topic="summary.generate",
+                aggregate_type="call-summary",
+            ),
+        )
 
 
 @pytest.mark.anyio

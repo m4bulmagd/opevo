@@ -4,10 +4,12 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
-from minio.error import InvalidResponseError, S3Error, ServerError
+from minio.error import InvalidResponseError, MinioException, S3Error, ServerError
+from urllib3.exceptions import MaxRetryError, ReadTimeoutError
 
+from app.core.provider_failures import ProviderFailure
 from app.providers.notifications.firebase import FirebaseNotificationProvider
-from app.providers.storage.base import StorageProviderError
+from app.providers.storage import s3 as s3_module
 from app.providers.storage.s3 import S3Storage, StorageConfigurationError
 from app.providers.telephony.twilio import TelephonyTwilio
 
@@ -269,52 +271,88 @@ async def test_s3_storage_maps_missing_bucket_races_to_configuration_failure(
     (
         "operation",
         "provider_error",
-        "expected_category",
+        "expected_provider_operation",
+        "expected_disposition",
         "expected_error_class",
     ),
     [
         (
             "bucket",
             TimeoutError("provider-controlled timeout"),
-            "provider_retryable",
+            "upload_bytes",
+            "retryable",
             "timeout",
         ),
         (
             "put",
             _s3_error(code="SlowDown", status=429),
-            "provider_retryable",
+            "upload_bytes",
+            "retryable",
             "rate_limited",
         ),
         (
             "lifecycle",
             _s3_error(code="InternalError", status=503),
-            "provider_retryable",
+            "get_bucket_lifecycle",
+            "retryable",
             "unavailable",
         ),
         (
             "stat",
             _s3_error(code="AccessDenied", status=403),
-            "provider_terminal",
+            "get_download_url",
+            "terminal",
             "authentication",
         ),
         (
             "sign",
             _s3_error(code="InvalidArgument", status=400),
-            "provider_terminal",
+            "get_download_url",
+            "terminal",
             "validation",
         ),
         (
             "put",
             _s3_error(code="NoSuchKey", status=404),
-            "provider_terminal",
-            "validation",
+            "upload_bytes",
+            "terminal",
+            "not_found",
+        ),
+        (
+            "put",
+            _s3_error(code="BucketAlreadyExists", status=409),
+            "upload_bytes",
+            "terminal",
+            "conflict",
+        ),
+        (
+            "put",
+            MinioException("S3_MINIO_EXCEPTION_SENTINEL"),
+            "upload_bytes",
+            "terminal",
+            "unknown",
+        ),
+        (
+            "put",
+            ReadTimeoutError(None, "https://minio.invalid", "S3_TIMEOUT_SENTINEL"),
+            "upload_bytes",
+            "retryable",
+            "timeout",
+        ),
+        (
+            "put",
+            MaxRetryError(None, "https://minio.invalid"),
+            "upload_bytes",
+            "retryable",
+            "unavailable",
         ),
     ],
 )
-async def test_s3_storage_uses_safe_fixed_provider_categories(
+async def test_s3_storage_translates_known_sdk_and_transport_failures_once(
     operation: str,
     provider_error: Exception,
-    expected_category: str,
+    expected_provider_operation: str,
+    expected_disposition: str,
     expected_error_class: str,
 ) -> None:
     client = FailingOperationMinioClient(
@@ -323,7 +361,7 @@ async def test_s3_storage_uses_safe_fixed_provider_categories(
     )
     storage = S3Storage(bucket_name="recordings", client=client)
 
-    with pytest.raises(StorageProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         if operation == "put" or operation == "bucket":
             await storage.upload_bytes(
                 object_key="calls/provider-failure.mp3",
@@ -337,61 +375,39 @@ async def test_s3_storage_uses_safe_fixed_provider_categories(
         else:
             await storage.get_bucket_lifecycle()
 
-    assert exc_info.value.category == expected_category
-    assert exc_info.value.retryable is (expected_category == "provider_retryable")
+    assert exc_info.value.provider == "s3"
+    assert exc_info.value.operation == expected_provider_operation
+    assert exc_info.value.disposition == expected_disposition
+    assert exc_info.value.retryable is (expected_disposition == "retryable")
     assert exc_info.value.error_class == expected_error_class
-    assert str(exc_info.value) == expected_category
+    assert str(exc_info.value) == "provider operation failed"
     assert "provider-controlled" not in str(exc_info.value)
-    assert exc_info.value.__cause__ is None
-    assert exc_info.value.__suppress_context__ is True
+    assert exc_info.value.__cause__ is provider_error
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("provider_error", "expected_category", "expected_error_class"),
+    ("provider_error", "expected_disposition", "expected_error_class"),
     [
         (
             InvalidResponseError(
-                status_code,
+                503,
                 "text/plain",
-                "provider-controlled credential and phone +33123456789",
+                "S3_RESPONSE_BODY_SENTINEL +33123456789",
             ),
-            "provider_terminal" if status_code in {400, 401, 403} else "provider_retryable",
-            (
-                "authentication"
-                if status_code in {401, 403}
-                else "validation"
-                if status_code == 400
-                else "rate_limited"
-                if status_code == 429
-                else "unavailable"
-            ),
-        )
-        for status_code in (400, 401, 403, 429, 500, 503)
-    ]
-    + [
+            "terminal",
+            "validation",
+        ),
         (
-            ServerError(
-                "provider-controlled credential and phone +33123456789",
-                status_code,
-            ),
-            "provider_terminal" if status_code in {400, 401, 403} else "provider_retryable",
-            (
-                "authentication"
-                if status_code in {401, 403}
-                else "validation"
-                if status_code == 400
-                else "rate_limited"
-                if status_code == 429
-                else "unavailable"
-            ),
-        )
-        for status_code in (400, 401, 403, 429, 500, 503)
+            ServerError("S3_RESPONSE_BODY_SENTINEL +33123456789", 503),
+            "retryable",
+            "unavailable",
+        ),
     ],
 )
-async def test_s3_storage_maps_pinned_minio_http_exceptions_safely(
+async def test_s3_storage_keeps_malformed_provider_responses_private(
     provider_error: Exception,
-    expected_category: str,
+    expected_disposition: str,
     expected_error_class: str,
 ) -> None:
     storage = S3Storage(
@@ -402,20 +418,62 @@ async def test_s3_storage_maps_pinned_minio_http_exceptions_safely(
         ),
     )
 
-    with pytest.raises(StorageProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await storage.upload_bytes(
             object_key="calls/provider-http-failure.mp3",
             data=b"audio",
             content_type="audio/mpeg",
         )
 
-    assert exc_info.value.category == expected_category
-    assert exc_info.value.retryable is (expected_category == "provider_retryable")
-    assert exc_info.value.error_class == expected_error_class
-    assert str(exc_info.value) == expected_category
-    assert "provider-controlled" not in str(exc_info.value)
-    assert exc_info.value.__cause__ is None
-    assert exc_info.value.__suppress_context__ is True
+    assert (
+        exc_info.value.provider,
+        exc_info.value.operation,
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("s3", "upload_bytes", expected_disposition, expected_error_class)
+    assert "S3_RESPONSE_BODY_SENTINEL" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is provider_error
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("provider_error", [TypeError("S3_DEFECT_SENTINEL"), RuntimeError("S3_DEFECT_SENTINEL")])
+async def test_s3_storage_does_not_translate_injected_programming_defects(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_error: Exception,
+) -> None:
+    async def run_inline(operation, *args, **kwargs):
+        return operation(*args, **kwargs)
+
+    monkeypatch.setattr(s3_module.asyncio, "to_thread", run_inline)
+    storage = S3Storage(
+        bucket_name="recordings",
+        client=FailingOperationMinioClient(operation="put", error=provider_error),
+    )
+
+    with pytest.raises(type(provider_error), match="S3_DEFECT_SENTINEL"):
+        await storage.upload_bytes(
+            object_key="calls/provider-defect.mp3",
+            data=b"audio",
+            content_type="audio/mpeg",
+        )
+
+
+@pytest.mark.anyio
+async def test_s3_storage_propagates_cancellation_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def cancel_inline(*_args, **_kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(s3_module.asyncio, "to_thread", cancel_inline)
+    storage = S3Storage(bucket_name="recordings", client=FakeMinioClient())
+
+    with pytest.raises(asyncio.CancelledError):
+        await storage.upload_bytes(
+            object_key="calls/cancelled.mp3",
+            data=b"audio",
+            content_type="audio/mpeg",
+        )
 
 
 @pytest.mark.anyio

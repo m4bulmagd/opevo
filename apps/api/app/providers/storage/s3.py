@@ -3,13 +3,20 @@ import io
 from functools import lru_cache
 from urllib.parse import urlparse
 
-from minio.error import InvalidResponseError, S3Error, ServerError
+from minio.error import InvalidResponseError, MinioException, S3Error, ServerError
 from urllib3 import PoolManager
+from urllib3.exceptions import HTTPError, TimeoutError as Urllib3TimeoutError
 from urllib3.util import Retry, Timeout
 
 from app.core.config import get_settings
 from app.core.observability import get_observability, instrument_provider
-from app.providers.storage.base import StorageProvider, StorageProviderError, StoredObject
+from app.core.provider_failures import (
+    ProviderFailure,
+    ProviderFailureClass,
+    ProviderOperation,
+    provider_failure_from_http_status,
+)
+from app.providers.storage.base import StorageProvider, StoredObject
 
 
 class StorageConfigurationError(RuntimeError):
@@ -80,93 +87,155 @@ class S3Storage(StorageProvider):
         self._bucket_verified = True
 
     @staticmethod
-    def _raise_provider_error(error: Exception) -> None:
-        if isinstance(error, S3Error) and error.code == "NoSuchBucket":
-            raise StorageConfigurationError(
-                "Configured storage bucket is unavailable"
-            ) from None
+    def _failure(
+        *,
+        operation: ProviderOperation,
+        disposition: str,
+        error_class: ProviderFailureClass,
+    ) -> ProviderFailure:
+        return ProviderFailure(
+            provider="s3",
+            operation=operation,
+            disposition=disposition,  # type: ignore[arg-type]
+            error_class=error_class,
+        )
+
+    @classmethod
+    def _translate_provider_error(
+        cls,
+        error: Exception,
+        *,
+        operation: ProviderOperation,
+    ) -> ProviderFailure | None:
         if isinstance(error, S3Error):
             status = getattr(getattr(error, "response", None), "status", None)
-            category, error_class = S3Storage._s3_error_details(
-                status=status,
-                code=error.code,
+            code = error.code
+            if code == "RequestTimeout":
+                return cls._failure(
+                    operation=operation,
+                    disposition="retryable",
+                    error_class="timeout",
+                )
+            if code in {"SlowDown", "TooManyRequests"}:
+                return cls._failure(
+                    operation=operation,
+                    disposition="retryable",
+                    error_class="rate_limited",
+                )
+            if code in {"InternalError", "ServiceUnavailable"}:
+                return cls._failure(
+                    operation=operation,
+                    disposition="retryable",
+                    error_class="unavailable",
+                )
+            if code in {
+                "AccessDenied",
+                "InvalidAccessKeyId",
+                "InvalidToken",
+                "SignatureDoesNotMatch",
+            }:
+                return cls._failure(
+                    operation=operation,
+                    disposition="terminal",
+                    error_class="authentication",
+                )
+            if code in {"BucketAlreadyExists", "BucketAlreadyOwnedByYou"}:
+                return cls._failure(
+                    operation=operation,
+                    disposition="terminal",
+                    error_class="conflict",
+                )
+            if code in {"NoSuchKey", "NoSuchObject", "NoSuchVersion"}:
+                return cls._failure(
+                    operation=operation,
+                    disposition="terminal",
+                    error_class="not_found",
+                )
+            if code in {"InvalidArgument", "InvalidRequest"}:
+                return cls._failure(
+                    operation=operation,
+                    disposition="terminal",
+                    error_class="validation",
+                )
+            if isinstance(status, int):
+                return provider_failure_from_http_status(
+                    provider="s3",
+                    operation=operation,
+                    status=status,
+                )
+            return cls._failure(
+                operation=operation,
+                disposition="terminal",
+                error_class="unknown",
             )
-        elif isinstance(error, InvalidResponseError):
-            status = error._code
-            category, error_class = S3Storage._s3_error_details(
-                status=status,
+        if isinstance(error, InvalidResponseError):
+            return cls._failure(
+                operation=operation,
+                disposition="terminal",
+                error_class="validation",
             )
-        elif isinstance(error, ServerError):
-            status = error.status_code
-            category, error_class = S3Storage._s3_error_details(
-                status=status,
+        if isinstance(error, ServerError):
+            return provider_failure_from_http_status(
+                provider="s3",
+                operation=operation,
+                status=error.status_code,
             )
-        elif isinstance(error, TimeoutError):
-            category = "provider_retryable"
-            error_class = "timeout"
-        elif isinstance(error, (ConnectionError, OSError)):
-            category = "provider_retryable"
-            error_class = "unavailable"
-        elif isinstance(error, (TypeError, ValueError)):
-            category = "provider_terminal"
-            error_class = "validation"
-        else:
-            category = "provider_retryable"
-            error_class = "unknown"
-        raise StorageProviderError(
-            category,
-            error_class=error_class,
-        ) from None
+        if isinstance(error, MinioException):
+            return cls._failure(
+                operation=operation,
+                disposition="terminal",
+                error_class="unknown",
+            )
+        if isinstance(error, (TimeoutError, Urllib3TimeoutError)):
+            return cls._failure(
+                operation=operation,
+                disposition="retryable",
+                error_class="timeout",
+            )
+        if isinstance(error, (ConnectionError, OSError, HTTPError)):
+            return cls._failure(
+                operation=operation,
+                disposition="retryable",
+                error_class="unavailable",
+            )
+        return None
 
     @staticmethod
-    def _s3_error_details(
-        *,
-        status: int | None,
-        code: str | None = None,
-    ) -> tuple[str, str]:
-        if code == "RequestTimeout" or status in {408, 504}:
-            return "provider_retryable", "timeout"
-        if code in {"SlowDown", "TooManyRequests"} or status == 429:
-            return "provider_retryable", "rate_limited"
-        if code in {"InternalError", "ServiceUnavailable"} or (
-            isinstance(status, int) and status >= 500
-        ):
-            return "provider_retryable", "unavailable"
-        if code in {
-            "AccessDenied",
-            "InvalidAccessKeyId",
-            "InvalidToken",
-            "SignatureDoesNotMatch",
-        } or status in {401, 403}:
-            return "provider_terminal", "authentication"
-        if code in {"BucketAlreadyExists", "BucketAlreadyOwnedByYou"} or (
-            status == 409
-        ):
-            return "provider_terminal", "conflict"
-        if code in {
-            "InvalidArgument",
-            "InvalidRequest",
-            "NoSuchKey",
-            "NoSuchObject",
-            "NoSuchVersion",
-        } or status in {400, 404, 405, 415, 422}:
-            return "provider_terminal", "validation"
-        return "provider_terminal", "unknown"
+    def _raise_configuration_error(error: S3Error) -> None:
+        if error.code == "NoSuchBucket":
+            raise StorageConfigurationError(
+                "Configured storage bucket is unavailable"
+            ) from error
 
-    async def _run_application_call(self, operation, *args, **kwargs):
+    async def _run_application_call(
+        self,
+        provider_operation: ProviderOperation,
+        operation,
+        *args,
+        **kwargs,
+    ):
         try:
             return await asyncio.to_thread(operation, *args, **kwargs)
         except StorageConfigurationError:
             raise
         except Exception as exc:
-            self._raise_provider_error(exc)
+            if isinstance(exc, S3Error):
+                self._raise_configuration_error(exc)
+            failure = self._translate_provider_error(
+                exc,
+                operation=provider_operation,
+            )
+            if failure is None:
+                raise
+            raise failure from exc
 
     @instrument_provider("s3", "upload_bytes")
     async def upload_bytes(self, *, object_key: str, data: bytes, content_type: str) -> StoredObject:
         client = self._get_client()
-        await self._run_application_call(self._ensure_bucket_exists, client)
+        await self._run_application_call("upload_bytes", self._ensure_bucket_exists, client)
         data_stream = io.BytesIO(data)
         await self._run_application_call(
+            "upload_bytes",
             client.put_object,
             self.bucket_name,
             object_key,
@@ -182,7 +251,9 @@ class S3Storage(StorageProvider):
     @instrument_provider("s3", "get_download_url")
     async def get_download_url(self, *, object_key: str) -> str | None:
         client = self._get_client()
-        await self._run_application_call(self._ensure_bucket_exists, client)
+        await self._run_application_call(
+            "get_download_url", self._ensure_bucket_exists, client
+        )
         try:
             await asyncio.to_thread(
                 client.stat_object,
@@ -193,13 +264,20 @@ class S3Storage(StorageProvider):
             if exc.code == "NoSuchBucket":
                 raise StorageConfigurationError(
                     "Configured storage bucket is unavailable"
-                ) from None
+                ) from exc
             if exc.code in {"NoSuchKey", "NoSuchObject", "NoSuchVersion"}:
                 return None
-            self._raise_provider_error(exc)
+            failure = self._translate_provider_error(exc, operation="get_download_url")
+            if failure is not None:
+                raise failure from exc
+            raise
         except Exception as exc:
-            self._raise_provider_error(exc)
+            failure = self._translate_provider_error(exc, operation="get_download_url")
+            if failure is not None:
+                raise failure from exc
+            raise
         return await self._run_application_call(
+            "get_download_url",
             client.presigned_get_object,
             self.bucket_name,
             object_key,
@@ -208,7 +286,7 @@ class S3Storage(StorageProvider):
     @instrument_provider("s3", "delete_object")
     async def delete_object(self, *, object_key: str) -> None:
         client = self._get_client()
-        await self._run_application_call(self._ensure_bucket_exists, client)
+        await self._run_application_call("delete_object", self._ensure_bucket_exists, client)
         try:
             await asyncio.to_thread(
                 client.remove_object,
@@ -219,18 +297,27 @@ class S3Storage(StorageProvider):
             if exc.code == "NoSuchBucket":
                 raise StorageConfigurationError(
                     "Configured storage bucket is unavailable"
-                ) from None
+                ) from exc
             if exc.code in {"NoSuchKey", "NoSuchObject", "NoSuchVersion"}:
                 return
-            self._raise_provider_error(exc)
+            failure = self._translate_provider_error(exc, operation="delete_object")
+            if failure is not None:
+                raise failure from exc
+            raise
         except Exception as exc:
-            self._raise_provider_error(exc)
+            failure = self._translate_provider_error(exc, operation="delete_object")
+            if failure is not None:
+                raise failure from exc
+            raise
 
     @instrument_provider("s3", "get_bucket_lifecycle")
     async def get_bucket_lifecycle(self):
         client = self._get_client()
-        await self._run_application_call(self._ensure_bucket_exists, client)
+        await self._run_application_call(
+            "get_bucket_lifecycle", self._ensure_bucket_exists, client
+        )
         return await self._run_application_call(
+            "get_bucket_lifecycle",
             client.get_bucket_lifecycle,
             self.bucket_name,
         )
