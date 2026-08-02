@@ -2,15 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace incidental async-scheduling coverage of four phone-number provisioning repository decisions with direct, deterministic behavioral tests and restore stable clean/poisoned full-suite coverage.
+**Goal:** Replace incidental async-scheduling coverage of four phone-number provisioning repository decisions with direct deterministic tests, repair the test-app database-engine leak exposed by verification, and restore stable clean/poisoned full-suite coverage.
 
-**Architecture:** Add one focused repository test module that reuses the existing SQLite `db_session`, real ORM models, and the real `PhoneNumberProvisioningRepository`. Keep the existing PostgreSQL concurrency tests and every production path unchanged; use controlled temporary mutations to prove the characterization tests can catch each broken decision, then verify two clean reports and one controlled-poison report have identical per-file coverage sets.
+**Architecture:** Add one focused repository test module that reuses the existing SQLite `db_session`, real ORM models, and the real `PhoneNumberProvisioningRepository`. Give each `test_app` fixture one async engine and session factory, retain a fresh session per request, dispose the engine in the fixture's exception-safe teardown, and promote pytest thread exceptions to errors. Keep the existing PostgreSQL concurrency tests and every production path unchanged; verify two clean reports and one controlled-poison report have identical per-file coverage sets.
 
 **Tech Stack:** Python 3.13, pytest 9, pytest-anyio, SQLAlchemy 2 async ORM, aiosqlite, PostgreSQL 17.8, Redis 7.4.7, pytest-cov, Ruff, mypy, uv.
 
 ## Global Constraints
 
 - Implement approved decisions **3A** and **3A-1A** exactly as specified in `docs/superpowers/specs/2026-08-02-api-provisioning-coverage-stabilization-design.md`.
+- Implement approved blocker resolution **4A** exactly as specified in the design addendum: one engine/session factory per `test_app`, fresh session per request, exception-safe outer disposal, and `pytest.PytestUnhandledThreadExceptionWarning` promoted to an error.
 - Do not modify provisioning state-machine behavior, locking, transaction boundaries, worker scheduling, provider behavior, or any other production code. If a direct test demonstrates a real production defect, stop and ask the user before changing production code.
 - Preserve the existing PostgreSQL concurrency and lifecycle tests unchanged.
 - Reuse the existing function-scoped SQLite `db_session`; do not add another engine or schema fixture.
@@ -27,6 +28,8 @@
 ## File Map
 
 - Create `apps/api/tests/repositories/test_phone_number_provisioning_repository.py`: four direct, deterministic behavioral tests plus two small setup/reload helpers.
+- Modify `apps/api/tests/conftest.py`: replace duplicate schema/per-request engines with one fixture-owned test-app engine and session factory, disposed in outer teardown.
+- Modify `apps/api/pyproject.toml`: promote `pytest.PytestUnhandledThreadExceptionWarning` to an error without suppressing the known Starlette/httpx deprecation warning.
 - Modify conditionally `apps/api/coverage-baseline.json`: raise a ratchet only when two clean reports and one poison report prove the same higher floor.
 - Modify `docs/superpowers/specs/2026-08-02-api-provisioning-coverage-stabilization-design.md`: record implementation evidence only after every acceptance gate passes.
 - Modify this plan only to mark completed steps after their evidence exists.
@@ -45,7 +48,7 @@
 - Consumes: `db_session: AsyncSession`, `PhoneNumberProvisioningRepository.mark_running`, `mark_succeeded`, `mark_pending`, and `mark_failed`.
 - Produces: four always-running tests that deterministically protect the stable-key conflict and the three missing-row fallback contracts.
 
-- [ ] **Step 1: Create the complete direct repository test module**
+- [x] **Step 1: Create the complete direct repository test module**
 
 Use `apply_patch` to create this exact test boundary:
 
@@ -223,7 +226,7 @@ async def test_mark_failed_creates_and_persists_a_missing_provisioning_row(
 Every expectation is hand-derived. The tests use real ORM persistence and the
 real repository; no mock or source-text assertion is permitted.
 
-- [ ] **Step 2: Run the unmutated focused tests and establish the characterization baseline**
+- [x] **Step 2: Run the unmutated focused tests and establish the characterization baseline**
 
 From `apps/api`, run outside the restricted sandbox if the known aiosqlite
 stream limitation prevents execution:
@@ -237,7 +240,7 @@ Expected: four tests pass with zero skips. Because the production behavior
 predates the test, this is the characterization baseline; the controlled
 mutation checks below provide the required proof that each test can fail.
 
-- [ ] **Step 3: Prove the stable-key conflict test detects a removed conflict**
+- [x] **Step 3: Prove the stable-key conflict test detects a removed conflict**
 
 Use `apply_patch` to replace only the `mark_running` conflict line:
 
@@ -266,7 +269,7 @@ prove the production file is restored:
 git diff --exit-code -- app/repositories/phone_number_provisioning_repository.py
 ```
 
-- [ ] **Step 4: Prove each missing-row test detects removal of its fallback**
+- [x] **Step 4: Prove each missing-row test detects removal of its fallback**
 
 For `mark_succeeded`, temporarily use `apply_patch` to change only:
 
@@ -293,7 +296,7 @@ mutation/restore cycle independently for `mark_pending` and `mark_failed`,
 running only the matching exact test node each time. Never leave more than one
 mutation applied, and do not continue until the source diff is empty.
 
-- [ ] **Step 5: Run the restored focused and static gates**
+- [x] **Step 5: Run the restored focused and static gates**
 
 From `apps/api`, run:
 
@@ -314,7 +317,7 @@ git diff --exit-code -- app/repositories/phone_number_provisioning_repository.py
 Expected: 187 focused tests pass with zero skips; Ruff, mypy, lock validation,
 and both diff checks pass. The production repository has no diff.
 
-- [ ] **Step 6: Commit the independently passing deterministic tests**
+- [x] **Step 6: Commit the independently passing deterministic tests**
 
 From the worktree root, verify the staged scope contains only the new test:
 
@@ -334,7 +337,191 @@ apps/api/tests/repositories/test_phone_number_provisioning_repository.py
 
 ---
 
-### Task 2: Prove stable clean and poisoned coverage and close the record
+### Task 2: Give the test app one exception-safe database-engine owner
+
+**Files:**
+- Modify: `apps/api/tests/conftest.py:171-215`
+- Modify: `apps/api/pyproject.toml:62-68`
+- Test: `apps/api/tests/agent/test_agent_config_api.py`
+- Test: `apps/api/tests/agent/test_call_completion.py`
+- Disposable and always removed: `/tmp/presvo_aiosqlite_diag.py`, `/tmp/presvo-api-provisioning-phase1-global.db`, and that database's exact `-journal`, `-wal`, and `-shm` siblings
+
+**Interfaces:**
+- Consumes: the exact Phase 1 root-cause evidence and diagnostic plugin appendix in `.superpowers/sdd/2026-08-02-api-provisioning-coverage-stabilization/task-2-report.md`.
+- Produces: one `AsyncEngine` and one `async_sessionmaker` per `test_app`; a fresh `AsyncSession` per request; exception-safe fixture-level engine disposal; pytest thread exceptions enforced as errors.
+
+- [ ] **Step 1: Install the strict background-thread warning gate before the lifecycle fix**
+
+Use `apply_patch` to extend `[tool.pytest.ini_options]` in
+`apps/api/pyproject.toml` without changing the existing test paths, required
+plugins, or timeout:
+
+```toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+required_plugins = [
+  "pytest-cov>=7.1,<8",
+  "pytest-timeout>=2.4,<3",
+]
+timeout = 60
+filterwarnings = [
+  "error::pytest.PytestUnhandledThreadExceptionWarning",
+]
+```
+
+This converts future worker-thread failures into test errors; it does not
+ignore or suppress any warning.
+
+- [ ] **Step 2: Reproduce the undisposed-engine RED with the exact diagnostic boundary**
+
+First prove all exact disposable paths are absent. Recreate
+`/tmp/presvo_aiosqlite_diag.py` with `apply_patch` using the exact content in
+the Task 2 report's `### Diagnostic plugin appendix`; do not shorten, adapt, or
+install it. Run from `apps/api` outside the restricted sandbox:
+
+```bash
+env -u CLIENT_TEST_DATABASE_URL \
+  APP_ENV=test \
+  DATABASE_URL=sqlite+aiosqlite:////tmp/presvo-api-provisioning-phase1-global.db \
+  TEST_DATABASE_URL=sqlite+aiosqlite:////tmp/presvo-api-provisioning-phase1-global.db \
+  REDIS_URL=redis://127.0.0.1:1/0 \
+  TEST_REDIS_URL=redis://127.0.0.1:1/0 \
+  PYTHONPATH=/tmp \
+  UV_CACHE_DIR=/tmp/uv-cache \
+  uv run --frozen --no-sync python -m pytest -q -s \
+    -p no:cacheprovider \
+    -p presvo_aiosqlite_diag \
+    --maxfail=1 \
+    tests/agent/test_agent_config_api.py::test_patch_agent_config_enable_with_incomplete_setup_returns_409 \
+    tests/agent/test_call_completion.py::test_agent_completion_endpoint_rejects_negative_duration \
+    tests/agent/test_call_completion.py::test_static_agent_token_is_rejected_in_every_environment
+```
+
+Expected RED: the producer, negative-duration case, and first static-token
+parameter pass, then pytest errors on the leaked aiosqlite worker exception.
+The diagnostic output must identify an engine created by
+`tests/conftest.py:override_get_session`, show that disposal never started,
+and show an open connection/worker after the expected 409 producer. The command
+selects six tests; `--maxfail=1` prevents the final parameters from running.
+
+- [ ] **Step 3: Replace duplicate/per-request engines with one fixture owner**
+
+Use `apply_patch` to replace the complete `test_app` fixture with:
+
+```python
+@pytest_asyncio.fixture
+async def test_app(tmp_path: Path):
+    from app.core.config import get_settings
+    from app.core.database import get_session
+    from app import main as main_module
+
+    original_app = main_module.app
+    app = main_module.create_app(get_settings())
+    engine = None
+    try:
+        main_module.app = app
+        database_url = os.getenv("CLIENT_TEST_DATABASE_URL")
+        if database_url is None:
+            database_path = tmp_path / "test_client.db"
+            database_url = f"sqlite+aiosqlite:///{database_path}"
+        elif database_url.startswith("postgresql://"):
+            database_url = database_url.replace(
+                "postgresql://",
+                "postgresql+asyncpg://",
+                1,
+            )
+
+        engine = create_async_engine(database_url, future=True)
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        app.state.test_database_url = database_url
+
+        async def override_get_session():
+            async with session_factory() as session:
+                yield session
+
+        app.dependency_overrides[get_session] = override_get_session
+
+        async with app.router.lifespan_context(app):
+            yield app
+    finally:
+        app.dependency_overrides.clear()
+        main_module.app = original_app
+        if engine is not None:
+            await engine.dispose()
+```
+
+Do not expose the engine through application state, share sessions between
+requests, change `client_database_url`, or alter application/production code.
+
+- [ ] **Step 4: Prove the identical instrumented boundary is GREEN**
+
+Repeat the exact Step 2 command without changing its node list or diagnostic
+plugin. Expected: all six selected tests pass, no
+`AIOSQLITE_DIAG_UNCLOSED_DEL`, `AIOSQLITE_DIAG_WORKER_EXCEPTION`,
+`AIOSQLITE_DIAG_LIVE`, or `AIOSQLITE_DIAG_UNDISPOSED_ENGINES` marker remains,
+and pytest reports no thread warning/error.
+
+Use `apply_patch` to delete only `/tmp/presvo_aiosqlite_diag.py`. Remove only
+the exact disposable SQLite file and its exact `-journal`, `-wal`, and `-shm`
+siblings, then prove all five paths absent. Do not remove any other `/tmp`
+file.
+
+- [ ] **Step 5: Verify normal focused behavior without instrumentation**
+
+From `apps/api`, with `CLIENT_TEST_DATABASE_URL` absent and the normal
+construction-safe pytest environment, run outside the restricted sandbox:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/agent/test_agent_config_api.py \
+  tests/agent/test_call_completion.py
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/repositories/test_phone_number_provisioning_repository.py \
+  tests/test_settings_sources.py \
+  tests/test_collection_environment.py \
+  tests/auth/test_clerk_auth_config.py \
+  tests/test_deployment_readiness.py
+```
+
+Expected: 49 agent tests and 187 focused hermeticity/repository tests pass,
+zero skips, and no `PytestUnhandledThreadExceptionWarning` is emitted.
+
+- [ ] **Step 6: Run static, lock, scope, and mutation-strength checks**
+
+From `apps/api`, run:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check app tests
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
+UV_CACHE_DIR=/tmp/uv-cache uv lock --check
+git diff --check
+git diff --exit-code -- uv.lock
+```
+
+Expected: every command passes and the lockfile has no diff. Finish with a diff
+proving only `tests/conftest.py` and `pyproject.toml` changed from this task's
+base. The Step 2 RED and identical Step 4 GREEN are the required mutation-strength
+proof; do not reintroduce the leak a second time.
+
+- [ ] **Step 7: Commit the independently passing 4A lifecycle repair**
+
+From the worktree root:
+
+```bash
+git add apps/api/tests/conftest.py apps/api/pyproject.toml
+git diff --cached --name-only
+git commit -m "test(api): own test app database engine lifecycle"
+```
+
+Expected staged paths are exactly the two paths above. The commit contains no
+diagnostic plugin, disposable database, dependency, lockfile, production,
+realtime, deployment, agent, or frontend change.
+
+---
+
+### Task 3: Prove stable clean and poisoned coverage and close the record
 
 **Files:**
 - Modify conditionally: `apps/api/coverage-baseline.json`
@@ -343,7 +530,7 @@ apps/api/tests/repositories/test_phone_number_provisioning_repository.py
 - Disposable and always removed: `apps/api/.env`, `apps/api/.coverage`, `apps/api/coverage.json`, `/tmp/presvo-api-provisioning-coverage-clean-1.json`, `/tmp/presvo-api-provisioning-coverage-clean-2.json`, `/tmp/presvo-api-provisioning-coverage-poison.json`
 
 **Interfaces:**
-- Consumes: Task 1 tests, the existing coverage checker, and exact disposable PostgreSQL/Redis services.
+- Consumes: Task 1 deterministic repository tests, Task 2 exception-safe test-app engine ownership and strict thread-warning gate, the existing coverage checker, and exact disposable PostgreSQL/Redis services.
 - Produces: two identical clean reports, one matching controlled-poison report, passing non-decreased coverage ratchets, exact cleanup proof, and an implemented design record.
 
 - [ ] **Step 1: Verify isolated-worktree and resource preconditions**
@@ -359,6 +546,11 @@ test ! -e apps/api/coverage.json
 test ! -e /tmp/presvo-api-provisioning-coverage-clean-1.json
 test ! -e /tmp/presvo-api-provisioning-coverage-clean-2.json
 test ! -e /tmp/presvo-api-provisioning-coverage-poison.json
+test ! -e /tmp/presvo_aiosqlite_diag.py
+test ! -e /tmp/presvo-api-provisioning-phase1-global.db
+test ! -e /tmp/presvo-api-provisioning-phase1-global.db-journal
+test ! -e /tmp/presvo-api-provisioning-phase1-global.db-wal
+test ! -e /tmp/presvo-api-provisioning-phase1-global.db-shm
 test -z "$(docker ps -a --filter name=^/presvo-api-provisioning-coverage-postgres$ --format '{{.Names}}')"
 test -z "$(docker ps -a --filter name=^/presvo-api-provisioning-coverage-redis$ --format '{{.Names}}')"
 ```
@@ -518,6 +710,8 @@ status from `Approved design` to `Implemented and verified`, and append a
 concise `## Implementation evidence` section recording:
 
 - the four deterministic repository behaviors and mutation checks;
+- the 4A undisposed-engine RED, fixture-owned-engine GREEN, strict thread-warning
+  gate, and reviewed lifecycle-repair commit;
 - focused/static/lock results;
 - exact full-suite pass, skip, and warning counts for both clean runs and the
   poison run;
@@ -543,6 +737,8 @@ Expected tracked scope after the design commit:
 
 ```text
 apps/api/tests/repositories/test_phone_number_provisioning_repository.py
+apps/api/tests/conftest.py
+apps/api/pyproject.toml
 apps/api/coverage-baseline.json  # only if a shared higher floor was proved
 docs/superpowers/specs/2026-08-02-api-provisioning-coverage-stabilization-design.md
 docs/superpowers/plans/2026-08-02-api-provisioning-coverage-stabilization.md
