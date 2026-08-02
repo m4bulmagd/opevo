@@ -1,7 +1,7 @@
 # API Provisioning Coverage Stabilization Design
 
 Date: 2026-08-02
-Status: Approved design
+Status: Implemented and verified
 Decision: 3A / 3A-1A / 4A / 22A
 
 ## Problem
@@ -252,3 +252,45 @@ fail independently.
    and one controlled-poison report must each pass 2,402 tests with zero skips,
    the same warning set, and identical per-file line/branch sets and totals.
    The prior failed reports do not count toward acceptance.
+
+## Implementation evidence
+
+The deterministic repository boundary now directly protects four provisioning
+behaviors: changed stable-operation keys are rejected without durable mutation,
+and missing rows are created and persisted by the succeeded, pending, and failed
+transitions. A fifth direct test protects the same-subscription-ID lifecycle
+fence and proves every durable field remains unchanged. Temporary mutations of
+each of those five decisions made its exact test fail; every production source
+line was then restored byte-for-byte and the focused tests returned green.
+
+The 4A lifecycle work first reproduced the undisposed per-request engine as a
+strict-warning RED (`3 passed, 1 error`) with the expected event-loop-closed
+aiosqlite worker exception. Commit `24e4dc8` gives `test_app` one fixture-owned
+engine and session factory, retains a fresh session per request, disposes the
+engine in exception-safe outer teardown, and promotes
+`PytestUnhandledThreadExceptionWarning` to an error. The identical diagnostic
+boundary then passed all six selected tests with no leak markers or thread
+warning. Focused gates passed 49 agent tests, 187 provisioning/hermeticity
+tests, and 200 subscription/provisioning/hermeticity tests, all with zero
+skips; Ruff, mypy over 169 source files, `uv lock --check`, diff checks, and
+lockfile checks passed. The lifecycle repair and the same-ID test received
+clean scoped reviews in commits `24e4dc8` and `a1da6ca` respectively.
+
+Fresh final verification used only the named disposable PostgreSQL 17.8 and
+Redis 7.4.7 services. Clean run 1, clean run 2, and the controlled-poison run
+each passed exactly 2,402 tests with zero skips and the same single known
+Starlette/httpx deprecation warning. All three reports had identical 167-file
+key sets, identical normalized executed/missing line and branch sets for every
+file, and identical totals: 10,957 of 12,169 statements and 2,504 of 3,220
+branches covered. Exact coverage was 90.04026625030816007888898020% line and
+77.76397515527950310559006211% branch, producing shared two-decimal
+`ROUND_DOWN` floors of 90.04% and 77.76%. The line ratchet increased from
+90.03% to 90.04% and the branch ratchet from 77.63% to 77.76%; neither
+decreased, and all three retained reports passed separately against the new
+floors.
+
+After comparison and ratchet checks, the controlled ignored dotenv, local
+coverage database and JSON, all three retained `/tmp` reports, and only the
+two exact named containers were removed; absence was verified. No production
+behavior, realtime or activation behavior, dependency or lockfile, deployment,
+frontend, or agent boundary changed.

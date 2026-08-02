@@ -352,7 +352,7 @@ apps/api/tests/repositories/test_phone_number_provisioning_repository.py
 - Consumes: the exact Phase 1 root-cause evidence and diagnostic plugin appendix in `.superpowers/sdd/2026-08-02-api-provisioning-coverage-stabilization/task-2-report.md`.
 - Produces: one `AsyncEngine` and one `async_sessionmaker` per `test_app`; a fresh `AsyncSession` per request; exception-safe fixture-level engine disposal; pytest thread exceptions enforced as errors.
 
-- [ ] **Step 1: Install the strict background-thread warning gate before the lifecycle fix**
+- [x] **Step 1: Install the strict background-thread warning gate before the lifecycle fix**
 
 Use `apply_patch` to extend `[tool.pytest.ini_options]` in
 `apps/api/pyproject.toml` without changing the existing test paths, required
@@ -374,7 +374,7 @@ filterwarnings = [
 This converts future worker-thread failures into test errors; it does not
 ignore or suppress any warning.
 
-- [ ] **Step 2: Reproduce the undisposed-engine RED with the exact diagnostic boundary**
+- [x] **Step 2: Reproduce the undisposed-engine RED with the exact diagnostic boundary**
 
 First prove all exact disposable paths are absent. Recreate
 `/tmp/presvo_aiosqlite_diag.py` with `apply_patch` using the exact content in
@@ -406,7 +406,7 @@ The diagnostic output must identify an engine created by
 and show an open connection/worker after the expected 409 producer. The command
 selects six tests; `--maxfail=1` prevents the final parameters from running.
 
-- [ ] **Step 3: Replace duplicate/per-request engines with one fixture owner**
+- [x] **Step 3: Replace duplicate/per-request engines with one fixture owner**
 
 Use `apply_patch` to replace the complete `test_app` fixture with:
 
@@ -457,7 +457,7 @@ async def test_app(tmp_path: Path):
 Do not expose the engine through application state, share sessions between
 requests, change `client_database_url`, or alter application/production code.
 
-- [ ] **Step 4: Prove the identical instrumented boundary is GREEN**
+- [x] **Step 4: Prove the identical instrumented boundary is GREEN**
 
 Repeat the exact Step 2 command without changing its node list or diagnostic
 plugin. Expected: all six selected tests pass, no
@@ -470,7 +470,7 @@ the exact disposable SQLite file and its exact `-journal`, `-wal`, and `-shm`
 siblings, then prove all five paths absent. Do not remove any other `/tmp`
 file.
 
-- [ ] **Step 5: Verify normal focused behavior without instrumentation**
+- [x] **Step 5: Verify normal focused behavior without instrumentation**
 
 From `apps/api`, with `CLIENT_TEST_DATABASE_URL` absent and the normal
 construction-safe pytest environment, run outside the restricted sandbox:
@@ -490,7 +490,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
 Expected: 49 agent tests and 187 focused hermeticity/repository tests pass,
 zero skips, and no `PytestUnhandledThreadExceptionWarning` is emitted.
 
-- [ ] **Step 6: Run static, lock, scope, and mutation-strength checks**
+- [x] **Step 6: Run static, lock, scope, and mutation-strength checks**
 
 From `apps/api`, run:
 
@@ -507,7 +507,7 @@ proving only `tests/conftest.py` and `pyproject.toml` changed from this task's
 base. The Step 2 RED and identical Step 4 GREEN are the required mutation-strength
 proof; do not reintroduce the leak a second time.
 
-- [ ] **Step 7: Commit the independently passing 4A lifecycle repair**
+- [x] **Step 7: Commit the independently passing 4A lifecycle repair**
 
 From the worktree root:
 
@@ -534,7 +534,7 @@ realtime, deployment, agent, or frontend change.
 - Consumes: the existing SQLite `db_session`, `_user`, real `Subscription`, and real `SubscriptionRepository.upsert_by_stripe_subscription_id`.
 - Produces: one always-running test that deterministically protects the same-Stripe-ID/mismatched-lifecycle-generation return and its durable no-mutation contract.
 
-- [ ] **Step 1: Add the complete standalone characterization test**
+- [x] **Step 1: Add the complete standalone characterization test**
 
 Use `apply_patch` to insert this test immediately after
 `test_old_lifecycle_generation_cannot_replace_current_subscription`:
@@ -631,7 +631,7 @@ async def test_same_subscription_id_from_other_lifecycle_is_ignored_without_muta
 Do not parameterize this with the different-ID lifecycle test. They protect
 separate repository predicates and must produce independent failure names.
 
-- [ ] **Step 2: Establish the unmodified characterization baseline**
+- [x] **Step 2: Establish the unmodified characterization baseline**
 
 From `apps/api`, run:
 
@@ -643,7 +643,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
 Expected: the test passes with zero skips. The production fence predates the
 test, so Step 3 provides the required failure-strength evidence.
 
-- [ ] **Step 3: Prove the test detects removal of the same-ID lifecycle fence**
+- [x] **Step 3: Prove the test detects removal of the same-ID lifecycle fence**
 
 Use `apply_patch` to change only line 107 in
 `app/repositories/subscription_repository.py` from:
@@ -669,7 +669,7 @@ git diff --exit-code -- app/repositories/subscription_repository.py
 
 Do not commit the mutation or reintroduce it after this proof.
 
-- [ ] **Step 4: Run the restored focused and static gates**
+- [x] **Step 4: Run the restored focused and static gates**
 
 From `apps/api`, run:
 
@@ -692,7 +692,7 @@ Expected: 200 focused tests pass with zero skips; Ruff, mypy, lock, diff, and
 lockfile checks pass. The task diff contains only the subscription repository
 test file, and the production subscription repository has no diff.
 
-- [ ] **Step 5: Commit the independently passing test**
+- [x] **Step 5: Commit the independently passing test**
 
 From the worktree root:
 
@@ -720,7 +720,7 @@ the commit.
 - Consumes: Tasks 1 and 3 deterministic repository tests, Task 2 exception-safe test-app engine ownership and strict thread-warning gate, the existing coverage checker, and exact disposable PostgreSQL/Redis services.
 - Produces: two identical clean reports, one matching controlled-poison report, passing non-decreased coverage ratchets, exact cleanup proof, and an implemented design record.
 
-- [ ] **Step 1: Verify isolated-worktree and resource preconditions**
+- [x] **Step 1: Verify isolated-worktree and resource preconditions**
 
 From the worktree root, run:
 
@@ -746,7 +746,7 @@ Expected: the worktree is clean, every exact artifact and container is absent,
 and `apps/api/.env` is absent. If that dotenv exists, stop without reading,
 modifying, or deleting it.
 
-- [ ] **Step 2: Start and bound readiness for only the named services**
+- [x] **Step 2: Start and bound readiness for only the named services**
 
 Start:
 
@@ -769,7 +769,7 @@ Poll the PostgreSQL `pg_isready -U postgres -d ai_call_test` and Redis
 PostgreSQL accepts connections and Redis returns `PONG`. On failure, capture
 logs only from the exact failing container and proceed directly to Step 8.
 
-- [ ] **Step 3: Run and retain clean full-suite coverage report 1**
+- [x] **Step 3: Run and retain clean full-suite coverage report 1**
 
 From `apps/api`, run outside the restricted sandbox with
 `CLIENT_TEST_DATABASE_URL` explicitly absent:
@@ -799,7 +799,7 @@ cp coverage.json /tmp/presvo-api-provisioning-coverage-clean-1.json
 Expected: 2,402 tests pass, zero skip, only the already-known Starlette/httpx
 deprecation warning remains, and both coverage ratchets pass.
 
-- [ ] **Step 4: Run and retain clean full-suite coverage report 2**
+- [x] **Step 4: Run and retain clean full-suite coverage report 2**
 
 Repeat the exact Step 3 pytest and coverage-check commands, then copy the new
 report to:
@@ -816,7 +816,7 @@ the differing filenames/fields in its assertion payload. Expected: equality.
 If any value differs, preserve the reports, diagnose, and stop for a new user
 decision; do not retry or lower a ratchet.
 
-- [ ] **Step 5: Create only the approved controlled poison dotenv**
+- [x] **Step 5: Create only the approved controlled poison dotenv**
 
 From the worktree root, rerun `test ! -e apps/api/.env`, then use `apply_patch`
 to create exactly:
@@ -837,7 +837,7 @@ CLERK_JWKS_URL=https://poison.example.invalid/jwks.json
 Confirm only existence and ignored status with `test -e apps/api/.env` and
 `git check-ignore apps/api/.env`. Do not inspect any other dotenv.
 
-- [ ] **Step 6: Run and retain the controlled-poison full-suite report**
+- [x] **Step 6: Run and retain the controlled-poison full-suite report**
 
 Repeat the exact Step 3 pytest and coverage-check commands while the controlled
 dotenv exists, then copy:
@@ -851,7 +851,7 @@ ratchets pass. Extend the Step 4 comparison to all three reports and require
 identical file-key sets, identical normalized per-file line/branch sets, and
 identical totals. Any difference is a gate failure; do not retry.
 
-- [ ] **Step 7: Apply only a shared higher coverage floor**
+- [x] **Step 7: Apply only a shared higher coverage floor**
 
 Load all three reports through `scripts.check_python_coverage.py`, compute the
 minimum exact line percentage and minimum exact branch percentage across the
@@ -866,7 +866,7 @@ Use `apply_patch` to raise only a strictly higher value; preserve an equal
 value and never lower either one. Run the coverage checker separately against
 all three retained reports and expect all three to pass.
 
-- [ ] **Step 8: Remove only exact disposable resources and prove absence**
+- [x] **Step 8: Remove only exact disposable resources and prove absence**
 
 Use `apply_patch` to delete only the controlled `apps/api/.env` created in
 Step 5. Remove the exact generated coverage files and exact named containers:
@@ -890,7 +890,7 @@ Verify every listed file is absent and exact-name `docker ps -a` filters return
 no container. Do not remove any other file, container, image, volume, network,
 or cache.
 
-- [ ] **Step 9: Record verified implementation evidence**
+- [x] **Step 9: Record verified implementation evidence**
 
 Only after Steps 1-8 pass, use `apply_patch` to change the stabilization design
 status from `Approved design` to `Implemented and verified`, and append a
@@ -910,7 +910,7 @@ concise `## Implementation evidence` section recording:
 
 Mark every completed checkbox in this plan `[x]` only after its evidence exists.
 
-- [ ] **Step 10: Run final checks and commit the verified record**
+- [x] **Step 10: Run final checks and commit the verified record**
 
 From the worktree root, run:
 
@@ -943,7 +943,7 @@ git add apps/api/coverage-baseline.json  # only when Step 7 changed it
 git commit -m "docs: verify provisioning coverage stability"
 ```
 
-- [ ] **Step 11: Perform one scoped final review**
+- [x] **Step 11: Perform one scoped final review**
 
 Review `e824f86..HEAD` for correctness, test strength, DRY/explicit balance,
 scope control, coverage-ratchet integrity, documentation accuracy, and exact
