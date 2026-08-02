@@ -388,7 +388,7 @@ docker run -d \
 Poll the PostgreSQL `pg_isready -U postgres -d ai_call_test` and Redis
 `redis-cli ping` commands once per second for at most 60 attempts. Expected:
 PostgreSQL accepts connections and Redis returns `PONG`. On failure, capture
-logs only from the exact failing container and proceed directly to Step 9.
+logs only from the exact failing container and proceed directly to Step 8.
 
 - [ ] **Step 3: Run and retain clean full-suite coverage report 1**
 
