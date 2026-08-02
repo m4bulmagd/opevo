@@ -137,3 +137,69 @@ committed. Confirm the restored focused suite passes before continuing.
   lowering the ratchet or adding retries.
 - Always remove only the exact disposable resources created for verification,
   including after a failed gate.
+
+## Approved blocker resolution: 4A test-app engine ownership
+
+The first Task 2 verification attempt exposed a separate test-infrastructure
+defect after the deterministic repository tests were committed. Clean run 1
+passed 2,401 tests with the one known Starlette/httpx warning. Clean run 2 also
+passed all 2,401 tests, but emitted an additional
+`PytestUnhandledThreadExceptionWarning`: an aiosqlite worker tried to deliver a
+result to an event loop that had already closed. The poison run and ratchet
+decision were correctly withheld, all exact disposable resources were removed,
+and no Task 2 tracked change was made.
+
+Instrumented diagnosis traced the leaked connection to
+`tests/conftest.py`'s `test_app` fixture. Its request dependency creates an
+async engine, yields a session, and disposes the engine only after the yield.
+When an expected route `HTTPException` is thrown into the dependency generator,
+the session context unwinds but the unprotected disposal statement is skipped.
+The unclosed connection can later be garbage-collected under another AnyIO
+loop; aiosqlite's destructor queues shutdown work to that loop, and the worker
+can respond after the loop closes. The later test named by pytest is therefore
+not the producer.
+
+Decision **4A** replaces request-level engine ownership with one explicit
+fixture-level owner:
+
+- `test_app` creates one async engine after resolving its unique database URL;
+- the same engine creates the schema and one `async_sessionmaker`;
+- the FastAPI dependency creates a fresh session per request from that factory
+  and owns no engine;
+- the outer `test_app` fixture disposes the engine in exception-safe teardown,
+  after the application lifespan and request dependencies have unwound;
+- the existing `app.state.test_database_url` contract remains unchanged;
+- application routes, production database ownership, and production code are
+  unchanged.
+
+This removes the duplicate schema engine plus one engine/thread per request,
+while retaining request-scoped sessions and a unique SQLite database per test
+app. Multi-request tests continue to share only the fixture's engine/pool, not
+ORM sessions or transactions.
+
+Pytest configuration will also promote
+`pytest.PytestUnhandledThreadExceptionWarning` to an error. This is strict
+enforcement, not suppression: any future background-thread exception fails the
+responsible test run. The existing known Starlette/httpx deprecation warning
+remains unchanged.
+
+### 4A test-first acceptance
+
+1. Add the strict warning filter before changing fixture ownership and run the
+   diagnosed minimal expected-409/call-completion sequence. It must fail with
+   the reproduced aiosqlite event-loop-closed thread exception.
+2. Implement only the fixture-owned engine/session-factory change and rerun the
+   identical sequence. Every selected test must pass with no thread warning.
+3. Run the complete agent-config and call-completion files with the strict
+   filter, then the full focused/static/lock gates. All must pass cleanly.
+4. Commit only `apps/api/tests/conftest.py` and `apps/api/pyproject.toml` for
+   the independently reviewed 4A task. Do not change a dependency or lockfile.
+5. Restart the original Task 2 verification from clean preconditions: two clean
+   full coverage runs, one controlled-poison run, exact per-file coverage-set
+   and totals equality, shared non-decreased ratchet handling, exact cleanup,
+   and final review. Prior incomplete reports do not count toward acceptance.
+
+If sharing one fixture-owned engine changes a legitimate test contract, stop
+and present the concrete conflict rather than restoring request-level engine
+churn, suppressing warnings, adding sleeps, forcing garbage collection, or
+weakening the gate.
