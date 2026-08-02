@@ -11,6 +11,21 @@ from app.core.provider_failures import ProviderFailure, provider_failure_from_ht
 from app.providers.summaries.base import StructuredSummary, SummaryProvider
 
 
+class _MalformedGeminiResponse(Exception):
+    pass
+
+
+_SUMMARY_FIELDS = frozenset(
+    {
+        "summary_text",
+        "caller_intent",
+        "action_items",
+        "sentiment",
+        "follow_up_required",
+    }
+)
+
+
 class GeminiSummaryProvider(SummaryProvider):
     def __init__(
         self,
@@ -100,14 +115,8 @@ class GeminiSummaryProvider(SummaryProvider):
 
         try:
             payload = self._extract_json(response)
-            return StructuredSummary(
-                summary_text=str(payload["summary_text"]),
-                caller_intent=str(payload["caller_intent"]),
-                action_items=[str(item) for item in payload["action_items"]],
-                sentiment=str(payload["sentiment"]),
-                follow_up_required=bool(payload["follow_up_required"]),
-            )
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            return self._structured_summary(payload)
+        except _MalformedGeminiResponse as exc:
             raise ProviderFailure(
                 provider="gemini",
                 operation="generate_summary",
@@ -129,17 +138,17 @@ class GeminiSummaryProvider(SummaryProvider):
         )
 
     @staticmethod
-    def _extract_json(response) -> dict:
+    def _extract_json(response: object) -> dict[str, object]:
         text = getattr(response, "text", None)
-        if not text:
-            raise ValueError("Gemini returned no text")
+        if not isinstance(text, str):
+            raise _MalformedGeminiResponse("Gemini response text is invalid")
         content = text.strip()
         if not content:
-            raise ValueError("Gemini returned no text")
+            raise _MalformedGeminiResponse("Gemini response text is invalid")
 
         try:
-            return json.loads(content)
-        except json.JSONDecodeError:
+            payload = json.loads(content)
+        except json.JSONDecodeError as error:
             decoder = json.JSONDecoder()
             for start in range(len(content)):
                 if content[start] not in "{[":
@@ -150,4 +159,40 @@ class GeminiSummaryProvider(SummaryProvider):
                     continue
                 if isinstance(payload, dict):
                     return payload
-            raise
+            raise _MalformedGeminiResponse("Gemini response JSON is invalid") from error
+
+        if not isinstance(payload, dict):
+            raise _MalformedGeminiResponse("Gemini response shape is invalid")
+        return payload
+
+    @staticmethod
+    def _structured_summary(payload: dict[str, object]) -> StructuredSummary:
+        if set(payload) != _SUMMARY_FIELDS:
+            raise _MalformedGeminiResponse("Gemini response schema is invalid")
+
+        summary_text = payload["summary_text"]
+        caller_intent = payload["caller_intent"]
+        action_items = payload["action_items"]
+        sentiment = payload["sentiment"]
+        follow_up_required = payload["follow_up_required"]
+
+        if not isinstance(summary_text, str):
+            raise _MalformedGeminiResponse("Gemini response schema is invalid")
+        if not isinstance(caller_intent, str):
+            raise _MalformedGeminiResponse("Gemini response schema is invalid")
+        if not isinstance(sentiment, str):
+            raise _MalformedGeminiResponse("Gemini response schema is invalid")
+        if not isinstance(action_items, list) or not all(
+            isinstance(item, str) for item in action_items
+        ):
+            raise _MalformedGeminiResponse("Gemini response schema is invalid")
+        if not isinstance(follow_up_required, bool):
+            raise _MalformedGeminiResponse("Gemini response schema is invalid")
+
+        return StructuredSummary(
+            summary_text=summary_text,
+            caller_intent=caller_intent,
+            action_items=action_items,
+            sentiment=sentiment,
+            follow_up_required=follow_up_required,
+        )
