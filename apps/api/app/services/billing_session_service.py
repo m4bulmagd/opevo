@@ -204,7 +204,7 @@ class BillingSessionService:
         *,
         operation: ProviderOperation = "create_checkout_session",
     ):
-        stripe_provider._install_safe_stripe_sdk_logging()
+        stripe_provider.install_safe_stripe_log_filter()
         if self._stripe_client is not None:
             return self._stripe_client
 
@@ -214,6 +214,7 @@ class BillingSessionService:
         try:
             import stripe
             from stripe._http_client import RequestsClient
+            stripe_provider.configure_safe_stripe_sdk_logging(stripe)
         except ImportError as exc:
             raise ProviderFailure(
                 provider="stripe",
