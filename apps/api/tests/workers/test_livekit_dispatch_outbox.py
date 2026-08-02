@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.core.provider_failures import ProviderFailure
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.outbox_event import OutboxEvent
@@ -62,7 +63,12 @@ class _Provider:
             {"agent_name": agent_name, "room_name": room_name, "metadata": metadata}
         )
         if self.always_fail:
-            raise TimeoutError("RAW_PROVIDER_TIMEOUT")
+            raise ProviderFailure(
+                provider="livekit",
+                operation="create_dispatch",
+                disposition="retryable",
+                error_class="timeout",
+            )
         created = LiveKitDispatch(
             id="dispatch-1",
             agent_name=agent_name,
@@ -72,7 +78,12 @@ class _Provider:
         )
         self.dispatches.append(created)
         if self.timeout_after_create:
-            raise TimeoutError("RAW_PROVIDER_TIMEOUT_AFTER_CREATE")
+            raise ProviderFailure(
+                provider="livekit",
+                operation="create_dispatch",
+                disposition="retryable",
+                error_class="timeout",
+            )
         return created
 
 
@@ -714,6 +725,52 @@ async def test_create_then_timeout_reconciles_to_one_effective_dispatch(
     assert len(provider.dispatches) == 1
     assert len(provider.create_calls) == 1
     assert provider.list_calls == ["room-outbox", "room-outbox"]
+
+
+@pytest.mark.anyio
+async def test_terminal_create_failure_bypasses_dispatch_reconciliation(
+    db_session,
+    monkeypatch,
+) -> None:
+    class TerminalCreateProvider(_Provider):
+        async def create_dispatch(
+            self,
+            *,
+            agent_name: str,
+            room_name: str,
+            metadata: str,
+        ) -> LiveKitDispatch:
+            self.create_calls.append(
+                {
+                    "agent_name": agent_name,
+                    "room_name": room_name,
+                    "metadata": metadata,
+                }
+            )
+            raise ProviderFailure(
+                provider="livekit",
+                operation="create_dispatch",
+                disposition="terminal",
+                error_class="authentication",
+            )
+
+    _call, event, _subscription = await _seed_dispatch(db_session)
+    provider = TerminalCreateProvider()
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_livekit_dispatch(
+            {"session_factory": session_factory, "livekit_dispatch_provider": provider},
+            event,
+        )
+
+    assert exc_info.value.error_code == "provider_terminal"
+    assert provider.list_calls == ["room-outbox"]
+    assert len(provider.create_calls) == 1
 
 
 @pytest.mark.anyio

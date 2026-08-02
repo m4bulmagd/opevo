@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal, cast
 from urllib.parse import urlsplit
@@ -8,13 +8,16 @@ from livekit import api
 from app.core.observability import (
     get_observability,
     instrument_provider,
-    validated_error_class,
 )
+from app.core.provider_failures import ProviderFailure, ProviderFailureClass
 from app.providers.livekit_recording.base import (
     RecordingEgressResult,
     RecordingEgressSnapshot,
     RecordingProvider,
-    StartOutcome,
+)
+from app.providers.livekit_failures import (
+    livekit_failure_from_exception,
+    livekit_start_failure_context,
 )
 
 
@@ -240,10 +243,7 @@ def livekit_field_is_present(value: object, name: str) -> bool:
 
 def _field(value: object, *names: str) -> object:
     candidates: list[object] = []
-    try:
-        is_mapping = isinstance(value, Mapping)
-    except Exception:
-        return _ALIAS_CONFLICT
+    is_mapping = isinstance(value, Mapping)
     if is_mapping:
         mapping_value = cast(Mapping, value)
         for name in names:
@@ -251,19 +251,14 @@ def _field(value: object, *names: str) -> object:
                 candidate = mapping_value[name]
             except KeyError:
                 continue
-            except Exception:
-                return _ALIAS_CONFLICT
             candidates.append(candidate)
     else:
         for name in names:
-            try:
-                candidate = getattr(value, name, _MISSING)
-                if candidate is _MISSING:
-                    continue
-                if not livekit_field_is_present(value, name):
-                    continue
-            except Exception:
-                return _ALIAS_CONFLICT
+            candidate = getattr(value, name, _MISSING)
+            if candidate is _MISSING:
+                continue
+            if not livekit_field_is_present(value, name):
+                continue
             candidates.append(candidate)
     if not candidates:
         return _MISSING
@@ -295,13 +290,10 @@ def _bounded_nonempty_string(value: object, *, max_length: int) -> str | None:
 
 
 def _is_record(value: object) -> bool:
-    try:
-        return isinstance(value, Mapping) or not isinstance(
-            value,
-            (str, bytes, int, float, bool, list, tuple, set, frozenset),
-        )
-    except Exception:
-        return False
+    return isinstance(value, Mapping) or not isinstance(
+        value,
+        (str, bytes, int, float, bool, list, tuple, set, frozenset),
+    )
 
 
 def _location_object_key(
@@ -406,20 +398,14 @@ def _items(value: object) -> tuple[object, ...] | None:
         return ()
     if value is None or value is _ALIAS_CONFLICT:
         return None
-    try:
-        if isinstance(value, (str, bytes, Mapping)):
-            return None
-    except Exception:
+    if isinstance(value, (str, bytes, Mapping)):
         return None
     items: list[object] = []
-    try:
-        iterator = iter(value)  # type: ignore[call-overload]
-        for index, item in enumerate(iterator):
-            if index == _LIVEKIT_REPEATED_MAX_ITEMS:
-                return None
-            items.append(item)
-    except Exception:
-        return None
+    iterator = iter(value)  # type: ignore[call-overload]
+    for index, item in enumerate(iterator):
+        if index == _LIVEKIT_REPEATED_MAX_ITEMS:
+            return None
+        items.append(item)
     return tuple(items)
 
 
@@ -524,31 +510,6 @@ def normalized_egress_object_key(
     ).object_key
 
 
-class LiveKitRecordingProviderError(Exception):
-    def __init__(
-        self,
-        category: str,
-        *,
-        error_class: str | None = None,
-        start_outcome: StartOutcome = "unknown",
-    ) -> None:
-        if category not in {"provider_retryable", "provider_terminal"}:
-            raise ValueError("Unsafe LiveKit recording provider category")
-        if start_outcome not in {"not_started", "unknown"}:
-            raise ValueError("Unsafe LiveKit recording start outcome")
-        super().__init__(category)
-        self.category = category
-        self.retryable = category == "provider_retryable"
-        self.error_class = validated_error_class(
-            error_class or ("unavailable" if self.retryable else "unknown")
-        )
-        self._start_outcome: StartOutcome = start_outcome
-
-    @property
-    def start_outcome(self) -> StartOutcome:
-        return self._start_outcome
-
-
 class LiveKitRecordingProvider(RecordingProvider):
     _SUCCESSFUL_TERMINAL_STATUSES = frozenset(
         {
@@ -611,37 +572,42 @@ class LiveKitRecordingProvider(RecordingProvider):
         room_name: str,
         object_key: str,
     ) -> RecordingEgressResult:
-        try:
-            if not room_name or not object_key:
-                raise _LocalStartValidationError(
-                    "Recording room and object key are required"
-                )
-            request = api.RoomCompositeEgressRequest(
-                room_name=room_name,
-                audio_only=True,
-                file=api.EncodedFileOutput(
-                    filepath=object_key,
-                    s3=self._build_s3_upload(),
-                ),
+        if not room_name or not object_key:
+            raise ProviderFailure(
+                provider="livekit",
+                operation="start_recording",
+                disposition="terminal",
+                error_class="validation",
+                context={"start_outcome": "not_started"},
             )
+        request = api.RoomCompositeEgressRequest(
+            room_name=room_name,
+            audio_only=True,
+            file=api.EncodedFileOutput(
+                filepath=object_key,
+                s3=self._build_s3_upload(),
+            ),
+        )
+        try:
             info = await self.egress_client.start_room_composite_egress(request)
-        except Exception as exc:  # pragma: no cover - exercised by tests via wrapping
-            category, error_class = self._exception_details(exc)
-            raise LiveKitRecordingProviderError(
-                category,
-                error_class=error_class,
-                start_outcome=self.start_outcome_for(exc),
-            ) from None
+        except (api.TwirpError, TimeoutError, ConnectionError, OSError) as error:
+            raise livekit_failure_from_exception(
+                error,
+                operation="start_recording",
+                context=livekit_start_failure_context(error),
+            ) from error
 
         egress_id = _bounded_nonempty_string(
             getattr(info, "egress_id", None),
             max_length=255,
         )
         if egress_id is None:
-            raise LiveKitRecordingProviderError(
-                "provider_retryable",
-                error_class="unknown",
-                start_outcome="unknown",
+            raise ProviderFailure(
+                provider="livekit",
+                operation="start_recording",
+                disposition="terminal",
+                error_class="validation",
+                context={"start_outcome": "unknown"},
             )
         return RecordingEgressResult(
             egress_id=egress_id,
@@ -659,20 +625,20 @@ class LiveKitRecordingProvider(RecordingProvider):
             response = await self.egress_client.list_egress(
                 api.ListEgressRequest(room_name=room_name)
             )
-        except Exception as exc:
-            category, error_class = self._exception_details(exc)
-            raise LiveKitRecordingProviderError(
-                category,
-                error_class=error_class,
-            ) from None
-
-        try:
-            items = tuple(response.items)
-        except (AttributeError, TypeError):
-            raise LiveKitRecordingProviderError(
-                "provider_retryable",
-                error_class="unknown",
-            ) from None
+        except (api.TwirpError, TimeoutError, ConnectionError, OSError) as error:
+            raise livekit_failure_from_exception(
+                error,
+                operation="list_recording_egresses",
+            ) from error
+        items_value = getattr(response, "items", _MISSING)
+        if (
+            items_value is _MISSING
+            or items_value is None
+            or not isinstance(items_value, Iterable)
+            or isinstance(items_value, (str, bytes, Mapping))
+        ):
+            raise self._validation_failure("list_recording_egresses")
+        items: tuple[object, ...] = tuple(items_value)
 
         snapshots: list[RecordingEgressSnapshot] = []
         for item in items:
@@ -691,10 +657,7 @@ class LiveKitRecordingProvider(RecordingProvider):
                 or type(status) is not int
                 or status not in range(7)
             ):
-                raise LiveKitRecordingProviderError(
-                    "provider_retryable",
-                    error_class="unknown",
-                )
+                raise self._validation_failure("list_recording_egresses")
             snapshots.append(
                 RecordingEgressSnapshot(
                     egress_id=egress_id,
@@ -717,18 +680,18 @@ class LiveKitRecordingProvider(RecordingProvider):
         request = api.StopEgressRequest(egress_id=egress_id)
         try:
             await self.egress_client.stop_egress(request)
-        except Exception as exc:  # pragma: no cover - exercised by tests via wrapping
-            category, error_class = self._exception_details(exc)
-            raise LiveKitRecordingProviderError(
-                category,
-                error_class=error_class,
-            ) from None
+        except (api.TwirpError, TimeoutError, ConnectionError, OSError) as error:
+            raise livekit_failure_from_exception(
+                error,
+                operation="stop_recording",
+            ) from error
 
     @instrument_provider("livekit", "ensure_recording_stopped")
     async def ensure_stopped(self, egress_id: str) -> None:
         await self._ensure_terminal_status(
             egress_id,
             accepted_terminal_statuses=self._SUCCESSFUL_TERMINAL_STATUSES,
+            operation="ensure_recording_stopped",
         )
 
     @instrument_provider("livekit", "ensure_recording_not_running")
@@ -738,6 +701,7 @@ class LiveKitRecordingProvider(RecordingProvider):
             accepted_terminal_statuses=(
                 self._SUCCESSFUL_TERMINAL_STATUSES | self._FAILED_TERMINAL_STATUSES
             ),
+            operation="ensure_recording_not_running",
         )
 
     async def _ensure_terminal_status(
@@ -745,59 +709,51 @@ class LiveKitRecordingProvider(RecordingProvider):
         egress_id: str,
         *,
         accepted_terminal_statuses: frozenset,
+        operation: str,
     ) -> None:
-        info = await self._get_egress(egress_id)
+        info = await self._get_egress(egress_id, operation=operation)
         if info is None:
-            raise LiveKitRecordingProviderError(
-                "provider_retryable",
-                error_class="unavailable",
-            )
+            raise self._retryable_failure(operation, "unavailable")
         if info.status in accepted_terminal_statuses:
             return
-        self._raise_for_failed_terminal(info.status)
+        self._raise_for_failed_terminal(info.status, operation=operation)
         if info.status not in self._STOPPABLE_STATUSES:
-            raise LiveKitRecordingProviderError(
-                "provider_retryable",
-                error_class="unknown",
-            )
+            raise self._retryable_failure(operation, "unknown")
 
         await self._stop_room_recording(egress_id=egress_id)
-        refreshed = await self._get_egress(egress_id)
+        refreshed = await self._get_egress(egress_id, operation=operation)
         if refreshed is None:
-            raise LiveKitRecordingProviderError(
-                "provider_retryable",
-                error_class="unavailable",
-            )
+            raise self._retryable_failure(operation, "unavailable")
         if refreshed.status in accepted_terminal_statuses:
             return
-        self._raise_for_failed_terminal(refreshed.status)
-        raise LiveKitRecordingProviderError(
-            "provider_retryable",
-            error_class="unavailable",
-        )
+        self._raise_for_failed_terminal(refreshed.status, operation=operation)
+        raise self._retryable_failure(operation, "unavailable")
 
-    def _raise_for_failed_terminal(self, status) -> None:
+    def _raise_for_failed_terminal(self, status, *, operation: str) -> None:
         if status in self._FAILED_TERMINAL_STATUSES:
-            error_class = {
-                api.EgressStatus.EGRESS_ABORTED: "conflict",
-                api.EgressStatus.EGRESS_LIMIT_REACHED: "rate_limited",
-            }.get(status, "unknown")
-            raise LiveKitRecordingProviderError(
-                "provider_terminal",
+            if status == api.EgressStatus.EGRESS_ABORTED:
+                error_class: ProviderFailureClass = "conflict"
+            elif status == api.EgressStatus.EGRESS_LIMIT_REACHED:
+                error_class = "rate_limited"
+            else:
+                error_class = "unknown"
+            raise ProviderFailure(
+                provider="livekit",
+                operation=operation,  # type: ignore[arg-type]
+                disposition="terminal",
                 error_class=error_class,
             )
 
-    async def _get_egress(self, egress_id: str):
+    async def _get_egress(self, egress_id: str, *, operation: str):
         try:
             response = await self.egress_client.list_egress(
                 api.ListEgressRequest(egress_id=egress_id)
             )
-        except Exception as exc:
-            category, error_class = self._exception_details(exc)
-            raise LiveKitRecordingProviderError(
-                category,
-                error_class=error_class,
-            ) from None
+        except (api.TwirpError, TimeoutError, ConnectionError, OSError) as error:
+            raise livekit_failure_from_exception(
+                error,
+                operation=operation,  # type: ignore[arg-type]
+            ) from error
         matches = [
             item
             for item in response.items
@@ -806,63 +762,28 @@ class LiveKitRecordingProvider(RecordingProvider):
         if not matches:
             return None
         if len(matches) != 1:
-            raise LiveKitRecordingProviderError(
-                "provider_retryable",
+            raise ProviderFailure(
+                provider="livekit",
+                operation="ensure_recording_not_running",
+                disposition="terminal",
                 error_class="conflict",
             )
         return matches[0]
 
     @staticmethod
-    def _exception_details(error: Exception) -> tuple[str, str]:
-        if isinstance(error, _LocalStartValidationError):
-            return "provider_terminal", "validation"
-        if isinstance(error, TimeoutError):
-            return "provider_retryable", "timeout"
-        if isinstance(error, api.TwirpError):
-            code = error.code
-            status = error.status
-            if code == "deadline_exceeded" or status in {408, 504}:
-                return "provider_retryable", "timeout"
-            if code == "resource_exhausted" or status == 429:
-                return "provider_retryable", "rate_limited"
-            if code in {"unavailable", "internal", "data_loss"} or status >= 500:
-                return "provider_retryable", "unavailable"
-            if code in {"unauthenticated", "permission_denied"} or status in {
-                401,
-                403,
-            }:
-                return "provider_terminal", "authentication"
-            if code in {"already_exists", "aborted"} or status == 409:
-                return "provider_terminal", "conflict"
-            if code in {
-                "invalid_argument",
-                "not_found",
-                "failed_precondition",
-                "out_of_range",
-                "unimplemented",
-            } or status in {400, 404, 405, 415, 422}:
-                return "provider_terminal", "validation"
-            return "provider_retryable", "unknown"
-        if isinstance(error, (ConnectionError, OSError)):
-            return "provider_retryable", "unavailable"
-        return "provider_retryable", "unknown"
+    def _validation_failure(operation: str) -> ProviderFailure:
+        return ProviderFailure(
+            provider="livekit",
+            operation=operation,  # type: ignore[arg-type]
+            disposition="terminal",
+            error_class="validation",
+        )
 
     @staticmethod
-    def start_outcome_for(error: Exception) -> StartOutcome:
-        if isinstance(error, _LocalStartValidationError):
-            return "not_started"
-        if not isinstance(error, api.TwirpError):
-            return "unknown"
-        if error.code in {
-            "invalid_argument",
-            "not_found",
-            "failed_precondition",
-            "out_of_range",
-            "unimplemented",
-            "unauthenticated",
-            "permission_denied",
-        }:
-            return "not_started"
-        if error.status in {400, 401, 403, 404, 405, 415, 422}:
-            return "not_started"
-        return "unknown"
+    def _retryable_failure(operation: str, error_class: str) -> ProviderFailure:
+        return ProviderFailure(
+            provider="livekit",
+            operation=operation,  # type: ignore[arg-type]
+            disposition="retryable",
+            error_class=error_class,  # type: ignore[arg-type]
+        )

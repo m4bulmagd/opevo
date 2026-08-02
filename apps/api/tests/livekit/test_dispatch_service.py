@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.provider_failures import ProviderFailure
 from app.services import livekit_dispatch_service as dispatch_service_module
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 
@@ -224,6 +225,17 @@ class FakeRecordingService:
 
 
 class FakeFailingRecordingService:
+    async def start_room_recording(self, *, room_name: str, object_key: str):
+        raise ProviderFailure(
+            provider="livekit",
+            operation="start_recording",
+            disposition="retryable",
+            error_class="unavailable",
+            context={"start_outcome": "unknown"},
+        )
+
+
+class FakeDefectiveRecordingService:
     async def start_room_recording(self, *, room_name: str, object_key: str):
         raise RuntimeError(RECORDING_START_SENTINEL)
 
@@ -562,3 +574,44 @@ async def test_dispatch_service_continues_when_recording_egress_fails(caplog) ->
     assert f"call_id={call_repository.call.id}" in caplog.text
     assert f"user_id={user_id}" in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_dispatch_service_propagates_recording_start_defects() -> None:
+    user_id = uuid4()
+    phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
+    agent_config = FakeAgentConfig(
+        id=uuid4(),
+        agent_name="Ava",
+        owner_context="Sam at Bakery",
+        system_prompt="Be helpful and concise.",
+        knowledge_base="Hours 9-5",
+        pipeline_mode="stt_llm_tts",
+    )
+    call_repository = FakeCallRepository(call_id=uuid4())
+    call_repository.call.user_id = user_id
+    call_repository.call.livekit_room_id = ROOM_NAME_SENTINEL
+    service = build_dispatch_service(
+        FakeSession(),
+        FakeDispatchClient(),
+        phone_number_repository=FakePhoneNumberRepository(phone_number),
+        agent_config_repository=FakeAgentConfigRepository(agent_config),
+        call_repository=call_repository,
+        user_repository=FakeUserRepository(
+            FakeUser(id=user_id, full_name="Sam", email="active@example.com")
+        ),
+        recording_service=FakeDefectiveRecordingService(),
+    )
+
+    with pytest.raises(RuntimeError, match=RECORDING_START_SENTINEL):
+        await service.handle_participant_joined(
+            {
+                "event": "participant_joined",
+                "room": {"name": ROOM_NAME_SENTINEL},
+                "participant": {
+                    "identity": f"agent-call-{call_repository.call.id}",
+                    "kind": "AGENT",
+                    "attributes": {},
+                },
+            }
+        )

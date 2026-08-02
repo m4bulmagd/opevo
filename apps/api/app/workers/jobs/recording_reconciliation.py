@@ -194,7 +194,9 @@ class RecordingReconciler:
                 await self.provider.ensure_not_running(
                     snapshot.provider_egress_id  # type: ignore[arg-type]
                 )
-            except Exception:
+            except ProviderFailure as error:
+                if not error.retryable:
+                    raise
                 return await self._record_retry(
                     snapshot,
                     "recording_provider_unavailable",
@@ -239,7 +241,9 @@ class RecordingReconciler:
             listed = await self.provider.list_room_egresses(
                 room_name=snapshot.room_name
             )
-        except Exception:
+        except ProviderFailure as error:
+            if not error.retryable:
+                raise
             return await self._record_retry(
                 snapshot,
                 "recording_provider_unavailable",
@@ -307,7 +311,9 @@ class RecordingReconciler:
                 listed = await self.provider.list_room_egresses(
                     room_name=snapshot.room_name
                 )
-            except Exception:
+            except ProviderFailure as error:
+                if not error.retryable:
+                    raise
                 listed = ()
             exact_ids = tuple(
                 dict.fromkeys(
@@ -364,7 +370,9 @@ class RecordingReconciler:
         for egress_id in safe_ids:
             try:
                 await self.provider.ensure_not_running(egress_id)
-            except Exception:
+            except ProviderFailure as error:
+                if not error.retryable:
+                    raise
                 continue
         return ReconciliationResult(
             "retry",
@@ -391,7 +399,9 @@ class RecordingReconciler:
                 )
             except FileNotFoundError:
                 pass
-            except ProviderFailure:
+            except ProviderFailure as error:
+                if not error.retryable:
+                    raise
                 return await self._record_retry(
                     snapshot,
                     "recording_storage_unavailable",

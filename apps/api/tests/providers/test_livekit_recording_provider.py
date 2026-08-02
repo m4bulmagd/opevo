@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from collections.abc import Iterator
 from dataclasses import FrozenInstanceError
@@ -6,10 +7,10 @@ from types import SimpleNamespace
 import pytest
 from livekit import api
 
+from app.core.provider_failures import ProviderFailure
 from app.providers.livekit_recording import base as recording_base
 from app.providers.livekit_recording.livekit import (
     LiveKitRecordingProvider,
-    LiveKitRecordingProviderError,
     normalized_egress_object_key_evidence,
 )
 
@@ -185,6 +186,28 @@ def twirp_error(*, code: str, status: int) -> api.TwirpError:
     return api.TwirpError(code, "provider detail must not escape", status=status)
 
 
+_TWIRP_FAILURE_CASES = (
+    ("deadline_exceeded", "retryable", "timeout"),
+    ("resource_exhausted", "retryable", "rate_limited"),
+    ("unavailable", "retryable", "unavailable"),
+    ("internal", "retryable", "unavailable"),
+    ("unauthenticated", "terminal", "authentication"),
+    ("permission_denied", "terminal", "authentication"),
+    ("already_exists", "terminal", "conflict"),
+    ("aborted", "terminal", "conflict"),
+    ("not_found", "terminal", "not_found"),
+    ("invalid_argument", "terminal", "validation"),
+    ("malformed", "terminal", "validation"),
+    ("failed_precondition", "terminal", "validation"),
+    ("out_of_range", "terminal", "validation"),
+    ("bad_route", "terminal", "validation"),
+    ("unimplemented", "terminal", "validation"),
+    ("unknown", "retryable", "unknown"),
+    ("canceled", "terminal", "unknown"),
+    ("dataloss", "terminal", "unknown"),
+)
+
+
 def build_provider(
     client: FakeEgressClient,
     *,
@@ -200,6 +223,112 @@ def build_provider(
         region="us-east-1",
         observability=observability,
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("code", "disposition", "error_class"), _TWIRP_FAILURE_CASES)
+@pytest.mark.parametrize("operation", ["start", "list", "stop"])
+async def test_livekit_recording_adapter_maps_every_twirp_code_to_safe_provider_failure(
+    code: str,
+    disposition: str,
+    error_class: str,
+    operation: str,
+) -> None:
+    cause = twirp_error(code=code, status=418)
+    if operation == "start":
+        client = FakeStartEgressClient(failure=cause)
+
+        async def invoke() -> object:
+            return await build_provider(client).start_room_recording(
+                room_name="room-owned", object_key="calls/user/call.ogg"
+            )
+
+        expected_operation = "start_recording"
+    elif operation == "list":
+        client = FakeRoomListEgressClient([], failure=cause)
+
+        async def invoke() -> object:
+            return await build_provider(client).list_room_egresses(
+                room_name="room-owned"
+            )
+
+        expected_operation = "list_recording_egresses"
+    else:
+        client = FakeEgressClient([])
+
+        async def stop_egress(_request: object) -> None:
+            raise cause
+
+        client.stop_egress = stop_egress
+
+        async def invoke() -> object:
+            return await build_provider(client).stop_room_recording(
+                egress_id="EG_owned"
+            )
+
+        expected_operation = "stop_recording"
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await invoke()
+
+    failure = exc_info.value
+    assert (
+        failure.provider,
+        failure.operation,
+        failure.disposition,
+        failure.error_class,
+    ) == ("livekit", expected_operation, disposition, error_class)
+    assert failure.__cause__ is cause
+    assert "provider detail must not escape" not in str(failure)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("failure", "expected_context"),
+    [
+        (TimeoutError("transport request boundary"), {"start_outcome": "unknown"}),
+    ],
+)
+async def test_livekit_recording_start_failure_keeps_the_acceptance_boundary_context(
+    failure: Exception,
+    expected_context: dict[str, str],
+) -> None:
+    client = FakeStartEgressClient(failure=failure)
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await build_provider(client).start_room_recording(
+            room_name="room-owned", object_key="calls/user/call.ogg"
+        )
+
+    assert exc_info.value.context == expected_context
+
+
+@pytest.mark.anyio
+async def test_livekit_recording_malformed_provider_start_response_is_terminal_validation() -> None:
+    with pytest.raises(ProviderFailure) as exc_info:
+        await build_provider(FakeStartEgressClient(result=SimpleNamespace())).start_room_recording(
+            room_name="room-owned", object_key="calls/user/call.ogg"
+        )
+
+    assert (exc_info.value.disposition, exc_info.value.error_class) == (
+        "terminal",
+        "validation",
+    )
+
+
+@pytest.mark.anyio
+async def test_livekit_recording_does_not_translate_injected_type_error_or_cancellation() -> None:
+    type_error = TypeError("INTERNAL_SENTINEL")
+    with pytest.raises(TypeError) as type_error_info:
+        await build_provider(FakeStartEgressClient(failure=type_error)).start_room_recording(
+            room_name="room-owned", object_key="calls/user/call.ogg"
+        )
+    assert type_error_info.value is type_error
+
+    with pytest.raises(asyncio.CancelledError):
+        await build_provider(
+            FakeRoomListEgressClient([], failure=asyncio.CancelledError())
+        ).list_room_egresses(room_name="room-owned")
 
 
 async def ensure_stopped(provider: LiveKitRecordingProvider, egress_id: str) -> None:
@@ -248,13 +377,12 @@ async def test_ensure_stopped_retries_when_initial_egress_lookup_is_missing() ->
         observability=telemetry,
     )
 
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await ensure_stopped(provider, "egress-1")
 
-    assert exc_info.value.category == "provider_retryable"
+    assert exc_info.value.disposition == "retryable"
     assert exc_info.value.retryable is True
     assert exc_info.value.error_class == "unavailable"
-    assert str(exc_info.value) == "provider_retryable"
     assert client.stop_requests == []
     assert telemetry.calls == [("livekit", "ensure_recording_stopped", "error")]
     assert telemetry.error_classes == ["unavailable"]
@@ -264,13 +392,12 @@ async def test_ensure_stopped_retries_when_initial_egress_lookup_is_missing() ->
 async def test_ensure_stopped_retries_when_post_stop_egress_lookup_is_missing() -> None:
     client = FakeEgressClient([[api.EgressStatus.EGRESS_ACTIVE], []])
 
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await ensure_stopped(build_provider(client), "egress-1")
 
-    assert exc_info.value.category == "provider_retryable"
+    assert exc_info.value.disposition == "retryable"
     assert exc_info.value.retryable is True
     assert exc_info.value.error_class == "unavailable"
-    assert str(exc_info.value) == "provider_retryable"
     assert len(client.stop_requests) == 1
     assert len(client.list_requests) == 2
 
@@ -300,13 +427,12 @@ async def test_ensure_stopped_reports_failed_terminal_egress_as_provider_error(
         observability=telemetry,
     )
 
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await ensure_stopped(provider, "egress-1")
 
-    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.disposition == "terminal"
     assert exc_info.value.retryable is False
     assert exc_info.value.error_class == expected_error_class
-    assert str(exc_info.value) == "provider_terminal"
     assert client.stop_requests == []
     assert telemetry.calls == [("livekit", "ensure_recording_stopped", "error")]
     assert telemetry.error_classes == [expected_error_class]
@@ -328,7 +454,7 @@ async def test_ensure_not_running_accepts_failed_terminal_egress_while_ensure_st
     deletion_client = FakeEgressClient([[failed_status]])
     telemetry = _Telemetry()
 
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await ensure_stopped(build_provider(stop_job_client), "egress-1")
 
     await ensure_not_running(
@@ -336,7 +462,7 @@ async def test_ensure_not_running_accepts_failed_terminal_egress_while_ensure_st
         "egress-1",
     )
 
-    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.disposition == "terminal"
     assert stop_job_client.stop_requests == []
     assert deletion_client.stop_requests == []
     assert telemetry.calls == [("livekit", "ensure_recording_not_running", "success")]
@@ -372,13 +498,12 @@ async def test_ensure_stopped_retries_when_recheck_is_still_active() -> None:
         ]
     )
 
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await ensure_stopped(build_provider(client), "egress-1")
 
-    assert exc_info.value.category == "provider_retryable"
+    assert exc_info.value.disposition == "retryable"
     assert exc_info.value.retryable is True
     assert exc_info.value.error_class == "unavailable"
-    assert str(exc_info.value) == "provider_retryable"
 
 
 @pytest.mark.anyio
@@ -440,98 +565,56 @@ async def test_start_room_recording_uses_aws_native_s3_shape() -> None:
 
 
 @pytest.mark.anyio
-async def test_start_room_recording_wraps_provider_failures() -> None:
-    client = FakeStartEgressClient(
-        failure=RuntimeError("provider unavailable SECRET_PROVIDER_MESSAGE")
-    )
+async def test_start_room_recording_propagates_injected_runtime_defects() -> None:
+    failure = RuntimeError("provider unavailable SECRET_PROVIDER_MESSAGE")
+    client = FakeStartEgressClient(failure=failure)
 
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(RuntimeError) as exc_info:
         await build_provider(client).start_room_recording(
             room_name="room-1",
             object_key="calls/user-1/call-1.ogg",
         )
 
-    assert exc_info.value.category == "provider_retryable"
-    assert exc_info.value.retryable is True
-    assert exc_info.value.error_class == "unknown"
-    assert exc_info.value.start_outcome == "unknown"
-    assert str(exc_info.value) == "provider_retryable"
-    assert exc_info.value.__cause__ is None
+    assert exc_info.value is failure
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("failure", "expected"),
     [
-        (twirp_error(code="invalid_argument", status=400), "not_started"),
-        (TimeoutError(), "unknown"),
-        (ValueError("unexpected provider failure"), "unknown"),
+        (twirp_error(code="invalid_argument", status=400), {"start_outcome": "not_started"}),
+        (TimeoutError(), {"start_outcome": "unknown"}),
     ],
 )
 async def test_start_room_recording_exposes_classified_outcome(
     failure: Exception,
-    expected: str,
+    expected: dict[str, str],
 ) -> None:
     client = FakeStartEgressClient(failure=failure)
 
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await build_provider(client).start_room_recording(
             room_name="room-1",
             object_key="calls/user-1/call-1.ogg",
         )
 
-    assert exc_info.value.start_outcome == expected
+    assert exc_info.value.context == expected
 
 
 @pytest.mark.anyio
 async def test_start_room_recording_rejects_empty_object_key_before_io() -> None:
     client = FakeStartEgressClient()
 
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await build_provider(client).start_room_recording(
             room_name="room-1",
             object_key="",
         )
 
-    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.disposition == "terminal"
     assert exc_info.value.error_class == "validation"
-    assert exc_info.value.start_outcome == "not_started"
+    assert exc_info.value.context == {"start_outcome": "not_started"}
     assert client.start_requests == []
-
-
-@pytest.mark.parametrize(
-    ("error", "expected"),
-    [
-        (ValueError("unexpected provider failure"), "unknown"),
-        (twirp_error(code="invalid_argument", status=400), "not_started"),
-        (twirp_error(code="unauthenticated", status=401), "not_started"),
-        (twirp_error(code="permission_denied", status=403), "not_started"),
-        (TimeoutError(), "unknown"),
-        (ConnectionError(), "unknown"),
-        (twirp_error(code="already_exists", status=409), "unknown"),
-        (twirp_error(code="resource_exhausted", status=429), "unknown"),
-        (twirp_error(code="internal", status=500), "unknown"),
-        (RuntimeError("unexpected"), "unknown"),
-    ],
-)
-def test_start_outcome_classification(
-    error: Exception,
-    expected: str,
-) -> None:
-    assert LiveKitRecordingProvider.start_outcome_for(error) == expected
-
-
-def test_recording_provider_error_start_outcome_is_immutable() -> None:
-    error = LiveKitRecordingProviderError(
-        "provider_terminal",
-        error_class="validation",
-        start_outcome="not_started",
-    )
-
-    with pytest.raises(AttributeError):
-        error.start_outcome = "unknown"
-
-    assert error.start_outcome == "not_started"
 
 
 @pytest.mark.anyio
@@ -547,21 +630,20 @@ def test_recording_provider_error_start_outcome_is_immutable() -> None:
         SimpleNamespace(egress_id=object()),
     ],
 )
-async def test_start_room_recording_treats_malformed_result_as_unknown(
+async def test_start_room_recording_treats_malformed_result_as_terminal_validation(
     result: object,
 ) -> None:
     client = FakeStartEgressClient(result=result)
 
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await build_provider(client).start_room_recording(
             room_name="room-1",
             object_key="calls/user-1/call-1.ogg",
         )
 
-    assert exc_info.value.category == "provider_retryable"
-    assert exc_info.value.error_class == "unknown"
-    assert exc_info.value.start_outcome == "unknown"
-    assert str(exc_info.value) == "provider_retryable"
+    assert exc_info.value.disposition == "terminal"
+    assert exc_info.value.error_class == "validation"
+    assert exc_info.value.context == {"start_outcome": "unknown"}
 
 
 @pytest.mark.anyio
@@ -774,7 +856,7 @@ async def test_list_room_egresses_marks_malformed_mapping_paths_untrusted(
     [_RepeatedIteratorConstructionFailure(), _RepeatedIterationFailure()],
 )
 @pytest.mark.parametrize("field_name", ["fileResults", "fileOutputs"])
-def test_object_key_evidence_contains_malformed_repeated_iteration(
+def test_object_key_evidence_propagates_repeated_iterator_defects(
     field_name: str,
     repeated: object,
 ) -> None:
@@ -784,14 +866,12 @@ def test_object_key_evidence_contains_malformed_repeated_iteration(
         else {"roomComposite": {"fileOutputs": repeated}}
     )
 
-    evidence = normalized_egress_object_key_evidence(
-        egress,
-        bucket_name="recordings",
-        endpoint_url="http://minio:9000",
-    )
-
-    assert evidence.state == "invalid"
-    assert evidence.object_key is None
+    with pytest.raises(RuntimeError, match="repeated iteration|repeated iterator"):
+        normalized_egress_object_key_evidence(
+            egress,
+            bucket_name="recordings",
+            endpoint_url="http://minio:9000",
+        )
 
 
 def test_object_key_evidence_bounds_infinite_like_repeated_input() -> None:
@@ -827,12 +907,13 @@ def test_object_key_evidence_bounds_infinite_like_repeated_input() -> None:
     ],
 )
 async def test_list_room_egresses_rejects_unsafe_mapping_identity(item: dict) -> None:
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await build_provider(FakeRoomListEgressClient([item])).list_room_egresses(
             room_name="room-owned"
         )
 
-    assert exc_info.value.error_class == "unknown"
+    assert exc_info.value.disposition == "terminal"
+    assert exc_info.value.error_class == "validation"
 
 
 @pytest.mark.anyio
@@ -846,13 +927,13 @@ async def test_list_room_egresses_rejects_int_subclass_status() -> None:
         "status": ProviderStatus(api.EgressStatus.EGRESS_ACTIVE),
     }
 
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await build_provider(FakeRoomListEgressClient([item])).list_room_egresses(
             room_name="room-owned"
         )
 
-    assert exc_info.value.category == "provider_retryable"
-    assert exc_info.value.error_class == "unknown"
+    assert exc_info.value.disposition == "terminal"
+    assert exc_info.value.error_class == "validation"
 
 
 @pytest.mark.anyio
@@ -864,29 +945,25 @@ async def test_list_room_egresses_rejects_int_subclass_status() -> None:
         _ProviderPresenceProbeFailure(),
     ],
 )
-async def test_list_room_egresses_contains_record_accessor_errors(
+async def test_list_room_egresses_propagates_record_accessor_errors(
     item: object,
 ) -> None:
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+    with pytest.raises(RuntimeError) as exc_info:
         await build_provider(FakeRoomListEgressClient([item])).list_room_egresses(
             room_name="room-owned"
         )
 
-    assert exc_info.value.category == "provider_retryable"
-    assert exc_info.value.error_class == "unknown"
-    assert str(exc_info.value) == "provider_retryable"
+    assert "SDK identity attribute unavailable" in str(exc_info.value) or "protobuf" in str(exc_info.value)
 
 
 @pytest.mark.anyio
-async def test_list_room_egresses_contains_protocol_classification_failure() -> None:
-    with pytest.raises(LiveKitRecordingProviderError) as exc_info:
+async def test_list_room_egresses_propagates_protocol_classification_failure() -> None:
+    with pytest.raises(RuntimeError) as exc_info:
         await build_provider(
             FakeRoomListEgressClient([_ProviderProtocolClassificationFailure()])
         ).list_room_egresses(room_name="room-owned")
 
-    assert exc_info.value.category == "provider_retryable"
-    assert exc_info.value.error_class == "unknown"
-    assert str(exc_info.value) == "provider_retryable"
+    assert "protocol classification unavailable" in str(exc_info.value)
 
 
 @pytest.mark.anyio

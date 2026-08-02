@@ -2,7 +2,9 @@ from types import SimpleNamespace
 from contextlib import asynccontextmanager
 
 import pytest
+from livekit import api
 
+from app.core.provider_failures import ProviderFailure
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
 
 
@@ -47,6 +49,113 @@ class _DispatchService:
             metadata=request.metadata,
             state=1,
         )
+
+
+_TWIRP_FAILURE_CASES = (
+    ("deadline_exceeded", "retryable", "timeout"),
+    ("resource_exhausted", "retryable", "rate_limited"),
+    ("unavailable", "retryable", "unavailable"),
+    ("internal", "retryable", "unavailable"),
+    ("unauthenticated", "terminal", "authentication"),
+    ("permission_denied", "terminal", "authentication"),
+    ("already_exists", "terminal", "conflict"),
+    ("aborted", "terminal", "conflict"),
+    ("not_found", "terminal", "not_found"),
+    ("invalid_argument", "terminal", "validation"),
+    ("malformed", "terminal", "validation"),
+    ("failed_precondition", "terminal", "validation"),
+    ("out_of_range", "terminal", "validation"),
+    ("bad_route", "terminal", "validation"),
+    ("unimplemented", "terminal", "validation"),
+    ("unknown", "retryable", "unknown"),
+    ("canceled", "terminal", "unknown"),
+    ("dataloss", "terminal", "unknown"),
+)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("code", "disposition", "error_class"), _TWIRP_FAILURE_CASES)
+@pytest.mark.parametrize("operation", ["list", "create"])
+async def test_livekit_dispatch_adapter_maps_every_twirp_code_to_safe_provider_failure(
+    code: str,
+    disposition: str,
+    error_class: str,
+    operation: str,
+) -> None:
+    cause = api.TwirpError(code, "provider detail must not escape", status=418)
+
+    class FailingDispatchService:
+        async def list_dispatch(self, _room_name: str):
+            raise cause
+
+        async def create_dispatch(self, _request: object):
+            raise cause
+
+    provider = LiveKitDispatchAPIProvider(
+        livekit_api=SimpleNamespace(agent_dispatch=FailingDispatchService()),
+        observability=_Telemetry(),
+    )
+    if operation == "list":
+
+        async def invoke() -> object:
+            return await provider.list_dispatches(room_name="room-owned")
+
+        expected_operation = "list_dispatches"
+    else:
+
+        async def invoke() -> object:
+            return await provider.create_dispatch(
+                agent_name="Ava",
+                room_name="room-owned",
+                metadata='{"call_id":"call-owned"}',
+            )
+
+        expected_operation = "create_dispatch"
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await invoke()
+
+    failure = exc_info.value
+    assert (
+        failure.provider,
+        failure.operation,
+        failure.disposition,
+        failure.error_class,
+        failure.context,
+    ) == ("livekit", expected_operation, disposition, error_class, {})
+    assert failure.__cause__ is cause
+    assert "provider detail must not escape" not in str(failure)
+
+
+@pytest.mark.anyio
+async def test_livekit_dispatch_malformed_response_is_terminal_validation_and_defects_escape() -> None:
+    class MalformedDispatchService:
+        async def list_dispatch(self, _room_name: str):
+            return [SimpleNamespace(id="dispatch", agent_name="Ava", room="", metadata="{}")]
+
+    provider = LiveKitDispatchAPIProvider(
+        livekit_api=SimpleNamespace(agent_dispatch=MalformedDispatchService()),
+        observability=_Telemetry(),
+    )
+    with pytest.raises(ProviderFailure) as exc_info:
+        await provider.list_dispatches(room_name="room-owned")
+    assert (exc_info.value.disposition, exc_info.value.error_class) == (
+        "terminal",
+        "validation",
+    )
+
+    defect = TypeError("INTERNAL_SENTINEL")
+
+    class DefectiveDispatchService:
+        async def list_dispatch(self, _room_name: str):
+            raise defect
+
+    with pytest.raises(TypeError) as defect_info:
+        await LiveKitDispatchAPIProvider(
+            livekit_api=SimpleNamespace(agent_dispatch=DefectiveDispatchService()),
+            observability=_Telemetry(),
+        ).list_dispatches(room_name="room-owned")
+    assert defect_info.value is defect
 
 
 @pytest.mark.anyio

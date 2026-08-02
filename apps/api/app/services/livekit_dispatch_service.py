@@ -25,7 +25,8 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.usage_repository import UsageRepository
 from app.repositories.user_repository import UserRepository
 from app.providers.telephony.telnyx import normalize_french_number
-from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
+from app.core.provider_failures import ProviderFailure
+from app.providers.livekit_recording.base import StartOutcome
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.customer_readiness_service import (
     evaluate_customer_readiness,
@@ -433,11 +434,16 @@ class LiveKitDispatchService:
                 room_name=claim.room_name,
                 object_key=claim.expected_object_key,
             )
-        except LiveKitRecordingProviderError as exc:
+        except ProviderFailure as exc:
+            start_outcome: StartOutcome = (
+                "not_started"
+                if exc.context.get("start_outcome") == "not_started"
+                else "unknown"
+            )
             try:
                 await self.recording_lifecycle_service.record_start_error(
                     claim.operation_id,
-                    outcome=exc.start_outcome,
+                    outcome=start_outcome,
                     error_code=exc.error_class,
                 )
                 await self.session.commit()
@@ -449,26 +455,6 @@ class LiveKitDispatchService:
                 event="livekit_recording_start_failed",
                 operation="start_room_recording",
                 error_type=exc.error_class,
-                call_id=call_id,
-                user_id=user_id,
-                status="failed",
-            )
-        except Exception:
-            try:
-                await self.recording_lifecycle_service.record_start_error(
-                    claim.operation_id,
-                    outcome="unknown",
-                    error_code="unknown",
-                )
-                await self.session.commit()
-            except Exception:
-                await self.session.rollback()
-                raise
-            report_safe_exception(
-                logger,
-                event="livekit_recording_start_failed",
-                operation="start_room_recording",
-                error_type="unknown",
                 call_id=call_id,
                 user_id=user_id,
                 status="failed",
