@@ -1456,10 +1456,13 @@ async def deliver_summary_generate(
         try:
             structured = await provider.generate_summary(transcript)
             summary_data = SummaryService.validate_structured_summary(structured)
-        except Exception:
-            raise OutboxDeliveryError("provider_retryable", retryable=True) from None
+        except ProviderFailure as exc:
+            raise OutboxDeliveryError(
+                "provider_retryable" if exc.retryable else "provider_terminal",
+                retryable=exc.retryable,
+            ) from None
         if summary_data is None:
-            raise OutboxDeliveryError("provider_retryable", retryable=True)
+            raise OutboxDeliveryError("provider_terminal", retryable=False)
 
     async with session_factory() as session:
         call = await CallRepository(session).get_by_id_for_update(call_id)

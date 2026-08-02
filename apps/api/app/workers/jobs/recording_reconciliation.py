@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.call import Call
 from app.models.recording_egress_operation import RecordingEgressOperation
+from app.core.provider_failures import ProviderFailure
 from app.providers.livekit_recording.base import RecordingEgressSnapshot
 from app.repositories.call_repository import CallRepository
 from app.repositories.recording_egress_operation_repository import (
@@ -390,7 +391,7 @@ class RecordingReconciler:
                 )
             except FileNotFoundError:
                 pass
-            except Exception:
+            except ProviderFailure:
                 return await self._record_retry(
                     snapshot,
                     "recording_storage_unavailable",

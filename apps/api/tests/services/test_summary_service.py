@@ -2,6 +2,7 @@ import logging
 
 import pytest
 
+from app.core.provider_failures import ProviderFailure
 from app.services.summary_service import SummaryService
 
 
@@ -15,10 +16,23 @@ class FakeSummaryProvider:
 
 class ExplodingSummaryProvider:
     async def generate_summary(self, transcript: list[dict]):
-        raise RuntimeError(
-            "TRANSCRIPT_SENTINEL_FROM_SUMMARY_PROVIDER "
-            "AUTHORIZATION_SENTINEL_FROM_SUMMARY_PROVIDER"
-        )
+        try:
+            raise RuntimeError(
+                "TRANSCRIPT_SENTINEL_FROM_SUMMARY_PROVIDER "
+                "AUTHORIZATION_SENTINEL_FROM_SUMMARY_PROVIDER"
+            )
+        except RuntimeError as error:
+            raise ProviderFailure(
+                provider="gemini",
+                operation="generate_summary",
+                disposition="retryable",
+                error_class="unavailable",
+            ) from error
+
+
+class DefectiveSummaryProvider:
+    async def generate_summary(self, transcript: list[dict]):
+        raise RuntimeError("SUMMARY_DEFECT_SENTINEL")
 
 
 def test_structured_summary_validator_is_public() -> None:
@@ -100,6 +114,20 @@ async def test_summary_service_handles_provider_failure_non_blocking(caplog) -> 
     assert "AUTHORIZATION_SENTINEL_FROM_SUMMARY_PROVIDER" not in caplog.text
     assert "event=summary_generation_failed" in caplog.text
     assert "operation=generate_summary" in caplog.text
-    assert "error_type=RuntimeError" in caplog.text
+    assert "error_type=ProviderFailure" in caplog.text
     assert "call_id=call_summary_123" in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_summary_service_propagates_injected_defects() -> None:
+    service = SummaryService(provider=DefectiveSummaryProvider())
+
+    with pytest.raises(RuntimeError, match="SUMMARY_DEFECT_SENTINEL"):
+        await service.create_summary(
+            {
+                "transcript": [
+                    {"speaker": "CALLER", "text": "What are your opening hours?"},
+                ],
+            }
+        )

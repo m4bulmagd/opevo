@@ -1,8 +1,13 @@
+import asyncio
+import builtins
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
 
+import httpx
 import pytest
+from google.genai import errors as genai_errors
 
+from app.core.provider_failures import ProviderFailure
 from app.providers.summaries.gemini import GeminiSummaryProvider
 
 
@@ -105,3 +110,174 @@ async def test_generate_summary_uses_async_client_and_parses_result() -> None:
     assert async_models.calls[0]["model"] == "gemini-test"
     assert "CALLER: Hello" in async_models.calls[0]["contents"]
     assert telemetry.calls == [("gemini", "generate_summary", "success")]
+
+
+class _FailingAsyncModels:
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    async def generate_content(self, **_kwargs):
+        raise self.error
+
+
+def _async_client(error: BaseException) -> SimpleNamespace:
+    return SimpleNamespace(aio=SimpleNamespace(models=_FailingAsyncModels(error)))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("status", "expected_disposition", "expected_error_class"),
+    [
+        (408, "retryable", "timeout"),
+        (429, "retryable", "rate_limited"),
+        (401, "terminal", "authentication"),
+        (403, "terminal", "authentication"),
+        (409, "terminal", "conflict"),
+        (422, "terminal", "validation"),
+        (503, "retryable", "unavailable"),
+    ],
+)
+async def test_gemini_maps_known_api_statuses_to_safe_provider_failures(
+    status: int,
+    expected_disposition: str,
+    expected_error_class: str,
+) -> None:
+    response_body = {"message": "GEMINI_RESPONSE_BODY_SENTINEL"}
+    error = genai_errors.APIError(status, response_body)
+    provider = GeminiSummaryProvider(client=_async_client(error), model="gemini-test")
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
+
+    assert (
+        exc_info.value.provider,
+        exc_info.value.operation,
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("gemini", "generate_summary", expected_disposition, expected_error_class)
+    assert "GEMINI_RESPONSE_BODY_SENTINEL" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("error", "expected_error_class"),
+    [
+        (httpx.ReadTimeout("GEMINI_TIMEOUT_SENTINEL"), "timeout"),
+        (
+            genai_errors.UnknownApiResponseError(
+                "GEMINI_RESPONSE_BODY_SENTINEL"
+            ),
+            "validation",
+        ),
+    ],
+)
+async def test_gemini_maps_known_transport_and_malformed_response_failures(
+    error: Exception,
+    expected_error_class: str,
+) -> None:
+    provider = GeminiSummaryProvider(client=_async_client(error), model="gemini-test")
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
+
+    assert (
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("terminal" if expected_error_class == "validation" else "retryable", expected_error_class)
+    assert "SENTINEL" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "response",
+    [
+        SimpleNamespace(text="GEMINI_RESPONSE_BODY_SENTINEL not-json"),
+        SimpleNamespace(text='{"summary_text":"missing schema"}'),
+    ],
+)
+async def test_gemini_maps_malformed_content_to_terminal_validation(
+    response: SimpleNamespace,
+) -> None:
+    class AsyncModels:
+        async def generate_content(self, **_kwargs):
+            return response
+
+    provider = GeminiSummaryProvider(
+        client=SimpleNamespace(aio=SimpleNamespace(models=AsyncModels())),
+        model="gemini-test",
+    )
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
+
+    assert (
+        exc_info.value.provider,
+        exc_info.value.operation,
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("gemini", "generate_summary", "terminal", "validation")
+    assert "GEMINI_RESPONSE_BODY_SENTINEL" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is not None
+
+
+@pytest.mark.anyio
+async def test_gemini_maps_missing_credentials_to_terminal_configuration_failure() -> None:
+    provider = GeminiSummaryProvider(api_key="", client=None, model="gemini-test")
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
+
+    assert (
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("terminal", "authentication")
+    assert exc_info.value.__cause__ is None
+
+
+@pytest.mark.anyio
+async def test_gemini_maps_missing_sdk_import_to_terminal_configuration_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_import = builtins.__import__
+
+    def missing_google(name: str, *args, **kwargs):
+        if name == "google":
+            raise ImportError("GEMINI_IMPORT_SENTINEL")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", missing_google)
+    provider = GeminiSummaryProvider(api_key="test-key", client=None, model="gemini-test")
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
+
+    assert (
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("terminal", "unknown")
+    assert "GEMINI_IMPORT_SENTINEL" not in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, ImportError)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("error", [TypeError("GEMINI_DEFECT_SENTINEL"), RuntimeError("GEMINI_DEFECT_SENTINEL")])
+async def test_gemini_does_not_translate_injected_programming_defects(
+    error: Exception,
+) -> None:
+    provider = GeminiSummaryProvider(client=_async_client(error), model="gemini-test")
+
+    with pytest.raises(type(error), match="GEMINI_DEFECT_SENTINEL"):
+        await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
+
+
+@pytest.mark.anyio
+async def test_gemini_propagates_cancellation_unchanged() -> None:
+    provider = GeminiSummaryProvider(
+        client=_async_client(asyncio.CancelledError()),
+        model="gemini-test",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
