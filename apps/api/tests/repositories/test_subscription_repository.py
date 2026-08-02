@@ -169,6 +169,94 @@ async def test_old_lifecycle_generation_cannot_replace_current_subscription(
 
 
 @pytest.mark.anyio
+async def test_same_subscription_id_from_other_lifecycle_is_ignored_without_mutation(
+    db_session: AsyncSession,
+) -> None:
+    user = await _user(db_session, "same-id-other-lifecycle")
+    user.lifecycle_generation = 2
+    user_id = user.id
+    original_period_start = datetime(2026, 1, 1, tzinfo=UTC)
+    original_period_end = datetime(2026, 2, 1, tzinfo=UTC)
+    original_subscription_created_at = datetime(2025, 12, 1, tzinfo=UTC)
+    original_event_created_at = datetime(2026, 2, 1, tzinfo=UTC)
+    original_cancellation_effective_at = datetime(2026, 2, 1, tzinfo=UTC)
+    current = Subscription(
+        user_id=user_id,
+        stripe_customer_id="cus_same_id_original",
+        stripe_subscription_id="sub_same_id_other_lifecycle",
+        plan_tier="starter",
+        status="canceled",
+        allocated_minutes=60,
+        current_period_start=original_period_start,
+        current_period_end=original_period_end,
+        stripe_subscription_created_at=original_subscription_created_at,
+        last_stripe_event_created_at=original_event_created_at,
+        lifecycle_generation=1,
+        cancel_at_period_end=True,
+        cancellation_effective_at=original_cancellation_effective_at,
+    )
+    db_session.add(current)
+    await db_session.commit()
+    await db_session.refresh(current)
+    current_id = current.id
+    original_updated_at = current.updated_at
+
+    ignored = await SubscriptionRepository(
+        db_session
+    ).upsert_by_stripe_subscription_id(
+        user_id=user_id,
+        stripe_customer_id="cus_same_id_attempted",
+        stripe_subscription_id="sub_same_id_other_lifecycle",
+        plan_tier="starter",
+        status="active",
+        allocated_minutes=120,
+        current_period_start=datetime(2026, 3, 1, tzinfo=UTC),
+        current_period_end=datetime(2026, 4, 1, tzinfo=UTC),
+        stripe_subscription_created_at=original_subscription_created_at,
+        last_stripe_event_created_at=datetime(2026, 3, 1, tzinfo=UTC),
+        lifecycle_generation=2,
+        cancel_at_period_end=False,
+        cancellation_effective_at=None,
+    )
+
+    assert ignored is None
+    await db_session.commit()
+    db_session.expunge_all()
+    stored = await SubscriptionRepository(db_session).get_by_user_id(user_id)
+
+    assert stored is not None
+    assert stored.id == current_id
+    assert stored.user_id == user_id
+    assert stored.stripe_customer_id == "cus_same_id_original"
+    assert stored.stripe_subscription_id == "sub_same_id_other_lifecycle"
+    assert stored.plan_tier == "starter"
+    assert stored.status == "canceled"
+    assert stored.allocated_minutes == 60
+    assert stored.current_period_start is not None
+    assert stored.current_period_start.replace(tzinfo=UTC) == original_period_start
+    assert stored.current_period_end is not None
+    assert stored.current_period_end.replace(tzinfo=UTC) == original_period_end
+    assert stored.stripe_subscription_created_at is not None
+    assert (
+        stored.stripe_subscription_created_at.replace(tzinfo=UTC)
+        == original_subscription_created_at
+    )
+    assert stored.last_stripe_event_created_at is not None
+    assert (
+        stored.last_stripe_event_created_at.replace(tzinfo=UTC)
+        == original_event_created_at
+    )
+    assert stored.lifecycle_generation == 1
+    assert stored.cancel_at_period_end is True
+    assert stored.cancellation_effective_at is not None
+    assert (
+        stored.cancellation_effective_at.replace(tzinfo=UTC)
+        == original_cancellation_effective_at
+    )
+    assert stored.updated_at == original_updated_at
+
+
+@pytest.mark.anyio
 async def test_older_subscription_generation_cannot_replace_current_row(
     db_session: AsyncSession,
 ) -> None:
