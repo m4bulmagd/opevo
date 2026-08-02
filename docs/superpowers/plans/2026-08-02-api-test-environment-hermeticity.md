@@ -45,7 +45,7 @@
 - Consumes: Pydantic's `PydanticBaseSettingsSource.__call__() -> dict[str, Any]` and existing `SettingsConfigDict(env_file=".env")`.
 - Produces: `_requests_test_mode(init_settings, env_settings) -> bool` and `Settings.settings_customise_sources(...) -> tuple[PydanticBaseSettingsSource, ...]`.
 
-- [ ] **Step 1: Add poisoned-dotenv source-policy tests**
+- [x] **Step 1: Add poisoned-dotenv source-policy tests**
 
 Create `apps/api/tests/test_settings_sources.py` with the following complete test module:
 
@@ -264,7 +264,7 @@ def test_test_mode_does_not_supply_missing_required_settings(
 
 The controlled file deliberately contains both Clerk sources and enabled feature flags. No test reads the repository's ignored `.env`.
 
-- [ ] **Step 2: Run the focused tests and prove the contaminated cases fail**
+- [x] **Step 2: Run the focused tests and prove the contaminated cases fail**
 
 Run from `apps/api`:
 
@@ -274,7 +274,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/t
 
 Expected: the explicit and process test-mode cases fail because current `Settings` still reads `tmp_path/.env`; dotenv-only selection, development, non-test, precedence, file-secret, and missing-required-field cases pass. Confirm the failure shows dotenv sentinel values entering `Settings`, not a syntax, import, or fixture error.
 
-- [ ] **Step 3: Add the minimal source-selection helper**
+- [x] **Step 3: Add the minimal source-selection helper**
 
 In `apps/api/app/core/config.py`, import the source type and add this helper immediately above `Settings`:
 
@@ -300,7 +300,7 @@ def _requests_test_mode(
 
 Checking key presence, rather than truthiness, preserves constructor precedence even for an empty or invalid explicit value. Calling the configured Pydantic sources keeps environment-name handling aligned with Pydantic instead of duplicating alias/case rules with raw `os.environ` access.
 
-- [ ] **Step 4: Override only the dotenv position in `Settings`**
+- [x] **Step 4: Override only the dotenv position in `Settings`**
 
 Add this classmethod immediately after `model_config`:
 
@@ -321,7 +321,7 @@ Add this classmethod immediately after `model_config`:
 
 Do not remove `model_config.env_file`. Do not add pytest/cwd detection or a second settings class.
 
-- [ ] **Step 5: Run focused tests and static checks**
+- [x] **Step 5: Run focused tests and static checks**
 
 Run:
 
@@ -333,7 +333,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
 
 Expected: every settings-source test passes; Ruff and mypy report no errors.
 
-- [ ] **Step 6: Perform the required mutation check**
+- [x] **Step 6: Perform the required mutation check**
 
 Temporarily change the test-mode return to include `dotenv_settings`:
 
@@ -344,7 +344,7 @@ Temporarily change the test-mode return to include `dotenv_settings`:
 
 Run the focused pytest command again. Expected: at least `test_explicit_test_environment_ignores_dotenv` and `test_process_test_environment_makes_cached_settings_ignore_dotenv` fail on the sentinel assertions. Immediately restore the three-source test-mode return with `apply_patch`, rerun the focused test file, and confirm `git diff` contains only the intended implementation and tests.
 
-- [ ] **Step 7: Commit the independently passing source policy**
+- [x] **Step 7: Commit the independently passing source policy**
 
 ```bash
 git add apps/api/app/core/config.py apps/api/tests/test_settings_sources.py
@@ -363,7 +363,7 @@ git commit -m "fix(api): isolate test settings from dotenv"
 - Consumes: Task 1's effective pre-dotenv `APP_ENV=test` behavior.
 - Produces: `_construction_settings_environment() -> dict[str, str]`, `pytest_configure(config: pytest.Config) -> None`, and a collection-time `app.main.app` configured with exactly one JWKS source and no initialized auth provider.
 
-- [ ] **Step 1: Add a collection-time application regression**
+- [x] **Step 1: Add a collection-time application regression**
 
 Create `apps/api/tests/test_collection_environment.py` exactly as follows:
 
@@ -393,7 +393,7 @@ def test_collection_time_application_uses_controlled_network_free_settings() -> 
 
 The module-level import is intentional: it executes during collection, before function fixtures. `auth_provider is None` proves application construction did not build a JWKS resolver or make a network request.
 
-- [ ] **Step 2: Prove the existing fixture is too late**
+- [x] **Step 2: Prove the existing fixture is too late**
 
 Run from `apps/api` with deliberately ambiguous inherited Clerk configuration:
 
@@ -412,7 +412,7 @@ uv run --frozen --no-sync python -m pytest -q tests/test_collection_environment.
 
 Expected: collection fails before running the test because current `conftest.py` has no `pytest_configure` hook and `app.main` sees both Clerk verification sources.
 
-- [ ] **Step 3: Centralize construction-safe constants and environment creation**
+- [x] **Step 3: Centralize construction-safe constants and environment creation**
 
 In `apps/api/tests/conftest.py`, replace the single `TEST_CLERK_AUTHORIZED_PARTY` declaration with the following explicit constants and helper:
 
@@ -453,7 +453,7 @@ def _construction_settings_environment() -> dict[str, str]:
 
 Using `TEST_DATABASE_URL` and `TEST_REDIS_URL` when present keeps the same explicit CI/disposable-service contract; their localhost defaults preserve current focused-test behavior.
 
-- [ ] **Step 4: Install the controlled environment before collection**
+- [x] **Step 4: Install the controlled environment before collection**
 
 Add this hook immediately after `_construction_settings_environment`:
 
@@ -465,7 +465,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 The hook replaces process settings only inside the pytest process. It does not write files or mutate the parent shell.
 
-- [ ] **Step 5: Reuse the constants in generated Clerk material and the function fixture**
+- [x] **Step 5: Reuse the constants in generated Clerk material and the function fixture**
 
 In `clerk_key_material`, replace the local webhook byte/string construction with:
 
@@ -485,13 +485,13 @@ Replace the environment-setting prefix of `settings_env` with:
 
 Keep the existing imports, limiter-state restoration, and four cache clears before and after `yield` unchanged. The function fixture deliberately swaps the construction-time JWKS source for a generated static public key. Its explicit empty process JWKS value shadows any local dotenv while source selection treats that value as absent, so it never leaves both sources configured.
 
-- [ ] **Step 6: Run the poisoned collection command again**
+- [x] **Step 6: Run the poisoned collection command again**
 
 Repeat the exact command from Step 2.
 
 Expected: one test passes. The hook overwrites `APP_ENV`, database/Redis inputs, disabled flags, and Clerk construction settings, removes the inherited static key, and the collection-time application selects only the JWKS source without initializing an auth provider.
 
-- [ ] **Step 7: Run the source, collection, and existing Clerk/deployment fixtures together**
+- [x] **Step 7: Run the source, collection, and existing Clerk/deployment fixtures together**
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
@@ -505,7 +505,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
 
 Expected: all focused tests pass with zero skips, including current Clerk runtime-validation assertions; Ruff and mypy report no errors.
 
-- [ ] **Step 8: Commit the independently passing early test boundary**
+- [x] **Step 8: Commit the independently passing early test boundary**
 
 ```bash
 git add apps/api/tests/conftest.py apps/api/tests/test_collection_environment.py
@@ -524,7 +524,7 @@ git commit -m "test(api): configure settings before collection"
 - Consumes: Docker Compose `config --no-env-resolution` and existing `resolved_service_environment(document, service)`.
 - Produces: `render_compose(compose_file, environment, *, resolve_env_files=True, working_directory=REPO_ROOT) -> dict`; production callers retain the default and local assertions opt out explicitly.
 
-- [ ] **Step 1: Add a real disposable Compose env-file regression**
+- [x] **Step 1: Add a real disposable Compose env-file regression**
 
 Add this test immediately after `local_compose_service_environment`:
 
@@ -570,7 +570,7 @@ services:
 
 This test proves both sides of the contract with Docker Compose itself. It does not inspect or depend on repository `.env` files.
 
-- [ ] **Step 2: Run the new test and prove the helper lacks the explicit control**
+- [x] **Step 2: Run the new test and prove the helper lacks the explicit control**
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
@@ -579,7 +579,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
 
 Expected: fail with `TypeError` because `render_compose` does not yet accept `working_directory` or `resolve_env_files`.
 
-- [ ] **Step 3: Add explicit helper parameters without changing defaults**
+- [x] **Step 3: Add explicit helper parameters without changing defaults**
 
 Replace `render_compose` with:
 
@@ -616,7 +616,7 @@ def render_compose(
 
 The default `True` is essential: `load_compose_yaml()` and every production caller remain byte-for-byte equivalent at the command boundary.
 
-- [ ] **Step 4: Opt out only in the local test helper**
+- [x] **Step 4: Opt out only in the local test helper**
 
 Change `local_compose_service_environment` to:
 
@@ -632,7 +632,7 @@ def local_compose_service_environment(service: str) -> dict[str, str]:
 
 Do not edit `compose.dev.yaml`. Manual `docker compose -f compose.dev.yaml ...` commands will continue resolving its optional service env files.
 
-- [ ] **Step 5: Run the new regression and local/production scope assertions**
+- [x] **Step 5: Run the new regression and local/production scope assertions**
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
@@ -645,7 +645,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
 
 Expected: five tests pass. Normal disposable env-file resolution includes its sentinel, isolated rendering excludes only that sentinel, production still renders exactly one JWKS source, and local tracked settings remain local-auth/realtime-off.
 
-- [ ] **Step 6: Run the full deployment-readiness file and static checks**
+- [x] **Step 6: Run the full deployment-readiness file and static checks**
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/test_deployment_readiness.py
@@ -655,7 +655,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
 
 Expected: the full deployment-readiness file passes with zero skips; Ruff and mypy report no errors.
 
-- [ ] **Step 7: Commit the independently passing Compose-test boundary**
+- [x] **Step 7: Commit the independently passing Compose-test boundary**
 
 ```bash
 git add apps/api/tests/test_deployment_readiness.py
@@ -675,7 +675,7 @@ git commit -m "test(api): isolate local compose env rendering"
 - Consumes: Tasks 1-3 and the repository's coverage-ratchet checker.
 - Produces: two equivalent full API reports (one clean, one poisoned), no skipped tests, no disposable resources, and an implemented design record.
 
-- [ ] **Step 1: Verify repository and isolated-worktree preconditions**
+- [x] **Step 1: Verify repository and isolated-worktree preconditions**
 
 From the worktree root, run:
 
@@ -688,7 +688,7 @@ test ! -e /home/mo/code/ai/bmad-opevo/.worktrees/api-test-env-hermeticity/Presvo
 
 Expected: only the committed implementation plan and three committed implementation tasks are ahead of the design commit, no uncommitted changes exist, the isolated worktree has no API `.env`, and it has no `Presvo_frontend` path. If `apps/api/.env` exists, stop without reading or deleting it.
 
-- [ ] **Step 2: Run lock and static-analysis gates**
+- [x] **Step 2: Run lock and static-analysis gates**
 
 From `apps/api`:
 
@@ -700,7 +700,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
 
 Expected: lockfile unchanged and valid; Ruff and mypy report no errors.
 
-- [ ] **Step 3: Start only named disposable PostgreSQL and Redis services**
+- [x] **Step 3: Start only named disposable PostgreSQL and Redis services**
 
 First prove neither exact name already exists:
 
@@ -727,7 +727,7 @@ docker run -d \
 
 Poll `docker exec presvo-api-hermeticity-postgres pg_isready -U postgres -d ai_call_test` and `docker exec presvo-api-hermeticity-redis redis-cli ping` in bounded one-second loops for at most 60 attempts. Expected: PostgreSQL reports accepting connections and Redis reports `PONG`. If either fails, capture `docker logs` for that exact container and proceed directly to Step 9 cleanup.
 
-- [ ] **Step 4: Run the clean full API suite with coverage**
+- [x] **Step 4: Run the clean full API suite with coverage**
 
 From `apps/api`, with `CLIENT_TEST_DATABASE_URL` explicitly absent:
 
@@ -755,7 +755,7 @@ cp coverage.json /tmp/presvo-api-hermeticity-coverage-clean.json
 
 Expected: the complete API suite passes with zero skips; both line and branch checks pass. The general client fixture remains on its approved per-test SQLite path because `CLIENT_TEST_DATABASE_URL` is absent, while dedicated integration tests use PostgreSQL through `TEST_DATABASE_URL`.
 
-- [ ] **Step 5: Create only the approved disposable conflicting `.env`**
+- [x] **Step 5: Create only the approved disposable conflicting `.env`**
 
 From the worktree root, re-run `test ! -e apps/api/.env`, then use `apply_patch` to add exactly:
 
@@ -779,7 +779,7 @@ test -e apps/api/.env
 git check-ignore apps/api/.env
 ```
 
-- [ ] **Step 6: Run the identical full suite from `apps/api` while poison exists**
+- [x] **Step 6: Run the identical full suite from `apps/api` while poison exists**
 
 Repeat the exact pytest and coverage-check commands from Step 4. Expected: the complete API suite again passes with zero skips and identical coverage totals. Then compare only report totals:
 
@@ -790,7 +790,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -c \
 
 Expected: the assertion passes. This is the authoritative regression proving a conflicting local dotenv cannot alter collection, settings fixtures, deployment-readiness rendering, skips, or coverage.
 
-- [ ] **Step 7: Ratchet coverage only when both reports justify it**
+- [x] **Step 7: Ratchet coverage only when both reports justify it**
 
 Print the current measured percentages through the repository parser:
 
@@ -801,7 +801,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -c \
 
 For each metric independently, if its two-decimal round-down floor is higher than the current baseline, update that JSON string to the higher floor with `apply_patch`. Preserve a metric whose floor did not increase. Never lower either value. Re-run the coverage checker and expect PASS.
 
-- [ ] **Step 8: Mark the approved design implemented after all gates pass**
+- [x] **Step 8: Mark the approved design implemented after all gates pass**
 
 In `docs/superpowers/specs/2026-08-02-api-test-environment-hermeticity-design.md`, change:
 
@@ -836,7 +836,7 @@ changed.
 
 Do not add a second `Issue 21` row to the older visual-execution ledger; this design and plan are the single durable record for the approved API hermeticity decision.
 
-- [ ] **Step 9: Remove only exact disposable resources, even after a failed gate**
+- [x] **Step 9: Remove only exact disposable resources, even after a failed gate**
 
 Use `apply_patch` to delete only the disposable `apps/api/.env` created in Step 5. Then remove generated artifacts and named containers:
 
@@ -859,7 +859,7 @@ test -z "$(docker ps -a --filter name=^/presvo-api-hermeticity-redis$ --format '
 
 Do not prune Docker and do not remove any differently named container, network, volume, image, cache, ignored file, or user resource.
 
-- [ ] **Step 10: Run final repository checks and commit the verified record**
+- [x] **Step 10: Run final repository checks and commit the verified record**
 
 From the worktree root:
 

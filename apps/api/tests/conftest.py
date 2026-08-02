@@ -51,9 +51,29 @@ def _construction_settings_environment() -> dict[str, str]:
     }
 
 
+def _replace_controlled_settings_environment(
+    values: dict[str, str],
+    *,
+    monkeypatch: pytest.MonkeyPatch | None = None,
+) -> None:
+    controlled_names = {*_construction_settings_environment(), "CLERK_JWT_KEY"}
+    for inherited_name in list(os.environ):
+        if inherited_name.upper() not in controlled_names:
+            continue
+        if monkeypatch is None:
+            os.environ.pop(inherited_name)
+        else:
+            monkeypatch.delenv(inherited_name)
+
+    for name, value in values.items():
+        if monkeypatch is None:
+            os.environ[name] = value
+        else:
+            monkeypatch.setenv(name, value)
+
+
 def pytest_configure(config: pytest.Config) -> None:
-    os.environ.update(_construction_settings_environment())
-    os.environ.pop("CLERK_JWT_KEY", None)
+    _replace_controlled_settings_environment(_construction_settings_environment())
 
 
 @pytest.fixture
@@ -80,10 +100,17 @@ def clerk_key_material() -> dict[str, str | bytes]:
 
 @pytest.fixture(autouse=True)
 def settings_env(monkeypatch: pytest.MonkeyPatch, clerk_key_material: dict[str, str | bytes]):
-    for name, value in _construction_settings_environment().items():
-        monkeypatch.setenv(name, value)
-    monkeypatch.setenv("CLERK_JWT_KEY", str(clerk_key_material["public_key_pem"]))
-    monkeypatch.setenv("CLERK_JWKS_URL", "")
+    function_environment = _construction_settings_environment()
+    function_environment.update(
+        {
+            "CLERK_JWT_KEY": str(clerk_key_material["public_key_pem"]),
+            "CLERK_JWKS_URL": "",
+        }
+    )
+    _replace_controlled_settings_environment(
+        function_environment,
+        monkeypatch=monkeypatch,
+    )
 
     from app.core.config import get_settings
     from app.core.database import get_engine, get_session_factory
