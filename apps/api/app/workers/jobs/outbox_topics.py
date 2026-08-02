@@ -18,6 +18,7 @@ from app.core.dispatch_token import create_dispatch_token
 from app.core.observability import get_observability
 from app.core.verification_token import create_verification_token
 from app.core.database import get_session_factory
+from app.core.provider_failures import ProviderFailure
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
@@ -29,7 +30,6 @@ from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
 from app.providers.summaries.gemini import GeminiSummaryProvider
-from app.providers.telephony.base import TelephonyProviderError
 from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
@@ -156,9 +156,9 @@ async def deliver_phone_provision(
             retryable=True,
             exhaustible=False,
         ) from None
-    except TelephonyProviderError as exc:
+    except ProviderFailure as exc:
         raise OutboxDeliveryError(
-            exc.category,
+            "provider_retryable" if exc.retryable else "provider_terminal",
             retryable=exc.retryable,
         ) from None
     async with session_factory() as session:
@@ -371,7 +371,7 @@ async def deliver_phone_routing(
                 provider_connection_name = await provider.disable_number(
                     provider_number_id=snapshot.provider_number_id
                 )
-        except TelephonyProviderError as exc:
+        except ProviderFailure as exc:
             if snapshot.terminal_after_projection:
                 raise OutboxDeliveryError(
                     "provider_retryable",
@@ -379,7 +379,7 @@ async def deliver_phone_routing(
                     exhaustible=False,
                 ) from None
             raise OutboxDeliveryError(
-                exc.category,
+                "provider_retryable" if exc.retryable else "provider_terminal",
                 retryable=exc.retryable,
             ) from None
     if provider_connection_name != desired_connection_name:
@@ -560,7 +560,7 @@ async def _compensate_provider_enable(provider, *, provider_number_id: str) -> N
         connection_name = await provider.disable_number(
             provider_number_id=provider_number_id
         )
-    except TelephonyProviderError:
+    except ProviderFailure:
         # The provider is known to have accepted the enable operation. Keep the
         # durable event retryable until disable is confirmed, even if the
         # provider classifies an individual compensation attempt as terminal.

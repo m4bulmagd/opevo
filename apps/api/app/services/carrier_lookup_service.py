@@ -3,8 +3,8 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.provider_failures import ProviderFailure
 from app.providers.carrier_lookup.base import (
-    CarrierLookupError,
     CarrierLookupProvider,
     CarrierLookupResult,
     normalize_carrier_name,
@@ -35,11 +35,11 @@ class CarrierLookupService:
         try:
             requested_number = normalize_french_number(e164)
         except (TypeError, ValueError):
-            raise CarrierLookupError("terminal") from None
+            raise self._contract_failure() from None
 
         provider_result = await self.provider.lookup(requested_number)
         if not isinstance(provider_result, CarrierLookupResult):
-            raise CarrierLookupError("terminal")
+            raise self._contract_failure()
         try:
             result_number = normalize_french_number(
                 provider_result.normalized_number
@@ -51,13 +51,13 @@ class CarrierLookupService:
             number_type = normalize_number_type(provider_result.number_type)
             looked_up_at = self._safe_timestamp(provider_result.looked_up_at)
         except (TypeError, ValueError):
-            raise CarrierLookupError("terminal") from None
+            raise self._contract_failure() from None
 
         if (
             country_code != "FR"
             or result_number != requested_number
         ):
-            raise CarrierLookupError("terminal")
+            raise self._contract_failure()
 
         return CarrierLookupResult(
             normalized_number=result_number,
@@ -91,7 +91,7 @@ class CarrierLookupService:
 
         try:
             result = await self.lookup_number(expected_number)
-        except CarrierLookupError:
+        except ProviderFailure:
             await self._record_failed_lookup(user_id, expected_number)
             raise CarrierLookupUnavailableError from None
 
@@ -115,6 +115,15 @@ class CarrierLookupService:
             await session.rollback()
             raise
         return result
+
+    @staticmethod
+    def _contract_failure() -> ProviderFailure:
+        return ProviderFailure(
+            provider="telnyx",
+            operation="lookup_carrier",
+            disposition="terminal",
+            error_class="validation",
+        )
 
     async def _record_failed_lookup(self, user_id: UUID, expected_number: str) -> None:
         session = self._require_session()

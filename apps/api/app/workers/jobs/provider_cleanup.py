@@ -6,11 +6,11 @@ from uuid import UUID
 
 from app.core.config import get_settings
 from app.core.database import get_session_factory
+from app.core.provider_failures import ProviderFailure
 from app.models.outbox_event import OutboxEvent
 from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.providers.subscriptions.base import SubscriptionProviderError
 from app.providers.subscriptions.factory import build_subscription_provider
-from app.providers.telephony.base import TelephonyProviderError
 from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.repositories.phone_number_provisioning_repository import (
@@ -58,18 +58,20 @@ async def deliver_provider_cleanup(
                         provider_number_id=snapshot.provider_resource_id
                     )
                     if result != "app-disabled":
-                        raise TelephonyProviderError(
-                            "provider_retryable",
+                        raise ProviderFailure(
+                            provider="telnyx",
+                            operation="disable_number",
+                            disposition="retryable",
                             error_class="conflict",
                         )
-                except TelephonyProviderError as error:
+                except ProviderFailure as error:
                     await _record_failure(
                         session_factory,
                         operation_id,
-                        error.category,
+                        "provider_retryable" if error.retryable else "provider_terminal",
                     )
                     raise OutboxDeliveryError(
-                        error.category,
+                        "provider_retryable" if error.retryable else "provider_terminal",
                         retryable=error.retryable,
                         exhaustible=not error.retryable,
                     ) from None
@@ -83,14 +85,14 @@ async def deliver_provider_cleanup(
                 await provider.release_number(
                     provider_number_id=snapshot.provider_resource_id
                 )
-            except TelephonyProviderError as error:
+            except ProviderFailure as error:
                 await _record_failure(
                     session_factory,
                     operation_id,
-                    error.category,
+                    "provider_retryable" if error.retryable else "provider_terminal",
                 )
                 raise OutboxDeliveryError(
-                    error.category,
+                    "provider_retryable" if error.retryable else "provider_terminal",
                     retryable=error.retryable,
                     exhaustible=not error.retryable,
                 ) from None

@@ -993,11 +993,13 @@ async def test_phone_provisioning_unexpected_failure_does_not_log_or_persist_exc
     assert "+33612345678" not in caplog.text
     assert "event=phone_provisioning_failed" in caplog.text
     assert "operation=provision_phone_number" in caplog.text
-    assert "error_type=RuntimeError" in caplog.text
-    assert provisioning_repository.failed_calls[0]["reason"] == "RuntimeError"
+    assert "error_type=internal_defect" in caplog.text
+    assert provisioning_repository.failed_calls[0]["reason"] == "internal_defect"
     assert provisioning_repository.failed_calls[0]["payload"] == {
-        "error_type": "RuntimeError",
+        "error_type": "internal_defect",
     }
+    assert provisioning_repository.failed_calls[0]["can_retry"] is False
+    assert exc_info.value.__cause__ is not None
     assert all(record.exc_info is None for record in caplog.records)
 
 
@@ -1014,17 +1016,22 @@ async def test_phone_provisioning_preserves_safe_provider_category(
     category: str,
     can_retry: bool,
 ) -> None:
-    from app.providers.telephony.base import TelephonyProviderError
+    from app.core.provider_failures import ProviderFailure
     from app.workers.jobs.phone_provisioning import phone_provisioning_job
 
     session, provisioning_repository, _notification_repository = (
         install_phone_provisioning_job_fakes(
             monkeypatch,
-            error=TelephonyProviderError(category),
+            error=ProviderFailure(
+                provider="telnyx",
+                operation="provision_number",
+                disposition=("retryable" if category == "provider_retryable" else "terminal"),
+                error_class="unavailable",
+            ),
         )
     )
 
-    with pytest.raises(TelephonyProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await phone_provisioning_job(
             {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
             {
@@ -1033,10 +1040,10 @@ async def test_phone_provisioning_preserves_safe_provider_category(
             },
         )
 
-    assert exc_info.value.category == category
+    assert exc_info.value.retryable is can_retry
     assert provisioning_repository.failed_calls[0]["reason"] == category
     assert provisioning_repository.failed_calls[0]["payload"] == {
-        "error_type": category,
+        "error_type": "unavailable",
     }
     assert provisioning_repository.failed_calls[0]["can_retry"] is can_retry
 
@@ -1069,9 +1076,9 @@ async def test_phone_provisioning_sanitizes_sensitive_exception_class_name(
 
     assert sensitive_type_sentinel not in str(exc_info.value)
     assert sensitive_type_sentinel not in caplog.text
-    assert provisioning_repository.failed_calls[0]["reason"] == "Exception"
+    assert provisioning_repository.failed_calls[0]["reason"] == "internal_defect"
     assert provisioning_repository.failed_calls[0]["payload"] == {
-        "error_type": "Exception",
+        "error_type": "internal_defect",
     }
 
 

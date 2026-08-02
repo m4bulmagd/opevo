@@ -1,7 +1,7 @@
 import pytest
 
 from app.core.config import Settings
-from app.providers.telephony.base import TelephonyProviderError
+from app.core.provider_failures import ProviderFailure
 from app.providers.telephony.factory import create_telephony_provider
 from app.providers.telephony.fake import FakeTelephonyProvider
 
@@ -58,15 +58,18 @@ async def test_fake_telephony_rejects_invalid_provisioning_inputs_safely(
 ) -> None:
     provider = FakeTelephonyProvider()
 
-    with pytest.raises(TelephonyProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await provider.provision_number(
             country_code=country_code,
             operation_key=operation_key,
         )
 
-    assert exc_info.value.category == "provider_terminal"
-    assert exc_info.value.error_class == "validation"
-    assert str(exc_info.value) == "provider_terminal"
+    assert (
+        exc_info.value.provider,
+        exc_info.value.operation,
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("fake", "validate", "terminal", "validation")
 
 
 @pytest.mark.anyio
@@ -85,12 +88,15 @@ async def test_fake_telephony_rejects_non_fake_provider_ids_safely(
 ) -> None:
     provider = FakeTelephonyProvider()
 
-    with pytest.raises(TelephonyProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await getattr(provider, operation)(provider_number_id=provider_number_id)
 
-    assert exc_info.value.category == "provider_terminal"
-    assert exc_info.value.error_class == "validation"
-    assert str(exc_info.value) == "provider_terminal"
+    assert (
+        exc_info.value.provider,
+        exc_info.value.operation,
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("fake", "validate", "terminal", "validation")
 
 
 @pytest.mark.anyio

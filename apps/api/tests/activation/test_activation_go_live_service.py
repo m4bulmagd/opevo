@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.core.provider_failures import ProviderFailure
 from app.models.activation_event import ActivationEvent
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
@@ -62,9 +63,12 @@ class _RoutingProvider:
     async def enable_number(self, *, provider_number_id: str) -> str:
         self.enabled.append(provider_number_id)
         if self.failure is not None:
-            from app.providers.telephony.base import TelephonyProviderError
-
-            raise TelephonyProviderError(self.failure)
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="enable_number",
+                disposition=("retryable" if self.failure == "provider_retryable" else "terminal"),
+                error_class="unavailable",
+            )
         return "app-active"
 
     async def disable_number(self, *, provider_number_id: str) -> str:
@@ -103,9 +107,10 @@ class _StateChangingRoutingProvider(_RoutingProvider):
         self.disabled.append(provider_number_id)
         if self.compensation_failures_remaining:
             self.compensation_failures_remaining -= 1
-            from app.providers.telephony.base import TelephonyProviderError
-
-            raise TelephonyProviderError("provider_terminal")
+            raise ProviderFailure(
+                provider="telnyx", operation="disable_number", disposition="terminal",
+                error_class="validation",
+            )
         self.external_connection_name = "app-disabled"
         return self.external_connection_name
 
@@ -147,9 +152,10 @@ class _ProviderIdentityChangingWithFailedCompensation(
         self.disabled.append(provider_number_id)
         if self.compensation_failures_remaining:
             self.compensation_failures_remaining -= 1
-            from app.providers.telephony.base import TelephonyProviderError
-
-            raise TelephonyProviderError("provider_terminal")
+            raise ProviderFailure(
+                provider="telnyx", operation="disable_number", disposition="terminal",
+                error_class="validation",
+            )
         self.externally_active.discard(provider_number_id)
         return "app-disabled"
 

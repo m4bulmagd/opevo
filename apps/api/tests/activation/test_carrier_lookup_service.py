@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.provider_failures import ProviderFailure
 from app.providers.carrier_lookup.base import (
-    CarrierLookupError,
     CarrierLookupResult,
 )
 from app.repositories.business_profile_repository import BusinessProfileRepository
@@ -26,7 +26,7 @@ class ResultProvider:
 
 
 class FailingProvider:
-    def __init__(self, error: CarrierLookupError) -> None:
+    def __init__(self, error: ProviderFailure) -> None:
         self.error = error
         self.calls: list[str] = []
 
@@ -95,12 +95,12 @@ async def test_lookup_number_normalizes_provider_brand_and_safe_number_type() ->
 async def test_lookup_number_rejects_non_french_or_mismatched_results(
     unsafe_result: CarrierLookupResult,
 ) -> None:
-    with pytest.raises(CarrierLookupError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await CarrierLookupService(
             provider=ResultProvider(unsafe_result)
         ).lookup_number("+33612345678")
 
-    assert exc_info.value.code == "terminal"
+    assert exc_info.value.disposition == "terminal"
 
 
 @pytest.mark.anyio
@@ -123,13 +123,13 @@ async def test_lookup_number_converts_malformed_provider_contract_to_safe_error(
         **{field: malformed_value},
     )
 
-    with pytest.raises(CarrierLookupError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await CarrierLookupService(
             provider=ResultProvider(malformed_result)
         ).lookup_number("+33612345678")
 
-    assert exc_info.value.code == "terminal"
-    assert str(exc_info.value) == "terminal"
+    assert exc_info.value.disposition == "terminal"
+    assert exc_info.value.error_class == "validation"
 
 
 @pytest.mark.anyio
@@ -180,7 +180,14 @@ async def test_provider_failure_records_only_safe_failed_state_and_preserves_con
     profile.detected_number_type = "mobile"
     profile.carrier_lookup_status = "succeeded"
     await db_session.commit()
-    provider = FailingProvider(CarrierLookupError(error_code))  # type: ignore[arg-type]
+    provider = FailingProvider(
+        ProviderFailure(
+            provider="telnyx",
+            operation="lookup_carrier",
+            disposition=error_code,  # type: ignore[arg-type]
+            error_class="unavailable" if error_code == "retryable" else "validation",
+        )
+    )
 
     with pytest.raises(CarrierLookupUnavailableError):
         await CarrierLookupService(db_session, provider=provider).lookup_for_user(

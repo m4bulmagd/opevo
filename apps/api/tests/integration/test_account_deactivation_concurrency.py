@@ -29,7 +29,7 @@ from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
-from app.providers.telephony.base import TelephonyProviderError
+from app.core.provider_failures import ProviderFailure
 from app.core.database import get_session
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.account_deactivation_repository import (
@@ -544,8 +544,10 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
             if self.fail_release:
                 cleanup_release_entered.set()
                 await resume_cleanup_release.wait()
-                raise TelephonyProviderError(
-                    "provider_retryable",
+                raise ProviderFailure(
+                    provider="telnyx",
+                    operation="release_number",
+                    disposition="retryable",
                     error_class="timeout",
                 )
 

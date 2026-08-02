@@ -1,28 +1,5 @@
 from abc import ABC, abstractmethod
 
-from app.core.observability import validated_error_class
-
-
-SAFE_PROVIDER_CATEGORIES = frozenset({"provider_retryable", "provider_terminal"})
-
-
-class TelephonyProviderError(RuntimeError):
-    def __init__(
-        self,
-        category: str,
-        *,
-        error_class: str | None = None,
-    ) -> None:
-        if category not in SAFE_PROVIDER_CATEGORIES:
-            raise ValueError("Unsafe telephony provider category")
-        super().__init__(category)
-        self.category = category
-        self.retryable = category == "provider_retryable"
-        self.error_class = validated_error_class(
-            error_class or ("unavailable" if self.retryable else "unknown")
-        )
-
-
 class TelephonyProvisioningReviewRequired(Exception):
     def __init__(self, *, reason: str, payload: dict) -> None:
         super().__init__(reason)

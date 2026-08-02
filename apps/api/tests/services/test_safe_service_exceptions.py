@@ -13,7 +13,7 @@ from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
-from app.providers.telephony.base import TelephonyProviderError
+from app.core.provider_failures import ProviderFailure
 from app.workers.jobs.outbox_delivery import (
     OutboxDeliveryError,
     _outbox_error_class,
@@ -175,7 +175,12 @@ async def test_phone_routing_preserves_safe_provider_category(
 
     class CategorizedProvider:
         async def enable_number(self, *, provider_number_id: str) -> str:
-            raise TelephonyProviderError(category)
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="enable_number",
+                disposition=("retryable" if category == "provider_retryable" else "terminal"),
+                error_class="unavailable",
+            )
 
         async def disable_number(self, *, provider_number_id: str) -> str:
             raise AssertionError
@@ -219,7 +224,12 @@ async def test_phone_provisioning_outbox_preserves_safe_provider_category(
     from app.workers.jobs import outbox_topics
 
     async def fail_provisioning(*_args, **_kwargs) -> None:
-        raise TelephonyProviderError(category)
+        raise ProviderFailure(
+            provider="telnyx",
+            operation="provision_number",
+            disposition=("retryable" if category == "provider_retryable" else "terminal"),
+            error_class="unavailable",
+        )
 
     monkeypatch.setattr(
         outbox_topics,
@@ -326,4 +336,4 @@ async def test_malformed_provisioning_result_is_safe_terminal_outbox_failure(
     assert provisioning is not None
     assert provisioning.last_error_reason == "provider_terminal"
     assert provisioning.can_retry is False
-    assert provisioning.last_error_payload == {"error_type": "provider_terminal"}
+    assert provisioning.last_error_payload == {"error_type": "validation"}

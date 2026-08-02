@@ -5,8 +5,12 @@ from typing import Any
 import telnyx
 
 from app.core.config import get_settings
+from app.core.provider_failures import (
+    ProviderFailure,
+    ProviderFailureClass,
+    provider_failure_from_http_status,
+)
 from app.providers.carrier_lookup.base import (
-    CarrierLookupError,
     CarrierLookupResult,
     normalize_carrier_name,
     normalize_number_type,
@@ -32,27 +36,72 @@ class TelnyxCarrierLookupProvider:
                 normalized,
                 api_key=self.api_key,
             )
-        except (
-            telnyx.error.APIConnectionError,
-            telnyx.error.TimeoutError,
-            telnyx.error.RateLimitError,
-            telnyx.error.ServiceUnavailableError,
-        ):
-            raise CarrierLookupError("retryable") from None
+        except telnyx.error.APIConnectionError as exc:
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="lookup_carrier",
+                disposition=(
+                    "retryable" if getattr(exc, "should_retry", False) is True else "terminal"
+                ),
+                error_class="unavailable",
+            ) from exc
+        except telnyx.error.TimeoutError as exc:
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="lookup_carrier",
+                disposition="retryable",
+                error_class="timeout",
+            ) from exc
+        except telnyx.error.RateLimitError as exc:
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="lookup_carrier",
+                disposition="retryable",
+                error_class="rate_limited",
+            ) from exc
+        except telnyx.error.ServiceUnavailableError as exc:
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="lookup_carrier",
+                disposition="retryable",
+                error_class="unavailable",
+            ) from exc
         except (
             telnyx.error.AuthenticationError,
             telnyx.error.PermissionError,
             telnyx.error.InvalidRequestError,
             telnyx.error.InvalidParametersError,
             telnyx.error.ResourceNotFoundError,
-        ):
-            raise CarrierLookupError("terminal") from None
+        ) as exc:
+            error_class: ProviderFailureClass = (
+                "not_found"
+                if isinstance(exc, telnyx.error.ResourceNotFoundError)
+                else "authentication"
+                if isinstance(
+                    exc,
+                    (telnyx.error.AuthenticationError, telnyx.error.PermissionError),
+                )
+                else "validation"
+            )
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="lookup_carrier",
+                disposition="terminal",
+                error_class=error_class,
+            ) from exc
         except telnyx.error.APIError as exc:
-            if isinstance(exc.http_status, int) and exc.http_status < 500:
-                raise CarrierLookupError("terminal") from None
-            raise CarrierLookupError("retryable") from None
-        except telnyx.error.TelnyxError:
-            raise CarrierLookupError("terminal") from None
+            raise provider_failure_from_http_status(
+                provider="telnyx",
+                operation="lookup_carrier",
+                status=exc.http_status,
+            ) from exc
+        except telnyx.error.TelnyxError as exc:
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="lookup_carrier",
+                disposition="terminal",
+                error_class="unknown",
+            ) from exc
 
         try:
             payload_data = self._read(response, "data")
@@ -69,10 +118,20 @@ class TelnyxCarrierLookupProvider:
             )
             number_type = normalize_number_type(self._read(carrier, "type"))
             result_number = normalize_french_number(result_number)
-        except (TypeError, ValueError):
-            raise CarrierLookupError("terminal") from None
+        except (TypeError, ValueError) as exc:
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="lookup_carrier",
+                disposition="terminal",
+                error_class="validation",
+            ) from exc
         if country_code != "FR" or result_number != normalized:
-            raise CarrierLookupError("terminal")
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="lookup_carrier",
+                disposition="terminal",
+                error_class="validation",
+            ) from None
         return CarrierLookupResult(
             normalized_number=result_number,
             country_code="FR",

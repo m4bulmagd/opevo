@@ -6,9 +6,9 @@ from uuid import UUID
 from app.core.database import get_session_factory
 from app.core.config import get_settings
 from app.core.logging import report_safe_exception
+from app.core.provider_failures import ProviderFailure
 from app.core.redaction import safe_log_label
 from app.providers.telephony.base import (
-    TelephonyProviderError,
     TelephonyProvisioningPending,
     TelephonyProvisioningReviewRequired,
 )
@@ -69,8 +69,8 @@ async def _run_provider_attempt(
     provider_guard: ProviderSingleFlight | None = None,
 ) -> None:
     review_failure: tuple[str, dict[str, Any], str] | None = None
-    provider_failure: tuple[str, bool] | None = None
-    unexpected_error_type: str | None = None
+    provider_failure: ProviderFailure | None = None
+    unexpected_error: Exception | None = None
     try:
         if provider_guard is not None:
             provider_guard.assert_transaction_free(session)
@@ -113,10 +113,10 @@ async def _run_provider_attempt(
         raise TelephonyProvisioningPending(reason=pending_reason) from None
     except TelephonyProvisioningReviewRequired as exc:
         review_failure = (exc.reason, dict(exc.payload), _safe_error_type(exc))
-    except TelephonyProviderError as exc:
-        provider_failure = (exc.category, exc.retryable)
+    except ProviderFailure as exc:
+        provider_failure = exc
     except Exception as exc:
-        unexpected_error_type = _safe_error_type(exc)
+        unexpected_error = exc
     else:
         if acquired is not None:
             current_user = await UserRepository(session).get_by_id_for_update(user_id)
@@ -209,8 +209,10 @@ async def _run_provider_attempt(
                     payload={"cleanup_operation_id": str(cleanup.id)},
                 )
                 await session.commit()
-                raise TelephonyProviderError(
-                    "provider_terminal",
+                raise ProviderFailure(
+                    provider="telnyx",
+                    operation="provision_number",
+                    disposition="terminal",
                     error_class="conflict",
                 )
         assert phone_number is not None
@@ -258,16 +260,23 @@ async def _run_provider_attempt(
             return
     else:
         if provider_failure is not None:
-            error_type, can_retry = provider_failure
+            error_code = (
+                "provider_retryable"
+                if provider_failure.retryable
+                else "provider_terminal"
+            )
+            error_type = provider_failure.error_class
+            can_retry = provider_failure.retryable
         else:
-            assert unexpected_error_type is not None
-            error_type = unexpected_error_type
-            can_retry = True
+            assert unexpected_error is not None
+            error_code = "internal_defect"
+            error_type = "internal_defect"
+            can_retry = False
         try:
             await provisioning_repo.mark_failed(
                 user_id=user_id,
                 target_country_code=country_code,
-                reason=error_type,
+                reason=error_code,
                 payload={"error_type": error_type},
                 can_retry=can_retry,
             )
@@ -284,10 +293,8 @@ async def _run_provider_attempt(
             secondary_error_type = _safe_error_type(exc)
         if secondary_error_type is None:
             if provider_failure is not None:
-                raise TelephonyProviderError(provider_failure[0]) from None
-            raise RuntimeError(
-                f"phone_provisioning_failed error_type={error_type}"
-            ) from None
+                raise provider_failure
+            raise RuntimeError("phone_provisioning_internal_defect") from unexpected_error
 
     report_safe_exception(
         logger,
@@ -426,8 +433,10 @@ async def phone_provisioning_job(
                     operation_key=provider_operation_key,
                 )
                 if recovered is None:
-                    raise TelephonyProviderError(
-                        "provider_retryable",
+                    raise ProviderFailure(
+                        provider="telnyx",
+                        operation="recover_provisioned_number",
+                        disposition="retryable",
                         error_class="unavailable",
                     )
                 current_user = await user_repo.get_by_id_for_update(user_id)

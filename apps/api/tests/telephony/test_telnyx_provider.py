@@ -10,8 +10,8 @@ import pytest
 import app.providers.telephony.telnyx as telnyx_module
 import telnyx
 import telnyx.util as telnyx_util
+from app.core.provider_failures import ProviderFailure
 from app.providers.telephony.base import (
-    TelephonyProviderError,
     TelephonyProvisioningPending,
     TelephonyProvisioningReviewRequired,
 )
@@ -200,11 +200,12 @@ async def test_telnyx_release_rejects_none_provider_response() -> None:
         phone_number_resource=NoneReturningPhoneNumber,
     )
 
-    with pytest.raises(TelephonyProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await provider.release_number(provider_number_id="123456789")
 
-    assert exc_info.value.category == "provider_terminal"
-    assert exc_info.value.error_class == "unknown"
+    assert (exc_info.value.operation, exc_info.value.disposition, exc_info.value.error_class) == (
+        "release_number", "terminal", "validation"
+    )
 
 
 @pytest.mark.anyio
@@ -212,10 +213,10 @@ async def test_telnyx_release_rejects_none_provider_response() -> None:
     ("result", "expected_error_class"),
     [
         ({"data": {"id": "other-provider-id", "status": "deleted"}}, "conflict"),
-        ({"data": {"id": "123456789", "status": "active"}}, "unknown"),
-        ({"data": {"id": "123456789"}}, "unknown"),
-        ({"data": {"status": "deleted"}}, "unknown"),
-        ({"not_data": {}}, "unknown"),
+        ({"data": {"id": "123456789", "status": "active"}}, "validation"),
+        ({"data": {"id": "123456789"}}, "validation"),
+        ({"data": {"status": "deleted"}}, "validation"),
+        ({"not_data": {}}, "validation"),
     ],
 )
 async def test_telnyx_release_requires_exact_deleted_response(
@@ -231,12 +232,12 @@ async def test_telnyx_release_requires_exact_deleted_response(
         phone_number_resource=phone_number_resource,
     )
 
-    with pytest.raises(TelephonyProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await provider.release_number(provider_number_id="123456789")
 
-    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.operation == "release_number"
+    assert exc_info.value.disposition == "terminal"
     assert exc_info.value.error_class == expected_error_class
-    assert str(exc_info.value) == "provider_terminal"
     assert exc_info.value.__cause__ is None
 
 
@@ -270,14 +271,14 @@ async def test_telnyx_sdk_release_error_parsing_cannot_log_private_details(
     provider = TelephonyTelnyx(api_key="CREDENTIAL_SENTINEL")
 
     with caplog.at_level(logging.DEBUG):
-        with pytest.raises(TelephonyProviderError) as exc_info:
+        with pytest.raises(ProviderFailure) as exc_info:
             logging.getLogger("app.unrelated").info(
                 "unrelated application log remains visible"
             )
             await provider.release_number(provider_number_id=provider_number_id)
 
     captured = capsys.readouterr()
-    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.disposition == "terminal"
     assert exc_info.value.error_class == "validation"
     assert len(http_client.calls) == 1
     for sentinel in private_sentinels:
@@ -291,14 +292,14 @@ async def test_telnyx_sdk_release_error_parsing_cannot_log_private_details(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("provider_error", "expected_category", "expected_error_class"),
+    ("provider_error", "expected_disposition", "expected_error_class"),
     [
         (
             telnyx.error.TimeoutError(
                 [{"title": "timeout response with private credential"}],
                 http_status=408,
             ),
-            "provider_retryable",
+            "retryable",
             "timeout",
         ),
         (
@@ -306,7 +307,7 @@ async def test_telnyx_sdk_release_error_parsing_cannot_log_private_details(
                 [{"title": "rate limit response with private credential"}],
                 http_status=429,
             ),
-            "provider_retryable",
+            "retryable",
             "rate_limited",
         ),
         (
@@ -314,14 +315,14 @@ async def test_telnyx_sdk_release_error_parsing_cannot_log_private_details(
                 [{"title": "service failure with private credential"}],
                 http_status=503,
             ),
-            "provider_retryable",
+            "retryable",
             "unavailable",
         ),
         (
             telnyx.error.AuthenticationError(
                 [{"title": "authentication response with private credential"}],
             ),
-            "provider_terminal",
+            "terminal",
             "authentication",
         ),
         (
@@ -329,7 +330,7 @@ async def test_telnyx_sdk_release_error_parsing_cannot_log_private_details(
                 [{"title": "deletion lock with private provider response"}],
                 http_status=422,
             ),
-            "provider_terminal",
+            "terminal",
             "validation",
         ),
         (
@@ -337,14 +338,14 @@ async def test_telnyx_sdk_release_error_parsing_cannot_log_private_details(
                 [{"title": "identity conflict with private provider response"}],
                 http_status=409,
             ),
-            "provider_terminal",
+            "terminal",
             "conflict",
         ),
     ],
 )
 async def test_telnyx_release_uses_safe_provider_error_categories(
     provider_error: Exception,
-    expected_category: str,
+    expected_disposition: str,
     expected_error_class: str,
 ) -> None:
     phone_number = MagicMock()
@@ -356,13 +357,16 @@ async def test_telnyx_release_uses_safe_provider_error_categories(
         phone_number_resource=phone_number_resource,
     )
 
-    with pytest.raises(TelephonyProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await provider.release_number(provider_number_id="123456789")
 
-    assert exc_info.value.category == expected_category
-    assert exc_info.value.error_class == expected_error_class
-    assert str(exc_info.value) == expected_category
-    assert exc_info.value.__cause__ is None
+    assert (
+        exc_info.value.provider,
+        exc_info.value.operation,
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("telnyx", "release_number", expected_disposition, expected_error_class)
+    assert exc_info.value.__cause__ is provider_error
 
 
 @pytest.mark.parametrize(
@@ -610,11 +614,12 @@ async def test_provisioned_provider_result_must_be_valid_and_complete(
 
     service = TelephonyService(db_session, provider=MalformedProvider())
 
-    with pytest.raises(TelephonyProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await service.provision_number(active_user.id, country_code="FR")
 
-    assert exc_info.value.category == "provider_terminal"
-    assert str(exc_info.value) == "provider_terminal"
+    assert (exc_info.value.operation, exc_info.value.disposition, exc_info.value.error_class) == (
+        "provision_number", "terminal", "validation"
+    )
 
 
 @pytest.mark.anyio
@@ -1274,23 +1279,23 @@ async def test_telnyx_connection_change_requires_matching_provider_response() ->
         phone_number_resource=DisagreeingPhoneNumberResource,
     )
 
-    with pytest.raises(TelephonyProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await provider.enable_number(provider_number_id="pn_123")
 
-    assert type(exc_info.value) is telnyx_module.TelephonyProviderError
-    assert exc_info.value.category == "provider_retryable"
+    assert type(exc_info.value) is ProviderFailure
+    assert exc_info.value.disposition == "retryable"
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("provider_error", "expected_category", "expected_error_class"),
+    ("provider_error", "expected_disposition", "expected_error_class"),
     [
         (
             telnyx.error.TimeoutError(
                 [{"title": "timeout secret +33123456789"}],
                 http_status=408,
             ),
-            "provider_retryable",
+            "retryable",
             "timeout",
         ),
         (
@@ -1298,21 +1303,21 @@ async def test_telnyx_connection_change_requires_matching_provider_response() ->
                 [{"title": "rate limited secret +33123456789"}],
                 http_status=429,
             ),
-            "provider_retryable",
+            "retryable",
             "rate_limited",
         ),
         (
             telnyx.error.AuthenticationError(
                 [{"title": "invalid credential sk-secret"}],
             ),
-            "provider_terminal",
+            "terminal",
             "authentication",
         ),
         (
             telnyx.error.InvalidRequestError(
                 [{"title": "invalid request secret +33123456789"}],
             ),
-            "provider_terminal",
+            "terminal",
             "validation",
         ),
         (
@@ -1320,7 +1325,7 @@ async def test_telnyx_connection_change_requires_matching_provider_response() ->
                 [{"title": "generic validation secret"}],
                 http_status=400,
             ),
-            "provider_terminal",
+            "terminal",
             "validation",
         ),
         (
@@ -1328,7 +1333,7 @@ async def test_telnyx_connection_change_requires_matching_provider_response() ->
                 [{"title": "generic server secret"}],
                 http_status=503,
             ),
-            "provider_retryable",
+            "retryable",
             "unavailable",
         ),
         (
@@ -1336,14 +1341,14 @@ async def test_telnyx_connection_change_requires_matching_provider_response() ->
                 "terminal local TLS configuration secret",
                 should_retry=False,
             ),
-            "provider_terminal",
+            "terminal",
             "unavailable",
         ),
     ],
 )
-async def test_telnyx_errors_use_safe_fixed_categories(
+async def test_telnyx_errors_use_shared_safe_failure_fields(
     provider_error: Exception,
-    expected_category: str,
+    expected_disposition: str,
     expected_error_class: str,
 ) -> None:
     FailingPhoneNumberResource.error = provider_error
@@ -1353,13 +1358,12 @@ async def test_telnyx_errors_use_safe_fixed_categories(
         phone_number_resource=FailingPhoneNumberResource,
     )
 
-    with pytest.raises(TelephonyProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await provider.enable_number(provider_number_id="pn_123")
 
-    assert type(exc_info.value) is telnyx_module.TelephonyProviderError
-    assert exc_info.value.category == expected_category
+    assert type(exc_info.value) is ProviderFailure
+    assert exc_info.value.disposition == expected_disposition
     assert exc_info.value.error_class == expected_error_class
-    assert str(exc_info.value) == expected_category
 
 
 def test_telnyx_sdk_uses_bounded_network_policy() -> None:

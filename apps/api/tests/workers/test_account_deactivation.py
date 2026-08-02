@@ -31,7 +31,7 @@ from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.providers.subscriptions.base import SubscriptionProviderError
-from app.providers.telephony.base import TelephonyProviderError
+from app.core.provider_failures import ProviderFailure
 from app.providers.telephony.telnyx import TelephonyTelnyx
 from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
@@ -766,8 +766,8 @@ async def test_restart_from_each_committed_timestamp_skips_completed_provider_wo
         (
             (
                 "telephony.disable",
-                TelephonyProviderError(
-                    "provider_retryable",
+                ProviderFailure(
+                    provider="telnyx", operation="disable_number", disposition="retryable",
                     error_class="rate_limited",
                 ),
             ),
@@ -788,8 +788,8 @@ async def test_restart_from_each_committed_timestamp_skips_completed_provider_wo
         (
             (
                 "telephony.release",
-                TelephonyProviderError(
-                    "provider_retryable",
+                ProviderFailure(
+                    provider="telnyx", operation="release_number", disposition="retryable",
                     error_class="unavailable",
                 ),
             ),
@@ -845,8 +845,8 @@ async def test_retryable_provider_failures_are_non_exhausting_and_committed(
             0,
             (
                 "telephony.disable",
-                TelephonyProviderError(
-                    "provider_terminal",
+                ProviderFailure(
+                    provider="telnyx", operation="disable_number", disposition="terminal",
                     error_class="authentication",
                 ),
             ),
@@ -857,8 +857,8 @@ async def test_retryable_provider_failures_are_non_exhausting_and_committed(
             0,
             (
                 "telephony.disable",
-                TelephonyProviderError(
-                    "provider_terminal",
+                ProviderFailure(
+                    provider="telnyx", operation="disable_number", disposition="terminal",
                     error_class="validation",
                 ),
             ),
@@ -887,8 +887,8 @@ async def test_retryable_provider_failures_are_non_exhausting_and_committed(
             3,
             (
                 "telephony.release",
-                TelephonyProviderError(
-                    "provider_terminal",
+                ProviderFailure(
+                    provider="telnyx", operation="release_number", disposition="terminal",
                     error_class="conflict",
                 ),
             ),
@@ -997,8 +997,8 @@ async def test_terminal_failure_redacts_raw_cause_from_customer_projection_and_l
     raw_error = RuntimeError(
         f"RAW_ERROR {PRIVATE_PHONE_PROVIDER_ID} {PRIVATE_E164} {PRIVATE_CONTENT}"
     )
-    terminal_error = TelephonyProviderError(
-        "provider_terminal",
+    terminal_error = ProviderFailure(
+        provider="telnyx", operation="disable_number", disposition="terminal",
         error_class="authentication",
     )
     terminal_error.__cause__ = raw_error

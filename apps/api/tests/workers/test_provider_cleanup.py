@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.models.outbox_event import OutboxEvent
 from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.user import User
+from app.core.provider_failures import ProviderFailure
 from app.providers.subscriptions.base import SubscriptionProviderError
-from app.providers.telephony.base import TelephonyProviderError
 from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.services.outbox_service import OutboxService
 from app.workers.jobs.outbox_delivery import OutboxDeliveryError
@@ -27,8 +27,10 @@ class RecordingTelephony:
     async def release_number(self, *, provider_number_id: str) -> None:
         self.calls.append(f"release:{provider_number_id}")
         if self.fail_release:
-            raise TelephonyProviderError(
-                "provider_retryable",
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="release_number",
+                disposition="retryable",
                 error_class="timeout",
             )
 
