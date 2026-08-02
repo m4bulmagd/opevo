@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import limiter
+from app.core.provider_failures import ProviderFailure
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.core.database import get_session
@@ -21,7 +22,6 @@ from app.schemas.billing_api import (
 from app.services.billing_query_service import BillingQueryService
 from app.services.billing_session_service import (
     BillingPortalReturnUrlError,
-    BillingSessionProviderError,
     BillingSessionService,
     BillingSessionStateError,
 )
@@ -121,7 +121,7 @@ async def create_checkout_session(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
-    except BillingSessionProviderError as exc:
+    except ProviderFailure as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to create Stripe checkout session",
@@ -179,7 +179,7 @@ async def create_portal_session(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
-    except BillingSessionProviderError as exc:
+    except ProviderFailure as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to create Stripe billing portal session",

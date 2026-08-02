@@ -3,12 +3,12 @@ import logging
 from typing import Any
 
 from app.core.config import get_settings
-from app.providers.subscriptions.base import (
-    ProviderErrorCategory,
-    ProviderErrorClass,
-    SubscriptionProvider,
-    SubscriptionProviderError,
+from app.core.provider_failures import (
+    ProviderFailure,
+    ProviderOperation,
+    provider_failure_from_http_status,
 )
+from app.providers.subscriptions.base import SubscriptionProvider
 
 
 _UNSAFE_STRIPE_SDK_LOG_MARKERS = (
@@ -49,6 +49,74 @@ def _install_safe_stripe_sdk_logging() -> None:
         stripe_logger.addFilter(_SAFE_STRIPE_SDK_LOG_FILTER)
 
 
+def classify_stripe_exception(
+    error: Exception,
+    *,
+    operation: ProviderOperation,
+) -> ProviderFailure | None:
+    """Translate only known Stripe or transport failures into safe vocabulary."""
+    import stripe
+
+    if isinstance(error, TimeoutError):
+        return ProviderFailure(
+            provider="stripe",
+            operation=operation,
+            disposition="retryable",
+            error_class="timeout",
+        )
+    if isinstance(error, stripe.error.APIConnectionError):
+        return ProviderFailure(
+            provider="stripe",
+            operation=operation,
+            disposition=(
+                "retryable" if getattr(error, "should_retry", False) is True else "terminal"
+            ),
+            error_class="unavailable",
+        )
+    if isinstance(error, stripe.error.RateLimitError):
+        return ProviderFailure(
+            provider="stripe",
+            operation=operation,
+            disposition="retryable",
+            error_class="rate_limited",
+        )
+    if isinstance(error, (stripe.error.AuthenticationError, stripe.error.PermissionError)):
+        return ProviderFailure(
+            provider="stripe",
+            operation=operation,
+            disposition="terminal",
+            error_class="authentication",
+        )
+    if isinstance(error, stripe.error.InvalidRequestError):
+        return ProviderFailure(
+            provider="stripe",
+            operation=operation,
+            disposition="terminal",
+            error_class="validation",
+        )
+    if isinstance(error, stripe.error.APIError):
+        if error.http_status == 504:
+            return ProviderFailure(
+                provider="stripe",
+                operation=operation,
+                disposition="retryable",
+                error_class="timeout",
+            )
+        return provider_failure_from_http_status(
+            provider="stripe",
+            operation=operation,
+            status=error.http_status,
+        )
+    if isinstance(error, stripe.error.StripeError):
+        return ProviderFailure(
+            provider="stripe",
+            operation=operation,
+            disposition="terminal",
+            error_class="unknown",
+        )
+    return None
+
+
 class StripeSubscriptionProvider(SubscriptionProvider):
     def __init__(
         self,
@@ -61,8 +129,10 @@ class StripeSubscriptionProvider(SubscriptionProvider):
 
     async def cancel_immediately(self, subscription_id: str) -> None:
         if not isinstance(subscription_id, str) or not subscription_id.strip():
-            raise SubscriptionProviderError(
-                "provider_terminal",
+            raise ProviderFailure(
+                provider="stripe",
+                operation="cancel_subscription",
+                disposition="terminal",
                 error_class="validation",
             )
 
@@ -78,18 +148,27 @@ class StripeSubscriptionProvider(SubscriptionProvider):
         except Exception as error:
             if self._is_missing_subscription(error):
                 return
-            category, error_class = self._stripe_error_details(error)
-            raise SubscriptionProviderError(category, error_class=error_class) from None
+            failure = classify_stripe_exception(
+                error,
+                operation="cancel_subscription",
+            )
+            if failure is None:
+                raise
+            raise failure from error
 
         response_id = self._read(response, "id")
         if response_id != subscription_id:
-            raise SubscriptionProviderError(
-                "provider_terminal",
+            raise ProviderFailure(
+                provider="stripe",
+                operation="cancel_subscription",
+                disposition="terminal",
                 error_class="conflict",
             )
         if self._read(response, "status") != "canceled":
-            raise SubscriptionProviderError(
-                "provider_terminal",
+            raise ProviderFailure(
+                provider="stripe",
+                operation="cancel_subscription",
+                disposition="terminal",
                 error_class="validation",
             )
 
@@ -98,19 +177,23 @@ class StripeSubscriptionProvider(SubscriptionProvider):
         if self._stripe_client is not None:
             return self._stripe_client
         if not self.secret_key:
-            raise SubscriptionProviderError(
-                "provider_terminal",
+            raise ProviderFailure(
+                provider="stripe",
+                operation="cancel_subscription",
+                disposition="terminal",
                 error_class="validation",
             )
 
         try:
             import stripe
             from stripe._http_client import RequestsClient
-        except ImportError:
-            raise SubscriptionProviderError(
-                "provider_terminal",
+        except ImportError as error:
+            raise ProviderFailure(
+                provider="stripe",
+                operation="cancel_subscription",
+                disposition="terminal",
                 error_class="validation",
-            ) from None
+            ) from error
 
         stripe.api_key = self.secret_key
         stripe.max_network_retries = 2
@@ -127,45 +210,10 @@ class StripeSubscriptionProvider(SubscriptionProvider):
 
     @classmethod
     def _is_missing_subscription(cls, error: Exception) -> bool:
-        return (
-            cls._read(error, "code") == "resource_missing"
-            and cls._read(error, "http_status") == 404
-        )
-
-    @staticmethod
-    def _stripe_error_details(
-        error: Exception,
-    ) -> tuple[ProviderErrorCategory, ProviderErrorClass]:
         import stripe
 
-        if isinstance(error, TimeoutError):
-            return "provider_retryable", "timeout"
-        if isinstance(error, stripe.error.APIConnectionError):
-            return "provider_retryable", "unavailable"
-        if isinstance(error, stripe.error.RateLimitError):
-            return "provider_retryable", "rate_limited"
-        if isinstance(
-            error,
-            (stripe.error.AuthenticationError, stripe.error.PermissionError),
-        ):
-            return "provider_terminal", "authentication"
-        if isinstance(error, stripe.error.InvalidRequestError):
-            return "provider_terminal", "validation"
-        if isinstance(error, stripe.error.APIError):
-            status = error.http_status
-            if status == 429:
-                return "provider_retryable", "rate_limited"
-            if status in {408, 504}:
-                return "provider_retryable", "timeout"
-            if status is not None and status >= 500:
-                return "provider_retryable", "unavailable"
-            if status in {401, 403}:
-                return "provider_terminal", "authentication"
-            if status == 409:
-                return "provider_terminal", "conflict"
-            if status in {400, 404, 405, 422}:
-                return "provider_terminal", "validation"
-            return "provider_terminal", "unknown"
-        if isinstance(error, stripe.error.StripeError):
-            return "provider_terminal", "unknown"
-        return "provider_retryable", "unknown"
+        return (
+            isinstance(error, stripe.error.StripeError)
+            and cls._read(error, "code") == "resource_missing"
+            and cls._read(error, "http_status") == 404
+        )

@@ -6,9 +6,10 @@ import pytest
 import stripe
 
 from app.core.config import Settings
-from app.providers.subscriptions.base import SubscriptionProviderError
+from app.core.provider_failures import ProviderFailure
 from app.providers.subscriptions.factory import build_subscription_provider
 from app.providers.subscriptions.fake import FakeSubscriptionProvider
+from app.providers.subscriptions import stripe as stripe_provider
 from app.providers.subscriptions.stripe import StripeSubscriptionProvider
 
 
@@ -53,12 +54,14 @@ async def test_fake_provider_validates_subscription_identity_without_provider_io
 
     await provider.cancel_immediately("sub_current")
 
-    with pytest.raises(SubscriptionProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await provider.cancel_immediately(" ")
 
-    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.provider == "fake"
+    assert exc_info.value.operation == "validate"
+    assert exc_info.value.disposition == "terminal"
     assert exc_info.value.error_class == "validation"
-    assert str(exc_info.value) == "validation"
+    assert str(exc_info.value) == "provider operation failed"
 
 
 def test_factory_uses_fake_provider_by_default(settings: Settings) -> None:
@@ -120,65 +123,76 @@ async def test_stripe_cancellation_does_not_block_the_event_loop() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("provider_error", "category", "error_class"),
+    ("provider_error", "disposition", "error_class"),
     [
-        (TimeoutError("timeout secret"), "provider_retryable", "timeout"),
+        (TimeoutError("timeout secret"), "retryable", "timeout"),
         (
-            stripe.error.APIConnectionError("connection secret"),
-            "provider_retryable",
+            stripe.error.APIConnectionError("connection retry secret", should_retry=True),
+            "retryable",
+            "unavailable",
+        ),
+        (
+            stripe.error.APIConnectionError("connection terminal secret", should_retry=False),
+            "terminal",
             "unavailable",
         ),
         (
             stripe.error.RateLimitError("rate secret"),
-            "provider_retryable",
+            "retryable",
             "rate_limited",
         ),
         (
             stripe.error.APIError("429 secret", http_status=429),
-            "provider_retryable",
+            "retryable",
             "rate_limited",
         ),
         (
             stripe.error.APIError("timeout secret", http_status=504),
-            "provider_retryable",
+            "retryable",
             "timeout",
         ),
         (
             stripe.error.APIError("unavailable secret", http_status=503),
-            "provider_retryable",
+            "retryable",
             "unavailable",
         ),
         (
             stripe.error.AuthenticationError("auth secret"),
-            "provider_terminal",
+            "terminal",
             "authentication",
         ),
         (
             stripe.error.PermissionError("permission secret"),
-            "provider_terminal",
+            "terminal",
             "authentication",
         ),
         (
             stripe.error.InvalidRequestError("validation secret", "subscription"),
-            "provider_terminal",
+            "terminal",
             "validation",
         ),
         (
             stripe.error.APIError("conflict secret", http_status=409),
-            "provider_terminal",
+            "terminal",
             "conflict",
         ),
         (
+            stripe.error.APIError("not found secret", http_status=404),
+            "terminal",
+            "not_found",
+        ),
+        (
             stripe.error.APIError("validation secret", http_status=422),
-            "provider_terminal",
+            "terminal",
             "validation",
         ),
+        (stripe.error.StripeError("base secret"), "terminal", "unknown"),
     ],
 )
 async def test_stripe_errors_map_to_safe_contract_without_raw_messages(
     caplog: pytest.LogCaptureFixture,
     provider_error: Exception,
-    category: str,
+    disposition: str,
     error_class: str,
 ) -> None:
     provider = StripeSubscriptionProvider(
@@ -186,13 +200,17 @@ async def test_stripe_errors_map_to_safe_contract_without_raw_messages(
         secret_key="sk_test_value",
     )
 
-    with caplog.at_level(logging.DEBUG), pytest.raises(SubscriptionProviderError) as exc_info:
+    with caplog.at_level(logging.DEBUG), pytest.raises(ProviderFailure) as exc_info:
         await provider.cancel_immediately("sub_current")
 
-    assert exc_info.value.category == category
+    assert exc_info.value.provider == "stripe"
+    assert exc_info.value.operation == "cancel_subscription"
+    assert exc_info.value.disposition == disposition
     assert exc_info.value.error_class == error_class
-    assert str(exc_info.value) == error_class
+    assert exc_info.value.__cause__ is provider_error
     assert "secret" not in str(exc_info.value)
+    assert "secret" not in repr(exc_info.value)
+    assert "secret" not in exc_info.value.args[0]
     assert "secret" not in caplog.text
 
 
@@ -206,7 +224,7 @@ async def test_stripe_sdk_error_parsing_cannot_log_raw_provider_message(
     monkeypatch.setattr(stripe, "log", "debug")
     provider = StripeSubscriptionProvider(secret_key="sk_test_value")
 
-    with caplog.at_level(logging.DEBUG), pytest.raises(SubscriptionProviderError):
+    with caplog.at_level(logging.DEBUG), pytest.raises(ProviderFailure):
         logging.getLogger("app.unrelated").info(
             "unrelated application log remains visible"
         )
@@ -247,8 +265,94 @@ async def test_stripe_response_must_prove_requested_cancellation(response: objec
         secret_key="sk_test_value",
     )
 
-    with pytest.raises(SubscriptionProviderError) as exc_info:
+    with pytest.raises(ProviderFailure) as exc_info:
         await provider.cancel_immediately("sub_current")
 
-    assert exc_info.value.category == "provider_terminal"
+    assert exc_info.value.disposition == "terminal"
     assert exc_info.value.error_class in {"conflict", "validation"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("defect", [TypeError("TYPE_SENTINEL"), RuntimeError("RUNTIME_SENTINEL")])
+async def test_arbitrary_injected_defects_propagate_unchanged(defect: Exception) -> None:
+    provider = StripeSubscriptionProvider(
+        stripe_client=FakeStripeClient(error=defect),
+        secret_key="sk_test_value",
+    )
+
+    with pytest.raises(type(defect)) as exc_info:
+        await provider.cancel_immediately("sub_current")
+
+    assert exc_info.value is defect
+
+
+@pytest.mark.anyio
+async def test_cancellation_propagates_unchanged() -> None:
+    provider = StripeSubscriptionProvider(
+        stripe_client=FakeStripeClient(error=asyncio.CancelledError()),
+        secret_key="sk_test_value",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.cancel_immediately("sub_current")
+
+
+@pytest.mark.anyio
+async def test_subscription_and_hosted_sessions_reuse_the_stripe_classifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    calls: list[str] = []
+
+    def controlled_classifier(error: Exception, *, operation: str) -> ProviderFailure:
+        assert isinstance(error, stripe.error.StripeError)
+        calls.append(operation)
+        return ProviderFailure(
+            provider="stripe",
+            operation=operation,  # type: ignore[arg-type]
+            disposition="terminal",
+            error_class="unknown",
+        )
+
+    monkeypatch.setattr(stripe_provider, "classify_stripe_exception", controlled_classifier)
+    error = stripe.error.StripeError("provider response sentinel")
+    failing_checkout_api = type(
+        "FailingCheckoutAPI",
+        (),
+        {"create": lambda self, **_kwargs: (_ for _ in ()).throw(error)},
+    )()
+    hosted_client = type(
+        "HostedStripeClient",
+        (),
+        {
+            "checkout": type(
+                "CheckoutNamespace",
+                (),
+                {"Session": failing_checkout_api},
+            )()
+        },
+    )()
+    provider = StripeSubscriptionProvider(
+        stripe_client=FakeStripeClient(error=error),
+        secret_key="sk_test_value",
+    )
+    service = BillingSessionService(
+        stripe_client=hosted_client,
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+    )
+
+    with pytest.raises(ProviderFailure):
+        await provider.cancel_immediately("sub_current")
+    with pytest.raises(ProviderFailure):
+        await service.create_checkout_session(
+            user_id="user_123",
+            customer_email="billing@example.com",
+            clerk_user_id="clerk_123",
+            plan_tier="starter",
+            lifecycle_generation=7,
+        )
+
+    assert calls == ["cancel_subscription", "create_checkout_session"]
