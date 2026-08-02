@@ -149,6 +149,7 @@ SAFE_ERROR_CLASSES = frozenset(
         "authentication",
         "validation",
         "conflict",
+        "not_found",
         "unknown",
     }
 )

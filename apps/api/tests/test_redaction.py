@@ -379,6 +379,28 @@ def test_report_safe_exception_preserves_valid_operational_fields(caplog) -> Non
     assert "status=failed" in caplog.text
 
 
+def test_report_safe_exception_preserves_only_allowlisted_provider(caplog) -> None:
+    logger = logging.getLogger("test.safe.provider_exception_fields")
+
+    with caplog.at_level(logging.ERROR):
+        report_safe_exception(
+            logger,
+            event="recording_storage_failed",
+            operation="upload_recording",
+            provider="s3",
+        )
+        report_safe_exception(
+            logger,
+            event="recording_storage_failed",
+            operation="upload_recording",
+            provider="PRIVATE_PROVIDER_SENTINEL",
+        )
+
+    rendered = caplog.text
+    assert "provider=s3" in rendered
+    assert "PRIVATE_PROVIDER_SENTINEL" not in rendered
+
+
 def test_setup_logging_protects_existing_named_non_propagating_handler() -> None:
     logger = logging.getLogger("test.safe.existing_non_propagating")
     stream = io.StringIO()

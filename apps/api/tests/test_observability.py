@@ -89,6 +89,16 @@ class _Tracer:
         return span
 
 
+def test_not_found_is_a_safe_provider_error_class() -> None:
+    from app.core.observability import normalize_error_class, validated_error_class
+
+    error = RuntimeError("PRIVATE_PROVIDER_BODY")
+    error.error_class = "not_found"  # type: ignore[attr-defined]
+
+    assert normalize_error_class(error) == "not_found"
+    assert validated_error_class("not_found") == "not_found"
+
+
 def _observability(*, meter=None, tracer=None, lifecycle=None):
     try:
         from app.core.observability import Observability
