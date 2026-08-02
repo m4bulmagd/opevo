@@ -6,7 +6,6 @@ import unicodedata
 
 
 CarrierCode = Literal["orange", "sfr", "bouygues", "free", "other"]
-CarrierLookupErrorCode = Literal["retryable", "terminal"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,13 +16,6 @@ class CarrierLookupResult:
     normalized_carrier: CarrierCode
     number_type: str | None
     looked_up_at: datetime
-
-
-class CarrierLookupError(RuntimeError):
-    def __init__(self, code: CarrierLookupErrorCode) -> None:
-        super().__init__(code)
-        self.code = code
-        self.retryable = code == "retryable"
 
 
 class CarrierLookupProvider(Protocol):

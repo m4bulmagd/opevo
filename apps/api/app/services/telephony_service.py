@@ -3,8 +3,9 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.provider_failures import ProviderFailure, ProviderOperation
 from app.models.phone_number import PhoneNumber
-from app.providers.telephony.base import TelephonyProvider, TelephonyProviderError
+from app.providers.telephony.base import TelephonyProvider
 from app.providers.telephony.factory import create_telephony_provider
 from app.providers.telephony.telnyx import normalize_french_number
 from app.repositories.phone_number_repository import PhoneNumberRepository
@@ -69,7 +70,7 @@ class TelephonyService:
             provider_kwargs["operation_key"] = operation_key
         provisioned = await self.provider.provision_number(**provider_kwargs)
         e164, provider_number_id, provider_connection_name = (
-            self._validate_provisioned_result(provisioned)
+            self._validate_provisioned_result(provisioned, operation="provision_number")
         )
         return AcquiredPhoneNumber(
             e164=e164,
@@ -92,7 +93,9 @@ class TelephonyService:
         if recovered is None:
             return None
         e164, provider_number_id, provider_connection_name = (
-            self._validate_provisioned_result(recovered)
+            self._validate_provisioned_result(
+                recovered, operation="recover_provisioned_number"
+            )
         )
         return AcquiredPhoneNumber(
             e164=e164,
@@ -101,9 +104,11 @@ class TelephonyService:
         )
 
     @staticmethod
-    def _validate_provisioned_result(provisioned) -> tuple[str, str, str]:
+    def _validate_provisioned_result(
+        provisioned, *, operation: ProviderOperation
+    ) -> tuple[str, str, str]:
         if not isinstance(provisioned, dict):
-            raise TelephonyProviderError("provider_terminal") from None
+            raise TelephonyService._contract_failure(operation) from None
         e164 = provisioned.get("e164")
         provider_number_id = provisioned.get("provider_number_id")
         provider_connection_name = provisioned.get("provider_connection_name")
@@ -113,11 +118,11 @@ class TelephonyService:
             or not provider_number_id
             or provider_connection_name not in {"app-active", "app-disabled"}
         ):
-            raise TelephonyProviderError("provider_terminal") from None
+            raise TelephonyService._contract_failure(operation) from None
         try:
             normalized_e164 = normalize_french_number(e164)
         except ValueError:
-            raise TelephonyProviderError("provider_terminal") from None
+            raise TelephonyService._contract_failure(operation) from None
         return normalized_e164, provider_number_id, provider_connection_name
 
     async def enable_number(self, user_id):
@@ -128,12 +133,14 @@ class TelephonyService:
         phone_number_id = phone_number.id
         provider_number_id = phone_number.provider_number_id
         if not isinstance(provider_number_id, str) or not provider_number_id:
-            raise TelephonyProviderError("provider_terminal") from None
+            raise self._contract_failure("enable_number") from None
         await self.session.rollback()
         provider_connection_name = await self.provider.enable_number(
             provider_number_id=provider_number_id
         )
-        self._validate_connection_name(provider_connection_name, expected="app-active")
+        self._validate_connection_name(
+            provider_connection_name, expected="app-active", operation="enable_number"
+        )
         phone_number = await self.phone_number_repository.get_by_id_for_update(
             phone_number_id
         )
@@ -141,6 +148,7 @@ class TelephonyService:
             phone_number,
             user_id=user_id,
             provider_number_id=provider_number_id,
+            operation="enable_number",
         )
         phone_number.provider_connection_name = provider_connection_name
         phone_number.is_active = True
@@ -155,12 +163,16 @@ class TelephonyService:
         phone_number_id = phone_number.id
         provider_number_id = phone_number.provider_number_id
         if not isinstance(provider_number_id, str) or not provider_number_id:
-            raise TelephonyProviderError("provider_terminal") from None
+            raise self._contract_failure("disable_number") from None
         await self.session.rollback()
         provider_connection_name = await self.provider.disable_number(
             provider_number_id=provider_number_id
         )
-        self._validate_connection_name(provider_connection_name, expected="app-disabled")
+        self._validate_connection_name(
+            provider_connection_name,
+            expected="app-disabled",
+            operation="disable_number",
+        )
         phone_number = await self.phone_number_repository.get_by_id_for_update(
             phone_number_id
         )
@@ -168,6 +180,7 @@ class TelephonyService:
             phone_number,
             user_id=user_id,
             provider_number_id=provider_number_id,
+            operation="disable_number",
         )
         phone_number.provider_connection_name = provider_connection_name
         phone_number.is_active = False
@@ -175,9 +188,11 @@ class TelephonyService:
         return phone_number
 
     @staticmethod
-    def _validate_connection_name(value, *, expected: str) -> None:
+    def _validate_connection_name(
+        value, *, expected: str, operation: ProviderOperation
+    ) -> None:
         if value != expected:
-            raise TelephonyProviderError("provider_terminal") from None
+            raise TelephonyService._contract_failure(operation) from None
 
     @staticmethod
     def _revalidate_phone_number(
@@ -185,11 +200,26 @@ class TelephonyService:
         *,
         user_id,
         provider_number_id: str,
+        operation: ProviderOperation,
     ) -> PhoneNumber:
         if (
             phone_number is None
             or phone_number.user_id != user_id
             or phone_number.provider_number_id != provider_number_id
         ):
-            raise TelephonyProviderError("provider_retryable") from None
+            raise ProviderFailure(
+                provider="telnyx",
+                operation=operation,
+                disposition="retryable",
+                error_class="unavailable",
+            ) from None
         return phone_number
+
+    @staticmethod
+    def _contract_failure(operation: ProviderOperation) -> ProviderFailure:
+        return ProviderFailure(
+            provider="telnyx",
+            operation=operation,
+            disposition="terminal",
+            error_class="validation",
+        )

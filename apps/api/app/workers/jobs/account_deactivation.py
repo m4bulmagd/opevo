@@ -5,12 +5,12 @@ from uuid import UUID
 
 from app.core.config import get_settings
 from app.core.database import get_session_factory
+from app.core.provider_failures import ProviderFailure
 from app.core.observability import get_observability
 from app.models.account_deactivation_operation import AccountDeactivationOperation
 from app.models.outbox_event import OutboxEvent
 from app.providers.subscriptions.base import SubscriptionProviderError
 from app.providers.subscriptions.factory import build_subscription_provider
-from app.providers.telephony.base import TelephonyProviderError
 from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
@@ -192,7 +192,7 @@ async def _disable_routing(
             provider = create_telephony_provider(get_settings())
         try:
             await provider.disable_number(provider_number_id=provider_number_id)
-        except TelephonyProviderError as error:
+        except ProviderFailure as error:
             await _handle_provider_error(
                 session_factory=session_factory,
                 operation=operation,
@@ -452,7 +452,7 @@ async def _release_number(
             provider = create_telephony_provider(get_settings())
         try:
             await provider.release_number(provider_number_id=provider_number_id)
-        except TelephonyProviderError as error:
+        except ProviderFailure as error:
             await _handle_provider_error(
                 session_factory=session_factory,
                 operation=operation,
@@ -709,7 +709,7 @@ async def _handle_provider_error(
     session_factory,
     operation: _OperationSnapshot,
     step: str,
-    error: SubscriptionProviderError | TelephonyProviderError,
+    error: SubscriptionProviderError | ProviderFailure,
     now: datetime,
     telemetry,
 ) -> None:

@@ -14,10 +14,16 @@ from app.core.observability import (
     get_observability,
     instrument_provider,
 )
+from app.core.provider_failures import (
+    ProviderFailure,
+    ProviderFailureClass,
+    ProviderFailureDisposition,
+    ProviderOperation,
+    provider_failure_from_http_status,
+)
 from app.core.redaction import redact_phone
 from app.providers.telephony.base import (
     TelephonyProvider,
-    TelephonyProviderError,
     TelephonyProvisioningPending,
     TelephonyProvisioningReviewRequired,
 )
@@ -132,6 +138,7 @@ class TelephonyTelnyx(TelephonyProvider):
             existing_number = await self._reconcile_existing_order(
                 customer_reference=customer_reference,
                 country_code=country_code,
+                operation="provision_number",
             )
             if existing_number is not None:
                 logger.info(
@@ -150,6 +157,7 @@ class TelephonyTelnyx(TelephonyProvider):
                 break
 
             available_numbers = await self._run_resource_call(
+                "provision_number",
                 self.available_phone_number_resource.list,
                 api_key=self.api_key,
                 **{
@@ -210,6 +218,7 @@ class TelephonyTelnyx(TelephonyProvider):
             )
 
         await self._run_resource_call(
+            "provision_number",
             self.phone_number_order_resource.create,
             api_key=self.api_key,
             customer_reference=customer_reference,
@@ -218,6 +227,7 @@ class TelephonyTelnyx(TelephonyProvider):
         ordered_number = await self._reconcile_existing_order(
             customer_reference=customer_reference,
             country_code=country_code,
+            operation="provision_number",
         )
         if ordered_number is None:
             raise TelephonyProvisioningPending(reason="existing_order_pending")
@@ -237,10 +247,12 @@ class TelephonyTelnyx(TelephonyProvider):
         ordered_number = await self._reconcile_existing_order(
             customer_reference=customer_reference,
             country_code=country_code,
+            operation="recover_provisioned_number",
         )
         if ordered_number is None:
             return None
         phone_numbers = await self._run_resource_call(
+            "recover_provisioned_number",
             self.phone_number_resource.list,
             api_key=self.api_key,
             **{"filter[phone_number]": ordered_number},
@@ -249,13 +261,12 @@ class TelephonyTelnyx(TelephonyProvider):
         if not provider_numbers:
             raise TelephonyProvisioningPending(reason="existing_order_pending")
         if len(provider_numbers) != 1:
-            raise TelephonyProviderError(
-                "provider_terminal",
-                error_class="conflict",
+            raise self._failure(
+                "recover_provisioned_number", error_class="conflict"
             ) from None
         provider_number_id = self._read_field(provider_numbers[0], "id")
         if not isinstance(provider_number_id, str) or not provider_number_id:
-            raise TelephonyProviderError("provider_terminal") from None
+            raise self._failure("recover_provisioned_number") from None
         return {
             "e164": ordered_number,
             "provider_number_id": provider_number_id,
@@ -267,8 +278,10 @@ class TelephonyTelnyx(TelephonyProvider):
         *,
         customer_reference: str,
         country_code: str,
+        operation: ProviderOperation,
     ) -> str | None:
         response = await self._run_resource_call(
+            operation,
             self.phone_number_order_resource.list,
             api_key=self.api_key,
             **{"filter[customer_reference]": customer_reference},
@@ -332,8 +345,9 @@ class TelephonyTelnyx(TelephonyProvider):
         try:
             normalized_number = normalize_french_number(selected_number)
         except (TypeError, ValueError):
-            raise TelephonyProviderError("provider_terminal") from None
+            raise self._failure("provision_number") from None
         phone_numbers = await self._run_resource_call(
+            "provision_number",
             self.phone_number_resource.list,
             api_key=self.api_key,
             **{"filter[phone_number]": normalized_number},
@@ -342,19 +356,22 @@ class TelephonyTelnyx(TelephonyProvider):
         if not provider_numbers:
             raise TelephonyProvisioningPending(reason="existing_order_pending")
         if len(provider_numbers) != 1:
-            raise TelephonyProviderError("provider_terminal") from None
+            raise self._failure("provision_number") from None
 
         provider_number = provider_numbers[0]
         provider_number_id = self._read_field(provider_number, "id")
         if not isinstance(provider_number_id, str) or not provider_number_id:
-            raise TelephonyProviderError("provider_terminal") from None
+            raise self._failure("provision_number") from None
         response = await self._run_resource_call(
+            "provision_number",
             self.phone_number_resource.modify,
             provider_number_id,
             api_key=self.api_key,
             connection_id=self.disabled_connection_id,
         )
-        self._confirm_connection(response, self.disabled_connection_id)
+        self._confirm_connection(
+            response, self.disabled_connection_id, operation="provision_number"
+        )
 
         return {
             "e164": normalized_number,
@@ -407,17 +424,21 @@ class TelephonyTelnyx(TelephonyProvider):
     @instrument_provider("telnyx", "enable_number")
     async def enable_number(self, *, provider_number_id: str) -> str:
         response = await self._run_resource_call(
+            "enable_number",
             self.phone_number_resource.modify,
             provider_number_id,
             api_key=self.api_key,
             connection_id=self.active_connection_id,
         )
-        self._confirm_connection(response, self.active_connection_id)
+        self._confirm_connection(
+            response, self.active_connection_id, operation="enable_number"
+        )
         return "app-active"
 
     @instrument_provider("telnyx", "disable_number")
     async def disable_number(self, *, provider_number_id: str) -> str:
         response = await self._run_resource_call(
+            "disable_number",
             self.phone_number_resource.modify,
             provider_number_id,
             api_key=self.api_key,
@@ -426,21 +447,21 @@ class TelephonyTelnyx(TelephonyProvider):
         )
         if response is _TELNYX_RESOURCE_NOT_FOUND:
             return "app-disabled"
-        self._confirm_connection(response, self.disabled_connection_id)
+        self._confirm_connection(
+            response, self.disabled_connection_id, operation="disable_number"
+        )
         return "app-disabled"
 
     @instrument_provider("telnyx", "release_number")
     async def release_number(self, *, provider_number_id: str) -> None:
         if not isinstance(provider_number_id, str) or not provider_number_id:
-            raise TelephonyProviderError(
-                "provider_terminal",
-                error_class="validation",
-            )
+            raise self._failure("release_number")
         phone_number = self.phone_number_resource(
             provider_number_id,
             api_key=self.api_key,
         )
         response = await self._run_resource_call(
+            "release_number",
             phone_number.delete,
             _allow_missing=True,
         )
@@ -454,16 +475,19 @@ class TelephonyTelnyx(TelephonyProvider):
             released_number_id = self._read_field(data, "id")
             status = self._read_field(data, "status")
         if not isinstance(released_number_id, str) or not isinstance(status, str):
-            raise TelephonyProviderError("provider_terminal")
+            raise self._failure("release_number")
         if released_number_id != provider_number_id:
-            raise TelephonyProviderError(
-                "provider_terminal",
-                error_class="conflict",
-            )
+            raise self._failure("release_number", error_class="conflict")
         if status != "deleted":
-            raise TelephonyProviderError("provider_terminal")
+            raise self._failure("release_number")
 
-    async def _run_resource_call(self, operation, *args, **kwargs):
+    async def _run_resource_call(
+        self,
+        operation_name: ProviderOperation,
+        operation,
+        *args,
+        **kwargs,
+    ):
         allow_missing = kwargs.pop("_allow_missing", False)
         try:
             return await asyncio.to_thread(operation, *args, **kwargs)
@@ -473,90 +497,80 @@ class TelephonyTelnyx(TelephonyProvider):
                 if getattr(exc, "should_retry", False) is True
                 else "provider_terminal"
             )
-            raise TelephonyProviderError(
-                category,
+            raise self._failure(
+                operation_name,
+                disposition=(
+                    "retryable"
+                    if category == "provider_retryable"
+                    else "terminal"
+                ),
                 error_class="unavailable",
-            ) from None
-        except telnyx.error.TimeoutError:
-            raise TelephonyProviderError(
-                "provider_retryable",
-                error_class="timeout",
-            ) from None
-        except telnyx.error.RateLimitError:
-            raise TelephonyProviderError(
-                "provider_retryable",
-                error_class="rate_limited",
-            ) from None
-        except telnyx.error.ServiceUnavailableError:
-            raise TelephonyProviderError(
-                "provider_retryable",
-                error_class="unavailable",
-            ) from None
+            ) from exc
+        except telnyx.error.TimeoutError as exc:
+            raise self._failure(
+                operation_name, disposition="retryable", error_class="timeout"
+            ) from exc
+        except telnyx.error.RateLimitError as exc:
+            raise self._failure(
+                operation_name, disposition="retryable", error_class="rate_limited"
+            ) from exc
+        except telnyx.error.ServiceUnavailableError as exc:
+            raise self._failure(
+                operation_name, disposition="retryable", error_class="unavailable"
+            ) from exc
         except (
             telnyx.error.AuthenticationError,
             telnyx.error.PermissionError,
-        ):
-            raise TelephonyProviderError(
-                "provider_terminal",
-                error_class="authentication",
-            ) from None
+        ) as exc:
+            raise self._failure(
+                operation_name, error_class="authentication"
+            ) from exc
         except telnyx.error.ResourceNotFoundError as exc:
             if allow_missing and exc.http_status == 404:
                 return _TELNYX_RESOURCE_NOT_FOUND
-            raise TelephonyProviderError(
-                "provider_terminal",
-                error_class="validation",
-            ) from None
+            raise self._failure(operation_name, error_class="not_found") from exc
         except (
             telnyx.error.InvalidRequestError,
             telnyx.error.MethodNotSupportedError,
             telnyx.error.UnsupportedMediaTypeError,
             telnyx.error.InvalidParametersError,
-        ):
-            raise TelephonyProviderError(
-                "provider_terminal",
-                error_class="validation",
-            ) from None
+        ) as exc:
+            raise self._failure(operation_name) from exc
         except telnyx.error.APIError as exc:
-            category, error_class = self._telnyx_http_error_details(
-                exc.http_status
-            )
-            raise TelephonyProviderError(
-                category,
-                error_class=error_class,
-            ) from None
+            raise provider_failure_from_http_status(
+                provider="telnyx", operation=operation_name, status=exc.http_status
+            ) from exc
         except telnyx.error.TelnyxError as exc:
-            category, error_class = self._telnyx_http_error_details(
-                exc.http_status
-            )
-            raise TelephonyProviderError(
-                category,
-                error_class=error_class,
-            ) from None
+            raise self._failure(operation_name, error_class="unknown") from exc
 
     @staticmethod
-    def _telnyx_http_error_details(status: int | None) -> tuple[str, str]:
-        if status == 429:
-            return "provider_retryable", "rate_limited"
-        if status in {408, 504}:
-            return "provider_retryable", "timeout"
-        if status is not None and status >= 500:
-            return "provider_retryable", "unavailable"
-        if status in {401, 403}:
-            return "provider_terminal", "authentication"
-        if status == 409:
-            return "provider_terminal", "conflict"
-        if status in {400, 404, 405, 415, 422}:
-            return "provider_terminal", "validation"
-        return "provider_terminal", "unknown"
+    def _failure(
+        operation: ProviderOperation,
+        *,
+        disposition: ProviderFailureDisposition = "terminal",
+        error_class: ProviderFailureClass = "validation",
+    ) -> ProviderFailure:
+        return ProviderFailure(
+            provider="telnyx",
+            operation=operation,
+            disposition=disposition,
+            error_class=error_class,
+        )
 
     @staticmethod
-    def _confirm_connection(response, requested_connection_id: str | None) -> None:
+    def _confirm_connection(
+        response,
+        requested_connection_id: str | None,
+        *,
+        operation: ProviderOperation,
+    ) -> None:
         if requested_connection_id is None:
-            raise TelephonyProviderError("provider_terminal")
+            raise TelephonyTelnyx._failure(operation)
         connection_id = TelephonyTelnyx._read_field(response, "connection_id")
         if connection_id != requested_connection_id:
-            raise TelephonyProviderError("provider_retryable")
+            raise TelephonyTelnyx._failure(
+                operation, disposition="retryable", error_class="unavailable"
+            )
 
     @staticmethod
     def _extract_candidate_details(candidate, *, phone_number_type: str) -> dict:
