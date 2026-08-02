@@ -25,7 +25,7 @@ from app.models.phone_number import PhoneNumber
 from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
-from app.providers.livekit_recording.livekit import LiveKitRecordingProviderError
+from app.core.provider_failures import ProviderFailure
 from app.schemas.business_profile import WEEKDAYS
 from app.services.routing_fingerprint import routing_fingerprint
 from app.services.call_lifecycle_service import CallLifecycleService
@@ -179,10 +179,12 @@ class _UntypedFailingRecording:
 class _TypedFailingRecording(_UntypedFailingRecording):
     async def start_room_recording(self, *, room_name, object_key):
         self.starts.append({"room_name": room_name, "object_key": object_key})
-        raise LiveKitRecordingProviderError(
-            "provider_retryable",
+        raise ProviderFailure(
+            provider="livekit",
+            operation="start_recording",
+            disposition="retryable",
             error_class="rate_limited",
-            start_outcome="not_started",
+            context={"start_outcome": "not_started"},
         )
 
 
@@ -1134,16 +1136,11 @@ async def test_result_persistence_failure_leaves_starting_claim_and_cannot_resta
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "recording",
-    [_TypedFailingRecording(), _UntypedFailingRecording()],
-    ids=["typed", "untyped"],
-)
 async def test_error_result_persistence_failure_cannot_restart_provider(
     db_session,
-    recording,
 ) -> None:
     await _seed_eligible_user(db_session)
+    recording = _TypedFailingRecording()
     service = LiveKitDispatchService(
         db_session,
         _ForbiddenDirectDispatch(),
@@ -1242,7 +1239,7 @@ async def test_completion_racing_success_preserves_terminal_facts_and_stop_inten
 
 
 @pytest.mark.anyio
-async def test_untyped_start_failure_is_unknown_safe_and_never_restarted(
+async def test_untyped_start_failure_propagates_without_recording_retry(
     db_session,
     caplog,
 ) -> None:
@@ -1267,25 +1264,21 @@ async def test_untyped_start_failure_is_unknown_safe_and_never_restarted(
         },
     }
 
-    with caplog.at_level("ERROR"):
-        first = await service.handle_participant_joined(event)
-        replay = await service.handle_participant_joined(event)
+    with pytest.raises(RuntimeError, match="PROVIDER_SECRET"):
+        await service.handle_participant_joined(event)
+    replay = await service.handle_participant_joined(event)
 
     operation = await db_session.scalar(
         select(RecordingEgressOperation).where(
             RecordingEgressOperation.call_id == call.id
         )
     )
-    assert first.status == "connected"
     assert replay.status == "ignored"
     assert len(recording.starts) == 1
     assert operation is not None
-    assert operation.start_state == "uncertain"
-    assert operation.last_error_code == "unknown"
-    assert "error_type=unknown" in caplog.text
-    assert "RuntimeError" not in caplog.text
+    assert operation.start_state == "starting"
+    assert operation.last_error_code is None
     assert "PROVIDER_SECRET" not in caplog.text
-    assert "caller transcript" not in caplog.text
 
 
 @pytest.mark.anyio

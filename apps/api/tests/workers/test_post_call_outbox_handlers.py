@@ -643,7 +643,7 @@ async def test_recording_reconcile_retry_is_bounded_and_non_exhausting() -> None
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("failure_site", ["builder", "reconciler"])
-async def test_recording_reconcile_unexpected_failures_are_non_exhausting(
+async def test_recording_reconcile_unexpected_failures_escape_the_outbox_wrapper(
     monkeypatch: pytest.MonkeyPatch,
     failure_site: str,
 ) -> None:
@@ -662,13 +662,10 @@ async def test_recording_reconcile_unexpected_failures_are_non_exhausting(
     else:
         ctx = {"recording_reconciler": ExplodingReconciler()}
 
-    with pytest.raises(OutboxDeliveryError) as exc_info:
+    with pytest.raises(RuntimeError) as exc_info:
         await deliver_recording_reconcile(ctx, recording_event(operation_id))
 
-    assert exc_info.value.error_code == "recording_unresolved"
-    assert exc_info.value.retryable is True
-    assert exc_info.value.exhaustible is False
-    assert "SENTINEL" not in str(exc_info.value)
+    assert "SENTINEL" in str(exc_info.value)
 
 
 @pytest.mark.anyio
@@ -687,20 +684,16 @@ async def test_recording_reconcile_unexpected_failures_are_non_exhausting(
         SimpleNamespace(error_code=None),
     ],
 )
-async def test_recording_reconcile_malformed_results_fail_closed_without_exhaustion(
+async def test_recording_reconcile_malformed_results_escape_the_outbox_wrapper(
     malformed_result,
 ) -> None:
     operation_id = uuid4()
 
-    with pytest.raises(OutboxDeliveryError) as exc_info:
+    with pytest.raises((ValueError, AttributeError)):
         await deliver_recording_reconcile(
             {"recording_reconciler": FakeRecordingReconciler(malformed_result)},
             recording_event(operation_id),
         )
-
-    assert exc_info.value.error_code == "recording_unresolved"
-    assert exc_info.value.retryable is True
-    assert exc_info.value.exhaustible is False
 
 
 def test_default_handlers_exactly_match_supported_topics_without_placeholders() -> None:

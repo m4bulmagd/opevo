@@ -314,7 +314,12 @@ class FakeProvider:
     async def ensure_not_running(self, egress_id: str) -> None:
         self._record("ensure_not_running", egress_id)
         if egress_id in self.ensure_failures:
-            raise RuntimeError("provider-secret-that-must-not-be-persisted")
+            raise ProviderFailure(
+                provider="livekit",
+                operation="ensure_recording_not_running",
+                disposition="retryable",
+                error_class="unavailable",
+            )
 
     async def start_room_recording(self, **_kwargs) -> None:
         pytest.fail("reconciliation must never start another recording")
@@ -1457,15 +1462,24 @@ async def test_provider_failure_is_bounded_and_does_not_persist_exception_text(
         async_sessionmaker(db_session.bind, expire_on_commit=False)
     )
 
-    result = await RecordingReconciler(
-        tracker,
-        FakeProvider(
+    private_cause = RuntimeError("LIVEKIT_CREDENTIAL_SENTINEL")
+    try:
+        raise ProviderFailure(
+            provider="livekit",
+            operation="list_recording_egresses",
+            disposition="retryable",
+            error_class="unavailable",
+        ) from private_cause
+    except ProviderFailure as provider_error:
+        result = await RecordingReconciler(
             tracker,
-            list_error=RuntimeError("LIVEKIT_CREDENTIAL_SENTINEL"),
-        ),
-        FakeStorage(tracker),
-        now_provider=lambda: NOW,
-    ).reconcile(operation_id)
+            FakeProvider(
+                tracker,
+                list_error=provider_error,
+            ),
+            FakeStorage(tracker),
+            now_provider=lambda: NOW,
+        ).reconcile(operation_id)
 
     assert result == ReconciliationResult("retry", "recording_provider_unavailable")
     db_session.expire_all()
@@ -2727,13 +2741,13 @@ async def test_recording_handler_does_not_emit_for_invalid_payload(
         ),
     ],
 )
-async def test_recording_handler_maps_failure_or_invalid_shape_to_one_unresolved_result(
+async def test_recording_handler_propagates_defects_and_invalid_result_shapes(
     result: object | Exception,
 ) -> None:
     operation_id = uuid4()
     observability = _RecordingObservability()
 
-    with pytest.raises(OutboxDeliveryError) as exc_info:
+    with pytest.raises((RuntimeError, ValueError, AttributeError)):
         await deliver_recording_reconcile(
             {
                 "recording_reconciler": _HandlerReconciler(result),
@@ -2742,11 +2756,36 @@ async def test_recording_handler_maps_failure_or_invalid_shape_to_one_unresolved
             _recording_reconcile_event(operation_id),
         )
 
-    assert exc_info.value.error_code == "recording_unresolved"
-    assert exc_info.value.retryable is True
-    assert exc_info.value.exhaustible is False
-    assert observability.results == ["recording_unresolved"]
+    assert observability.results == []
     assert observability.multiple_exact_count == 0
+
+
+@pytest.mark.anyio
+async def test_recording_handler_maps_typed_provider_failure_without_private_cause() -> None:
+    operation_id = uuid4()
+    observability = _RecordingObservability()
+    private_cause = RuntimeError("PRIVATE_RECONCILER_FAILURE")
+    try:
+        raise ProviderFailure(
+            provider="livekit",
+            operation="list_recording_egresses",
+            disposition="retryable",
+            error_class="unavailable",
+        ) from private_cause
+    except ProviderFailure as failure:
+        with pytest.raises(OutboxDeliveryError) as exc_info:
+            await deliver_recording_reconcile(
+                {
+                    "recording_reconciler": _HandlerReconciler(failure),
+                    "observability": observability,
+                },
+                _recording_reconcile_event(operation_id),
+            )
+
+    assert exc_info.value.error_code == "provider_retryable"
+    assert exc_info.value.retryable is True
+    assert "PRIVATE_RECONCILER_FAILURE" not in str(exc_info.value)
+    assert observability.results == []
 
 
 @pytest.mark.anyio

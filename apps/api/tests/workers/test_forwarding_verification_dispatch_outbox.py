@@ -16,6 +16,7 @@ from presvo_contracts import (
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.core.provider_failures import ProviderFailure
 from app.core.verification_token import verify_verification_token
 from app.models.call import Call
 from app.models.customer_activation import CustomerActivation
@@ -226,7 +227,12 @@ class _Provider:
             and self.dispatches
         ):
             self.fail_recovery_list_once = False
-            raise TimeoutError("provider recovery list timeout")
+            raise ProviderFailure(
+                provider="livekit",
+                operation="list_dispatches",
+                disposition="retryable",
+                error_class="timeout",
+            )
         return list(self.dispatches)
 
     async def create_dispatch(
@@ -240,7 +246,12 @@ class _Provider:
             {"agent_name": agent_name, "room_name": room_name, "metadata": metadata}
         )
         if self.always_fail:
-            raise TimeoutError("provider timeout")
+            raise ProviderFailure(
+                provider="livekit",
+                operation="create_dispatch",
+                disposition="retryable",
+                error_class="timeout",
+            )
         created = LiveKitDispatch(
             id="verification-dispatch-1",
             agent_name=agent_name,
@@ -250,7 +261,12 @@ class _Provider:
         )
         self.dispatches.append(created)
         if self.timeout_after_create:
-            raise TimeoutError("provider timeout after create")
+            raise ProviderFailure(
+                provider="livekit",
+                operation="create_dispatch",
+                disposition="retryable",
+                error_class="timeout",
+            )
         return created
 
 
