@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace incidental async-scheduling coverage of four phone-number provisioning repository decisions with direct deterministic tests, repair the test-app database-engine leak exposed by verification, and restore stable clean/poisoned full-suite coverage.
+**Goal:** Replace incidental async-scheduling coverage of four phone-number provisioning decisions and one subscription lifecycle fence with direct deterministic tests, repair the test-app database-engine leak exposed by verification, and restore stable clean/poisoned full-suite coverage.
 
-**Architecture:** Add one focused repository test module that reuses the existing SQLite `db_session`, real ORM models, and the real `PhoneNumberProvisioningRepository`. Give each `test_app` fixture one async engine and session factory, retain a fresh session per request, dispose the engine in the fixture's exception-safe teardown, and promote pytest thread exceptions to errors. Keep the existing PostgreSQL concurrency tests and every production path unchanged; verify two clean reports and one controlled-poison report have identical per-file coverage sets.
+**Architecture:** Add direct repository tests that reuse the existing SQLite `db_session`, real ORM models, and the real provisioning/subscription repositories. Give each `test_app` fixture one async engine and session factory, retain a fresh session per request, dispose the engine in the fixture's exception-safe teardown, and promote pytest thread exceptions to errors. Keep the existing PostgreSQL concurrency tests and every production path unchanged; verify two clean reports and one controlled-poison report have identical per-file coverage sets.
 
 **Tech Stack:** Python 3.13, pytest 9, pytest-anyio, SQLAlchemy 2 async ORM, aiosqlite, PostgreSQL 17.8, Redis 7.4.7, pytest-cov, Ruff, mypy, uv.
 
@@ -12,28 +12,30 @@
 
 - Implement approved decisions **3A** and **3A-1A** exactly as specified in `docs/superpowers/specs/2026-08-02-api-provisioning-coverage-stabilization-design.md`.
 - Implement approved blocker resolution **4A** exactly as specified in the design addendum: one engine/session factory per `test_app`, fresh session per request, exception-safe outer disposal, and `pytest.PytestUnhandledThreadExceptionWarning` promoted to an error.
+- Implement approved blocker resolution **22A** exactly as specified in the design addendum: one explicit same-Stripe-ID/mismatched-lifecycle-generation repository test, durable no-mutation assertions, and no production behavior change.
 - Do not modify provisioning state-machine behavior, locking, transaction boundaries, worker scheduling, provider behavior, or any other production code. If a direct test demonstrates a real production defect, stop and ask the user before changing production code.
 - Preserve the existing PostgreSQL concurrency and lifecycle tests unchanged.
 - Reuse the existing function-scoped SQLite `db_session`; do not add another engine or schema fixture.
 - Keep each state test explicit. Share only repeated model seeding and commit/reload mechanics; do not introduce parameterized method dispatch or test-only production APIs.
-- Prove test strength with temporary mutations, restore `apps/api/app/repositories/phone_number_provisioning_repository.py` byte-for-byte after every mutation, and commit no production mutation.
+- Prove test strength with temporary mutations, restore the affected provisioning or subscription repository byte-for-byte after every mutation, and commit no production mutation.
 - Keep realtime and activation flow disabled. Do not enable or implement realtime.
 - Do not alter deployment, frontend, agent, dependencies, lockfiles, Compose service declarations, or production configuration.
 - Do not touch `/home/mo/code/ai/bmad-opevo/Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
 - Never inspect, rewrite, or delete a developer's real `.env`. The controlled poison proof may create only a pre-checked absent `apps/api/.env` inside this isolated worktree and must remove that exact file afterward.
 - Use `UV_CACHE_DIR=/tmp/uv-cache` for every `uv` command. Do not push, deploy, open a PR, or modify remote branches.
 - Never lower either value in `apps/api/coverage-baseline.json`. Raise a value only to a two-decimal `ROUND_DOWN` floor shared by all three identical reports.
-- Create and clean up only the exact disposable PostgreSQL/Redis containers and coverage artifacts named in Task 2. Do not prune Docker or remove any differently named resource.
+- Create and clean up only the exact disposable PostgreSQL/Redis containers and coverage artifacts named in Task 4. Do not prune Docker or remove any differently named resource.
 
 ## File Map
 
 - Create `apps/api/tests/repositories/test_phone_number_provisioning_repository.py`: four direct, deterministic behavioral tests plus two small setup/reload helpers.
+- Modify `apps/api/tests/repositories/test_subscription_repository.py`: add one explicit same-ID lifecycle-generation fence test using the existing helper and SQLite fixture.
 - Modify `apps/api/tests/conftest.py`: replace duplicate schema/per-request engines with one fixture-owned test-app engine and session factory, disposed in outer teardown.
 - Modify `apps/api/pyproject.toml`: promote `pytest.PytestUnhandledThreadExceptionWarning` to an error without suppressing the known Starlette/httpx deprecation warning.
 - Modify conditionally `apps/api/coverage-baseline.json`: raise a ratchet only when two clean reports and one poison report prove the same higher floor.
 - Modify `docs/superpowers/specs/2026-08-02-api-provisioning-coverage-stabilization-design.md`: record implementation evidence only after every acceptance gate passes.
 - Modify this plan only to mark completed steps after their evidence exists.
-- Do not modify `apps/api/app/repositories/phone_number_provisioning_repository.py`; temporary mutation checks must always restore it before moving to the next step.
+- Do not modify `apps/api/app/repositories/phone_number_provisioning_repository.py` or `apps/api/app/repositories/subscription_repository.py`; temporary mutation checks must always restore the affected file before moving to the next step.
 
 ---
 
@@ -521,7 +523,192 @@ realtime, deployment, agent, or frontend change.
 
 ---
 
-### Task 3: Prove stable clean and poisoned coverage and close the record
+### Task 3: Add deterministic same-ID subscription lifecycle coverage
+
+**Files:**
+- Modify: `apps/api/tests/repositories/test_subscription_repository.py`
+- Temporarily mutate and fully restore: `apps/api/app/repositories/subscription_repository.py:105-107`
+- Test: `apps/api/tests/repositories/test_subscription_repository.py`
+
+**Interfaces:**
+- Consumes: the existing SQLite `db_session`, `_user`, real `Subscription`, and real `SubscriptionRepository.upsert_by_stripe_subscription_id`.
+- Produces: one always-running test that deterministically protects the same-Stripe-ID/mismatched-lifecycle-generation return and its durable no-mutation contract.
+
+- [ ] **Step 1: Add the complete standalone characterization test**
+
+Use `apply_patch` to insert this test immediately after
+`test_old_lifecycle_generation_cannot_replace_current_subscription`:
+
+```python
+@pytest.mark.anyio
+async def test_same_subscription_id_from_other_lifecycle_is_ignored_without_mutation(
+    db_session: AsyncSession,
+) -> None:
+    user = await _user(db_session, "same-id-other-lifecycle")
+    user.lifecycle_generation = 2
+    user_id = user.id
+    original_period_start = datetime(2026, 1, 1, tzinfo=UTC)
+    original_period_end = datetime(2026, 2, 1, tzinfo=UTC)
+    original_subscription_created_at = datetime(2025, 12, 1, tzinfo=UTC)
+    original_event_created_at = datetime(2026, 2, 1, tzinfo=UTC)
+    original_cancellation_effective_at = datetime(2026, 2, 1, tzinfo=UTC)
+    current = Subscription(
+        user_id=user_id,
+        stripe_customer_id="cus_same_id_original",
+        stripe_subscription_id="sub_same_id_other_lifecycle",
+        plan_tier="starter",
+        status="canceled",
+        allocated_minutes=60,
+        current_period_start=original_period_start,
+        current_period_end=original_period_end,
+        stripe_subscription_created_at=original_subscription_created_at,
+        last_stripe_event_created_at=original_event_created_at,
+        lifecycle_generation=1,
+        cancel_at_period_end=True,
+        cancellation_effective_at=original_cancellation_effective_at,
+    )
+    db_session.add(current)
+    await db_session.commit()
+    await db_session.refresh(current)
+    current_id = current.id
+    original_updated_at = current.updated_at
+
+    ignored = await SubscriptionRepository(
+        db_session
+    ).upsert_by_stripe_subscription_id(
+        user_id=user_id,
+        stripe_customer_id="cus_same_id_attempted",
+        stripe_subscription_id="sub_same_id_other_lifecycle",
+        plan_tier="starter",
+        status="active",
+        allocated_minutes=120,
+        current_period_start=datetime(2026, 3, 1, tzinfo=UTC),
+        current_period_end=datetime(2026, 4, 1, tzinfo=UTC),
+        stripe_subscription_created_at=original_subscription_created_at,
+        last_stripe_event_created_at=datetime(2026, 3, 1, tzinfo=UTC),
+        lifecycle_generation=2,
+        cancel_at_period_end=False,
+        cancellation_effective_at=None,
+    )
+
+    assert ignored is None
+    await db_session.commit()
+    db_session.expunge_all()
+    stored = await SubscriptionRepository(db_session).get_by_user_id(user_id)
+
+    assert stored is not None
+    assert stored.id == current_id
+    assert stored.user_id == user_id
+    assert stored.stripe_customer_id == "cus_same_id_original"
+    assert stored.stripe_subscription_id == "sub_same_id_other_lifecycle"
+    assert stored.plan_tier == "starter"
+    assert stored.status == "canceled"
+    assert stored.allocated_minutes == 60
+    assert stored.current_period_start is not None
+    assert stored.current_period_start.replace(tzinfo=UTC) == original_period_start
+    assert stored.current_period_end is not None
+    assert stored.current_period_end.replace(tzinfo=UTC) == original_period_end
+    assert stored.stripe_subscription_created_at is not None
+    assert (
+        stored.stripe_subscription_created_at.replace(tzinfo=UTC)
+        == original_subscription_created_at
+    )
+    assert stored.last_stripe_event_created_at is not None
+    assert (
+        stored.last_stripe_event_created_at.replace(tzinfo=UTC)
+        == original_event_created_at
+    )
+    assert stored.lifecycle_generation == 1
+    assert stored.cancel_at_period_end is True
+    assert stored.cancellation_effective_at is not None
+    assert (
+        stored.cancellation_effective_at.replace(tzinfo=UTC)
+        == original_cancellation_effective_at
+    )
+    assert stored.updated_at == original_updated_at
+```
+
+Do not parameterize this with the different-ID lifecycle test. They protect
+separate repository predicates and must produce independent failure names.
+
+- [ ] **Step 2: Establish the unmodified characterization baseline**
+
+From `apps/api`, run:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/repositories/test_subscription_repository.py::test_same_subscription_id_from_other_lifecycle_is_ignored_without_mutation
+```
+
+Expected: the test passes with zero skips. The production fence predates the
+test, so Step 3 provides the required failure-strength evidence.
+
+- [ ] **Step 3: Prove the test detects removal of the same-ID lifecycle fence**
+
+Use `apply_patch` to change only line 107 in
+`app/repositories/subscription_repository.py` from:
+
+```python
+                return None
+```
+
+to:
+
+```python
+                pass  # temporary mutation: stale lifecycle incorrectly accepted
+```
+
+Run the exact Step 2 node. Expected: fail at `assert ignored is None` because
+the incoming values are accepted. Restore the exact `return None` line with
+`apply_patch`, rerun the same node, expect pass, and prove byte-for-byte
+restoration:
+
+```bash
+git diff --exit-code -- app/repositories/subscription_repository.py
+```
+
+Do not commit the mutation or reintroduce it after this proof.
+
+- [ ] **Step 4: Run the restored focused and static gates**
+
+From `apps/api`, run:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/repositories/test_subscription_repository.py \
+  tests/repositories/test_phone_number_provisioning_repository.py \
+  tests/test_settings_sources.py \
+  tests/test_collection_environment.py \
+  tests/auth/test_clerk_auth_config.py \
+  tests/test_deployment_readiness.py
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check app tests
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
+UV_CACHE_DIR=/tmp/uv-cache uv lock --check
+git diff --check
+git diff --exit-code -- uv.lock
+```
+
+Expected: 200 focused tests pass with zero skips; Ruff, mypy, lock, diff, and
+lockfile checks pass. The task diff contains only the subscription repository
+test file, and the production subscription repository has no diff.
+
+- [ ] **Step 5: Commit the independently passing test**
+
+From the worktree root:
+
+```bash
+git add apps/api/tests/repositories/test_subscription_repository.py
+git diff --cached --name-only
+git commit -m "test(api): stabilize subscription lifecycle coverage"
+```
+
+Expected staged scope is exactly the one test file. No production, dependency,
+lockfile, realtime, deployment, agent, frontend, or disposable artifact is in
+the commit.
+
+---
+
+### Task 4: Prove stable clean and poisoned coverage and close the record
 
 **Files:**
 - Modify conditionally: `apps/api/coverage-baseline.json`
@@ -530,7 +717,7 @@ realtime, deployment, agent, or frontend change.
 - Disposable and always removed: `apps/api/.env`, `apps/api/.coverage`, `apps/api/coverage.json`, `/tmp/presvo-api-provisioning-coverage-clean-1.json`, `/tmp/presvo-api-provisioning-coverage-clean-2.json`, `/tmp/presvo-api-provisioning-coverage-poison.json`
 
 **Interfaces:**
-- Consumes: Task 1 deterministic repository tests, Task 2 exception-safe test-app engine ownership and strict thread-warning gate, the existing coverage checker, and exact disposable PostgreSQL/Redis services.
+- Consumes: Tasks 1 and 3 deterministic repository tests, Task 2 exception-safe test-app engine ownership and strict thread-warning gate, the existing coverage checker, and exact disposable PostgreSQL/Redis services.
 - Produces: two identical clean reports, one matching controlled-poison report, passing non-decreased coverage ratchets, exact cleanup proof, and an implemented design record.
 
 - [ ] **Step 1: Verify isolated-worktree and resource preconditions**
@@ -609,7 +796,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python \
 cp coverage.json /tmp/presvo-api-provisioning-coverage-clean-1.json
 ```
 
-Expected: 2,401 tests pass, zero skip, only the already-known Starlette/httpx
+Expected: 2,402 tests pass, zero skip, only the already-known Starlette/httpx
 deprecation warning remains, and both coverage ratchets pass.
 
 - [ ] **Step 4: Run and retain clean full-suite coverage report 2**
@@ -659,7 +846,7 @@ dotenv exists, then copy:
 cp coverage.json /tmp/presvo-api-provisioning-coverage-poison.json
 ```
 
-Expected: 2,401 tests pass, zero skip, the same one known warning, and both
+Expected: 2,402 tests pass, zero skip, the same one known warning, and both
 ratchets pass. Extend the Step 4 comparison to all three reports and require
 identical file-key sets, identical normalized per-file line/branch sets, and
 identical totals. Any difference is a gate failure; do not retry.
@@ -709,7 +896,8 @@ Only after Steps 1-8 pass, use `apply_patch` to change the stabilization design
 status from `Approved design` to `Implemented and verified`, and append a
 concise `## Implementation evidence` section recording:
 
-- the four deterministic repository behaviors and mutation checks;
+- the four deterministic provisioning behaviors, the same-ID subscription
+  lifecycle fence, and all five mutation checks;
 - the 4A undisposed-engine RED, fixture-owned-engine GREEN, strict thread-warning
   gate, and reviewed lifecycle-repair commit;
 - focused/static/lock results;
@@ -737,6 +925,7 @@ Expected tracked scope after the design commit:
 
 ```text
 apps/api/tests/repositories/test_phone_number_provisioning_repository.py
+apps/api/tests/repositories/test_subscription_repository.py
 apps/api/tests/conftest.py
 apps/api/pyproject.toml
 apps/api/coverage-baseline.json  # only if a shared higher floor was proved
