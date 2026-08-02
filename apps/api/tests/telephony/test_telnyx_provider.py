@@ -1291,6 +1291,22 @@ async def test_telnyx_connection_change_requires_matching_provider_response() ->
     ("provider_error", "expected_disposition", "expected_error_class"),
     [
         (
+            telnyx.error.APIConnectionError(
+                "retryable TLS secret +33123456789",
+                should_retry=True,
+            ),
+            "retryable",
+            "unavailable",
+        ),
+        (
+            telnyx.error.APIConnectionError(
+                "terminal TLS secret +33123456789",
+                should_retry=False,
+            ),
+            "terminal",
+            "unavailable",
+        ),
+        (
             telnyx.error.TimeoutError(
                 [{"title": "timeout secret +33123456789"}],
                 http_status=408,
@@ -1307,11 +1323,34 @@ async def test_telnyx_connection_change_requires_matching_provider_response() ->
             "rate_limited",
         ),
         (
+            telnyx.error.ServiceUnavailableError(
+                [{"title": "service secret +33123456789"}],
+                http_status=503,
+            ),
+            "retryable",
+            "unavailable",
+        ),
+        (
             telnyx.error.AuthenticationError(
                 [{"title": "invalid credential sk-secret"}],
             ),
             "terminal",
             "authentication",
+        ),
+        (
+            telnyx.error.PermissionError(
+                [{"title": "permission secret +33123456789"}],
+            ),
+            "terminal",
+            "authentication",
+        ),
+        (
+            telnyx.error.ResourceNotFoundError(
+                [{"title": "missing secret +33123456789"}],
+                http_status=404,
+            ),
+            "terminal",
+            "not_found",
         ),
         (
             telnyx.error.InvalidRequestError(
@@ -1321,9 +1360,24 @@ async def test_telnyx_connection_change_requires_matching_provider_response() ->
             "validation",
         ),
         (
+            telnyx.error.InvalidParametersError(
+                [{"title": "invalid parameters secret +33123456789"}],
+            ),
+            "terminal",
+            "validation",
+        ),
+        (
             telnyx.error.APIError(
-                [{"title": "generic validation secret"}],
-                http_status=400,
+                [{"title": "conflict secret +33123456789"}],
+                http_status=409,
+            ),
+            "terminal",
+            "conflict",
+        ),
+        (
+            telnyx.error.APIError(
+                [{"title": "other client status secret +33123456789"}],
+                http_status=418,
             ),
             "terminal",
             "validation",
@@ -1337,12 +1391,12 @@ async def test_telnyx_connection_change_requires_matching_provider_response() ->
             "unavailable",
         ),
         (
-            telnyx.error.APIConnectionError(
-                "terminal local TLS configuration secret",
-                should_retry=False,
+            telnyx.error.TelnyxError(
+                [{"title": "unknown SDK secret +33123456789"}],
+                http_status=418,
             ),
             "terminal",
-            "unavailable",
+            "unknown",
         ),
     ],
 )
@@ -1362,8 +1416,16 @@ async def test_telnyx_errors_use_shared_safe_failure_fields(
         await provider.enable_number(provider_number_id="pn_123")
 
     assert type(exc_info.value) is ProviderFailure
-    assert exc_info.value.disposition == expected_disposition
-    assert exc_info.value.error_class == expected_error_class
+    assert (
+        exc_info.value.provider,
+        exc_info.value.operation,
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("telnyx", "enable_number", expected_disposition, expected_error_class)
+    assert exc_info.value.__cause__ is provider_error
+    assert "secret" not in str(exc_info.value).casefold()
+    assert "secret" not in repr(exc_info.value).casefold()
+    assert all("secret" not in str(value).casefold() for value in exc_info.value.args)
 
 
 def test_telnyx_sdk_uses_bounded_network_policy() -> None:
