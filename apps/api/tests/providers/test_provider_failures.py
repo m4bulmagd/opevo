@@ -135,6 +135,7 @@ def test_provider_failure_does_not_turn_cancellation_into_a_provider_failure() -
         (429, ("retryable", "rate_limited")),
         (503, ("retryable", "unavailable")),
         (401, ("terminal", "authentication")),
+        (403, ("terminal", "authentication")),
         (404, ("terminal", "not_found")),
         (409, ("terminal", "conflict")),
         (422, ("terminal", "validation")),

@@ -149,7 +149,7 @@ def provider_failure_from_http_status(
     elif status == 503:
         disposition = "retryable"
         error_class = "unavailable"
-    elif status == 401:
+    elif status in {401, 403}:
         disposition = "terminal"
         error_class = "authentication"
     elif status == 404:
