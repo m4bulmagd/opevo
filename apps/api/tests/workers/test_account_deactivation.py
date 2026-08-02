@@ -889,6 +889,17 @@ async def test_retryable_provider_failures_are_non_exhausting_and_committed(
             "subscription_contract",
         ),
         (
+            1,
+            None,
+            ProviderFailure(
+                provider="fake",
+                operation="validate",
+                disposition="terminal",
+                error_class="validation",
+            ),
+            "subscription_contract",
+        ),
+        (
             3,
             (
                 "telephony.release",

@@ -147,6 +147,11 @@ async def test_stripe_cancellation_does_not_block_the_event_loop() -> None:
             "rate_limited",
         ),
         (
+            stripe.error.APIError("request timeout secret", http_status=408),
+            "retryable",
+            "timeout",
+        ),
+        (
             stripe.error.APIError("timeout secret", http_status=504),
             "retryable",
             "timeout",
@@ -163,6 +168,11 @@ async def test_stripe_cancellation_does_not_block_the_event_loop() -> None:
         ),
         (
             stripe.error.PermissionError("permission secret"),
+            "terminal",
+            "authentication",
+        ),
+        (
+            stripe.error.APIError("forbidden secret", http_status=403),
             "terminal",
             "authentication",
         ),

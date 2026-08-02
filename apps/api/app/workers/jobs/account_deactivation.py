@@ -731,7 +731,7 @@ async def _handle_provider_error(
             exhaustible=False,
         ) from None
 
-    if error.provider == "stripe":
+    if step == "cancel_subscription":
         code = (
             "subscription_authentication"
             if error.error_class == "authentication"

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from contextlib import asynccontextmanager
 
@@ -101,6 +102,33 @@ class FailingStripeClient(FakeStripeClient):
             )()
 
 
+class RawLoggingCheckoutSessionAPI(FakeCheckoutSessionAPI):
+    def create(self, **kwargs):
+        logging.getLogger("stripe").debug(
+            "message='Stripe v1 API error received' RAW_HOSTED_STRIPE_SENTINEL"
+        )
+        return super().create(**kwargs)
+
+
+class RawLoggingPortalSessionAPI(FakePortalSessionAPI):
+    def create(self, **kwargs):
+        logging.getLogger("stripe").debug(
+            "message='Stripe v2 API error received' RAW_HOSTED_STRIPE_SENTINEL"
+        )
+        return super().create(**kwargs)
+
+
+class RawLoggingStripeClient(FakeStripeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.checkout = type(
+            "CheckoutNamespace", (), {"Session": RawLoggingCheckoutSessionAPI()}
+        )()
+        self.billing_portal = type(
+            "BillingPortalNamespace", (), {"Session": RawLoggingPortalSessionAPI()}
+        )()
+
+
 @pytest.mark.anyio
 async def test_create_checkout_session_uses_price_mapping() -> None:
     from app.services.billing_session_service import BillingSessionService
@@ -143,6 +171,40 @@ async def test_create_checkout_session_uses_price_mapping() -> None:
         == expected_metadata
     )
     assert telemetry.calls == [("stripe", "create_checkout_session", "success")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("caller", ["checkout", "portal"])
+async def test_injected_hosted_client_logs_are_filtered_without_hiding_unrelated_logs(
+    caller: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    service = BillingSessionService(
+        stripe_client=RawLoggingStripeClient(),
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        logging.getLogger("app.unrelated").info("unrelated hosted application log")
+        if caller == "checkout":
+            await service.create_checkout_session(
+                user_id="user_123",
+                customer_email="billing@example.com",
+                clerk_user_id="clerk_123",
+                plan_tier="starter",
+                lifecycle_generation=7,
+            )
+        else:
+            await service.create_portal_session(customer_id="cus_123")
+
+    assert "RAW_HOSTED_STRIPE_SENTINEL" not in caplog.text
+    assert "unrelated hosted application log" in caplog.text
 
 
 @pytest.mark.anyio
@@ -374,6 +436,11 @@ def test_stripe_sdk_uses_bounded_network_policy(
             "unavailable",
         ),
         (
+            stripe.error.APIError("request timeout secret", http_status=408),
+            "retryable",
+            "timeout",
+        ),
+        (
             stripe.error.APIError("gateway timeout secret", http_status=504),
             "retryable",
             "timeout",
@@ -385,6 +452,11 @@ def test_stripe_sdk_uses_bounded_network_policy(
         ),
         (
             stripe.error.PermissionError("permission secret"),
+            "terminal",
+            "authentication",
+        ),
+        (
+            stripe.error.APIError("forbidden secret", http_status=403),
             "terminal",
             "authentication",
         ),
