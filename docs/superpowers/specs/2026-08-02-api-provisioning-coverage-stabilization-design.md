@@ -2,7 +2,7 @@
 
 Date: 2026-08-02
 Status: Approved design
-Decision: 3A / 3A-1A
+Decision: 3A / 3A-1A / 4A / 22A
 
 ## Problem
 
@@ -132,7 +132,7 @@ committed. Confirm the restored focused suite passes before continuing.
 - If a direct test reveals a production defect, stop and present the defect
   and options before changing production code.
 - If any full run fails behaviorally, diagnose that failure before proceeding.
-- If coverage still varies after all four decisions are deterministic, compare
+- If coverage still varies after all approved decisions are deterministic, compare
   per-file coverage sets again and stop for a new user decision rather than
   lowering the ratchet or adding retries.
 - Always remove only the exact disposable resources created for verification,
@@ -194,7 +194,7 @@ remains unchanged.
    filter, then the full focused/static/lock gates. All must pass cleanly.
 4. Commit only `apps/api/tests/conftest.py` and `apps/api/pyproject.toml` for
    the independently reviewed 4A task. Do not change a dependency or lockfile.
-5. Restart the original Task 2 verification from clean preconditions: two clean
+5. Restart the full verification task from clean preconditions: two clean
    full coverage runs, one controlled-poison run, exact per-file coverage-set
    and totals equality, shared non-decreased ratchet handling, exact cleanup,
    and final review. Prior incomplete reports do not count toward acceptance.
@@ -203,3 +203,52 @@ If sharing one fixture-owned engine changes a legitimate test contract, stop
 and present the concrete conflict rather than restoring request-level engine
 churn, suppressing warnings, adding sleeps, forcing garbage collection, or
 weakening the gate.
+
+## Approved blocker resolution: 22A same-ID lifecycle coverage
+
+The clean verification restart after 4A produced two identical reports: each
+passed 2,401 tests with zero skips and the one known Starlette/httpx warning,
+and each measured 90.03% line coverage and 77.73% branch coverage. The
+controlled-poison run had the same pass, skip, warning, and branch results, but
+its report alone executed
+`SubscriptionRepository.upsert_by_stripe_subscription_id` line 107. That
+single statement raised the poison report's line measurement to 90.04%, so the
+three-report equality gate correctly failed. No run was retried, no ratchet or
+completion document changed, and all exact disposable resources were removed.
+
+Line 107 is a distinct lifecycle fence: when a stored subscription has the
+same Stripe subscription ID as an incoming event but a different lifecycle
+generation, the repository returns `None` before any mutation. Existing direct
+tests protect the sibling different-ID generation fence but do not own this
+same-ID decision. Test settings replace the poisoned values at collection and
+per-test boundaries, test-mode settings omit dotenv loading, and 166 of 167
+coverage files were identical. The poison file is therefore treated as a
+timing perturbation that exposed incidental coverage, not as evidence of a
+different business result.
+
+Decision **22A** adds one explicit characterization test beside the existing
+subscription repository lifecycle tests. It uses the established SQLite
+`db_session`, a real user and subscription row, and the real repository. The
+test seeds a generation-one subscription under a generation-two user, submits
+the same Stripe subscription ID at generation two with deliberately different
+mutable values, and asserts both a `None` result and a fully unchanged durable
+row. It remains a standalone test rather than parameterizing the different-ID
+case because the two predicates express separate business decisions and should
+fail independently.
+
+### 22A test-strength and acceptance
+
+1. The unmodified production behavior passes the new characterization test.
+2. Temporarily replacing only the line-107 `return None` with a fall-through
+   mutation makes that exact test fail; restoring the source byte-for-byte
+   makes it pass again. No production mutation is committed.
+3. The complete subscription repository module, the earlier deterministic
+   provisioning/hermeticity boundary, Ruff, mypy, lock, diff, and lockfile
+   checks all pass.
+4. A fresh task review confirms the test directly protects the same-ID
+   lifecycle fence without changing production behavior or weakening existing
+   integration coverage.
+5. The full verification then restarts from clean resources. Two clean reports
+   and one controlled-poison report must each pass 2,402 tests with zero skips,
+   the same warning set, and identical per-file line/branch sets and totals.
+   The prior failed reports do not count toward acceptance.
