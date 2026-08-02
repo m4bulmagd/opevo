@@ -1,7 +1,9 @@
+import os
 from pathlib import Path
 
 import pytest
 
+import conftest
 from app.core.clerk_verification_source import select_clerk_verification_source
 from app.core.config import Settings
 from app.core.runtime_validation import validate_api_runtime
@@ -25,6 +27,38 @@ def test_collection_time_application_uses_controlled_network_free_settings() -> 
         "https://clerk.example.com/.well-known/jwks.json"
     )
     assert collection_app.state.auth_provider is None
+    assert all(
+        name == name.upper() or name.upper() not in {"CLERK_JWT_KEY", "CLERK_JWKS_URL"}
+        for name in os.environ
+    )
+
+
+@pytest.mark.parametrize("inherited_name", ["clerk_jwt_key", "ClErK_JwT_KeY"])
+def test_function_settings_environment_replaces_case_variant_clerk_keys(
+    inherited_name: str,
+    clerk_key_material: dict[str, str | bytes],
+) -> None:
+    os.environ[inherited_name] = "inherited-static-key"
+    try:
+        with pytest.MonkeyPatch.context() as scoped_patch:
+            fixture = conftest.settings_env.__wrapped__(
+                scoped_patch,
+                clerk_key_material,
+            )
+            next(fixture)
+            try:
+                settings = Settings(app_env="development")
+
+                assert inherited_name not in os.environ
+                assert settings.clerk_jwt_key == clerk_key_material["public_key_pem"]
+                assert settings.clerk_jwks_url == ""
+            finally:
+                with pytest.raises(StopIteration):
+                    next(fixture)
+
+        assert os.environ[inherited_name] == "inherited-static-key"
+    finally:
+        os.environ.pop(inherited_name, None)
 
 
 def test_function_settings_environment_shadows_dotenv_jwks_for_non_test_settings(
