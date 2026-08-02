@@ -1,7 +1,7 @@
 # Hermetic API Test Environment Design
 
 Date: 2026-08-02
-Status: Approved design
+Status: Implemented and verified
 Decision: Review Issue 21A
 
 ## Context
@@ -220,3 +220,18 @@ not validate the contents of a developer's optional env files. That is
 intentional: those files are unversioned user inputs. Separate example-file
 and explicit-environment tests continue validating the repository's declared
 configuration contract.
+
+## Implementation evidence
+
+The implementation uses Pydantic's supported settings-source seam, an early
+pytest construction baseline, and Docker Compose's supported
+`--no-env-resolution` flag exactly as designed. Focused source-selection,
+collection-time application, and real disposable Compose env-file regressions
+all passed. The complete API suite and both coverage ratchets passed once with
+no repository dotenv and again with a controlled conflicting `apps/api/.env`;
+both runs had zero skips and identical coverage totals.
+
+Normal development dotenv loading and normal service env-file resolution were
+proved separately. Production Compose rendering, Clerk runtime behavior,
+realtime defaults, dependencies, lockfiles, and deployment state were not
+changed.
