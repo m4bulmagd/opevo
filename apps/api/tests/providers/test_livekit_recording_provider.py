@@ -98,6 +98,16 @@ class FakeRoomListEgressClient:
         return SimpleNamespace(items=self.items)
 
 
+class FakeGetEgressResponseClient(FakeEgressClient):
+    def __init__(self, responses: list[object]) -> None:
+        super().__init__([])
+        self.responses = list(responses)
+
+    async def list_egress(self, request):
+        self.list_requests.append(request)
+        return self.responses.pop(0)
+
+
 class _EquivalentPath(str):
     pass
 
@@ -344,6 +354,172 @@ async def ensure_not_running(
     method = getattr(provider, "ensure_not_running", None)
     assert method is not None, "recording provider must expose ensure_not_running"
     await method(egress_id)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "response",
+    [
+        SimpleNamespace(),
+        {"not_items": []},
+        SimpleNamespace(items=None),
+        {"items": object()},
+        SimpleNamespace(items=[None]),
+        {"items": [{}]},
+        SimpleNamespace(items=[SimpleNamespace(status=api.EgressStatus.EGRESS_ACTIVE)]),
+        {
+            "items": [
+                {
+                    "egress_id": "egress-1",
+                    "status": "not-an-egress-status",
+                }
+            ]
+        },
+    ],
+)
+@pytest.mark.parametrize(
+    ("operation", "invoke"),
+    [
+        ("ensure_recording_stopped", ensure_stopped),
+        ("ensure_recording_not_running", ensure_not_running),
+    ],
+)
+async def test_ensure_operations_reject_malformed_successful_get_egress_responses(
+    response: object,
+    operation: str,
+    invoke,
+) -> None:
+    provider = build_provider(FakeGetEgressResponseClient([response]))
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await invoke(provider, "egress-1")
+
+    failure = exc_info.value
+    assert (
+        failure.provider,
+        failure.operation,
+        failure.disposition,
+        failure.error_class,
+        failure.context,
+    ) == ("livekit", operation, "terminal", "validation", {})
+    assert failure.__cause__ is None
+    assert "egress-1" not in str(failure)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "response",
+    [
+        SimpleNamespace(items=[SimpleNamespace(egress_id="egress-1", status=1)]),
+        {"items": [{"egress_id": "egress-1", "status": 1}]},
+    ],
+)
+async def test_ensure_operations_accept_plain_object_and_dict_egress_responses(
+    response: object,
+) -> None:
+    provider = build_provider(
+        FakeGetEgressResponseClient(
+            [
+                response,
+                SimpleNamespace(
+                    items=[
+                        SimpleNamespace(
+                            egress_id="egress-1",
+                            status=api.EgressStatus.EGRESS_COMPLETE,
+                        )
+                    ]
+                ),
+            ]
+        )
+    )
+
+    await ensure_stopped(provider, "egress-1")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("failure", "field"),
+    [
+        (TypeError("ITEMS_DEFECT"), "items"),
+        (RuntimeError("ID_DEFECT"), "egress_id"),
+        (AttributeError("ID_ATTRIBUTE_DEFECT"), "egress_id"),
+    ],
+)
+async def test_ensure_operations_propagate_get_egress_accessor_defects(
+    failure: Exception,
+    field: str,
+) -> None:
+    if field == "items":
+
+        class DefectiveResponse:
+            @property
+            def items(self) -> object:
+                raise failure
+
+        response: object = DefectiveResponse()
+    else:
+
+        class DefectiveItem:
+            status = 1
+
+            @property
+            def egress_id(self) -> object:
+                raise failure
+
+        response = SimpleNamespace(items=[DefectiveItem()])
+
+    provider = build_provider(FakeGetEgressResponseClient([response]))
+
+    with pytest.raises(type(failure)) as exc_info:
+        await ensure_stopped(provider, "egress-1")
+
+    assert exc_info.value is failure
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["start", "list", "stop", "ensure"])
+async def test_recording_operations_propagate_cancellation_unchanged(operation: str) -> None:
+    cancellation = asyncio.CancelledError()
+    if operation == "start":
+        provider = build_provider(FakeStartEgressClient(failure=cancellation))
+
+        async def invoke() -> None:
+            await provider.start_room_recording(
+                room_name="room-owned", object_key="calls/user/call.ogg"
+            )
+
+    elif operation == "list":
+        provider = build_provider(FakeRoomListEgressClient([], failure=cancellation))
+
+        async def invoke() -> None:
+            await provider.list_room_egresses(room_name="room-owned")
+
+    elif operation == "stop":
+        provider = build_provider(FakeEgressClient([]))
+
+        async def stop_egress(_request: object) -> None:
+            raise cancellation
+
+        provider.egress_client.stop_egress = stop_egress
+
+        async def invoke() -> None:
+            await provider.stop_room_recording(egress_id="egress-1")
+
+    else:
+        provider = build_provider(FakeEgressClient([]))
+
+        async def list_egress(_request: object) -> None:
+            raise cancellation
+
+        provider.egress_client.list_egress = list_egress
+
+        async def invoke() -> None:
+            await provider.ensure_stopped("egress-1")
+
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await invoke()
+
+    assert exc_info.value is cancellation
 
 
 @pytest.mark.anyio
