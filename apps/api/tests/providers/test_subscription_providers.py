@@ -1,4 +1,5 @@
 import asyncio
+import builtins
 import logging
 from types import SimpleNamespace
 
@@ -46,6 +47,17 @@ class StripeErrorResponseHTTPClient(stripe.HTTPClient):
             400,
             {},
         )
+
+
+def _deny_stripe_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_import = builtins.__import__
+
+    def unavailable_stripe_import(name: str, *args, **kwargs):
+        if name == "stripe" or name.startswith("stripe."):
+            raise ImportError("STRIPE_SDK_UNAVAILABLE")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", unavailable_stripe_import)
 
 
 @pytest.mark.anyio
@@ -100,6 +112,37 @@ async def test_stripe_cancels_exact_subscription_without_proration() -> None:
             },
         )
     ]
+
+
+@pytest.mark.anyio
+async def test_injected_subscription_client_works_without_stripe_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _deny_stripe_import(monkeypatch)
+    provider = StripeSubscriptionProvider(
+        stripe_client=FakeStripeClient(),
+        secret_key="sk_test_value",
+    )
+
+    await provider.cancel_immediately("sub_current")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("defect", [TypeError("TYPE_SENTINEL"), RuntimeError("RUNTIME_SENTINEL")])
+async def test_injected_subscription_defect_propagates_without_stripe_sdk(
+    defect: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _deny_stripe_import(monkeypatch)
+    provider = StripeSubscriptionProvider(
+        stripe_client=FakeStripeClient(error=defect),
+        secret_key="sk_test_value",
+    )
+
+    with pytest.raises(type(defect)) as exc_info:
+        await provider.cancel_immediately("sub_current")
+
+    assert exc_info.value is defect
 
 
 @pytest.mark.anyio

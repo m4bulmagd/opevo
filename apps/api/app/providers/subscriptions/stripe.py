@@ -36,17 +36,21 @@ class _SafeStripeSdkLogFilter(logging.Filter):
 _SAFE_STRIPE_SDK_LOG_FILTER = _SafeStripeSdkLogFilter()
 
 
-def _install_safe_stripe_sdk_logging() -> None:
-    import stripe
+def install_safe_stripe_log_filter() -> None:
+    """Install bounded Stripe logger redaction without importing the SDK."""
+    stripe_logger = logging.getLogger("stripe")
+    if _SAFE_STRIPE_SDK_LOG_FILTER not in stripe_logger.filters:
+        stripe_logger.addFilter(_SAFE_STRIPE_SDK_LOG_FILTER)
+
+
+def configure_safe_stripe_sdk_logging(stripe: Any) -> None:
+    """Disable Stripe SDK console diagnostics after the SDK is available."""
     from stripe import _util as stripe_util
 
     # Stripe's console mode prints before logging filters run. Keep SDK
     # diagnostics in the standard logger, where provider details are filtered.
     stripe.log = None
     stripe_util.STRIPE_LOG = None
-    stripe_logger = logging.getLogger("stripe")
-    if _SAFE_STRIPE_SDK_LOG_FILTER not in stripe_logger.filters:
-        stripe_logger.addFilter(_SAFE_STRIPE_SDK_LOG_FILTER)
 
 
 def classify_stripe_exception(
@@ -55,8 +59,6 @@ def classify_stripe_exception(
     operation: ProviderOperation,
 ) -> ProviderFailure | None:
     """Translate only known Stripe or transport failures into safe vocabulary."""
-    import stripe
-
     if isinstance(error, TimeoutError):
         return ProviderFailure(
             provider="stripe",
@@ -64,6 +66,10 @@ def classify_stripe_exception(
             disposition="retryable",
             error_class="timeout",
         )
+    try:
+        import stripe
+    except ImportError:
+        return None
     if isinstance(error, stripe.error.APIConnectionError):
         return ProviderFailure(
             provider="stripe",
@@ -173,7 +179,7 @@ class StripeSubscriptionProvider(SubscriptionProvider):
             )
 
     def _get_client(self) -> Any:
-        _install_safe_stripe_sdk_logging()
+        install_safe_stripe_log_filter()
         if self._stripe_client is not None:
             return self._stripe_client
         if not self.secret_key:
@@ -187,6 +193,7 @@ class StripeSubscriptionProvider(SubscriptionProvider):
         try:
             import stripe
             from stripe._http_client import RequestsClient
+            configure_safe_stripe_sdk_logging(stripe)
         except ImportError as error:
             raise ProviderFailure(
                 provider="stripe",
@@ -210,7 +217,10 @@ class StripeSubscriptionProvider(SubscriptionProvider):
 
     @classmethod
     def _is_missing_subscription(cls, error: Exception) -> bool:
-        import stripe
+        try:
+            import stripe
+        except ImportError:
+            return False
 
         return (
             isinstance(error, stripe.error.StripeError)

@@ -1,4 +1,5 @@
 import asyncio
+import builtins
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -129,6 +130,17 @@ class RawLoggingStripeClient(FakeStripeClient):
         )()
 
 
+def _deny_stripe_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_import = builtins.__import__
+
+    def unavailable_stripe_import(name: str, *args, **kwargs):
+        if name == "stripe" or name.startswith("stripe."):
+            raise ImportError("STRIPE_SDK_UNAVAILABLE")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", unavailable_stripe_import)
+
+
 @pytest.mark.anyio
 async def test_create_checkout_session_uses_price_mapping() -> None:
     from app.services.billing_session_service import BillingSessionService
@@ -205,6 +217,124 @@ async def test_injected_hosted_client_logs_are_filtered_without_hiding_unrelated
 
     assert "RAW_HOSTED_STRIPE_SENTINEL" not in caplog.text
     assert "unrelated hosted application log" in caplog.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("caller", "operation"),
+    [
+        ("checkout", "create_checkout_session"),
+        ("portal", "create_portal_session"),
+    ],
+)
+async def test_non_injected_hosted_client_missing_sdk_is_safe_provider_failure(
+    caller: str,
+    operation: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    _deny_stripe_import(monkeypatch)
+    service = BillingSessionService(
+        secret_key="sk_test_123",
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
+    )
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        if caller == "checkout":
+            await service.create_checkout_session(
+                user_id="user_123",
+                customer_email="billing@example.com",
+                clerk_user_id="clerk_123",
+                plan_tier="starter",
+                lifecycle_generation=7,
+            )
+        else:
+            await service.create_portal_session(customer_id="cus_123")
+
+    assert (exc_info.value.provider, exc_info.value.operation) == ("stripe", operation)
+    assert (exc_info.value.disposition, exc_info.value.error_class) == (
+        "terminal",
+        "validation",
+    )
+    assert isinstance(exc_info.value.__cause__, ImportError)
+    assert "STRIPE_SDK_UNAVAILABLE" not in str(exc_info.value)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("caller", ["checkout", "portal"])
+async def test_injected_hosted_client_works_and_redacts_logs_without_sdk(
+    caller: str,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    _deny_stripe_import(monkeypatch)
+    service = BillingSessionService(
+        stripe_client=RawLoggingStripeClient(),
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        logging.getLogger("app.unrelated").info("unrelated missing sdk log")
+        if caller == "checkout":
+            result = await service.create_checkout_session(
+                user_id="user_123",
+                customer_email="billing@example.com",
+                clerk_user_id="clerk_123",
+                plan_tier="starter",
+                lifecycle_generation=7,
+            )
+        else:
+            result = await service.create_portal_session(customer_id="cus_123")
+
+    assert result.url.startswith("https://")
+    assert "RAW_HOSTED_STRIPE_SENTINEL" not in caplog.text
+    assert "unrelated missing sdk log" in caplog.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("caller", ["checkout", "portal"])
+@pytest.mark.parametrize("defect", [TypeError("TYPE_SENTINEL"), RuntimeError("RUNTIME_SENTINEL")])
+async def test_injected_hosted_defect_propagates_unchanged_without_sdk(
+    caller: str,
+    defect: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.billing_session_service import BillingSessionService
+
+    _deny_stripe_import(monkeypatch)
+    service = BillingSessionService(
+        stripe_client=FailingStripeClient(defect, caller=caller),
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+        billing_portal_return_url="https://app.example.com/dashboard/billing",
+        billing_portal_configuration_id="bpc_period_end_cancel",
+    )
+
+    with pytest.raises(type(defect)) as exc_info:
+        if caller == "checkout":
+            await service.create_checkout_session(
+                user_id="user_123",
+                customer_email="billing@example.com",
+                clerk_user_id="clerk_123",
+                plan_tier="starter",
+                lifecycle_generation=7,
+            )
+        else:
+            await service.create_portal_session(customer_id="cus_123")
+
+    assert exc_info.value is defect
 
 
 @pytest.mark.anyio
