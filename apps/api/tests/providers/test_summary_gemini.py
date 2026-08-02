@@ -1,5 +1,6 @@
 import asyncio
 import builtins
+import json
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
 
@@ -8,7 +9,10 @@ import pytest
 from google.genai import errors as genai_errors
 
 from app.core.provider_failures import ProviderFailure
-from app.providers.summaries.gemini import GeminiSummaryProvider
+from app.providers.summaries.gemini import (
+    GeminiSummaryProvider,
+    _MalformedGeminiResponse,
+)
 
 
 class _Telemetry:
@@ -66,7 +70,7 @@ def test_extract_json_accepts_prose_wrapped_payload() -> None:
 
 
 def test_extract_json_rejects_missing_text() -> None:
-    with pytest.raises(ValueError, match="Gemini returned no text"):
+    with pytest.raises(_MalformedGeminiResponse):
         GeminiSummaryProvider._extract_json(SimpleNamespace(text=""))
 
 
@@ -122,6 +126,25 @@ class _FailingAsyncModels:
 
 def _async_client(error: BaseException) -> SimpleNamespace:
     return SimpleNamespace(aio=SimpleNamespace(models=_FailingAsyncModels(error)))
+
+
+def _summary_payload(**overrides: object) -> dict[str, object]:
+    return {
+        "summary_text": "Summary",
+        "caller_intent": "Intent",
+        "action_items": ["Reply"],
+        "sentiment": "neutral",
+        "follow_up_required": False,
+        **overrides,
+    }
+
+
+def _response_client(response: object) -> SimpleNamespace:
+    class AsyncModels:
+        async def generate_content(self, **_kwargs):
+            return response
+
+    return SimpleNamespace(aio=SimpleNamespace(models=AsyncModels()))
 
 
 @pytest.mark.anyio
@@ -220,6 +243,105 @@ async def test_gemini_maps_malformed_content_to_terminal_validation(
     ) == ("gemini", "generate_summary", "terminal", "validation")
     assert "GEMINI_RESPONSE_BODY_SENTINEL" not in str(exc_info.value)
     assert exc_info.value.__cause__ is not None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        _summary_payload(summary_text=7),
+        _summary_payload(summary_text={"text": "summary"}),
+        _summary_payload(summary_text=None),
+        _summary_payload(caller_intent=7),
+        _summary_payload(caller_intent={"intent": "summary"}),
+        _summary_payload(caller_intent=None),
+        _summary_payload(sentiment=7),
+        _summary_payload(sentiment={"sentiment": "neutral"}),
+        _summary_payload(sentiment=None),
+        _summary_payload(action_items="Reply"),
+        _summary_payload(action_items=None),
+        _summary_payload(action_items=["Reply", 7]),
+        _summary_payload(action_items=["Reply", {"item": "next"}]),
+        _summary_payload(action_items=["Reply", None]),
+        _summary_payload(follow_up_required=0),
+        _summary_payload(follow_up_required=1),
+        _summary_payload(follow_up_required="false"),
+        _summary_payload(follow_up_required={"value": False}),
+        _summary_payload(follow_up_required=None),
+        _summary_payload(unexpected="field"),
+    ],
+)
+async def test_gemini_rejects_wrong_type_or_shape_response_payloads(
+    payload: object,
+) -> None:
+    provider = GeminiSummaryProvider(
+        client=_response_client(SimpleNamespace(text=json.dumps(payload))),
+        model="gemini-test",
+    )
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
+
+    assert (
+        exc_info.value.provider,
+        exc_info.value.operation,
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("gemini", "generate_summary", "terminal", "validation")
+    assert exc_info.value.__cause__ is not None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "error",
+    [TypeError("GEMINI_RESPONSE_ACCESSOR_TYPE_ERROR"), ValueError("GEMINI_RESPONSE_ACCESSOR_VALUE_ERROR")],
+)
+async def test_gemini_propagates_response_accessor_defects_unchanged(
+    error: Exception,
+) -> None:
+    class DefectiveResponse:
+        @property
+        def text(self) -> str:
+            raise error
+
+    provider = GeminiSummaryProvider(
+        client=_response_client(DefectiveResponse()),
+        model="gemini-test",
+    )
+
+    with pytest.raises(type(error)) as exc_info:
+        await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
+
+    assert exc_info.value is error
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "error",
+    [TypeError("GEMINI_PARSER_TYPE_ERROR"), ValueError("GEMINI_PARSER_VALUE_ERROR")],
+)
+async def test_gemini_propagates_injected_parser_defects_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    def defective_extract_json(_response: object) -> dict:
+        raise error
+
+    monkeypatch.setattr(
+        GeminiSummaryProvider,
+        "_extract_json",
+        staticmethod(defective_extract_json),
+    )
+    provider = GeminiSummaryProvider(
+        client=_response_client(SimpleNamespace(text=json.dumps(_summary_payload()))),
+        model="gemini-test",
+    )
+
+    with pytest.raises(type(error)) as exc_info:
+        await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
+
+    assert exc_info.value is error
 
 
 @pytest.mark.anyio
