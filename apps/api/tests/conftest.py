@@ -83,7 +83,7 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, clerk_key_material: dict[str, 
     for name, value in _construction_settings_environment().items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("CLERK_JWT_KEY", str(clerk_key_material["public_key_pem"]))
-    monkeypatch.delenv("CLERK_JWKS_URL", raising=False)
+    monkeypatch.setenv("CLERK_JWKS_URL", "")
 
     from app.core.config import get_settings
     from app.core.database import get_engine, get_session_factory

@@ -480,10 +480,10 @@ Replace the environment-setting prefix of `settings_env` with:
     for name, value in _construction_settings_environment().items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("CLERK_JWT_KEY", str(clerk_key_material["public_key_pem"]))
-    monkeypatch.delenv("CLERK_JWKS_URL", raising=False)
+    monkeypatch.setenv("CLERK_JWKS_URL", "")
 ```
 
-Keep the existing imports, limiter-state restoration, and four cache clears before and after `yield` unchanged. The function fixture deliberately swaps the construction-time JWKS source for a generated static public key; it must never leave both sources configured.
+Keep the existing imports, limiter-state restoration, and four cache clears before and after `yield` unchanged. The function fixture deliberately swaps the construction-time JWKS source for a generated static public key. Its explicit empty process JWKS value shadows any local dotenv while source selection treats that value as absent, so it never leaves both sources configured.
 
 - [ ] **Step 6: Run the poisoned collection command again**
 
