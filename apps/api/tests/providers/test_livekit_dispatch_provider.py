@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
 
@@ -156,6 +157,44 @@ async def test_livekit_dispatch_malformed_response_is_terminal_validation_and_de
             observability=_Telemetry(),
         ).list_dispatches(room_name="room-owned")
     assert defect_info.value is defect
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["list", "create"])
+async def test_livekit_dispatch_operations_propagate_cancellation_unchanged(
+    operation: str,
+) -> None:
+    cancellation = asyncio.CancelledError()
+
+    class CancelledDispatchService:
+        async def list_dispatch(self, _room_name: str):
+            raise cancellation
+
+        async def create_dispatch(self, _request: object):
+            raise cancellation
+
+    provider = LiveKitDispatchAPIProvider(
+        livekit_api=SimpleNamespace(agent_dispatch=CancelledDispatchService()),
+        observability=_Telemetry(),
+    )
+    if operation == "list":
+
+        async def invoke() -> None:
+            await provider.list_dispatches(room_name="room-owned")
+
+    else:
+
+        async def invoke() -> None:
+            await provider.create_dispatch(
+                agent_name="Ava",
+                room_name="room-owned",
+                metadata='{"call_id":"call-owned"}',
+            )
+
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await invoke()
+
+    assert exc_info.value is cancellation
 
 
 @pytest.mark.anyio

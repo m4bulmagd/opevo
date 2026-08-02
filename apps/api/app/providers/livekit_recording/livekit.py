@@ -31,6 +31,12 @@ class EgressObjectKeyEvidence:
     object_key: str | None = None
 
 
+@dataclass(frozen=True)
+class _EgressLookupRecord:
+    egress_id: str
+    status: int
+
+
 _MISSING = object()
 _ALIAS_CONFLICT = object()
 _ALIAS_MAX_DEPTH = 12
@@ -287,6 +293,33 @@ def _bounded_nonempty_string(value: object, *, max_length: int) -> str | None:
     ):
         return None
     return candidate
+
+
+def _plain_provider_field(value: object, name: str) -> object:
+    """Read a plain dict or SDK field without swallowing accessor defects."""
+    if type(value) is dict:
+        return value.get(name, _MISSING)
+    if value is None or type(value) is object:
+        return _MISSING
+
+    instance_values = getattr(value, "__dict__", None)
+    if type(instance_values) is dict and name not in instance_values:
+        descriptor = getattr(type(value), name, _MISSING)
+        if descriptor is _MISSING:
+            return _MISSING
+    return getattr(value, name)
+
+
+def _plain_provider_items(response: object) -> tuple[object, ...] | None:
+    items = _plain_provider_field(response, "items")
+    if (
+        items is _MISSING
+        or items is None
+        or not isinstance(items, Iterable)
+        or isinstance(items, (str, bytes, Mapping))
+    ):
+        return None
+    return tuple(items)
 
 
 def _is_record(value: object) -> bool:
@@ -754,17 +787,31 @@ class LiveKitRecordingProvider(RecordingProvider):
                 error,
                 operation=operation,  # type: ignore[arg-type]
             ) from error
-        matches = [
-            item
-            for item in response.items
-            if getattr(item, "egress_id", None) == egress_id
-        ]
+        items = _plain_provider_items(response)
+        if items is None:
+            raise self._validation_failure(operation)
+
+        matches: list[_EgressLookupRecord] = []
+        for item in items:
+            item_egress_id = _bounded_nonempty_string(
+                _plain_provider_field(item, "egress_id"),
+                max_length=255,
+            )
+            status = _plain_provider_field(item, "status")
+            if (
+                item_egress_id is None
+                or type(status) is not int
+                or status not in range(7)
+            ):
+                raise self._validation_failure(operation)
+            if item_egress_id == egress_id:
+                matches.append(_EgressLookupRecord(item_egress_id, status))
         if not matches:
             return None
         if len(matches) != 1:
             raise ProviderFailure(
                 provider="livekit",
-                operation="ensure_recording_not_running",
+                operation=operation,  # type: ignore[arg-type]
                 disposition="terminal",
                 error_class="conflict",
             )
