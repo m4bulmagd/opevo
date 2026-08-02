@@ -1,5 +1,6 @@
 import logging
 
+from app.core.provider_failures import SAFE_PROVIDER_NAMES
 from app.core.redaction import SafeExtraFilter, safe_log_identifier, safe_log_label
 
 
@@ -31,6 +32,7 @@ def report_safe_exception(
     user_id: object = None,
     status: str | None = None,
     provider_request_id: object = None,
+    provider: str | None = None,
     level: int = logging.ERROR,
 ) -> None:
     fields: list[tuple[str, object]] = []
@@ -43,6 +45,8 @@ def report_safe_exception(
         safe_value = safe_log_label(label_value)
         if safe_value is not None:
             fields.append((key, safe_value))
+    if provider in SAFE_PROVIDER_NAMES:
+        fields.append(("provider", provider))
     for key, identifier_value in (
         ("call_id", call_id),
         ("user_id", user_id),
