@@ -1,7 +1,7 @@
 # Provider-Neutral Authentication Design
 
 **Date:** 2026-08-03
-**Status:** Approved interactively; awaiting written-spec review
+**Status:** Approved; implementation planning deferred
 
 ## Summary
 
