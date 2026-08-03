@@ -14,9 +14,16 @@ from presvo_contracts import (
 )
 
 from app.core.config import get_settings
-from app.core.dispatch_token import create_dispatch_token
+from app.core.dispatch_token import (
+    DispatchTokenConfigurationError,
+    DispatchTokenError,
+    create_dispatch_token,
+)
 from app.core.observability import get_observability
-from app.core.verification_token import create_verification_token
+from app.core.verification_token import (
+    VerificationTokenError,
+    create_verification_token,
+)
 from app.core.database import get_session_factory
 from app.core.provider_failures import ProviderFailure
 from app.models.agent_config import AgentConfig
@@ -914,13 +921,21 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
                 retryable=False,
             )
 
+        worker_name = settings.livekit_agent_name.strip()
+        if not worker_name:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            )
+        business_display_name = (agent_config.business_display_name or "").strip()
+        if settings.activation_flow_enabled and not business_display_name:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            )
         try:
-            worker_name = settings.livekit_agent_name.strip()
-            if not worker_name:
-                raise ValueError("LiveKit agent worker name is not configured")
-            business_display_name = (agent_config.business_display_name or "").strip()
-            if settings.activation_flow_enabled and not business_display_name:
-                raise ValueError("Projected business display name is not configured")
             dispatch_token = create_dispatch_token(
                 call_id=str(call.id),
                 user_id=str(call.user_id),
@@ -952,7 +967,7 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
                     dispatch_token=dispatch_token,
                 )
             )
-        except Exception:
+        except (DispatchTokenError, ContractError):
             await session.rollback()
             raise OutboxDeliveryError(
                 "dispatch_configuration",
@@ -1271,10 +1286,14 @@ async def _verification_dispatch_snapshot(
                 retryable=False,
             )
 
+        worker_name = get_settings().livekit_agent_name.strip()
+        if not worker_name:
+            await session.rollback()
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            )
         try:
-            worker_name = get_settings().livekit_agent_name.strip()
-            if not worker_name:
-                raise ValueError
             metadata = dump_contract_json(
                 create_contract(
                     ForwardingVerificationDispatch,
@@ -1290,7 +1309,11 @@ async def _verification_dispatch_snapshot(
                     tts_provider="speechmatics",
                 )
             )
-        except Exception:
+        except (
+            DispatchTokenConfigurationError,
+            VerificationTokenError,
+            ContractError,
+        ):
             await session.rollback()
             raise OutboxDeliveryError(
                 "dispatch_configuration",

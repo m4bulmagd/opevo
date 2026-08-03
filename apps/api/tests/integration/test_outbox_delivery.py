@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import (
 from app.models import Base
 from app.models.activation_event import ActivationEvent
 from app.models.business_profile import BusinessProfile
+from app.models.call import Call
 from app.models.customer_activation import CustomerActivation
 from app.models.outbox_event import OutboxEvent
 from app.models.agent_config import AgentConfig
@@ -45,6 +46,7 @@ from app.services.activation_provisioning_service import ActivationProvisioningS
 from app.services.activation_go_live_service import ActivationGoLiveService
 from app.services.onboarding_service import OnboardingRetryNotAllowedError, OnboardingService
 from app.services.routing_fingerprint import routing_fingerprint
+from tests.fakes import CaptureMeter, CaptureTracer
 
 
 PROVISIONING_NOW = datetime(2026, 7, 18, 9, 0, tzinfo=UTC)
@@ -180,6 +182,7 @@ async def _add_event(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     topic: str = "phone.disable",
+    aggregate_type: str = "user",
     idempotency_key: str | None = None,
     aggregate_id=None,
     payload: dict | None = None,
@@ -187,10 +190,127 @@ async def _add_event(
     async with session_factory() as session:
         event = await OutboxService(session).add(
             topic=topic,
-            aggregate_type="user",
+            aggregate_type=aggregate_type,
             aggregate_id=aggregate_id or uuid4(),
             idempotency_key=idempotency_key or f"test:{uuid4().hex}",
             payload=payload or {"user_id": str(uuid4())},
+        )
+        await session.commit()
+        return event
+
+
+async def _seed_customer_dispatch_event(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> OutboxEvent:
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        user = User(
+            clerk_user_id=f"dispatch_fault_{uuid4().hex}",
+            email=f"dispatch_fault_{uuid4().hex}@example.com",
+        )
+        session.add(user)
+        await session.flush()
+        phone = PhoneNumber(
+            user_id=user.id,
+            e164=f"+339{str(user.id.int)[-8:]}",
+            country_code="FR",
+            provider="telnyx",
+            provider_number_id=f"pn_dispatch_fault_{user.id.hex}",
+            provider_connection_name="app-active",
+            is_active=True,
+        )
+        config = AgentConfig(
+            user_id=user.id,
+            agent_name="Ava",
+            owner_context="Sam at Bakery",
+            system_prompt="Be helpful.",
+            knowledge_base="Hours 9-5.",
+            pipeline_mode="stt_llm_tts",
+            is_enabled=True,
+        )
+        session.add_all(
+            [
+                phone,
+                config,
+                Subscription(
+                    user_id=user.id,
+                    stripe_customer_id=f"cus_dispatch_fault_{user.id.hex}",
+                    stripe_subscription_id=f"sub_dispatch_fault_{user.id.hex}",
+                    plan_tier="starter",
+                    status="active",
+                    allocated_minutes=60,
+                    current_period_start=now - timedelta(days=1),
+                    current_period_end=now + timedelta(days=1),
+                ),
+                UsageLedger(
+                    user_id=user.id,
+                    event_type="invoice_paid_reset",
+                    source_id=f"invoice_dispatch_fault_{user.id.hex}",
+                    minutes_delta=60,
+                    balance_after=60,
+                ),
+            ]
+        )
+        await session.flush()
+        call = Call(
+            user_id=user.id,
+            phone_number_id=phone.id,
+            agent_config_id=config.id,
+            livekit_room_id=f"room-dispatch-fault-{user.id.hex}",
+            caller_number="+33123456789",
+            status="pending",
+        )
+        session.add(call)
+        await session.flush()
+        event = await OutboxService(session).add(
+            topic="livekit.dispatch",
+            aggregate_type="call",
+            aggregate_id=call.id,
+            idempotency_key=f"livekit.dispatch:{call.id}",
+            payload={
+                "call_id": str(call.id),
+                "lifecycle_generation": user.lifecycle_generation,
+            },
+        )
+        await session.commit()
+        return event
+
+
+async def _seed_verification_dispatch_event(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    now: datetime,
+) -> OutboxEvent:
+    async with session_factory() as session:
+        user = User(
+            clerk_user_id=f"verification_fault_{uuid4().hex}",
+            email=f"verification_fault_{uuid4().hex}@example.com",
+        )
+        session.add(user)
+        await session.flush()
+        session_id = str(uuid4())
+        activation = CustomerActivation(
+            user_id=user.id,
+            verification_window_started_at=now - timedelta(minutes=1),
+            verification_window_expires_at=now + timedelta(minutes=9),
+            verification_session_id=session_id,
+            verification_claimed_at=now,
+            verification_status="claimed",
+            verification_routing_fingerprint="a" * 64,
+        )
+        session.add(activation)
+        await session.flush()
+        event = await OutboxService(session).add(
+            topic="livekit.verification_dispatch",
+            aggregate_type="forwarding-verification",
+            aggregate_id=activation.id,
+            idempotency_key=f"livekit.verification_dispatch:{session_id}",
+            payload={
+                "activation_id": str(activation.id),
+                "session_id": session_id,
+                "room_name": f"verification-fault-{activation.id}",
+                "lifecycle_generation": user.lifecycle_generation,
+            },
         )
         await session.commit()
         return event
@@ -804,10 +924,11 @@ async def test_terminal_provider_failure_stops_on_first_attempt(
 
 
 @pytest.mark.anyio
-async def test_untranslated_defect_stops_once_and_redacts_every_output(
+async def test_composed_internal_defect_redacts_exception_alert_telemetry_and_storage(
     outbox_session_factory: async_sessionmaker[AsyncSession],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    from app.core.observability import Observability
     from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
     event = await _add_event(outbox_session_factory)
@@ -821,33 +942,32 @@ async def test_untranslated_defect_stops_once_and_redacts_every_output(
         "PROVIDER_RESPONSE_BODY_SENTINEL",
     )
 
-    class Observability:
-        def __init__(self) -> None:
-            self.terminal_failures: list[tuple[str, str]] = []
-
-        def record_outbox_terminal_failure(
-            self,
-            topic: str,
-            error_class: str,
-        ) -> None:
-            self.terminal_failures.append((topic, error_class))
-
-    observability = Observability()
+    meter = CaptureMeter()
+    tracer = CaptureTracer()
+    observability = Observability(meter=meter, tracer=tracer)
+    private_cause = RuntimeError(
+        " ".join(
+            (
+                sentinels[0],
+                f"metadata={{'detail': '{sentinels[1]}'}}",
+                sentinels[2],
+                sentinels[3],
+                sentinels[4],
+            )
+        )
+    )
+    defect = TypeError("internal operation failed")
+    defect.__cause__ = private_cause
+    assert all(sentinel in str(private_cause) for sentinel in sentinels)
 
     async def defective_handler(_ctx: dict, _event: OutboxEvent) -> None:
         nonlocal calls
         calls += 1
-        raise TypeError(
-            " ".join(
-                (
-                    sentinels[0],
-                    f"metadata={{'detail': '{sentinels[1]}'}}",
-                    sentinels[2],
-                    sentinels[3],
-                    sentinels[4],
-                )
-            )
-        )
+        async with observability.provider_operation(
+            "gemini",
+            "generate_summary",
+        ):
+            raise defect
 
     caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
     result = await outbox_delivery_job(
@@ -861,7 +981,23 @@ async def test_untranslated_defect_stops_once_and_redacts_every_output(
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
     assert calls == 1
-    assert observability.terminal_failures == [("phone.disable", "unknown")]
+    assert meter.instruments["presvo.provider.errors"].measurements == [
+        (
+            1,
+            {
+                "provider": "gemini",
+                "operation": "generate_summary",
+                "error_class": "unknown",
+                "failure_kind": "internal",
+            },
+        )
+    ]
+    assert meter.instruments[
+        "presvo.outbox.terminal_failures"
+    ].measurements == [
+        (1, {"topic": "phone.disable", "error_class": "unknown"})
+    ]
+    assert tracer.spans[0].attributes["presvo.failure.kind"] == "internal"
     alert = next(
         record
         for record in caplog.records
@@ -879,14 +1015,198 @@ async def test_untranslated_defect_stops_once_and_redacts_every_output(
         assert stored.status == "failed"
         assert stored.attempt_count == 1
         assert stored.last_error_code == "internal_defect"
-        rendered = (
-            caplog.text
-            + repr(observability.terminal_failures)
-            + repr(stored.payload)
-            + repr(stored.last_error_code)
+        exception_display = f"{type(defect).__name__}: {defect!s} {defect!r}"
+        rendered_alert = caplog.text + repr(caplog.records)
+        rendered_metrics = repr(
+            {
+                name: instrument.measurements
+                for name, instrument in meter.instruments.items()
+            }
+        )
+        rendered_spans = repr(
+            [(span.name, span.attributes, span.status) for span in tracer.spans]
+        )
+        rendered_storage = repr(
+            {
+                "status": stored.status,
+                "attempt_count": stored.attempt_count,
+                "payload": stored.payload,
+                "last_error_code": stored.last_error_code,
+            }
+        )
+        rendered = " ".join(
+            (
+                exception_display,
+                rendered_alert,
+                rendered_metrics,
+                rendered_spans,
+                rendered_storage,
+            )
         )
     for sentinel in sentinels:
         assert sentinel not in rendered
+
+
+@pytest.mark.anyio
+async def test_customer_snapshot_type_error_becomes_durable_internal_defect(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+    activation_flow_disabled,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.workers.jobs import outbox_topics
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    event = await _seed_customer_dispatch_event(outbox_session_factory)
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+    defect = TypeError("CUSTOMER_SNAPSHOT_INTERNAL_SENTINEL")
+
+    def fail_token_builder(**_kwargs) -> str:
+        raise defect
+
+    monkeypatch.setattr(outbox_topics, "create_dispatch_token", fail_token_builder)
+    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+
+    result = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "outbox_now": lambda: current_time,
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.attempt_count == 1
+        assert stored.last_error_code == "internal_defect"
+    alerts = [
+        record
+        for record in caplog.records
+        if record.name == "app.workers.jobs.outbox_delivery"
+        and record.levelno == logging.CRITICAL
+    ]
+    assert len(alerts) == 1
+    assert alerts[0].getMessage() == (
+        "event=outbox_internal_defect operation=deliver_outbox_event "
+        "error_type=TypeError status=failed provider=internal"
+    )
+    assert "CUSTOMER_SNAPSHOT_INTERNAL_SENTINEL" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_verification_snapshot_runtime_error_becomes_durable_internal_defect(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.workers.jobs import outbox_topics
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    verification_now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+    event = await _seed_verification_dispatch_event(
+        outbox_session_factory,
+        now=verification_now,
+    )
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+    defect = RuntimeError("VERIFICATION_SNAPSHOT_INTERNAL_SENTINEL")
+
+    def fail_token_builder(**_kwargs) -> str:
+        raise defect
+
+    monkeypatch.setattr(
+        outbox_topics,
+        "create_verification_token",
+        fail_token_builder,
+    )
+    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+
+    result = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "verification_now": lambda: verification_now,
+            "outbox_now": lambda: current_time,
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.attempt_count == 1
+        assert stored.last_error_code == "internal_defect"
+    alerts = [
+        record
+        for record in caplog.records
+        if record.name == "app.workers.jobs.outbox_delivery"
+        and record.levelno == logging.CRITICAL
+    ]
+    assert len(alerts) == 1
+    assert alerts[0].getMessage() == (
+        "event=outbox_internal_defect operation=deliver_outbox_event "
+        "error_type=RuntimeError status=failed provider=internal"
+    )
+    assert "VERIFICATION_SNAPSHOT_INTERNAL_SENTINEL" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_raising_internal_defect_logger_cannot_block_terminal_persistence(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.workers.jobs import outbox_delivery
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    class RaisingFilter(logging.Filter):
+        def filter(self, _record: logging.LogRecord) -> bool:
+            raise RuntimeError("LOGGING_FILTER_PRIVATE_SENTINEL")
+
+    event = await _add_event(outbox_session_factory)
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+    calls = 0
+    defect = TypeError("HANDLER_PRIVATE_SENTINEL")
+
+    async def defective_handler(_ctx: dict, _event: OutboxEvent) -> None:
+        nonlocal calls
+        calls += 1
+        raise defect
+
+    logger_filter = RaisingFilter()
+    outbox_delivery.logger.addFilter(logger_filter)
+    try:
+        first = await outbox_delivery_job(
+            {
+                "session_factory": outbox_session_factory,
+                "outbox_handlers": {"phone.disable": defective_handler},
+                "outbox_now": lambda: current_time,
+                "outbox_terminal_failure_metric": lambda _topic, _code: None,
+            }
+        )
+    finally:
+        outbox_delivery.logger.removeFilter(logger_filter)
+
+    assert first == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
+    assert calls == 1
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.attempt_count == 1
+        assert stored.last_error_code == "internal_defect"
+
+    current_time += OutboxRepository.CLAIM_LEASE
+    second = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "outbox_handlers": {"phone.disable": defective_handler},
+            "outbox_now": lambda: current_time,
+            "outbox_terminal_failure_metric": lambda _topic, _code: None,
+        }
+    )
+
+    assert second == {"claimed": 0, "delivered": 0, "retried": 0, "failed": 0}
+    assert calls == 1
 
 
 @pytest.mark.anyio
@@ -901,8 +1221,10 @@ async def test_cancellation_propagates_without_failure_and_lease_reclaims_event(
     metric_calls: list[tuple[str, str]] = []
     successful_calls = 0
 
+    cancellation = asyncio.CancelledError("durable cancellation")
+
     async def cancelled_handler(_ctx: dict, _event: OutboxEvent) -> None:
-        raise asyncio.CancelledError
+        raise cancellation
 
     def metric(topic: str, error_code: str) -> None:
         metric_calls.append((topic, error_code))
@@ -915,8 +1237,10 @@ async def test_cancellation_propagates_without_failure_and_lease_reclaims_event(
     }
     caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError) as caught:
         await outbox_delivery_job(ctx)
+
+    assert caught.value is cancellation
 
     assert metric_calls == []
     assert not caplog.records
@@ -2072,7 +2396,10 @@ async def test_pending_order_retries_outbox_without_customer_retry(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     from app.providers.telephony.base import TelephonyProvisioningPending
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.jobs.outbox_delivery import (
+        OUTBOX_RETRY_DELAYS,
+        outbox_delivery_job,
+    )
 
     operation_key = "outbox:phone-provision:pending-order"
     async with outbox_session_factory() as session:
@@ -2102,6 +2429,7 @@ async def test_pending_order_retries_outbox_without_customer_retry(
         idempotency_key=operation_key,
         payload={"user_id": str(user_id), "lifecycle_generation": 1},
     )
+    current_time = event.next_attempt_at + timedelta(seconds=1)
 
     class PendingProvider:
         async def provision_number(self, **_kwargs) -> dict:
@@ -2113,14 +2441,31 @@ async def test_pending_order_retries_outbox_without_customer_retry(
         async def disable_number(self, *, provider_number_id: str) -> str:
             raise AssertionError
 
-    result = await outbox_delivery_job(
-        {
-            "session_factory": outbox_session_factory,
-            "telephony_provider": PendingProvider(),
-        }
-    )
+    provider = PendingProvider()
+    ctx = {
+        "session_factory": outbox_session_factory,
+        "telephony_provider": provider,
+        "outbox_now": lambda: current_time,
+    }
+    expected_delays = (*OUTBOX_RETRY_DELAYS, OUTBOX_RETRY_DELAYS[-1])
+    for expected_attempt, delay in enumerate(expected_delays, start=1):
+        result = await outbox_delivery_job(ctx)
 
-    assert result == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
+        assert result == {
+            "claimed": 1,
+            "delivered": 0,
+            "retried": 1,
+            "failed": 0,
+        }
+        async with outbox_session_factory() as session:
+            stored_event = await session.get(OutboxEvent, event.id)
+            assert stored_event is not None
+            assert stored_event.status == "pending"
+            assert stored_event.attempt_count == expected_attempt
+            assert stored_event.next_attempt_at == current_time + delay
+            assert stored_event.last_error_code == "provider_retryable"
+        current_time += delay
+
     async with outbox_session_factory() as session:
         stored_event = await session.get(OutboxEvent, event.id)
         provisioning = await PhoneNumberProvisioningRepository(
@@ -2128,6 +2473,7 @@ async def test_pending_order_retries_outbox_without_customer_retry(
         ).get_by_user_id(user_id)
         assert stored_event is not None
         assert stored_event.status == "pending"
+        assert stored_event.attempt_count == len(OUTBOX_RETRY_DELAYS) + 1
         assert stored_event.last_error_code == "provider_retryable"
         assert provisioning is not None
         assert provisioning.status == "running"

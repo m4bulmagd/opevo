@@ -102,6 +102,21 @@ def _classify_error(error: Exception) -> tuple[str, bool, bool]:
     return "internal_defect", False, True
 
 
+def _report_internal_defect(error: Exception) -> None:
+    try:
+        report_safe_exception(
+            logger,
+            event="outbox_internal_defect",
+            operation="deliver_outbox_event",
+            error=error,
+            provider="internal",
+            status="failed",
+            level=logging.CRITICAL,
+        )
+    except Exception:
+        return
+
+
 async def emit_outbox_terminal_failure_metric(
     topic: str,
     error_code: str,
@@ -186,15 +201,7 @@ async def outbox_delivery_job(
         except Exception as error:
             error_code, retryable, exhaustible = _classify_error(error)
             if error_code == "internal_defect":
-                report_safe_exception(
-                    logger,
-                    event="outbox_internal_defect",
-                    operation="deliver_outbox_event",
-                    error=error,
-                    provider="internal",
-                    status="failed",
-                    level=logging.CRITICAL,
-                )
+                _report_internal_defect(error)
             failure_time = now_provider()
             async with session_factory() as session:
                 stored = await OutboxRepository(session).mark_failed_attempt(

@@ -47,7 +47,7 @@ The recommendations use these agreed priorities:
 | 4 | Worker isolation | **4A + 4B** — split critical/background queues and add explicit limits, metrics, and load criteria | Accepted |
 | 5 | Outbox structure | **5A** — split the topic god module by cohesive topic family | Accepted |
 | 6 | Dependency construction | **6A** — explicit, thin composition roots with typed dependencies | Accepted |
-| 7 | Provider failures | **7A** — one typed provider-failure vocabulary; distinguish internal defects | Accepted; implemented |
+| 7 | Provider failures | **7A** — one typed provider-failure vocabulary; distinguish internal defects | Accepted; code complete, final verification pending |
 | 8 | LiveKit compatibility | **8A** — staged upgrade and removal of private SDK dependencies | Accepted |
 | 9 | Python/test reliability | **9A-1R** — Python 3.13 contract, test-only cancellation-regression stabilization, per-test timeouts | Accepted; implemented |
 | 10 | Coverage | **10A** — measured line and branch coverage ratchets | Accepted; implemented |
@@ -480,7 +480,7 @@ alerts. The repeated taxonomies also drift.
 | **7B:** share helper functions while retaining provider-specific exception families | Low–medium | Less migration risk but partial consistency | Error mapping and worker only | Medium; several vocabularies remain |
 | **7C:** retain current classifications | None | High retry, diagnosis, and alerting risk | None | High repeated policy burden |
 
-### Recorded decision and implemented solution — 7A
+### Recorded decision and code-complete solution — 7A (final verification pending)
 
 Define an explicit, small failure value at the external-provider boundary:
 
@@ -517,8 +517,9 @@ mapping while remaining different boundary types.
 The provider-boundary implementation is recorded in commits `1b70a95`
 (shared failure boundary), `866dabb` (Telnyx/carrier), `cf5fc9a` and
 `c12ce25` (Stripe/billing), `d84f1f1` (S3 and Gemini), and `ba22e13` plus
-`b5446f4` (LiveKit dispatch/recording). This cutover completes the root
-outbox policy: `ProviderFailure` retains the bounded provider retry or terminal
+`b5446f4` (LiveKit dispatch/recording). The cutover code completes the root
+outbox policy while final full-suite and cleanup verification remains pending:
+`ProviderFailure` retains the bounded provider retry or terminal
 codes, while an untranslated `Exception` becomes non-retryable,
 exhaustible `internal_defect` on its first attempt. The internal diagnostic is
 CRITICAL and has only fixed `event=outbox_internal_defect`,
@@ -552,8 +553,10 @@ Measured focused evidence at the cutover:
   family; the independent agent-to-API transport exceptions remain in
   `apps/agent/agent/api_client.py` and its tests.
 
-The final Docker-backed full API and agent regression gates are pending the
-controller's separate measured run; no full-suite count is claimed here.
+Issue 7 remains **code complete, final verification pending** until the
+controller records the final Docker-backed full API and agent regression gates
+and confirms cleanup. No final full-suite count or implemented status is
+claimed here.
 
 ## Issue 8 — LiveKit Is Pinned to an Old Family and Uses Private APIs
 
