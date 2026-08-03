@@ -295,6 +295,28 @@ describe("number milestone", () => {
     );
   });
 
+  it("does not present an assigned number as ready without provider readiness", () => {
+    render(
+      <NumberMilestone
+        localBilling={false}
+        snapshot={snapshot({
+          stage: "provisioning",
+          number: {
+            assigned_e164: "+33187654321",
+            country_code: "FR",
+            provider_ready: false,
+            provisioning_status: "running",
+            can_retry: false,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(/Provisioning your French number/i);
+    expect(screen.queryByText("Number ready")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Continue to forwarding/i })).not.toBeInTheDocument();
+  });
+
   it("offers a safe retry without ordering a second number", async () => {
     render(
       <NumberMilestone
