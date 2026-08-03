@@ -22,7 +22,7 @@ class ActivationFacts:
     subscription_eligible: bool
     provisioning_consented: bool
     provisioning_status: str | None
-    phone_ready: bool
+    number_provisioned: bool
     verification_window_open: bool
     forwarding_verified: bool
     go_live_pending: bool
@@ -58,7 +58,7 @@ class ActivationPolicy:
                 next_action="start_checkout",
                 blockers=("subscription_not_eligible",),
             )
-        if not facts.provisioning_consented:
+        if not facts.provisioning_consented and not facts.number_provisioned:
             return ActivationDecision(
                 stage=ActivationStage.PROVISIONING_CONSENT_REQUIRED,
                 completed_milestones=completed_milestones,
@@ -72,7 +72,7 @@ class ActivationPolicy:
                 next_action="retry_provisioning",
                 blockers=("number_provisioning_failed",),
             )
-        if facts.provisioning_status != "succeeded" or not facts.phone_ready:
+        if not facts.number_provisioned:
             return ActivationDecision(
                 stage=ActivationStage.PROVISIONING,
                 completed_milestones=completed_milestones,
@@ -130,7 +130,7 @@ class ActivationPolicy:
             completed.append("payment_eligible")
         if facts.provisioning_consented:
             completed.append("provisioning_consented")
-        if facts.phone_ready:
+        if facts.number_provisioned:
             completed.append("number_provisioned")
         if facts.forwarding_verified:
             completed.append("forwarding_verified")

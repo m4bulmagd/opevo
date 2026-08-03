@@ -715,6 +715,92 @@ No commit is expected for this operational task unless verification uncovers a c
 
 ---
 
+### Task 5: Resume a Legacy Account Whose Number Was Completed Before Explicit Consent Existed
+
+**Owner decision:** 23A. A completed provider side effect satisfies the number prerequisite without fabricating historical consent. This is a compatibility rule for authoritative completed state, not a bypass for unfinished provisioning.
+
+**Files:**
+
+- Modify: `apps/api/app/services/activation_policy.py`
+- Modify: `apps/api/app/services/activation_snapshot_service.py`
+- Modify: `apps/api/tests/activation/test_activation_policy.py`
+- Modify: `apps/api/tests/activation/test_activation_snapshot_service.py`
+- Modify: `apps/web/tests/app/activation-page.test.tsx`
+- Modify: this implementation plan with final evidence only if implementation details differ from this approved boundary
+
+**Interfaces and invariants:**
+
+- `ActivationFacts` exposes one explicit `number_provisioned` boolean rather than a looser `phone_ready` interpretation.
+- `ActivationSnapshotService` sets `number_provisioned=true` only when the provisioning row is `succeeded`, the assigned phone has a nonblank provider number identity, and `provisioning.phone_number_id` exactly matches `phone.id`.
+- Missing `provisioning_consented_at` still blocks every incomplete, failed, unlinked, or non-provider-ready number path before a new order can begin.
+- An already completed number advances to `forwarding_required` even when it predates explicit consent. `provisioning_consented_at`, the provisioning idempotency key, and activation events remain unchanged; the snapshot does not claim the `provisioning_consented` milestone.
+- `number_provisioned` is the single policy fact used for both stage evaluation and the completed-number milestone. Do not duplicate the completion predicate in multiple policy branches.
+- Forwarding verification, go-live approval, runtime readiness, provider modes, and authentication remain unchanged.
+- No migration, manual row repair, provider call, outbox event, or fake activation transition is permitted.
+
+- [ ] **Step 1: Add the permanent red policy regression**
+
+Add a policy test whose exact facts are: confirmed profile, eligible subscription, no historical consent, succeeded provisioning, completed number, no forwarding verification, and no go-live approval. Assert `forwarding_required`, `configure_forwarding`, the forwarding blocker, `number_provisioned` present, and `provisioning_consented` absent.
+
+Update the existing missing-consent precedence case so the number is explicitly incomplete; it must remain `provisioning_consent_required`.
+
+Run:
+
+```bash
+apps/api/.venv/bin/python -m pytest \
+  apps/api/tests/activation/test_activation_policy.py -q
+```
+
+Expected before production edits: FAIL because the completed legacy facts still return `provisioning_consent_required`.
+
+- [ ] **Step 2: Add the red snapshot regression and linkage edge cases**
+
+Using the real `ActivationSnapshotService` with repository fakes, cover:
+
+1. succeeded provisioning linked to the exact provider-ready phone plus null consent advances to forwarding while the response keeps `provisioning_consented_at=null`;
+2. a succeeded provisioning row linked to another phone does not count as completed;
+3. a missing/blank provider number identity does not count as completed;
+4. queued, running, failed, or absent provisioning never gains the compatibility path merely because a phone row exists.
+
+The positive case must fail before production edits for the same stage mismatch as the live account.
+
+- [ ] **Step 3: Add the web contract regression for the resulting snapshot**
+
+Render the real activation page with a `forwarding_required` snapshot that includes `number_provisioned`, omits `provisioning_consented`, and has a null consent timestamp. Request `milestone=forwarding` and assert the forwarding heading/guidance renders rather than the number card. This locks the cross-application contract; no web production change is expected.
+
+- [ ] **Step 4: Implement the minimal central policy change**
+
+Derive the exact linked completion fact once in `ActivationSnapshotService`. In `ActivationPolicy`, require consent only while that fact is false, retain failed/in-progress handling, and reuse the same fact for the `number_provisioned` completed milestone. Do not infer or write consent.
+
+- [ ] **Step 5: Verify focused and neighboring activation behavior**
+
+Run:
+
+```bash
+apps/api/.venv/bin/python -m pytest apps/api/tests/activation -q
+npm --prefix apps/web run test:ci -- \
+  tests/app/activation-page.test.tsx \
+  tests/app/number-milestone.test.tsx \
+  tests/app/forwarding-milestone.test.tsx
+apps/api/.venv/bin/ruff check apps/api/app apps/api/tests
+apps/api/.venv/bin/mypy apps/api/app
+npm --prefix apps/web run typecheck
+```
+
+Expected: all pass with no skip, warning introduced by this change, snapshot rewrite, or credential output.
+
+- [ ] **Step 6: Commit, review, and resume the owner smoke**
+
+Commit only the approved policy, snapshot, tests, and durable plan evidence:
+
+```bash
+git commit -m "fix(api): resume legacy completed activation"
+```
+
+After independent task review, recreate only API and web, reconfirm Clerk-mode health and cookie-free redirects, and ask the owner to refresh the existing activation page. The page must render forwarding without any database/provider mutation. Then continue the original forwarding-verification and voice smoke boundary.
+
+---
+
 ## Completion Criteria
 
 - Standard Compose renders API and web in Clerk mode with no usable default local token.
@@ -723,5 +809,6 @@ No commit is expected for this operational task unless verification uncovers a c
 - All focused and full web/API configuration tests pass without weakened assertions.
 - Cookie-free `/dashboard` and `/activate` no longer return HTTP 200.
 - The owner can sign in through Clerk and reach the existing activation state for `***99`.
+- A legacy account with an exactly linked, succeeded, provider-ready number can reach forwarding without fabricated provisioning consent, while every incomplete number still requires explicit consent.
 - No database deletion, readiness bypass, fake activation transition, realtime enablement, or credential exposure occurs.
 - Provider-mode audit is explicitly handed off before the real activation and inbound-call stage.

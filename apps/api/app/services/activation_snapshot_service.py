@@ -136,6 +136,14 @@ class ActivationSnapshotService:
         )
         evaluated_at = readiness.evaluated_at
         billing_eligible = readiness.subscription_eligible
+        number_provisioned = bool(
+            provisioning is not None
+            and provisioning.status == "succeeded"
+            and phone is not None
+            and provisioning.phone_number_id == phone.id
+            and phone.provider_number_id is not None
+            and phone.provider_number_id.strip()
+        )
         facts = ActivationFacts(
             profile_confirmed=bool(
                 profile is not None
@@ -151,7 +159,7 @@ class ActivationSnapshotService:
             provisioning_status=(
                 provisioning.status if provisioning is not None else None
             ),
-            phone_ready=bool(phone is not None and phone.provider_number_id),
+            number_provisioned=number_provisioned,
             verification_window_open=self._window_is_open(
                 activation,
                 evaluated_at,
