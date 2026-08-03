@@ -210,7 +210,7 @@ class ActivationSnapshotService:
             number=ActivationNumberResponse(
                 assigned_e164=phone.e164 if phone is not None else None,
                 country_code=phone.country_code if phone is not None else None,
-                provider_ready=bool(phone is not None and phone.provider_number_id),
+                provider_ready=number_provisioned,
                 provisioning_status=(
                     provisioning.status if provisioning is not None else None
                 ),
