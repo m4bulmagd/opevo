@@ -100,6 +100,36 @@ def test_provider_failure_context_is_bounded_and_immutable() -> None:
         failure.context["start_outcome"] = "not_started"  # type: ignore[index]
 
 
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("provider", "telnyx"),
+        ("operation", "release_number"),
+        ("disposition", "retryable"),
+        ("error_class", "timeout"),
+        ("context", {"start_outcome": "not_started"}),
+    ],
+)
+def test_provider_failure_validated_fields_cannot_be_reassigned(
+    field: str,
+    replacement: object,
+) -> None:
+    failure = ProviderFailure(
+        provider="livekit",
+        operation="start_recording",
+        disposition="terminal",
+        error_class="unknown",
+        context={"start_outcome": "unknown"},
+    )
+    original = getattr(failure, field)
+
+    with pytest.raises(AttributeError):
+        setattr(failure, field, replacement)
+
+    assert getattr(failure, field) is original
+    assert failure.context == {"start_outcome": "unknown"}
+
+
 def test_provider_failure_keeps_a_chained_cause_without_rendering_it() -> None:
     cause = RuntimeError("RAW_CAUSE_SECRET")
 

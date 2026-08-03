@@ -878,6 +878,196 @@ def test_root_outbox_classifier_separates_provider_and_internal_failures() -> No
     )
 
 
+def test_provider_failure_delivery_error_preserves_default_durable_policy() -> None:
+    from app.core.provider_failures import ProviderFailure
+    from app.workers.jobs import outbox_delivery
+
+    convert = getattr(outbox_delivery, "provider_failure_delivery_error", None)
+    assert convert is not None
+
+    retryable = convert(
+        ProviderFailure(
+            provider="livekit",
+            operation="list_dispatches",
+            disposition="retryable",
+            error_class="timeout",
+        )
+    )
+    terminal = convert(
+        ProviderFailure(
+            provider="livekit",
+            operation="list_dispatches",
+            disposition="terminal",
+            error_class="authentication",
+        )
+    )
+
+    assert (
+        retryable.error_code,
+        retryable.retryable,
+        retryable.exhaustible,
+    ) == ("provider_retryable", True, True)
+    assert (
+        terminal.error_code,
+        terminal.retryable,
+        terminal.exhaustible,
+    ) == ("provider_terminal", False, True)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("disposition", ["retryable", "terminal"])
+async def test_dispatch_provider_failure_retains_provider_exhausted_call_code(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+    disposition: str,
+) -> None:
+    from app.core.provider_failures import ProviderFailure
+    from app.workers.jobs.outbox_delivery import (
+        OUTBOX_RETRY_DELAYS,
+        outbox_delivery_job,
+    )
+
+    event = await _seed_customer_dispatch_event(outbox_session_factory)
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+    calls = 0
+
+    async def failing_handler(_ctx: dict, _event: OutboxEvent) -> None:
+        nonlocal calls
+        calls += 1
+        raise ProviderFailure(
+            provider="livekit",
+            operation="list_dispatches",
+            disposition=disposition,
+            error_class="unavailable",
+        )
+
+    ctx = {
+        "session_factory": outbox_session_factory,
+        "outbox_handlers": {"livekit.dispatch": failing_handler},
+        "outbox_now": lambda: current_time,
+        "outbox_terminal_failure_metric": lambda _topic, _code: None,
+    }
+    expected_attempts = len(OUTBOX_RETRY_DELAYS) + 1 if disposition == "retryable" else 1
+    for _attempt in range(expected_attempts):
+        await outbox_delivery_job(ctx)
+        async with outbox_session_factory() as session:
+            stored = await session.get(OutboxEvent, event.id)
+            assert stored is not None
+            current_time = stored.next_attempt_at
+
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        call = await session.get(Call, event.aggregate_id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.last_error_code == (
+            "provider_retryable" if disposition == "retryable" else "provider_terminal"
+        )
+        assert call is not None
+        assert call.status == "failed"
+        assert call.failure_code == "dispatch_provider_exhausted"
+    assert calls == expected_attempts
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("dispatch_kind", "provider_operation"),
+    [
+        ("customer", "list_dispatches"),
+        ("customer", "create_dispatch"),
+        ("verification", "list_dispatches"),
+        ("verification", "create_dispatch"),
+    ],
+)
+async def test_untyped_livekit_provider_value_error_is_durable_internal_defect(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+    activation_flow_disabled,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    dispatch_kind: str,
+    provider_operation: str,
+) -> None:
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    verification_now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+    event = (
+        await _seed_customer_dispatch_event(outbox_session_factory)
+        if dispatch_kind == "customer"
+        else await _seed_verification_dispatch_event(
+            outbox_session_factory,
+            now=verification_now,
+        )
+    )
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+    sentinel = f"{dispatch_kind.upper()}_{provider_operation.upper()}_PRIVATE_SENTINEL"
+    defect = ValueError(sentinel)
+
+    class FaultingProvider:
+        async def list_dispatches(self, *, room_name: str) -> list:
+            assert room_name
+            if provider_operation == "list_dispatches":
+                raise defect
+            return []
+
+        async def create_dispatch(
+            self,
+            *,
+            agent_name: str,
+            room_name: str,
+            metadata: str,
+        ):
+            assert agent_name
+            assert room_name
+            assert metadata
+            raise defect
+
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_verification_token",
+        lambda **_kwargs: "verification-jwt",
+    )
+    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+    result = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "livekit_dispatch_provider": FaultingProvider(),
+            "verification_now": lambda: verification_now,
+            "outbox_now": lambda: current_time,
+            "outbox_terminal_failure_metric": lambda _topic, _code: None,
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
+    alerts = [
+        record
+        for record in caplog.records
+        if record.name == "app.workers.jobs.outbox_delivery"
+        and record.levelno == logging.CRITICAL
+    ]
+    assert len(alerts) == 1
+    assert alerts[0].getMessage() == (
+        "event=outbox_internal_defect operation=deliver_outbox_event "
+        "error_type=ValueError status=failed provider=internal"
+    )
+    assert alerts[0].exc_info is None
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.attempt_count == 1
+        assert stored.last_error_code == "internal_defect"
+        rendered = caplog.text + repr(stored.payload) + repr(stored.last_error_code)
+        if dispatch_kind == "customer":
+            call = await session.get(Call, event.aggregate_id)
+            assert call is not None
+            assert call.status == "failed"
+            assert call.failure_code == "dispatch_internal_defect"
+            rendered += repr(call.failure_code)
+    assert sentinel not in rendered
+
+
 @pytest.mark.anyio
 async def test_terminal_provider_failure_stops_on_first_attempt(
     outbox_session_factory: async_sessionmaker[AsyncSession],

@@ -88,6 +88,13 @@ class OutboxDeliveryError(RuntimeError):
         self.exhaustible = exhaustible
 
 
+def provider_failure_delivery_error(error: ProviderFailure) -> OutboxDeliveryError:
+    return OutboxDeliveryError(
+        "provider_retryable" if error.retryable else "provider_terminal",
+        retryable=error.retryable,
+    )
+
+
 def _classify_error(error: Exception) -> tuple[str, bool, bool]:
     if isinstance(error, OutboxDeliveryError):
         return error.error_code, error.retryable, error.exhaustible
@@ -293,7 +300,7 @@ async def _fail_livekit_dispatch_call(
         "handler_configuration": "dispatch_configuration",
         "provider_retryable": "dispatch_provider_exhausted",
         "provider_terminal": "dispatch_provider_exhausted",
-        "internal_defect": "dispatch_provider_exhausted",
+        "internal_defect": "dispatch_internal_defect",
     }.get(error_code, "dispatch_provider_exhausted")
     await CallRepository(session).mark_dispatch_failed(
         call,

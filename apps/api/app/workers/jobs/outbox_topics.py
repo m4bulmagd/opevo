@@ -78,7 +78,10 @@ from app.services.livekit_recording_service import LiveKitRecordingService
 from app.services.provider_work_policy import UnresolvedProviderWorkError
 from app.services.forwarding_verification_service import COMPLETION_GRACE, as_utc
 from app.services.summary_service import SummaryService
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+from app.workers.jobs.outbox_delivery import (
+    OutboxDeliveryError,
+    provider_failure_delivery_error,
+)
 from app.workers.jobs.account_deactivation import deliver_account_deactivation
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
 from app.workers.jobs.provider_cleanup import deliver_provider_cleanup
@@ -171,10 +174,7 @@ async def deliver_phone_provision(
             exhaustible=False,
         ) from None
     except ProviderFailure as exc:
-        raise OutboxDeliveryError(
-            "provider_retryable" if exc.retryable else "provider_terminal",
-            retryable=exc.retryable,
-        ) from None
+        raise provider_failure_delivery_error(exc) from None
     async with session_factory() as session:
         phone_number = await PhoneNumberRepository(session).get_by_user_id(user_id)
         provisioning = await PhoneNumberProvisioningRepository(session).get_by_user_id(
@@ -392,10 +392,7 @@ async def deliver_phone_routing(
                     retryable=True,
                     exhaustible=False,
                 ) from None
-            raise OutboxDeliveryError(
-                "provider_retryable" if exc.retryable else "provider_terminal",
-                retryable=exc.retryable,
-            ) from None
+            raise provider_failure_delivery_error(exc) from None
     if provider_connection_name != desired_connection_name:
         raise OutboxDeliveryError(
             "provider_retryable",
@@ -727,16 +724,8 @@ async def deliver_livekit_dispatch(
 
         try:
             dispatches = await provider.list_dispatches(room_name=snapshot.room_name)
-        except ValueError:
-            raise OutboxDeliveryError(
-                "dispatch_configuration",
-                retryable=False,
-            ) from None
         except ProviderFailure as error:
-            raise OutboxDeliveryError(
-                "provider_retryable" if error.retryable else "provider_terminal",
-                retryable=error.retryable,
-            ) from error
+            raise provider_failure_delivery_error(error) from error
         await _require_current_worker_account(
             session_factory,
             snapshot.user_id,
@@ -761,30 +750,15 @@ async def deliver_livekit_dispatch(
                     room_name=snapshot.room_name,
                     metadata=snapshot.metadata,
                 )
-            except ValueError:
-                raise OutboxDeliveryError(
-                    "dispatch_configuration",
-                    retryable=False,
-                ) from None
             except ProviderFailure as error:
                 if not error.retryable:
-                    raise OutboxDeliveryError(
-                        "provider_terminal",
-                        retryable=False,
-                    ) from error
+                    raise provider_failure_delivery_error(error) from error
                 try:
                     dispatches = await provider.list_dispatches(
                         room_name=snapshot.room_name
                     )
                 except ProviderFailure as list_error:
-                    raise OutboxDeliveryError(
-                        (
-                            "provider_retryable"
-                            if list_error.retryable
-                            else "provider_terminal"
-                        ),
-                        retryable=list_error.retryable,
-                    ) from list_error
+                    raise provider_failure_delivery_error(list_error) from list_error
                 await _require_current_worker_account(
                     session_factory,
                     snapshot.user_id,
@@ -1117,16 +1091,8 @@ async def deliver_livekit_verification_dispatch(
 
         try:
             dispatches = await provider.list_dispatches(room_name=snapshot.room_name)
-        except ValueError:
-            raise OutboxDeliveryError(
-                "dispatch_configuration",
-                retryable=False,
-            ) from None
         except ProviderFailure as error:
-            raise OutboxDeliveryError(
-                "provider_retryable" if error.retryable else "provider_terminal",
-                retryable=error.retryable,
-            ) from error
+            raise provider_failure_delivery_error(error) from error
         await _require_current_worker_account(
             session_factory,
             snapshot.user_id,
@@ -1151,30 +1117,15 @@ async def deliver_livekit_verification_dispatch(
                     room_name=snapshot.room_name,
                     metadata=snapshot.metadata,
                 )
-            except ValueError:
-                raise OutboxDeliveryError(
-                    "dispatch_configuration",
-                    retryable=False,
-                ) from None
             except ProviderFailure as error:
                 if not error.retryable:
-                    raise OutboxDeliveryError(
-                        "provider_terminal",
-                        retryable=False,
-                    ) from error
+                    raise provider_failure_delivery_error(error) from error
                 try:
                     dispatches = await provider.list_dispatches(
                         room_name=snapshot.room_name
                     )
                 except ProviderFailure as list_error:
-                    raise OutboxDeliveryError(
-                        (
-                            "provider_retryable"
-                            if list_error.retryable
-                            else "provider_terminal"
-                        ),
-                        retryable=list_error.retryable,
-                    ) from list_error
+                    raise provider_failure_delivery_error(list_error) from list_error
                 await _require_current_worker_account(
                     session_factory,
                     snapshot.user_id,
@@ -1505,10 +1456,7 @@ async def deliver_summary_generate(
             structured = await provider.generate_summary(transcript)
             summary_data = SummaryService.validate_structured_summary(structured)
         except ProviderFailure as exc:
-            raise OutboxDeliveryError(
-                "provider_retryable" if exc.retryable else "provider_terminal",
-                retryable=exc.retryable,
-            ) from None
+            raise provider_failure_delivery_error(exc) from None
         if summary_data is None:
             raise OutboxDeliveryError("provider_terminal", retryable=False)
 
@@ -1593,10 +1541,7 @@ async def deliver_recording_reconcile(
         else:
             raise ValueError("Recording reconciliation outcome is invalid")
     except ProviderFailure as error:
-        raise OutboxDeliveryError(
-            "provider_retryable" if error.retryable else "provider_terminal",
-            retryable=error.retryable,
-        ) from error
+        raise provider_failure_delivery_error(error) from error
 
     observability.record_recording_reconciliation_result(result_label)
     if conflict_category == "multiple_exact_match":

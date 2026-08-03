@@ -740,15 +740,19 @@ async def test_provider_failure_telemetry_uses_exact_provider_failure_kind() -> 
     meter = _Meter()
     tracer = _Tracer()
     telemetry = _observability(meter=meter, tracer=tracer)
+    failure = ProviderFailure(
+        provider="telnyx",
+        operation="disable_number",
+        disposition="terminal",
+        error_class="authentication",
+    )
+    assert "error_class" not in failure.__dict__
 
-    with pytest.raises(ProviderFailure):
+    with pytest.raises(ProviderFailure) as caught:
         async with telemetry.provider_operation("telnyx", "disable_number"):
-            raise ProviderFailure(
-                provider="telnyx",
-                operation="disable_number",
-                disposition="terminal",
-                error_class="authentication",
-            )
+            raise failure
+
+    assert caught.value is failure
 
     assert meter.instruments["presvo.provider.errors"].measurements == [
         (
@@ -1132,6 +1136,30 @@ async def test_telnyx_release_provider_operation_is_allowlisted() -> None:
 
     assert tracer.spans[0].attributes["presvo.provider.name"] == "telnyx"
     assert tracer.spans[0].attributes["presvo.provider.operation"] == "release_number"
+
+
+@pytest.mark.anyio
+async def test_telnyx_recover_provisioned_number_operation_is_allowlisted() -> None:
+    meter = _Meter()
+    tracer = _Tracer()
+    telemetry = _observability(meter=meter, tracer=tracer)
+
+    async with telemetry.provider_operation(
+        "telnyx",
+        "recover_provisioned_number",
+    ):
+        await asyncio.sleep(0)
+
+    assert meter.instruments["presvo.provider.request.duration"].measurements[0][1] == {
+        "provider": "telnyx",
+        "operation": "recover_provisioned_number",
+        "outcome": "success",
+    }
+    assert tracer.spans[0].attributes == {
+        "presvo.provider.name": "telnyx",
+        "presvo.provider.operation": "recover_provisioned_number",
+        "presvo.outcome": "success",
+    }
 
 
 @pytest.mark.anyio

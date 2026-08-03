@@ -51,7 +51,13 @@ _UNSAFE_OTLP_HTTP_LOG_TEMPLATES = frozenset(
 
 _PROVIDER_OPERATIONS = {
     "telnyx": frozenset(
-        {"provision_number", "enable_number", "disable_number", "release_number"}
+        {
+            "provision_number",
+            "recover_provisioned_number",
+            "enable_number",
+            "disable_number",
+            "release_number",
+        }
     ),
     "s3": frozenset(
         {"upload_bytes", "get_download_url", "delete_object", "get_bucket_lifecycle"}
@@ -222,6 +228,9 @@ def _safe_failure(event: str, operation: str, error: BaseException) -> None:
 
 
 def normalize_error_class(error: BaseException) -> str:
+    if isinstance(error, ProviderFailure):
+        return error.error_class
+
     fields = getattr(error, "__dict__", None)
     structured = fields.get("error_class") if isinstance(fields, dict) else None
     if isinstance(structured, str) and structured in SAFE_ERROR_CLASSES:
