@@ -24,10 +24,11 @@ async function resolveActiveCaller(): Promise<WorkspaceCallerIdentity | null> {
 }
 
 export default async function AppLayout({ children }: Readonly<{ children: ReactNode }>) {
-  const [account, agentConfig, accountControl, activeCaller] = await Promise.all([
+  const [account, agentConfig, accountControl, mobileAccountControl, activeCaller] = await Promise.all([
     getAccount(),
     getAgentConfigForRequest(),
     resolveWorkspaceAccountControl(),
+    resolveWorkspaceAccountControl("mobile"),
     resolveActiveCaller(),
   ]);
   const agentName = normalizeAgentName(agentConfig.agent_name);
@@ -39,6 +40,7 @@ export default async function AppLayout({ children }: Readonly<{ children: React
       activeCaller={activeCaller}
       agentEnabled={agentConfig.is_enabled}
       agentName={agentName}
+      mobileAccountControl={mobileAccountControl}
     >
       {children}
     </WorkspaceShell>

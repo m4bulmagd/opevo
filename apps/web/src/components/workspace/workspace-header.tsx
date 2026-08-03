@@ -2,9 +2,10 @@ import type { ReactNode } from "react";
 
 import Link from "next/link";
 
-import { History, LogOut, PhoneCall, Search } from "lucide-react";
+import { History, PhoneCall, Search } from "lucide-react";
 
 import { ThemeSwitcher } from "@/app/(app)/dashboard/_components/sidebar/theme-switcher";
+import { ClerkSignOut } from "@/components/auth/clerk-sign-out";
 import { CapabilityBadge } from "@/components/product/capability-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ import { type WorkspaceCallerIdentity, WorkspaceCallerStatus } from "@/component
 import { WorkspaceNotificationsPreview } from "@/components/workspace/workspace-notifications-preview";
 import { authMode, shouldWrapClerk } from "@/lib/auth/clerk-config";
 
-export async function resolveWorkspaceAccountControl(): Promise<ReactNode> {
+export function resolveWorkspaceAccountControl(variant: "mobile" | "workspace" = "workspace"): ReactNode {
   if (authMode === "local") {
     return <Badge variant="secondary">Local development</Badge>;
   }
@@ -23,28 +24,21 @@ export async function resolveWorkspaceAccountControl(): Promise<ReactNode> {
     return null;
   }
 
-  const { SignOutButton } = await import("@clerk/nextjs");
-
-  return (
-    <SignOutButton redirectUrl="/">
-      <Button aria-label="Sign out" className="size-11" size="icon" variant="ghost">
-        <LogOut aria-hidden="true" />
-      </Button>
-    </SignOutButton>
-  );
+  return <ClerkSignOut variant={variant} />;
 }
 
 type WorkspaceHeaderProps = {
   accountControl: ReactNode;
   activeCaller: WorkspaceCallerIdentity | null;
   agentName: string;
+  mobileAccountControl: ReactNode;
 };
 
-export function WorkspaceHeader({ accountControl, activeCaller, agentName }: WorkspaceHeaderProps) {
+export function WorkspaceHeader({ accountControl, activeCaller, agentName, mobileAccountControl }: WorkspaceHeaderProps) {
   return (
     <header className="sticky top-0 z-20 flex items-center gap-2 border-border border-b bg-background/90 px-4 py-3 backdrop-blur lg:rounded-2xl lg:border lg:bg-card lg:shadow-card">
       <div className="flex min-w-0 items-center gap-2">
-        <MobileWorkspaceNavigation />
+        <MobileWorkspaceNavigation accountControl={mobileAccountControl} />
         <Link
           aria-label="Presvo overview"
           className="hidden min-h-11 min-w-0 items-center gap-2 rounded-md font-semibold tracking-tight outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:inline-flex lg:hidden"
