@@ -783,6 +783,33 @@ def test_local_compose_accepts_explicit_synthetic_auth_for_disposable_tests() ->
         assert environment["LOCAL_AUTH_TOKEN"] == "disposable-local-token"
 
 
+@pytest.mark.parametrize(
+    "local_auth_token",
+    ["", "   "],
+    ids=("blank", "whitespace"),
+)
+def test_local_compose_runtime_rejects_incomplete_synthetic_auth(
+    local_auth_token: str,
+) -> None:
+    document = load_local_compose_yaml(
+        {
+            "AUTH_MODE": "local",
+            "LOCAL_AUTH_TOKEN": local_auth_token,
+        }
+    )
+    api_environment = resolved_service_environment(document, "api")
+    settings = Settings(
+        app_env=api_environment["APP_ENV"],
+        database_url=api_environment["DATABASE_URL"],
+        redis_url=api_environment["REDIS_URL"],
+        auth_mode=api_environment["AUTH_MODE"],
+        local_auth_token=api_environment["LOCAL_AUTH_TOKEN"],
+    )
+
+    with pytest.raises(RuntimeError, match="LOCAL_AUTH_TOKEN"):
+        validate_api_runtime(settings)
+
+
 def test_clerk_example_documents_session_verifier_without_real_origin() -> None:
     example = (REPO_ROOT / "apps" / "api" / ".env.example").read_text()
     expected_settings = {
