@@ -158,6 +158,12 @@ Presvo will begin with the conversation runtime rather than a canvas:
 4. Visual node editor after the runtime is proven
 5. Reusable subflows and tool/function nodes after the authoring model is stable
 
+Before or alongside the runtime work, revisit the Python backend package
+responsibilities so the flow engine, LiveKit adapter, versioning, and durable
+traces do not accumulate in the existing central modules. The non-binding
+current considerations are recorded in
+[Backend package organization: future considerations](engineering/2026-08-03-backend-package-organization-considerations.md).
+
 This direction is inspired by [Retell AI's structured conversation flows](https://docs.retellai.com/build/conversation-flow/overview). Recall.ai is a meeting-bot platform and is not the intended product reference.
 
 ### Phase 5 — Advanced capabilities
@@ -180,3 +186,4 @@ This direction is inspired by [Retell AI's structured conversation flows](https:
 - [Controlled deployment and account-deactivation recovery](runbooks/deploy.md)
 - [Production-readiness hardening design](superpowers/specs/2026-07-12-production-readiness-hardening-design.md)
 - [Presvo UI production handoff](engineering/2026-07-29-presvo-ui-production-handoff.md)
+- [Backend package organization: future considerations](engineering/2026-08-03-backend-package-organization-considerations.md)
