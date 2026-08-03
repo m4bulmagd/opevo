@@ -71,6 +71,11 @@ CLERK_SESSION_VERIFIER_SETTINGS = (
     "CLERK_JWKS_POOL_TIMEOUT_SECONDS",
     "CLERK_JWKS_TOTAL_TIMEOUT_SECONDS",
 )
+LOCAL_COMPOSE_AUTH_DEFAULTS = {
+    "AUTH_MODE": "",
+    "LOCAL_AUTH_TOKEN": "",
+    "CLERK_AUTHORIZED_PARTIES": "",
+}
 
 
 def render_compose(
@@ -111,13 +116,14 @@ def resolved_service_environment(document: dict, service: str) -> dict[str, str]
     return document["services"][service].get("environment", {})
 
 
-def local_compose_service_environment(service: str) -> dict[str, str]:
-    document = render_compose(
+def load_local_compose_yaml(
+    environment: dict[str, str] | None = None,
+) -> dict:
+    return render_compose(
         "compose.dev.yaml",
-        {},
+        LOCAL_COMPOSE_AUTH_DEFAULTS | (environment or {}),
         resolve_env_files=False,
     )
-    return resolved_service_environment(document, service)
 
 
 def test_compose_render_can_skip_service_env_file_resolution(tmp_path: Path) -> None:
@@ -745,13 +751,36 @@ def test_production_compose_renders_exactly_one_nonempty_clerk_key_source() -> N
     ) == 1
 
 
-def test_local_compose_keeps_local_auth_and_realtime_disabled() -> None:
-    api_environment = local_compose_service_environment("api")
+def test_local_compose_defaults_interactive_services_to_clerk() -> None:
+    document = load_local_compose_yaml()
+    api_environment = resolved_service_environment(document, "api")
+    web_environment = resolved_service_environment(document, "web")
+    worker_environment = resolved_service_environment(document, "worker")
 
-    assert api_environment["AUTH_MODE"] == "local"
+    assert api_environment["AUTH_MODE"] == "clerk"
+    assert web_environment["AUTH_MODE"] == "clerk"
+    assert api_environment["LOCAL_AUTH_TOKEN"] == ""
+    assert web_environment["LOCAL_AUTH_TOKEN"] == ""
+    assert api_environment["CLERK_AUTHORIZED_PARTIES"] == (
+        "http://127.0.0.1:3000,http://localhost:3000"
+    )
     assert api_environment.get("REALTIME_ENABLED", "false") == "false"
-    for setting in CLERK_SESSION_VERIFIER_SETTINGS:
-        assert setting not in api_environment
+    for setting in ("AUTH_MODE", "LOCAL_AUTH_TOKEN", "CLERK_AUTHORIZED_PARTIES"):
+        assert setting not in worker_environment
+
+
+def test_local_compose_accepts_explicit_synthetic_auth_for_disposable_tests() -> None:
+    document = load_local_compose_yaml(
+        {
+            "AUTH_MODE": "local",
+            "LOCAL_AUTH_TOKEN": "disposable-local-token",
+        }
+    )
+
+    for service in ("api", "web"):
+        environment = resolved_service_environment(document, service)
+        assert environment["AUTH_MODE"] == "local"
+        assert environment["LOCAL_AUTH_TOKEN"] == "disposable-local-token"
 
 
 def test_clerk_example_documents_session_verifier_without_real_origin() -> None:
@@ -1029,41 +1058,35 @@ def test_development_services_load_local_env_files_without_leaking_api_identity_
     assert "API_BASE_URL: http://api:8000" in web_service
 
 
-def test_development_compose_scopes_local_identity_and_provider_modes() -> None:
-    compose_dev = (REPO_ROOT / "compose.dev.yaml").read_text()
+def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
+    document = load_local_compose_yaml()
     api_env_example = (REPO_ROOT / "apps" / "api" / ".env.example").read_text()
-    api_service = compose_dev.split("\n  api:", 1)[1].split("\n  worker:", 1)[0]
-    worker_service = compose_dev.split("\n  worker:", 1)[1].split("\n  agent:", 1)[0]
-    web_service = compose_dev.split("\n  web:", 1)[1].split("\nvolumes:", 1)[0]
+    api_environment = resolved_service_environment(document, "api")
+    worker_environment = resolved_service_environment(document, "worker")
+    web_environment = resolved_service_environment(document, "web")
 
-    for setting in (
-        "AUTH_MODE: local",
-        "BILLING_MODE: fake",
-        "CARRIER_LOOKUP_MODE: fake",
-        "TELEPHONY_MODE: fake",
-        "LOCAL_AUTH_TOKEN: presvo-local-development-token",
-        'ACTIVATION_FLOW_ENABLED: "true"',
-    ):
-        assert setting in api_service
+    assert api_environment["AUTH_MODE"] == "clerk"
+    assert api_environment["BILLING_MODE"] == "fake"
+    assert api_environment["CARRIER_LOOKUP_MODE"] == "fake"
+    assert api_environment["TELEPHONY_MODE"] == "fake"
+    assert api_environment["ACTIVATION_FLOW_ENABLED"] == "true"
 
-    assert "TELEPHONY_MODE: fake" in worker_service
-    assert 'ACTIVATION_FLOW_ENABLED: "true"' in worker_service
+    assert worker_environment["TELEPHONY_MODE"] == "fake"
+    assert worker_environment["ACTIVATION_FLOW_ENABLED"] == "true"
     for forbidden_setting in (
-        "AUTH_MODE:",
-        "CARRIER_LOOKUP_MODE:",
-        "LOCAL_AUTH_TOKEN:",
+        "AUTH_MODE",
+        "CARRIER_LOOKUP_MODE",
+        "LOCAL_AUTH_TOKEN",
     ):
-        assert forbidden_setting not in worker_service
-    assert "BILLING_MODE: fake" in worker_service
-    for setting in (
-        "AUTH_MODE: local",
-        "BILLING_MODE: fake",
-        "TELEPHONY_MODE: fake",
-        "LOCAL_AUTH_TOKEN: presvo-local-development-token",
-    ):
-        assert setting in web_service
-    assert "CARRIER_LOOKUP_MODE:" not in web_service
-    assert "NEXT_PUBLIC_LOCAL_AUTH_TOKEN" not in compose_dev
+        assert forbidden_setting not in worker_environment
+    for setting in CLERK_SESSION_VERIFIER_SETTINGS:
+        assert setting not in worker_environment
+    assert worker_environment["BILLING_MODE"] == "fake"
+    assert web_environment["AUTH_MODE"] == "clerk"
+    assert web_environment["BILLING_MODE"] == "fake"
+    assert web_environment["TELEPHONY_MODE"] == "fake"
+    assert "CARRIER_LOOKUP_MODE" not in web_environment
+    assert "NEXT_PUBLIC_LOCAL_AUTH_TOKEN" not in web_environment
 
     local_examples = (
         "AUTH_MODE=local",
@@ -1216,7 +1239,17 @@ def test_local_e2e_runner_preserves_signal_exit_and_failure_logs(
     fake_docker = tmp_path / "docker"
     fake_docker.write_text(
         """#!/bin/sh
-printf '%s\\n' "$*" >> "$PROBE_LOG"
+if [ "${AUTH_MODE:-}" = "local" ]; then
+  auth_mode_state=local
+else
+  auth_mode_state=unexpected
+fi
+if [ -n "${LOCAL_AUTH_TOKEN:-}" ]; then
+  local_token_state=configured
+else
+  local_token_state=missing
+fi
+printf '%s|%s|%s\\n' "$auth_mode_state" "$local_token_state" "$*" >> "$PROBE_LOG"
 if [ ! -e "$PROBE_SIGNAL_MARKER" ]; then
   : > "$PROBE_SIGNAL_MARKER"
   kill -"$PROBE_SIGNAL" "$PPID"
@@ -1243,7 +1276,10 @@ exit 0
     )
 
     assert result.returncode == expected_exit_code
-    docker_calls = probe_log.read_text()
+    docker_calls = probe_log.read_text().splitlines()
+    assert docker_calls
+    assert all(call.startswith("local|configured|") for call in docker_calls)
+    docker_calls = "\n".join(docker_calls)
     assert " ps" in docker_calls
     assert " logs api worker web" in docker_calls
     assert " down --volumes --remove-orphans" in docker_calls

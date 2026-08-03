@@ -12,6 +12,8 @@ export REDIS_PORT=56379
 export MINIO_PORT=59000
 export MINIO_CONSOLE_PORT=59001
 export DASHBOARD_METRICS_REFERENCE_TIME=2026-07-29T12:00:00Z
+export AUTH_MODE=local
+export LOCAL_AUTH_TOKEN=presvo-local-development-token
 
 compose() {
   docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
@@ -55,7 +57,7 @@ trap handle_term TERM
 e2e_state_dir=$(mktemp -d)
 export E2E_STATE_FILE="${e2e_state_dir}/account-lifecycle.json"
 export E2E_API_BASE_URL="http://127.0.0.1:${API_PORT}"
-export E2E_LOCAL_AUTH_TOKEN="presvo-local-development-token"
+export E2E_LOCAL_AUTH_TOKEN="$LOCAL_AUTH_TOKEN"
 update_snapshots=${E2E_UPDATE_SNAPSHOTS:-${UPDATE_SNAPSHOTS:-0}}
 e2e_focus=${E2E_FOCUS:-all}
 
