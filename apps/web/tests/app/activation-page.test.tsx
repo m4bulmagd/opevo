@@ -13,9 +13,8 @@ const clerkConfigState = vi.hoisted(() => ({
   authMode: "local" as "local" | "clerk",
   shouldWrapClerk: false,
 }));
-const clerkBoundaryState = vi.hoisted(() => ({
-  loadedDuringServerLayout: false,
-  serverLayoutExecuting: false,
+const clerkSignOutState = vi.hoisted(() => ({
+  variants: [] as Array<"activation" | "mobile" | "workspace">,
 }));
 const { getAccountMock, getActivationSnapshotMock, getDevelopmentCapabilitiesMock, redirectMock, refreshMock } =
   vi.hoisted(() => ({
@@ -37,16 +36,11 @@ vi.mock("@/lib/auth/clerk-config", () => ({
   },
 }));
 
-vi.mock("@clerk/nextjs", async () => {
-  if (clerkBoundaryState.serverLayoutExecuting) {
-    clerkBoundaryState.loadedDuringServerLayout = true;
-  }
-
-  const { Children, cloneElement } = await import("react");
-
+vi.mock("@/components/auth/clerk-sign-out", () => {
   return {
-    SignOutButton: ({ children }: { children: React.ReactNode }) => {
-      return cloneElement(Children.only(children) as React.ReactElement);
+    ClerkSignOut: ({ variant }: { variant: "activation" | "mobile" | "workspace" }) => {
+      clerkSignOutState.variants.push(variant);
+      return <button aria-label={`${variant} Clerk sign-out sentinel`} type="button" />;
     },
   };
 });
@@ -411,9 +405,13 @@ describe("authoritative stage refresh", () => {
 });
 
 describe("activation route feedback", () => {
-  it("keeps local context and skip navigation in the focused route layout", async () => {
+  beforeEach(() => {
     clerkConfigState.authMode = "local";
     clerkConfigState.shouldWrapClerk = false;
+    clerkSignOutState.variants.length = 0;
+  });
+
+  it("keeps local context and skip navigation in the focused route layout", async () => {
     const { default: ActivationLayout } = await import("@/app/(activation)/activate/layout");
 
     render(await ActivationLayout({ children: <div id="activation-content">Activation form</div> }));
@@ -422,25 +420,18 @@ describe("activation route feedback", () => {
     expect(screen.queryByRole("navigation", { name: "Account navigation" })).not.toBeInTheDocument();
     expect(screen.getByText(/Local development/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Skip to activation/i })).toHaveAttribute("href", "#activation-content");
+    expect(clerkSignOutState.variants).toEqual([]);
   });
 
-  it("renders Clerk sign-out through a client-owned single-child boundary", async () => {
+  it("delegates Clerk sign-out to the shared activation leaf", async () => {
     clerkConfigState.authMode = "clerk";
     clerkConfigState.shouldWrapClerk = true;
     const { default: ActivationLayout } = await import("@/app/(activation)/activate/layout");
 
-    clerkBoundaryState.loadedDuringServerLayout = false;
-    clerkBoundaryState.serverLayoutExecuting = true;
-    let layout: React.ReactNode;
-    try {
-      layout = await ActivationLayout({ children: <div id="activation-content">Activation form</div> });
-    } finally {
-      clerkBoundaryState.serverLayoutExecuting = false;
-    }
-    expect(clerkBoundaryState.loadedDuringServerLayout).toBe(false);
-    render(layout);
+    render(await ActivationLayout({ children: <div id="activation-content">Activation form</div> }));
 
-    expect(screen.getByRole("button", { name: /Sign out/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "activation Clerk sign-out sentinel" })).toBeInTheDocument();
+    expect(clerkSignOutState.variants).toEqual(["activation"]);
   });
 
   it("renders an accessible loading status", () => {

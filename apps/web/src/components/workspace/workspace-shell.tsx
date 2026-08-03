@@ -3,17 +3,16 @@ import type { ReactNode } from "react";
 import { AccountLifecycleBanner } from "@/components/account/account-lifecycle-banner";
 import { CommandRail } from "@/components/workspace/command-rail";
 import type { WorkspaceCallerIdentity } from "@/components/workspace/workspace-caller-status";
-import { WorkspaceHeader } from "@/components/workspace/workspace-header";
+import { type WorkspaceAccountControls, WorkspaceHeader } from "@/components/workspace/workspace-header";
 import type { AccountStatus } from "@/lib/types/account";
 
 type WorkspaceShellProps = {
   account: AccountStatus;
-  accountControl: ReactNode;
+  accountControls: WorkspaceAccountControls;
   activeCaller: WorkspaceCallerIdentity | null;
   agentEnabled: boolean;
   agentName: string;
   children: ReactNode;
-  mobileAccountControl: ReactNode;
 };
 
 function commandRailRuntimeState(account: AccountStatus, agentEnabled: boolean) {
@@ -28,12 +27,11 @@ function commandRailRuntimeState(account: AccountStatus, agentEnabled: boolean) 
 
 export function WorkspaceShell({
   account,
-  accountControl,
+  accountControls,
   activeCaller,
   agentEnabled,
   agentName,
   children,
-  mobileAccountControl,
 }: WorkspaceShellProps) {
   return (
     <div className="min-h-svh bg-background font-sans text-foreground" data-slot="workspace-shell">
@@ -47,10 +45,9 @@ export function WorkspaceShell({
         <CommandRail agentName={agentName} runtimeState={commandRailRuntimeState(account, agentEnabled)} />
         <div className="flex min-w-0 flex-1 flex-col">
           <WorkspaceHeader
-            accountControl={accountControl}
+            accountControls={accountControls}
             activeCaller={activeCaller}
             agentName={agentName}
-            mobileAccountControl={mobileAccountControl}
           />
           <main
             className="flex w-full flex-col gap-5 px-4 py-5 sm:px-6 md:gap-7 md:px-8 md:py-8 lg:px-0"
