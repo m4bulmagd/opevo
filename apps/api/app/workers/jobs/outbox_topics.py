@@ -35,7 +35,10 @@ from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
-from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
+from app.providers.livekit_dispatch.livekit import (
+    LiveKitDispatchAPIProvider,
+    LiveKitDispatchConfigurationError,
+)
 from app.providers.summaries.gemini import GeminiSummaryProvider
 from app.providers.telephony.factory import create_telephony_provider
 from app.providers.telephony.base import TelephonyProvisioningPending
@@ -724,6 +727,11 @@ async def deliver_livekit_dispatch(
 
         try:
             dispatches = await provider.list_dispatches(room_name=snapshot.room_name)
+        except LiveKitDispatchConfigurationError:
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            ) from None
         except ProviderFailure as error:
             raise provider_failure_delivery_error(error) from error
         await _require_current_worker_account(
@@ -750,6 +758,11 @@ async def deliver_livekit_dispatch(
                     room_name=snapshot.room_name,
                     metadata=snapshot.metadata,
                 )
+            except LiveKitDispatchConfigurationError:
+                raise OutboxDeliveryError(
+                    "dispatch_configuration",
+                    retryable=False,
+                ) from None
             except ProviderFailure as error:
                 if not error.retryable:
                     raise provider_failure_delivery_error(error) from error
@@ -1091,6 +1104,11 @@ async def deliver_livekit_verification_dispatch(
 
         try:
             dispatches = await provider.list_dispatches(room_name=snapshot.room_name)
+        except LiveKitDispatchConfigurationError:
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            ) from None
         except ProviderFailure as error:
             raise provider_failure_delivery_error(error) from error
         await _require_current_worker_account(
@@ -1117,6 +1135,11 @@ async def deliver_livekit_verification_dispatch(
                     room_name=snapshot.room_name,
                     metadata=snapshot.metadata,
                 )
+            except LiveKitDispatchConfigurationError:
+                raise OutboxDeliveryError(
+                    "dispatch_configuration",
+                    retryable=False,
+                ) from None
             except ProviderFailure as error:
                 if not error.retryable:
                     raise provider_failure_delivery_error(error) from error

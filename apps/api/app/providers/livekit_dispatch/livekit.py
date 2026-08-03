@@ -9,6 +9,10 @@ from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.providers.livekit_failures import livekit_failure_from_exception
 
 
+class LiveKitDispatchConfigurationError(RuntimeError):
+    pass
+
+
 class _MalformedLiveKitDispatchResponse(ValueError):
     pass
 
@@ -81,7 +85,9 @@ class LiveKitDispatchAPIProvider:
             or not settings.livekit_api_key
             or not settings.livekit_api_secret
         ):
-            raise ValueError("LiveKit settings are not configured")
+            raise LiveKitDispatchConfigurationError(
+                "LiveKit dispatch settings are not configured"
+            )
         return (
             api.LiveKitAPI(
                 url=settings.livekit_url,

@@ -4,6 +4,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -966,6 +967,93 @@ async def test_dispatch_provider_failure_retains_provider_exhausted_call_code(
         assert call.status == "failed"
         assert call.failure_code == "dispatch_provider_exhausted"
     assert calls == expected_attempts
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("dispatch_kind", "provider_operation"),
+    [
+        ("customer", "list_dispatches"),
+        ("customer", "create_dispatch"),
+        ("verification", "list_dispatches"),
+        ("verification", "create_dispatch"),
+    ],
+)
+async def test_missing_livekit_dispatch_settings_are_durable_configuration_failures(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+    activation_flow_disabled,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    dispatch_kind: str,
+    provider_operation: str,
+) -> None:
+    from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    verification_now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+    event = (
+        await _seed_customer_dispatch_event(outbox_session_factory)
+        if dispatch_kind == "customer"
+        else await _seed_verification_dispatch_event(
+            outbox_session_factory,
+            now=verification_now,
+        )
+    )
+    provider = LiveKitDispatchAPIProvider()
+    if provider_operation == "create_dispatch":
+
+        async def no_existing_dispatches(*, room_name: str) -> list:
+            assert room_name
+            return []
+
+        monkeypatch.setattr(provider, "list_dispatches", no_existing_dispatches)
+    monkeypatch.setattr(
+        "app.providers.livekit_dispatch.livekit.get_settings",
+        lambda: SimpleNamespace(
+            livekit_url=None,
+            livekit_api_key=None,
+            livekit_api_secret=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+    monkeypatch.setattr(
+        "app.workers.jobs.outbox_topics.create_verification_token",
+        lambda **_kwargs: "verification-jwt",
+    )
+    terminal_metrics: list[tuple[str, str]] = []
+    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+    result = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "livekit_dispatch_provider": provider,
+            "verification_now": lambda: verification_now,
+            "outbox_now": lambda: event.next_attempt_at + timedelta(seconds=1),
+            "outbox_terminal_failure_metric": (
+                lambda topic, error_code: terminal_metrics.append((topic, error_code))
+            ),
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
+    assert not any(
+        "event=outbox_internal_defect" in record.getMessage()
+        for record in caplog.records
+    )
+    assert terminal_metrics == [(event.topic, "dispatch_configuration")]
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.attempt_count == 1
+        assert stored.last_error_code == "dispatch_configuration"
+        if dispatch_kind == "customer":
+            call = await session.get(Call, event.aggregate_id)
+            assert call is not None
+            assert call.status == "failed"
+            assert call.failure_code == "dispatch_configuration"
 
 
 @pytest.mark.anyio
