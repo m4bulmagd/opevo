@@ -4,7 +4,7 @@
 
 **Goal:** Run the reviewed local stack against the existing real Telnyx number, complete Go live through the durable application path, and verify one real inbound voice call without fabricating application or provider state.
 
-**Architecture:** A private Compose override changes only API and worker provider mode to `telnyx`; committed development defaults remain `fake`. A masked database check and read-only Telnyx lookup gate the service restart, after which the account owner triggers the existing Go-live API through the browser and the normal worker outbox performs the only provider mutation.
+**Architecture:** A private Compose override changes only API and worker provider mode to `telnyx`; committed development defaults remain `fake`. A masked database check and read-only Telnyx lookup prove the exact legacy drift—Telnyx already uses the configured active connection while the durable projection is inactive—before the service restart. The account owner then triggers the existing Go-live API through the browser, and the normal worker outbox idempotently confirms the active provider connection before reconciling durable state.
 
 **Tech Stack:** Docker Compose, FastAPI, ARQ, PostgreSQL 17, Telnyx Python SDK 2.1.6, LiveKit, pytest-style boolean operational assertions.
 
@@ -16,7 +16,7 @@
 - Set `TELEPHONY_MODE=telnyx` for both `api` and `worker`; never run them in split provider modes during this E2E session.
 - Recreate API and worker from `/home/mo/code/ai/bmad-opevo/.worktrees/clerk-first-local-auth` and preserve PostgreSQL, Redis, MinIO, agent, and web container identities.
 - Use the existing `/home/mo/code/ai/bmad-opevo/apps/api/.env` credential file without reading or copying its values.
-- Perform a read-only Telnyx identity and disabled-connection preflight before any provider mutation.
+- Perform a read-only Telnyx identity and exact connection-classification preflight before any provider mutation. This account must classify as the configured active connection; an unknown connection stops execution.
 - Go live must run through the existing browser/API/outbox path; do not call `enable_number` directly.
 - Do not retry Go live while its latest `phone.enable` event is pending or processing.
 - Keep `/tmp/presvo-voice-e2e.override.yaml` and the new Telnyx override until the final provider state is explicitly resolved.
@@ -108,13 +108,13 @@ async def preflight() -> None:
         provider_numbers[0], "connection_id"
     )
     assert remote_id == provider_number_id
-    assert provider.disabled_connection_id is not None
-    assert remote_connection_id == provider.disabled_connection_id
+    assert provider.active_connection_id is not None
+    assert remote_connection_id == provider.active_connection_id
 
     print("database_target_count=1")
     print("provider_lookup_count=1")
     print("provider_identity_matches=true")
-    print("provider_connection_is_disabled=true")
+    print("provider_connection_is_active=true")
 
 
 try:
@@ -142,7 +142,7 @@ Expected exact boolean outcome:
 database_target_count=1
 provider_lookup_count=1
 provider_identity_matches=true
-provider_connection_is_disabled=true
+provider_connection_is_active=true
 telnyx_preflight_ok=true
 ```
 

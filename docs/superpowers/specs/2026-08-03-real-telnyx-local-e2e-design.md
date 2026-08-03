@@ -39,9 +39,12 @@ selected provider mode and boolean credential-presence checks.
 1. Confirm the database still records one matching account with forwarding
    verified, activation false, a Telnyx provider classification, and a non-fake
    provider number identity. Do not print the number or provider identifier.
-2. Make a read-only Telnyx lookup for that exact stored provider identifier.
-   Confirm only that it exists and is managed by the configured account. Do not
-   display provider response bodies or identifiers.
+2. Make a read-only Telnyx lookup using the exact stored phone number as the
+   filter. Confirm that the returned provider identity matches the stored
+   provider identity, is managed by the configured account, and is attached to
+   one of the two configured connections. Do not display provider response
+   bodies or identifiers. For this legacy account, the expected pre-Go-live
+   drift is an active Telnyx connection with an inactive durable projection.
 3. Create the private override and validate the rendered Compose configuration
    without printing secrets.
 4. Recreate only API and worker. Preserve PostgreSQL, Redis, MinIO, agent, and
@@ -50,8 +53,9 @@ selected provider mode and boolean credential-presence checks.
    Telnyx settings are present, API health is green, and the worker starts
    without configuration failures.
 6. The account owner clicks Go live once. This is the authorized mutation: the
-   worker changes the existing number from the disabled Telnyx connection to
-   the configured active connection.
+   worker idempotently assigns the exact existing number to the configured
+   active connection, confirms the provider response, and only then reconciles
+   the inactive durable projection to active.
 7. Verify the outbox event is delivered, the phone projection becomes active,
    activation completes, and no safe failure code remains. Then place one real
    inbound call and inspect API, worker, and agent logs for the complete voice
@@ -64,6 +68,9 @@ selected provider mode and boolean credential-presence checks.
 
 - A failed read-only preflight stops the procedure before any provider
   mutation.
+- A matching provider identity on the configured active connection is accepted
+  only for the documented legacy drift. Any connection other than the exact
+  configured active or disabled connection stops the procedure.
 - A retryable Telnyx failure remains in the durable outbox retry path; do not
   bypass it with database edits or direct projection changes.
 - A terminal Telnyx failure remains visible through the safe activation failure
@@ -77,6 +84,8 @@ selected provider mode and boolean credential-presence checks.
 Verification is complete only when all of the following are observed:
 
 - API and worker run in Telnyx mode from the same reviewed checkout;
+- the preflight proves exact provider identity and classifies the legacy remote
+  connection as the configured active connection without exposing its value;
 - the real `phone.enable` event is delivered exactly once for the successful
   attempt;
 - the durable activation and phone projections are active;
