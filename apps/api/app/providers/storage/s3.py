@@ -23,6 +23,9 @@ class StorageConfigurationError(RuntimeError):
     pass
 
 
+MAX_PRESIGNED_URL_LENGTH = 8192
+
+
 class S3Storage(StorageProvider):
     def __init__(
         self,
@@ -37,7 +40,9 @@ class S3Storage(StorageProvider):
     ) -> None:
         settings = get_settings()
         self.bucket_name = bucket_name or settings.storage_bucket_name
-        self.endpoint_url = endpoint_url or settings.s3_endpoint_url or "http://minio:9000"
+        self.endpoint_url = (
+            endpoint_url or settings.s3_endpoint_url or "http://minio:9000"
+        )
         self.access_key = access_key or settings.s3_access_key
         self.secret_key = secret_key or settings.s3_secret_key
         self.region = region or settings.s3_region
@@ -81,9 +86,7 @@ class S3Storage(StorageProvider):
             return
         bucket_exists = client.bucket_exists(self.bucket_name)
         if not bucket_exists:
-            raise StorageConfigurationError(
-                "Configured storage bucket is unavailable"
-            )
+            raise StorageConfigurationError("Configured storage bucket is unavailable")
         self._bucket_verified = True
 
     @staticmethod
@@ -207,6 +210,35 @@ class S3Storage(StorageProvider):
                 "Configured storage bucket is unavailable"
             ) from error
 
+    @classmethod
+    def _validate_presigned_url(cls, value: object) -> str:
+        if (
+            type(value) is not str
+            or not value
+            or len(value) > MAX_PRESIGNED_URL_LENGTH
+            or value.strip() != value
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise cls._failure(
+                operation="get_download_url",
+                disposition="terminal",
+                error_class="validation",
+            ) from None
+        try:
+            parsed = urlparse(value)
+            valid_location = parsed.hostname is not None
+            valid_scheme = parsed.scheme in {"http", "https"}
+        except ValueError:
+            valid_location = False
+            valid_scheme = False
+        if not valid_scheme or not valid_location:
+            raise cls._failure(
+                operation="get_download_url",
+                disposition="terminal",
+                error_class="validation",
+            ) from None
+        return value
+
     async def _run_application_call(
         self,
         provider_operation: ProviderOperation,
@@ -230,9 +262,13 @@ class S3Storage(StorageProvider):
             raise failure from exc
 
     @instrument_provider("s3", "upload_bytes")
-    async def upload_bytes(self, *, object_key: str, data: bytes, content_type: str) -> StoredObject:
+    async def upload_bytes(
+        self, *, object_key: str, data: bytes, content_type: str
+    ) -> StoredObject:
         client = self._get_client()
-        await self._run_application_call("upload_bytes", self._ensure_bucket_exists, client)
+        await self._run_application_call(
+            "upload_bytes", self._ensure_bucket_exists, client
+        )
         data_stream = io.BytesIO(data)
         await self._run_application_call(
             "upload_bytes",
@@ -276,17 +312,20 @@ class S3Storage(StorageProvider):
             if failure is not None:
                 raise failure from exc
             raise
-        return await self._run_application_call(
+        download_url = await self._run_application_call(
             "get_download_url",
             client.presigned_get_object,
             self.bucket_name,
             object_key,
         )
+        return self._validate_presigned_url(download_url)
 
     @instrument_provider("s3", "delete_object")
     async def delete_object(self, *, object_key: str) -> None:
         client = self._get_client()
-        await self._run_application_call("delete_object", self._ensure_bucket_exists, client)
+        await self._run_application_call(
+            "delete_object", self._ensure_bucket_exists, client
+        )
         try:
             await asyncio.to_thread(
                 client.remove_object,

@@ -40,7 +40,9 @@ class FakeMinioClient:
         self.missing_objects: set[str] = set()
         self.missing_bucket_on: set[str] = set()
 
-    def _raise_missing_bucket(self, operation: str, object_key: str | None = None) -> None:
+    def _raise_missing_bucket(
+        self, operation: str, object_key: str | None = None
+    ) -> None:
         if operation not in self.missing_bucket_on:
             return
         from minio.error import S3Error
@@ -63,7 +65,9 @@ class FakeMinioClient:
     def make_bucket(self, bucket_name: str) -> None:
         raise AssertionError("application storage paths must not create buckets")
 
-    def put_object(self, bucket_name: str, object_key: str, data, length: int, content_type: str) -> None:
+    def put_object(
+        self, bucket_name: str, object_key: str, data, length: int, content_type: str
+    ) -> None:
         self._raise_missing_bucket("put", object_key)
         self.put_calls.append(
             {
@@ -87,9 +91,7 @@ class FakeMinioClient:
 
     def stat_object(self, bucket_name: str, object_key: str):
         self._raise_missing_bucket("stat", object_key)
-        self.stat_calls.append(
-            {"bucket_name": bucket_name, "object_key": object_key}
-        )
+        self.stat_calls.append({"bucket_name": bucket_name, "object_key": object_key})
         if object_key in self.missing_objects:
             from minio.error import S3Error
 
@@ -154,6 +156,20 @@ class FailingOperationMinioClient(FakeMinioClient):
         return object()
 
 
+class SuccessfulPresignedResultMinioClient(FakeMinioClient):
+    def __init__(self, result: object) -> None:
+        super().__init__()
+        self.result = result
+
+    def presigned_get_object(self, bucket_name: str, object_key: str) -> object:
+        super().presigned_get_object(bucket_name, object_key)
+        return self.result
+
+
+class _PresignedURLStringSubclass(str):
+    pass
+
+
 @pytest.mark.anyio
 async def test_s3_storage_uploads_recordings_with_env_backed_endpoint() -> None:
     client = FakeMinioClient()
@@ -201,7 +217,9 @@ async def test_s3_storage_mints_fresh_download_url() -> None:
         client=client,
     )
 
-    signed_url = await storage.get_download_url(object_key="calls/user-123/call-456.mp3")
+    signed_url = await storage.get_download_url(
+        object_key="calls/user-123/call-456.mp3"
+    )
 
     assert client.created_buckets == []
     assert client.stat_calls == [
@@ -216,7 +234,72 @@ async def test_s3_storage_mints_fresh_download_url() -> None:
             "object_key": "calls/user-123/call-456.mp3",
         }
     ]
-    assert signed_url == "http://minio:9000/recordings/calls/user-123/call-456.mp3?signed=fresh"
+    assert (
+        signed_url
+        == "http://minio:9000/recordings/calls/user-123/call-456.mp3?signed=fresh"
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "result",
+    [
+        None,
+        42,
+        _PresignedURLStringSubclass("https://storage.example.test/private.mp3"),
+        "",
+        "   ",
+        "relative/download/path",
+        "ftp://storage.example.test/recording.mp3",
+        "https://",
+        "https://storage.example.test/PRIVATE_URL_SENTINEL\x00.mp3",
+        "https://storage.example.test/" + ("a" * 8192),
+    ],
+)
+async def test_s3_storage_rejects_malformed_successful_presigned_urls(
+    result: object,
+) -> None:
+    storage = S3Storage(
+        bucket_name="recordings",
+        client=SuccessfulPresignedResultMinioClient(result),
+    )
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await storage.get_download_url(object_key="calls/private.mp3")
+
+    assert (
+        exc_info.value.provider,
+        exc_info.value.operation,
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("s3", "get_download_url", "terminal", "validation")
+    assert "PRIVATE_URL_SENTINEL" not in str(exc_info.value)
+    assert "PRIVATE_URL_SENTINEL" not in repr(exc_info.value)
+    assert all(
+        "PRIVATE_URL_SENTINEL" not in str(value) for value in exc_info.value.args
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("defect_type", [TypeError, RuntimeError, AttributeError])
+async def test_s3_presigning_defects_propagate_exact_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    defect_type: type[Exception],
+) -> None:
+    async def run_inline(operation, *args, **kwargs):
+        return operation(*args, **kwargs)
+
+    defect = defect_type("S3_PRESIGN_DEFECT_SENTINEL")
+    monkeypatch.setattr(s3_module.asyncio, "to_thread", run_inline)
+    storage = S3Storage(
+        bucket_name="recordings",
+        client=FailingOperationMinioClient(operation="sign", error=defect),
+    )
+
+    with pytest.raises(defect_type) as exc_info:
+        await storage.get_download_url(object_key="calls/private.mp3")
+
+    assert exc_info.value is defect
 
 
 @pytest.mark.anyio
@@ -369,9 +452,7 @@ async def test_s3_storage_translates_known_sdk_and_transport_failures_once(
                 content_type="audio/mpeg",
             )
         elif operation in {"stat", "sign"}:
-            await storage.get_download_url(
-                object_key="calls/provider-failure.mp3"
-            )
+            await storage.get_download_url(object_key="calls/provider-failure.mp3")
         else:
             await storage.get_bucket_lifecycle()
 
@@ -436,7 +517,10 @@ async def test_s3_storage_keeps_malformed_provider_responses_private(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("provider_error", [TypeError("S3_DEFECT_SENTINEL"), RuntimeError("S3_DEFECT_SENTINEL")])
+@pytest.mark.parametrize(
+    "provider_error",
+    [TypeError("S3_DEFECT_SENTINEL"), RuntimeError("S3_DEFECT_SENTINEL")],
+)
 async def test_s3_storage_does_not_translate_injected_programming_defects(
     monkeypatch: pytest.MonkeyPatch,
     provider_error: Exception,
@@ -514,7 +598,10 @@ async def test_firebase_provider_remains_disabled_without_private_tokens() -> No
     status = await provider.send_notification(
         user_id="user_123",
         notification_type="call_completed",
-        payload={"summary_text": "Caller asked about opening hours.", "minutes_charged": 2},
+        payload={
+            "summary_text": "Caller asked about opening hours.",
+            "minutes_charged": 2,
+        },
     )
 
     assert status == "disabled"
