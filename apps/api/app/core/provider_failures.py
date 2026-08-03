@@ -97,6 +97,11 @@ _SAFE_PROVIDER_OPERATIONS = {
 _SAFE_CONTEXT_VALUES = {"start_outcome": frozenset({"not_started", "unknown"})}
 
 
+def is_safe_provider_operation(provider: str, operation: str) -> bool:
+    operations = _SAFE_PROVIDER_OPERATIONS.get(provider)
+    return operations is not None and operation in operations
+
+
 class ProviderFailure(RuntimeError):
     def __init__(
         self,
@@ -109,7 +114,7 @@ class ProviderFailure(RuntimeError):
     ) -> None:
         if provider not in SAFE_PROVIDER_NAMES:
             raise ValueError("Unsafe provider name")
-        if operation not in _SAFE_PROVIDER_OPERATIONS[provider]:
+        if not is_safe_provider_operation(provider, operation):
             raise ValueError("Unsafe provider operation")
         if disposition not in _SAFE_PROVIDER_DISPOSITIONS:
             raise ValueError("Unsafe provider failure disposition")

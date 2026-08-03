@@ -1139,6 +1139,29 @@ async def test_telnyx_release_provider_operation_is_allowlisted() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("provider", "operation"),
+    [
+        ("telnyx", "lookup_carrier"),
+        ("stripe", "cancel_subscription"),
+        ("fake", "validate"),
+    ],
+)
+async def test_provider_telemetry_uses_the_shared_bounded_operation_vocabulary(
+    provider: str,
+    operation: str,
+) -> None:
+    tracer = _Tracer()
+    telemetry = _observability(tracer=tracer)
+
+    async with telemetry.provider_operation(provider, operation):
+        await asyncio.sleep(0)
+
+    assert tracer.spans[0].attributes["presvo.provider.name"] == provider
+    assert tracer.spans[0].attributes["presvo.provider.operation"] == operation
+
+
+@pytest.mark.anyio
 async def test_telnyx_recover_provisioned_number_operation_is_allowlisted() -> None:
     meter = _Meter()
     tracer = _Tracer()

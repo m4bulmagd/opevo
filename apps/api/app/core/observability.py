@@ -20,7 +20,11 @@ from opentelemetry.sdk.metrics.export import MetricExporter, MetricExportResult
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from app.core.logging import report_safe_exception
-from app.core.provider_failures import ProviderFailure
+from app.core.provider_failures import (
+    SAFE_PROVIDER_NAMES,
+    ProviderFailure,
+    is_safe_provider_operation,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -49,33 +53,6 @@ _UNSAFE_OTLP_HTTP_LOG_TEMPLATES = frozenset(
     }
 )
 
-_PROVIDER_OPERATIONS = {
-    "telnyx": frozenset(
-        {
-            "provision_number",
-            "recover_provisioned_number",
-            "enable_number",
-            "disable_number",
-            "release_number",
-        }
-    ),
-    "s3": frozenset(
-        {"upload_bytes", "get_download_url", "delete_object", "get_bucket_lifecycle"}
-    ),
-    "livekit": frozenset(
-        {
-            "list_dispatches",
-            "create_dispatch",
-            "start_recording",
-            "stop_recording",
-            "ensure_recording_not_running",
-            "ensure_recording_stopped",
-            "list_recording_egresses",
-        }
-    ),
-    "gemini": frozenset({"generate_summary"}),
-    "stripe": frozenset({"create_checkout_session", "create_portal_session"}),
-}
 _WEBHOOK_PROVIDERS = frozenset({"clerk", "stripe", "livekit"})
 _WEBHOOK_OUTCOMES = frozenset({"accepted", "duplicate", "rejected", "error"})
 _JOB_NAMES = frozenset(
@@ -285,10 +262,12 @@ def _safe_label(
 
 
 def _provider_labels(provider: str, operation: str) -> tuple[str, str]:
-    operations = _PROVIDER_OPERATIONS.get(provider)
-    if operations is None:
+    if provider not in SAFE_PROVIDER_NAMES:
         return "unknown", "unknown"
-    return provider, operation if operation in operations else "unknown"
+    safe_operation = (
+        operation if is_safe_provider_operation(provider, operation) else "unknown"
+    )
+    return provider, safe_operation
 
 
 def _validated_call_id(call_id: object) -> str | None:
