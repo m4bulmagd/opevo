@@ -7,7 +7,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const authState = vi.hoisted(() => ({
   authMode: "clerk" as "clerk" | "local",
-  configured: true,
   redirectMock: vi.fn(() => {
     throw new Error("NEXT_REDIRECT");
   }),
@@ -33,12 +32,8 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/lib/auth/clerk-config", () => ({
-  CLERK_REQUIRED_ENV_VARS: ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"],
   get authMode() {
     return authState.authMode;
-  },
-  get isAppAuthConfigured() {
-    return authState.configured;
   },
 }));
 
@@ -49,14 +44,13 @@ vi.mock("@clerk/nextjs", () => ({
 
 beforeEach(() => {
   authState.authMode = "clerk";
-  authState.configured = true;
   authState.redirectMock.mockClear();
   authState.signInMock.mockClear();
   authState.signUpMock.mockClear();
 });
 
 describe("hosted auth entry", () => {
-  it("contains configured sign-in in the Presvo entry surface", async () => {
+  it("contains sign-in in the Presvo entry surface", async () => {
     const { default: SignInPage } = await import("@/app/(auth)/sign-in/[[...sign-in]]/page");
 
     render(await SignInPage());
@@ -74,7 +68,7 @@ describe("hosted auth entry", () => {
     );
   });
 
-  it("contains configured sign-up in the same Presvo entry surface", async () => {
+  it("contains sign-up in the same Presvo entry surface", async () => {
     const { default: SignUpPage } = await import("@/app/(auth)/sign-up/[[...sign-up]]/page");
 
     render(await SignUpPage());

@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { PhoneForwarded, Settings2, Sparkles } from "lucide-react";
 
 import { canEnterDashboard } from "@/app/(activation)/activate/_components/stage-router";
-import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { ActivityChart } from "@/components/dashboard/activity-chart";
 import { AnsweringStatusBanner } from "@/components/dashboard/answering-status-banner";
 import { AttentionSurface } from "@/components/dashboard/attention-surface";
@@ -23,7 +22,6 @@ import { listCalls } from "@/lib/api/calls";
 import { getDashboardMetrics } from "@/lib/api/dashboard";
 import { getOnboardingStatus } from "@/lib/api/onboarding";
 import { getAgentConfigForRequest } from "@/lib/api/request-data";
-import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 import { formatPhoneNumber } from "@/lib/formatters";
 import { normalizeAgentName } from "@/navigation/dashboard-items";
 
@@ -37,15 +35,6 @@ function dashboardDateContext(timezone: string) {
 }
 
 export default async function DashboardPage() {
-  if (!isAppAuthConfigured) {
-    return (
-      <ClerkSetupNotice
-        title="Dashboard is unavailable"
-        description="Add your Clerk keys to load customer data, call history, and billing state."
-      />
-    );
-  }
-
   const activation = await getActivationSnapshot();
   if (!canEnterDashboard(activation)) {
     redirect("/activate");

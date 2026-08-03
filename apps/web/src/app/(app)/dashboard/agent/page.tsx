@@ -3,12 +3,10 @@ import Link from "next/link";
 import { AgentRuntimeCard } from "@/components/agent/agent-runtime-card";
 import { type AgentConfigurationTab, AgentSettingsForm } from "@/components/agent/agent-settings-form";
 import { AssistantPreview } from "@/components/agent/assistant-preview";
-import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { CapabilityBadge } from "@/components/product/capability-badge";
 import { PageIntro } from "@/components/product/page-intro";
 import { getAccount } from "@/lib/api/account";
 import { getAgentConfigForRequest } from "@/lib/api/request-data";
-import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 import { cn } from "@/lib/utils";
 import { normalizeAgentName } from "@/navigation/dashboard-items";
 
@@ -35,15 +33,6 @@ function tabHref(tab: AgentPageTab): string {
 }
 
 export default async function AgentPage({ searchParams = Promise.resolve({}) }: AgentPageProps = {}) {
-  if (!isAppAuthConfigured) {
-    return (
-      <ClerkSetupNotice
-        title="Agent settings are unavailable"
-        description="Configure Clerk in your local environment before loading agent configuration."
-      />
-    );
-  }
-
   const [{ tab }, agentConfig, account] = await Promise.all([searchParams, getAgentConfigForRequest(), getAccount()]);
   const activeTab = parseTab(tab);
   const agentName = normalizeAgentName(agentConfig.agent_name);
