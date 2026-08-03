@@ -813,7 +813,7 @@ def test_local_compose_runtime_rejects_incomplete_synthetic_auth(
 def test_clerk_example_documents_session_verifier_without_real_origin() -> None:
     example = (REPO_ROOT / "apps" / "api" / ".env.example").read_text()
     expected_settings = {
-        "CLERK_AUTHORIZED_PARTIES": "https://your-app.example.com",
+        "CLERK_AUTHORIZED_PARTIES": "http://127.0.0.1:3000,http://localhost:3000",
         "CLERK_JWT_KEY": "",
         "CLERK_JWKS_URL": "",
         "CLERK_JWKS_CACHE_TTL_SECONDS": "300",
@@ -830,7 +830,9 @@ def test_clerk_example_documents_session_verifier_without_real_origin() -> None:
         line
         for line in example.splitlines()
         if line.startswith("CLERK_AUTHORIZED_PARTIES=")
-    ] == ["CLERK_AUTHORIZED_PARTIES=https://your-app.example.com"]
+    ] == [
+        "CLERK_AUTHORIZED_PARTIES=http://127.0.0.1:3000,http://localhost:3000"
+    ]
 
 
 def test_api_ci_supplies_network_free_clerk_construction_values() -> None:
@@ -1117,7 +1119,7 @@ def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
 
     local_examples = (
         "AUTH_MODE=local",
-        "LOCAL_AUTH_TOKEN=presvo-local-development-token",
+        "LOCAL_AUTH_TOKEN=replace-with-a-development-only-token",
         "BILLING_MODE=fake",
         "CARRIER_LOOKUP_MODE=fake",
         "TELEPHONY_MODE=fake",
