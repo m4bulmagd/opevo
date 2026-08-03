@@ -47,7 +47,7 @@ The recommendations use these agreed priorities:
 | 4 | Worker isolation | **4A + 4B** — split critical/background queues and add explicit limits, metrics, and load criteria | Accepted |
 | 5 | Outbox structure | **5A** — split the topic god module by cohesive topic family | Accepted |
 | 6 | Dependency construction | **6A** — explicit, thin composition roots with typed dependencies | Accepted |
-| 7 | Provider failures | **7A** — one typed provider-failure vocabulary; distinguish internal defects | Accepted; code complete, final verification pending |
+| 7 | Provider failures | **7A** — one typed provider-failure vocabulary; distinguish internal defects | Accepted; implemented |
 | 8 | LiveKit compatibility | **8A** — staged upgrade and removal of private SDK dependencies | Accepted |
 | 9 | Python/test reliability | **9A-1R** — Python 3.13 contract, test-only cancellation-regression stabilization, per-test timeouts | Accepted; implemented |
 | 10 | Coverage | **10A** — measured line and branch coverage ratchets | Accepted; implemented |
@@ -480,7 +480,7 @@ alerts. The repeated taxonomies also drift.
 | **7B:** share helper functions while retaining provider-specific exception families | Low–medium | Less migration risk but partial consistency | Error mapping and worker only | Medium; several vocabularies remain |
 | **7C:** retain current classifications | None | High retry, diagnosis, and alerting risk | None | High repeated policy burden |
 
-### Recorded decision and code-complete solution — 7A (final verification pending)
+### Recorded decision and implemented solution — 7A
 
 Define an explicit, small failure value at the external-provider boundary:
 
@@ -514,17 +514,18 @@ mapping while remaining different boundary types.
 
 ### Implementation evidence — 7A
 
-The provider-boundary implementation is recorded in commits `1b70a95`
-(shared failure boundary), `866dabb` (Telnyx/carrier), `cf5fc9a` and
-`c12ce25` (Stripe/billing), `d84f1f1` (S3 and Gemini), and `ba22e13` plus
-`b5446f4` (LiveKit dispatch/recording). The cutover code completes the root
-outbox policy while final full-suite and cleanup verification remains pending:
-`ProviderFailure` retains the bounded provider retry or terminal
-codes, while an untranslated `Exception` becomes non-retryable,
-exhaustible `internal_defect` on its first attempt. The internal diagnostic is
-CRITICAL and has only fixed `event=outbox_internal_defect`,
+The provider-boundary implementation is recorded in commits `1b70a95`,
+`866dabb`, `18c7995`, `cf5fc9a`, `c12ce25`, `685bc4e`, `d84f1f1`,
+`89e54f5`, `ba22e13`, `b5446f4`, `3eb994a`, `882b6ab`, `defcfe9`,
+`63d8b5f`, `c2b8117`, `523a899`, `dd29c2d`, `d0141d8`, and `5bd13d8`.
+`ProviderFailure` retains bounded provider retry or terminal codes, while an
+untranslated `Exception` becomes non-retryable, exhaustible
+`internal_defect` on its first attempt. The internal diagnostic is CRITICAL
+and has only fixed `event=outbox_internal_defect`,
 `operation=deliver_outbox_event`, `provider=internal`, `status=failed`, and
-the safe exception type.
+the safe exception type. Missing LiveKit dispatch credentials remain the
+explicit durable `dispatch_configuration` outcome; arbitrary provider
+`ValueError` defects do not enter that path.
 
 Measured focused evidence at the cutover:
 
@@ -544,19 +545,35 @@ Measured focused evidence at the cutover:
 - Controller-controlled regression selection after preserving
   `TelephonyProvisioningPending` and BaseException finalization: 13 passed,
   260 deselected.
-- Complete affected API suite for this provider/outbox cutover: 1,126 passed,
-  1 warning in 210.21s. This is not the reserved complete API or agent
-  regression gate.
+- Complete affected API suite for the provider/outbox cutover: 1,126 passed,
+  1 warning in 210.21s.
 - Changed-file Ruff completed without findings. No dependency, lockfile,
   migration/schema, realtime/activation, deployment, or agent transport type
   change was made. Scoped searches found no legacy API provider exception
   family; the independent agent-to-API transport exceptions remain in
   `apps/agent/agent/api_client.py` and its tests.
 
-Issue 7 remains **code complete, final verification pending** until the
-controller records the final Docker-backed full API and agent regression gates
-and confirms cleanup. No final full-suite count or implemented status is
-claimed here.
+Final controller verification at `5bd13d8`:
+
+- Complete Docker-backed API suite: **2,740 passed**, 1 third-party deprecation
+  warning, in 335.11s. API coverage passed at **90.56% line** (minimum 90.04%)
+  and **78.69% branch** (minimum 77.76%).
+- Complete agent suite: **664 passed, 4 credential-gated tests skipped**.
+  Agent coverage passed at **88.50% line** (minimum 88.35%) and
+  **72.70% branch** (minimum 71.07%).
+- API and agent lockfile checks, Ruff, and mypy passed. API mypy checked 172
+  source files; agent mypy checked 15 source files.
+- A final independent review found no critical or important issues. Scoped
+  searches found no legacy API provider exception family and confirmed the
+  agent transport exception family remains separate.
+- The isolated PostgreSQL and Redis verification containers
+  `presvo-7a-provider-failures-postgres` and
+  `presvo-7a-provider-failures-redis` were stopped, auto-removed, and verified
+  absent. No user compose container was changed.
+- Realtime and activation defaults remain disabled. There was no deploy, push,
+  PR, schema/migration, dependency, lockfile, or agent transport-type change.
+
+Issue 7 is **implemented**.
 
 ## Issue 8 — LiveKit Is Pinned to an Old Family and Uses Private APIs
 
