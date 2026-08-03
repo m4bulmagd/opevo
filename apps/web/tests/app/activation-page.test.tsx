@@ -13,6 +13,10 @@ const clerkConfigState = vi.hoisted(() => ({
   authMode: "local" as "local" | "clerk",
   shouldWrapClerk: false,
 }));
+const clerkBoundaryState = vi.hoisted(() => ({
+  loadedDuringServerLayout: false,
+  serverLayoutExecuting: false,
+}));
 const { getAccountMock, getActivationSnapshotMock, getDevelopmentCapabilitiesMock, redirectMock, refreshMock } =
   vi.hoisted(() => ({
     getAccountMock: vi.fn(),
@@ -33,9 +37,19 @@ vi.mock("@/lib/auth/clerk-config", () => ({
   },
 }));
 
-vi.mock("@clerk/nextjs", () => ({
-  SignOutButton: ({ children }: { children: React.ReactNode }) => <div data-testid="sign-out-control">{children}</div>,
-}));
+vi.mock("@clerk/nextjs", async () => {
+  if (clerkBoundaryState.serverLayoutExecuting) {
+    clerkBoundaryState.loadedDuringServerLayout = true;
+  }
+
+  const { Children, cloneElement } = await import("react");
+
+  return {
+    SignOutButton: ({ children }: { children: React.ReactNode }) => {
+      return cloneElement(Children.only(children) as React.ReactElement);
+    },
+  };
+});
 
 vi.mock("next/navigation", () => ({
   redirect: redirectMock,
@@ -410,15 +424,23 @@ describe("activation route feedback", () => {
     expect(screen.getByRole("link", { name: /Skip to activation/i })).toHaveAttribute("href", "#activation-content");
   });
 
-  it("renders a visible sign-out action when Clerk supplies it", async () => {
+  it("renders Clerk sign-out through a client-owned single-child boundary", async () => {
     clerkConfigState.authMode = "clerk";
     clerkConfigState.shouldWrapClerk = true;
     const { default: ActivationLayout } = await import("@/app/(activation)/activate/layout");
 
-    render(await ActivationLayout({ children: <div id="activation-content">Activation form</div> }));
+    clerkBoundaryState.loadedDuringServerLayout = false;
+    clerkBoundaryState.serverLayoutExecuting = true;
+    let layout: React.ReactNode;
+    try {
+      layout = await ActivationLayout({ children: <div id="activation-content">Activation form</div> });
+    } finally {
+      clerkBoundaryState.serverLayoutExecuting = false;
+    }
+    expect(clerkBoundaryState.loadedDuringServerLayout).toBe(false);
+    render(layout);
 
     expect(screen.getByRole("button", { name: /Sign out/i })).toBeInTheDocument();
-    expect(screen.getByTestId("sign-out-control")).toBeInTheDocument();
   });
 
   it("renders an accessible loading status", () => {

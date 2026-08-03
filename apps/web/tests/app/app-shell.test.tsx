@@ -10,6 +10,7 @@ import type { AccountStatus } from "@/lib/types/account";
 import type { AgentConfig } from "@/lib/types/agent";
 
 const testState = vi.hoisted(() => ({
+  clerkAllowed: false,
   pathname: "/dashboard",
   reducedMotion: false,
   listCallsMock: vi.fn(),
@@ -20,6 +21,20 @@ const testState = vi.hoisted(() => ({
     throw new Error("NEXT_REDIRECT");
   }),
 }));
+
+vi.mock("@clerk/nextjs", async () => {
+  const { Children, cloneElement } = await import("react");
+
+  return {
+    SignOutButton: ({ children }: { children: React.ReactNode }) => {
+      if (!testState.clerkAllowed) {
+        throw new Error("Clerk sign-out must not render in local mode");
+      }
+
+      return cloneElement(Children.only(children) as React.ReactElement);
+    },
+  };
+});
 
 type MockLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
   href: string;
@@ -108,13 +123,18 @@ async function renderDashboardLayout({
   account = activeAccount,
   agentEnabled = true,
   agentName = "Ava",
+  authMode = "local",
 }: {
   account?: AccountStatus;
   agentEnabled?: boolean;
   agentName?: string;
+  authMode?: "clerk" | "local";
 } = {}) {
   vi.stubEnv("NODE_ENV", "development");
-  vi.stubEnv("AUTH_MODE", "local");
+  vi.stubEnv("AUTH_MODE", authMode);
+  vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", authMode === "clerk" ? "pk_test_configured" : "");
+  vi.stubEnv("CLERK_SECRET_KEY", authMode === "clerk" ? "sk_test_configured" : "");
+  testState.clerkAllowed = authMode === "clerk";
   testState.getAccountMock.mockResolvedValue(account);
   testState.getAgentConfigForRequestMock.mockResolvedValue(agentConfig(agentName, agentEnabled));
 
@@ -168,6 +188,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  testState.clerkAllowed = false;
   testState.pathname = "/dashboard";
   testState.reducedMotion = false;
   testState.listCallsMock.mockReset();
@@ -351,7 +372,7 @@ describe("app shell", () => {
     expect(within(workspaceHeader).getByRole("button", { name: "Open navigation" })).toHaveClass(
       "min-h-11",
       "min-w-11",
-      "lg:hidden",
+      "xl:hidden",
     );
     expect(screen.queryByRole("navigation", { name: "Mobile workspace navigation" })).not.toBeInTheDocument();
 
@@ -404,6 +425,27 @@ describe("app shell", () => {
     const { dialog } = await openMobileNavigation();
     fireEvent.click(within(dialog).getByRole("link", { name: "Calls" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Workspace navigation" })).toBeNull());
+  });
+
+  it("exposes labelled Clerk sign-out in the workspace drawer while retaining the desktop control", async () => {
+    await renderDashboardLayout({ authMode: "clerk" });
+
+    const header = screen.getByRole("banner");
+    const trigger = within(header).getByRole("button", { name: "Open navigation" });
+    expect(within(header).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+
+    const { dialog } = await openMobileNavigation();
+    const mobileSignOut = within(dialog).getByRole("button", { name: "Sign out" });
+    expect(mobileSignOut).toHaveTextContent("Sign out");
+    expect(trigger).toHaveClass("xl:hidden");
+    expect(trigger).not.toHaveClass("lg:hidden");
+  });
+
+  it("keeps local development visible in the workspace drawer without invoking Clerk", async () => {
+    await renderDashboardLayout();
+
+    const { dialog } = await openMobileNavigation();
+    expect(within(dialog).getByText("Local development")).toBeVisible();
   });
 
   it("loads the newest in-progress call and shows its number in the header", async () => {

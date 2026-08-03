@@ -13,6 +13,7 @@ type WorkspaceShellProps = {
   agentEnabled: boolean;
   agentName: string;
   children: ReactNode;
+  mobileAccountControl: ReactNode;
 };
 
 function commandRailRuntimeState(account: AccountStatus, agentEnabled: boolean) {
@@ -32,6 +33,7 @@ export function WorkspaceShell({
   agentEnabled,
   agentName,
   children,
+  mobileAccountControl,
 }: WorkspaceShellProps) {
   return (
     <div className="min-h-svh bg-background font-sans text-foreground" data-slot="workspace-shell">
@@ -44,7 +46,12 @@ export function WorkspaceShell({
       <div className="min-h-svh lg:flex lg:gap-4 lg:p-4" data-slot="workspace-content">
         <CommandRail agentName={agentName} runtimeState={commandRailRuntimeState(account, agentEnabled)} />
         <div className="flex min-w-0 flex-1 flex-col">
-          <WorkspaceHeader accountControl={accountControl} activeCaller={activeCaller} agentName={agentName} />
+          <WorkspaceHeader
+            accountControl={accountControl}
+            activeCaller={activeCaller}
+            agentName={agentName}
+            mobileAccountControl={mobileAccountControl}
+          />
           <main
             className="flex w-full flex-col gap-5 px-4 py-5 sm:px-6 md:gap-7 md:px-8 md:py-8 lg:px-0"
             id="workspace-main"
