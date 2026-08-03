@@ -20,6 +20,7 @@ from opentelemetry.sdk.metrics.export import MetricExporter, MetricExportResult
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from app.core.logging import report_safe_exception
+from app.core.provider_failures import ProviderFailure
 
 
 logger = logging.getLogger(__name__)
@@ -756,16 +757,28 @@ class Observability:
         ] = (None, None, None)
         try:
             yield
-        except BaseException as error:
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            exception_info = sys.exc_info()
+            raise
+        except Exception as error:
             outcome = "error"
             exception_info = sys.exc_info()
             error_class = normalize_error_class(error)
+            failure_kind = "provider" if isinstance(error, ProviderFailure) else "internal"
             if span is not None:
                 _safe_trace_call(
                     "set_provider_span_error_class",
                     lambda: span.set_attribute(
                         "presvo.error.class",
                         error_class,
+                    ),
+                )
+                _safe_trace_call(
+                    "set_provider_span_failure_kind",
+                    lambda: span.set_attribute(
+                        "presvo.failure.kind",
+                        failure_kind,
                     ),
                 )
                 _safe_trace_call(
@@ -776,11 +789,16 @@ class Observability:
                 "provider": provider,
                 "operation": operation,
                 "error_class": error_class,
+                "failure_kind": failure_kind,
             }
             _safe_call(
                 "record_provider_error",
                 lambda: self.provider_errors.add(1, metric_attributes),
             )
+            raise
+        except BaseException:
+            outcome = "error"
+            exception_info = sys.exc_info()
             raise
         else:
             outcome = "success"

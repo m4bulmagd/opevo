@@ -4,6 +4,9 @@ from app.core.provider_failures import SAFE_PROVIDER_NAMES
 from app.core.redaction import SafeExtraFilter, safe_log_identifier, safe_log_label
 
 
+_SAFE_DIAGNOSTIC_PROVIDERS = SAFE_PROVIDER_NAMES | frozenset({"internal"})
+
+
 def _install_safe_filter(target: logging.Filterer) -> None:
     if not any(isinstance(item, SafeExtraFilter) for item in target.filters):
         target.addFilter(SafeExtraFilter())
@@ -45,7 +48,7 @@ def report_safe_exception(
         safe_value = safe_log_label(label_value)
         if safe_value is not None:
             fields.append((key, safe_value))
-    if provider in SAFE_PROVIDER_NAMES:
+    if provider in _SAFE_DIAGNOSTIC_PROVIDERS:
         fields.append(("provider", provider))
     for key, identifier_value in (
         ("call_id", call_id),

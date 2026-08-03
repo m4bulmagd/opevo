@@ -31,6 +31,7 @@ from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
 from app.providers.summaries.gemini import GeminiSummaryProvider
 from app.providers.telephony.factory import create_telephony_provider
+from app.providers.telephony.base import TelephonyProvisioningPending
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.call_repository import CallRepository
@@ -151,6 +152,12 @@ async def deliver_phone_provision(
             retryable=False,
         ) from None
     except UnresolvedProviderWorkError:
+        raise OutboxDeliveryError(
+            "provider_retryable",
+            retryable=True,
+            exhaustible=False,
+        ) from None
+    except TelephonyProvisioningPending:
         raise OutboxDeliveryError(
             "provider_retryable",
             retryable=True,

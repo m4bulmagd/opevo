@@ -23,6 +23,7 @@ from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.models.webhook_event import WebhookEvent
+from app.core.provider_failures import ProviderFailure
 from app.providers.livekit_recording.base import (
     RecordingEgressResult,
     RecordingEgressSnapshot,
@@ -134,7 +135,12 @@ class _ExactListingProvider:
     async def ensure_not_running(self, egress_id: str) -> None:
         self.stop_attempts.append(egress_id)
         if egress_id in self.stop_failures:
-            raise RuntimeError("synthetic task7 stop failure")
+            raise ProviderFailure(
+                provider="livekit",
+                operation="ensure_recording_not_running",
+                disposition="retryable",
+                error_class="unavailable",
+            )
 
 
 class _RecordingSignalObservability:

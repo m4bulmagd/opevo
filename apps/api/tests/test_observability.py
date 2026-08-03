@@ -764,6 +764,7 @@ async def test_provider_metrics_count_once_and_normalize_unknown_without_content
                 "provider": "gemini",
                 "operation": "generate_summary",
                 "error_class": "unknown",
+                "failure_kind": "internal",
             },
         )
     ]
@@ -773,6 +774,7 @@ async def test_provider_metrics_count_once_and_normalize_unknown_without_content
     )
     assert "presvo.error.class" not in tracer.spans[0].attributes
     assert tracer.spans[1].attributes["presvo.error.class"] == "unknown"
+    assert tracer.spans[1].attributes["presvo.failure.kind"] == "internal"
     assert tracer.spans[1].status.status_code.name == "ERROR"
     rendered = repr(durations) + repr(errors) + repr(
         [(span.name, span.attributes) for span in tracer.spans]
@@ -783,6 +785,89 @@ async def test_provider_metrics_count_once_and_normalize_unknown_without_content
         "recording.example",
     ):
         assert sentinel not in rendered
+
+
+@pytest.mark.anyio
+async def test_provider_failure_telemetry_uses_exact_provider_failure_kind() -> None:
+    from app.core.provider_failures import ProviderFailure
+
+    meter = _Meter()
+    tracer = _Tracer()
+    telemetry = _observability(meter=meter, tracer=tracer)
+
+    with pytest.raises(ProviderFailure):
+        async with telemetry.provider_operation("telnyx", "disable_number"):
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="disable_number",
+                disposition="terminal",
+                error_class="authentication",
+            )
+
+    assert meter.instruments["presvo.provider.errors"].measurements == [
+        (
+            1,
+            {
+                "provider": "telnyx",
+                "operation": "disable_number",
+                "error_class": "authentication",
+                "failure_kind": "provider",
+            },
+        )
+    ]
+    assert tracer.spans[0].attributes["presvo.error.class"] == "authentication"
+    assert tracer.spans[0].attributes["presvo.failure.kind"] == "provider"
+
+
+@pytest.mark.anyio
+async def test_cancelled_provider_operation_is_re_raised_without_error_telemetry() -> None:
+    meter = _Meter()
+    tracer = _Tracer()
+    telemetry = _observability(meter=meter, tracer=tracer)
+
+    with pytest.raises(asyncio.CancelledError):
+        async with telemetry.provider_operation("gemini", "generate_summary"):
+            raise asyncio.CancelledError
+
+    assert meter.instruments["presvo.provider.errors"].measurements == []
+    assert meter.instruments["presvo.provider.request.duration"].measurements == [
+        (
+            pytest.approx(meter.instruments["presvo.provider.request.duration"].measurements[0][0]),
+            {
+                "provider": "gemini",
+                "operation": "generate_summary",
+                "outcome": "cancelled",
+            },
+        )
+    ]
+    assert tracer.spans[0].attributes["presvo.outcome"] == "cancelled"
+    assert "presvo.error.class" not in tracer.spans[0].attributes
+    assert "presvo.failure.kind" not in tracer.spans[0].attributes
+
+
+@pytest.mark.anyio
+async def test_non_cancellation_base_exception_preserves_identity_without_error_metric() -> None:
+    class ProviderAbort(BaseException):
+        pass
+
+    meter = _Meter()
+    tracer = _Tracer()
+    telemetry = _observability(meter=meter, tracer=tracer)
+
+    with pytest.raises(ProviderAbort):
+        async with telemetry.provider_operation("livekit", "list_dispatches"):
+            raise ProviderAbort
+
+    assert meter.instruments["presvo.provider.errors"].measurements == []
+    assert meter.instruments["presvo.provider.request.duration"].measurements[0][1] == {
+        "provider": "livekit",
+        "operation": "list_dispatches",
+        "outcome": "error",
+    }
+    assert tracer.spans[0].attributes["presvo.outcome"] == "error"
+    assert "presvo.error.class" not in tracer.spans[0].attributes
+    assert "presvo.failure.kind" not in tracer.spans[0].attributes
+
 
 
 def test_recording_instruments_have_exact_names_types_and_units() -> None:
@@ -1209,6 +1294,7 @@ async def test_provider_telemetry_prefers_allowlisted_structured_error_class() -
                 "provider": "stripe",
                 "operation": "create_portal_session",
                 "error_class": "authentication",
+                "failure_kind": "internal",
             },
         )
     ]

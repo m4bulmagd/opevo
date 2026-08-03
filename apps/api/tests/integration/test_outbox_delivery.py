@@ -663,9 +663,10 @@ async def test_terminal_failure_does_not_block_later_same_user_event(
 
 
 @pytest.mark.anyio
-async def test_delivery_retries_all_backoffs_then_fails_terminally_with_safe_code(
+async def test_retryable_provider_failure_retries_all_backoffs_then_exhausts(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    from app.core.provider_failures import ProviderFailure
     from app.workers.jobs.outbox_delivery import (
         OUTBOX_RETRY_DELAYS,
         outbox_delivery_job,
@@ -675,8 +676,13 @@ async def test_delivery_retries_all_backoffs_then_fails_terminally_with_safe_cod
     current_time = event.next_attempt_at + timedelta(seconds=1)
     metric_calls: list[tuple[str, str]] = []
 
-    async def failing_handler(_ctx: dict, _event: OutboxEvent) -> None:
-        raise RuntimeError("RAW_PROVIDER_RESPONSE_MUST_NOT_BE_PERSISTED")
+    async def retryable_handler(_ctx: dict, _event: OutboxEvent) -> None:
+        raise ProviderFailure(
+            provider="telnyx",
+            operation="disable_number",
+            disposition="retryable",
+            error_class="unavailable",
+        )
 
     async def metric(topic: str, error_code: str) -> None:
         async with outbox_session_factory() as committed_session:
@@ -687,7 +693,7 @@ async def test_delivery_retries_all_backoffs_then_fails_terminally_with_safe_cod
 
     ctx = {
         "session_factory": outbox_session_factory,
-        "outbox_handlers": {"phone.disable": failing_handler},
+        "outbox_handlers": {"phone.disable": retryable_handler},
         "outbox_now": lambda: current_time,
         "outbox_terminal_failure_metric": metric,
     }
@@ -714,6 +720,234 @@ async def test_delivery_retries_all_backoffs_then_fails_terminally_with_safe_cod
         assert stored.attempt_count == 6
         assert stored.last_error_code == "provider_retryable"
     assert metric_calls == [("phone.disable", "provider_retryable")]
+
+
+def test_root_outbox_classifier_separates_provider_and_internal_failures() -> None:
+    from app.core.provider_failures import ProviderFailure
+    from app.services.outbox_service import OutboxPayloadError
+    from app.workers.jobs.outbox_delivery import OutboxDeliveryError, _classify_error
+
+    assert _classify_error(
+        OutboxDeliveryError("account_call_draining", retryable=True, exhaustible=False)
+    ) == ("account_call_draining", True, False)
+    assert _classify_error(OutboxPayloadError("private payload")) == (
+        "invalid_payload",
+        False,
+        True,
+    )
+    assert _classify_error(
+        ProviderFailure(
+            provider="telnyx",
+            operation="disable_number",
+            disposition="retryable",
+            error_class="unavailable",
+        )
+    ) == ("provider_retryable", True, True)
+    assert _classify_error(
+        ProviderFailure(
+            provider="telnyx",
+            operation="disable_number",
+            disposition="terminal",
+            error_class="authentication",
+        )
+    ) == ("provider_terminal", False, True)
+    assert _classify_error(TypeError("RAW_DEFECT_SENTINEL")) == (
+        "internal_defect",
+        False,
+        True,
+    )
+
+
+@pytest.mark.anyio
+async def test_terminal_provider_failure_stops_on_first_attempt(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.core.provider_failures import ProviderFailure
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    event = await _add_event(outbox_session_factory)
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+    calls = 0
+    metric_calls: list[tuple[str, str]] = []
+
+    async def terminal_handler(_ctx: dict, _event: OutboxEvent) -> None:
+        nonlocal calls
+        calls += 1
+        raise ProviderFailure(
+            provider="telnyx",
+            operation="disable_number",
+            disposition="terminal",
+            error_class="authentication",
+        )
+
+    def metric(topic: str, error_code: str) -> None:
+        metric_calls.append((topic, error_code))
+
+    result = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "outbox_handlers": {"phone.disable": terminal_handler},
+            "outbox_now": lambda: current_time,
+            "outbox_terminal_failure_metric": metric,
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
+    assert calls == 1
+    assert metric_calls == [("phone.disable", "provider_terminal")]
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.attempt_count == 1
+        assert stored.last_error_code == "provider_terminal"
+
+
+@pytest.mark.anyio
+async def test_untranslated_defect_stops_once_and_redacts_every_output(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    event = await _add_event(outbox_session_factory)
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+    calls = 0
+    sentinels = (
+        "RAW_MESSAGE_SENTINEL",
+        "NESTED_METADATA_SENTINEL",
+        "Bearer API_TOKEN_SENTINEL",
+        "+33612345678",
+        "PROVIDER_RESPONSE_BODY_SENTINEL",
+    )
+
+    class Observability:
+        def __init__(self) -> None:
+            self.terminal_failures: list[tuple[str, str]] = []
+
+        def record_outbox_terminal_failure(
+            self,
+            topic: str,
+            error_class: str,
+        ) -> None:
+            self.terminal_failures.append((topic, error_class))
+
+    observability = Observability()
+
+    async def defective_handler(_ctx: dict, _event: OutboxEvent) -> None:
+        nonlocal calls
+        calls += 1
+        raise TypeError(
+            " ".join(
+                (
+                    sentinels[0],
+                    f"metadata={{'detail': '{sentinels[1]}'}}",
+                    sentinels[2],
+                    sentinels[3],
+                    sentinels[4],
+                )
+            )
+        )
+
+    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+    result = await outbox_delivery_job(
+        {
+            "session_factory": outbox_session_factory,
+            "outbox_handlers": {"phone.disable": defective_handler},
+            "outbox_now": lambda: current_time,
+            "observability": observability,
+        }
+    )
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
+    assert calls == 1
+    assert observability.terminal_failures == [("phone.disable", "unknown")]
+    alert = next(
+        record
+        for record in caplog.records
+        if record.name == "app.workers.jobs.outbox_delivery"
+        and record.levelno == logging.CRITICAL
+    )
+    assert alert.getMessage() == (
+        "event=outbox_internal_defect operation=deliver_outbox_event "
+        "error_type=TypeError status=failed provider=internal"
+    )
+    assert alert.exc_info is None
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.attempt_count == 1
+        assert stored.last_error_code == "internal_defect"
+        rendered = (
+            caplog.text
+            + repr(observability.terminal_failures)
+            + repr(stored.payload)
+            + repr(stored.last_error_code)
+        )
+    for sentinel in sentinels:
+        assert sentinel not in rendered
+
+
+@pytest.mark.anyio
+async def test_cancellation_propagates_without_failure_and_lease_reclaims_event(
+    outbox_session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+
+    event = await _add_event(outbox_session_factory)
+    current_time = event.next_attempt_at + timedelta(seconds=1)
+    metric_calls: list[tuple[str, str]] = []
+    successful_calls = 0
+
+    async def cancelled_handler(_ctx: dict, _event: OutboxEvent) -> None:
+        raise asyncio.CancelledError
+
+    def metric(topic: str, error_code: str) -> None:
+        metric_calls.append((topic, error_code))
+
+    ctx = {
+        "session_factory": outbox_session_factory,
+        "outbox_handlers": {"phone.disable": cancelled_handler},
+        "outbox_now": lambda: current_time,
+        "outbox_terminal_failure_metric": metric,
+    }
+    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+
+    with pytest.raises(asyncio.CancelledError):
+        await outbox_delivery_job(ctx)
+
+    assert metric_calls == []
+    assert not caplog.records
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        assert stored is not None
+        assert stored.status == "processing"
+        assert stored.attempt_count == 1
+        assert stored.last_error_code is None
+        assert stored.next_attempt_at == current_time + OutboxRepository.CLAIM_LEASE
+
+    current_time += OutboxRepository.CLAIM_LEASE
+
+    async def successful_handler(_ctx: dict, _event: OutboxEvent) -> None:
+        nonlocal successful_calls
+        successful_calls += 1
+
+    ctx["outbox_handlers"] = {"phone.disable": successful_handler}
+    assert await outbox_delivery_job(ctx) == {
+        "claimed": 1,
+        "delivered": 1,
+        "retried": 0,
+        "failed": 0,
+    }
+    assert successful_calls == 1
+    async with outbox_session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+        assert stored is not None
+        assert stored.status == "delivered"
+        assert stored.attempt_count == 2
+        assert stored.last_error_code is None
 
 
 @pytest.mark.anyio
@@ -1559,6 +1793,7 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
 async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_routing(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    from app.core.provider_failures import ProviderFailure
     from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
     operation_key = "outbox:phone-provision:crash-safe-disabled"
@@ -1606,7 +1841,12 @@ async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_rout
             self.operation_keys.append(operation_key)
             self.provisioned_connections.append("app-disabled")
             if len(self.operation_keys) == 1:
-                raise RuntimeError("simulated crash after provider accepted order")
+                raise ProviderFailure(
+                    provider="telnyx",
+                    operation="provision_number",
+                    disposition="retryable",
+                    error_class="unavailable",
+                )
             return {
                 "e164": "+33123456782",
                 "provider_number_id": f"pn_crash_{user_id.hex}",
@@ -2048,6 +2288,7 @@ async def test_customer_retry_new_event_reuses_original_provider_operation_key(
 async def test_provider_idempotency_key_closes_side_effect_before_ack_crash_boundary(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    from app.core.provider_failures import ProviderFailure
     from app.workers.jobs.outbox_delivery import outbox_delivery_job
 
     event = await _add_event(
@@ -2066,7 +2307,12 @@ async def test_provider_idempotency_key_closes_side_effect_before_ack_crash_boun
             provider_side_effect_count += 1
         if first_delivery:
             first_delivery = False
-            raise ConnectionError("worker crashed after provider accepted operation")
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="disable_number",
+                disposition="retryable",
+                error_class="unavailable",
+            )
 
     ctx = {
         "session_factory": outbox_session_factory,

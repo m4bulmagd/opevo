@@ -6,7 +6,9 @@ from typing import Any
 from uuid import UUID
 
 from app.core.database import get_session_factory
+from app.core.logging import report_safe_exception
 from app.core.observability import bind_call_id, get_observability
+from app.core.provider_failures import ProviderFailure
 from app.models.outbox_event import OutboxEvent
 from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
@@ -39,6 +41,7 @@ SAFE_OUTBOX_ERROR_CODES = frozenset(
     {
         "provider_retryable",
         "provider_terminal",
+        "internal_defect",
         "unsupported_topic",
         "invalid_payload",
         "handler_configuration",
@@ -85,12 +88,18 @@ class OutboxDeliveryError(RuntimeError):
         self.exhaustible = exhaustible
 
 
-def _classify_error(error: BaseException) -> tuple[str, bool, bool]:
+def _classify_error(error: Exception) -> tuple[str, bool, bool]:
     if isinstance(error, OutboxDeliveryError):
         return error.error_code, error.retryable, error.exhaustible
     if isinstance(error, OutboxPayloadError):
         return "invalid_payload", False, True
-    return "provider_retryable", True, True
+    if isinstance(error, ProviderFailure):
+        return (
+            "provider_retryable" if error.retryable else "provider_terminal",
+            error.retryable,
+            True,
+        )
+    return "internal_defect", False, True
 
 
 async def emit_outbox_terminal_failure_metric(
@@ -114,6 +123,7 @@ def _outbox_error_class(error_code: str) -> str:
     return {
         "provider_retryable": "unavailable",
         "provider_terminal": "unknown",
+        "internal_defect": "unknown",
         "unsupported_topic": "validation",
         "invalid_payload": "validation",
         "handler_configuration": "validation",
@@ -175,6 +185,16 @@ async def outbox_delivery_job(
                 await handler(ctx, event)
         except Exception as error:
             error_code, retryable, exhaustible = _classify_error(error)
+            if error_code == "internal_defect":
+                report_safe_exception(
+                    logger,
+                    event="outbox_internal_defect",
+                    operation="deliver_outbox_event",
+                    error=error,
+                    provider="internal",
+                    status="failed",
+                    level=logging.CRITICAL,
+                )
             failure_time = now_provider()
             async with session_factory() as session:
                 stored = await OutboxRepository(session).mark_failed_attempt(
@@ -266,6 +286,7 @@ async def _fail_livekit_dispatch_call(
         "handler_configuration": "dispatch_configuration",
         "provider_retryable": "dispatch_provider_exhausted",
         "provider_terminal": "dispatch_provider_exhausted",
+        "internal_defect": "dispatch_provider_exhausted",
     }.get(error_code, "dispatch_provider_exhausted")
     await CallRepository(session).mark_dispatch_failed(
         call,
