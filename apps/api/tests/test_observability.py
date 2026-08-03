@@ -8,36 +8,12 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-
-class _Instrument:
-    def __init__(self, *, failure: Exception | None = None) -> None:
-        self.failure = failure
-        self.measurements: list[tuple[float, dict]] = []
-
-    def _write(self, value, attributes=None) -> None:
-        if self.failure is not None:
-            raise self.failure
-        self.measurements.append((value, dict(attributes or {})))
-
-    add = _write
-    record = _write
-    set = _write
-
-
-class _Meter:
-    def __init__(self, *, failure: Exception | None = None) -> None:
-        self.failure = failure
-        self.instruments: dict[str, _Instrument] = {}
-
-    def _create(self, name: str, **_kwargs) -> _Instrument:
-        instrument = _Instrument(failure=self.failure)
-        self.instruments[name] = instrument
-        return instrument
-
-    create_counter = _create
-    create_histogram = _create
-    create_gauge = _create
+from tests.fakes import (
+    CaptureInstrument as _Instrument,
+    CaptureMeter as _Meter,
+    CaptureSpan as _Span,
+    CaptureTracer as _Tracer,
+)
 
 
 class _SpecificationMeter(_Meter):
@@ -57,36 +33,6 @@ class _SpecificationMeter(_Meter):
 
     def create_gauge(self, name: str, **kwargs) -> _Instrument:
         return self._create_typed("gauge", name, **kwargs)
-
-
-class _Span:
-    def __init__(self, name: str, attributes: dict | None, *, kind=None) -> None:
-        self.name = name
-        self.attributes = dict(attributes or {})
-        self.status = None
-        self.kind = kind
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args) -> None:
-        return None
-
-    def set_attribute(self, key: str, value) -> None:
-        self.attributes[key] = value
-
-    def set_status(self, status) -> None:
-        self.status = status
-
-
-class _Tracer:
-    def __init__(self) -> None:
-        self.spans: list[_Span] = []
-
-    def start_as_current_span(self, name: str, *, attributes=None, **_kwargs):
-        span = _Span(name, attributes, kind=_kwargs.get("kind"))
-        self.spans.append(span)
-        return span
 
 
 def test_not_found_is_a_safe_provider_error_class() -> None:
@@ -824,10 +770,13 @@ async def test_cancelled_provider_operation_is_re_raised_without_error_telemetry
     meter = _Meter()
     tracer = _Tracer()
     telemetry = _observability(meter=meter, tracer=tracer)
+    cancellation = asyncio.CancelledError("provider cancellation")
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError) as caught:
         async with telemetry.provider_operation("gemini", "generate_summary"):
-            raise asyncio.CancelledError
+            raise cancellation
+
+    assert caught.value is cancellation
 
     assert meter.instruments["presvo.provider.errors"].measurements == []
     assert meter.instruments["presvo.provider.request.duration"].measurements == [
@@ -853,10 +802,13 @@ async def test_non_cancellation_base_exception_preserves_identity_without_error_
     meter = _Meter()
     tracer = _Tracer()
     telemetry = _observability(meter=meter, tracer=tracer)
+    abort = ProviderAbort("provider abort")
 
-    with pytest.raises(ProviderAbort):
+    with pytest.raises(ProviderAbort) as caught:
         async with telemetry.provider_operation("livekit", "list_dispatches"):
-            raise ProviderAbort
+            raise abort
+
+    assert caught.value is abort
 
     assert meter.instruments["presvo.provider.errors"].measurements == []
     assert meter.instruments["presvo.provider.request.duration"].measurements[0][1] == {

@@ -72,6 +72,66 @@ class FakeSummaryService:
         return "- Simulated task done\n- Simulated topic discussed"
 
 
+class CaptureInstrument:
+    def __init__(self, *, failure: Exception | None = None) -> None:
+        self.failure = failure
+        self.measurements: list[tuple[float, dict]] = []
+
+    def _write(self, value, attributes=None) -> None:
+        if self.failure is not None:
+            raise self.failure
+        self.measurements.append((value, dict(attributes or {})))
+
+    add = _write
+    record = _write
+    set = _write
+
+
+class CaptureMeter:
+    def __init__(self, *, failure: Exception | None = None) -> None:
+        self.failure = failure
+        self.instruments: dict[str, CaptureInstrument] = {}
+
+    def _create(self, name: str, **_kwargs) -> CaptureInstrument:
+        instrument = CaptureInstrument(failure=self.failure)
+        self.instruments[name] = instrument
+        return instrument
+
+    create_counter = _create
+    create_histogram = _create
+    create_gauge = _create
+
+
+class CaptureSpan:
+    def __init__(self, name: str, attributes: dict | None, *, kind=None) -> None:
+        self.name = name
+        self.attributes = dict(attributes or {})
+        self.status = None
+        self.kind = kind
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def set_attribute(self, key: str, value) -> None:
+        self.attributes[key] = value
+
+    def set_status(self, status) -> None:
+        self.status = status
+
+
+class CaptureTracer:
+    def __init__(self) -> None:
+        self.spans: list[CaptureSpan] = []
+
+    def start_as_current_span(self, name: str, *, attributes=None, **kwargs):
+        span = CaptureSpan(name, attributes, kind=kwargs.get("kind"))
+        self.spans.append(span)
+        return span
+
+
 class MockArqPool:
     def __init__(self):
         self.enqueued_jobs = []
