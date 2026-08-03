@@ -100,3 +100,26 @@ Verification is complete only when all of the following are observed:
 No production code change is required for Issue 24. The durable record of the
 root cause and selected solution is this design; the private runtime override
 must remain uncommitted.
+
+## Accepted recording limitations
+
+The owner selected Issue 26C and Issue 27C for this local E2E session:
+
+- **Issue 26C — recording unsupported in this local topology.** LiveKit Cloud
+  cannot upload egress output to the Docker-only `http://minio:9000` endpoint.
+  A future production-aligned fix should configure a private, externally
+  reachable HTTPS S3-compatible bucket. The failed recording from this session
+  is not recoverable.
+- **Issue 27C — premature recording availability remains deferred.** Recording
+  start currently publishes the call playback projection before egress upload
+  completes, so a failed egress can appear recorded in list projections while
+  detail playback correctly returns unavailable. The recommended future fix is
+  to publish playback availability only after an exact successful terminal
+  egress result and to cover failed, aborted, limit-reached, reconciliation, and
+  recovery paths with tests.
+
+These limitations do not invalidate the voice-path E2E. Completion now requires
+successful Go live, one dispatched and completed real call, durable transcript
+and summary evidence, no call failure, and an explicit final provider-state
+decision. Recording success is intentionally excluded until Issue 26 is
+reopened.
