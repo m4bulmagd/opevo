@@ -72,4 +72,13 @@ describe("activation proxy protection", () => {
     expect(clerkProxyInvocationMock).not.toHaveBeenCalled();
     expect(protectMock).not.toHaveBeenCalled();
   });
+
+  it("cannot initialize with incomplete development Clerk configuration", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("AUTH_MODE", "clerk");
+    vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "");
+    vi.stubEnv("CLERK_SECRET_KEY", "");
+
+    await expect(import("@/proxy")).rejects.toThrow("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY");
+  });
 });

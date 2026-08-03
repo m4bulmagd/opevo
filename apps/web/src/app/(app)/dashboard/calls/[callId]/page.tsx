@@ -3,7 +3,6 @@ import { notFound } from "next/navigation";
 
 import { ArrowLeft } from "lucide-react";
 
-import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { CallMetadataCard, CallStatusSurface, CallSummaryCard } from "@/components/calls/call-detail-card";
 import { DeleteCallDialog } from "@/components/calls/delete-call-dialog";
 import { RecordingPanel } from "@/components/calls/recording-panel";
@@ -15,19 +14,9 @@ import { Button } from "@/components/ui/button";
 import { getAccount } from "@/lib/api/account";
 import { BackendApiError } from "@/lib/api/backend-client";
 import { getCallDetail } from "@/lib/api/calls";
-import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 import { formatCallTime, formatPhoneNumber, toTitleCase } from "@/lib/formatters";
 
 export default async function CallDetailPage({ params }: { params: Promise<{ callId: string }> }) {
-  if (!isAppAuthConfigured) {
-    return (
-      <ClerkSetupNotice
-        title="Call details are unavailable"
-        description="Configure Clerk in your local environment before loading protected call detail routes."
-      />
-    );
-  }
-
   const { callId } = await params;
 
   try {

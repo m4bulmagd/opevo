@@ -5,7 +5,7 @@ type WebAuthModeInput = {
   authMode?: string;
 };
 
-type ProductionWebAuthInput = WebAuthModeInput & {
+export type WebAuthConfigurationInput = WebAuthModeInput & {
   publishableKey?: string;
   secretKey?: string;
   backendBaseUrl?: string;
@@ -33,20 +33,17 @@ export function resolveWebAuthMode(input: WebAuthModeInput): WebAuthMode {
   return mode;
 }
 
-export function requireProductionWebAuth(input: ProductionWebAuthInput): void {
-  resolveWebAuthMode(input);
-
-  if (input.nodeEnv !== "production") {
-    return;
-  }
-
+export function requireWebAuthConfiguration(input: WebAuthConfigurationInput): WebAuthMode {
+  const mode = resolveWebAuthMode(input);
   const missing = [
-    isBlank(input.publishableKey) ? CLERK_PUBLISHABLE_KEY : undefined,
-    isBlank(input.secretKey) ? CLERK_SECRET_KEY : undefined,
-    isBlank(input.backendBaseUrl) ? BACKEND_BASE_URL : undefined,
+    mode === "clerk" && isBlank(input.publishableKey) ? CLERK_PUBLISHABLE_KEY : undefined,
+    mode === "clerk" && isBlank(input.secretKey) ? CLERK_SECRET_KEY : undefined,
+    input.nodeEnv === "production" && isBlank(input.backendBaseUrl) ? BACKEND_BASE_URL : undefined,
   ].filter((setting): setting is string => Boolean(setting));
 
   if (missing.length > 0) {
-    throw new Error(`Missing required production settings: ${missing.join(", ")}`);
+    throw new Error(`Missing required authentication settings: ${missing.join(", ")}`);
   }
+
+  return mode;
 }
