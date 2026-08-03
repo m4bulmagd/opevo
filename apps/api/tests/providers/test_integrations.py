@@ -252,6 +252,7 @@ async def test_s3_storage_mints_fresh_download_url() -> None:
         "relative/download/path",
         "ftp://storage.example.test/recording.mp3",
         "https://",
+        "https://storage.example.test/private file.mp3",
         "https://storage.example.test/PRIVATE_URL_SENTINEL\x00.mp3",
         "https://storage.example.test/" + ("a" * 8192),
     ],

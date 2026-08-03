@@ -216,8 +216,12 @@ class S3Storage(StorageProvider):
             type(value) is not str
             or not value
             or len(value) > MAX_PRESIGNED_URL_LENGTH
-            or value.strip() != value
-            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            or any(
+                character.isspace()
+                or ord(character) < 32
+                or ord(character) == 127
+                for character in value
+            )
         ):
             raise cls._failure(
                 operation="get_download_url",
