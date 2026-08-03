@@ -70,6 +70,10 @@ def _require(settings: Settings, names: Sequence[str]) -> list[str]:
 
 def validate_api_runtime(settings: Settings) -> None:
     environment = settings.app_env.strip().lower()
+    if settings.auth_mode == "local" and _is_missing(settings.local_auth_token):
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: LOCAL_AUTH_TOKEN"
+        )
     if settings.auth_mode == "clerk":
         invalid_clerk: list[str] = []
         if _is_missing(settings.clerk_issuer):
