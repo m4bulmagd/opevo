@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     activation_flow_enabled: bool = False
     cors_allowed_origins: str | None = None
     auth_mode: Literal["clerk", "local"] = "clerk"
-    local_auth_token: str = "presvo-local-development-token"
+    local_auth_token: str = ""
     clerk_issuer: str = ""
     clerk_audience: str | None = None
     clerk_authorized_parties: str | None = None
