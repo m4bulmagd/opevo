@@ -746,9 +746,11 @@ Update the existing missing-consent precedence case so the number is explicitly 
 
 Run:
 
+From `apps/api`:
+
 ```bash
-apps/api/.venv/bin/python -m pytest \
-  apps/api/tests/activation/test_activation_policy.py -q
+.venv/bin/python -m pytest \
+  tests/activation/test_activation_policy.py -q
 ```
 
 Expected before production edits: FAIL because the completed legacy facts still return `provisioning_consent_required`.
@@ -776,14 +778,21 @@ Derive the exact linked completion fact once in `ActivationSnapshotService`. In 
 
 Run:
 
+From `apps/api`:
+
 ```bash
-apps/api/.venv/bin/python -m pytest apps/api/tests/activation -q
+.venv/bin/python -m pytest tests/activation -q
+.venv/bin/ruff check app tests
+.venv/bin/mypy app
+```
+
+From the repository root:
+
+```bash
 npm --prefix apps/web run test:ci -- \
   tests/app/activation-page.test.tsx \
   tests/app/number-milestone.test.tsx \
   tests/app/forwarding-milestone.test.tsx
-apps/api/.venv/bin/ruff check apps/api/app apps/api/tests
-apps/api/.venv/bin/mypy apps/api/app
 npm --prefix apps/web run typecheck
 ```
 
@@ -792,6 +801,8 @@ Expected: all pass with no skip, warning introduced by this change, snapshot rew
 - [ ] **Step 6: Commit, review, and resume the owner smoke**
 
 Commit only the approved policy, snapshot, tests, and durable plan evidence:
+
+From the repository root:
 
 ```bash
 git commit -m "fix(api): resume legacy completed activation"
