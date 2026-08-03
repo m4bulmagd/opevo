@@ -134,52 +134,91 @@ async def test_telnyx_lookup_runs_blocking_sdk_resource_off_event_loop() -> None
 @pytest.mark.parametrize(
     ("provider_error", "expected_disposition", "expected_error_class"),
     [
-        (telnyx.error.APIConnectionError("network secret", should_retry=True), "retryable", "unavailable"),
-        (telnyx.error.APIConnectionError("network secret", should_retry=False), "terminal", "unavailable"),
-        (telnyx.error.TimeoutError([{"title": "timeout secret"}]), "retryable", "timeout"),
-        (telnyx.error.RateLimitError([{"title": "rate secret"}]), "retryable", "rate_limited"),
+        (
+            telnyx.error.APIConnectionError("network secret", should_retry=True),
+            "retryable",
+            "unavailable",
+        ),
+        (
+            telnyx.error.APIConnectionError("network secret", should_retry=False),
+            "terminal",
+            "unavailable",
+        ),
+        (
+            telnyx.error.TimeoutError([{"title": "timeout secret"}]),
+            "retryable",
+            "timeout",
+        ),
+        (
+            telnyx.error.RateLimitError([{"title": "rate secret"}]),
+            "retryable",
+            "rate_limited",
+        ),
         (
             telnyx.error.ServiceUnavailableError([{"title": "service secret"}]),
-            "retryable", "unavailable",
+            "retryable",
+            "unavailable",
         ),
         (
             telnyx.error.AuthenticationError([{"title": "credential secret"}]),
-            "terminal", "authentication",
+            "terminal",
+            "authentication",
         ),
-        (telnyx.error.PermissionError([{"title": "permission secret"}]), "terminal", "authentication"),
+        (
+            telnyx.error.PermissionError([{"title": "permission secret"}]),
+            "terminal",
+            "authentication",
+        ),
         (
             telnyx.error.InvalidRequestError([{"title": "request secret"}]),
-            "terminal", "validation",
+            "terminal",
+            "validation",
         ),
         (
             telnyx.error.InvalidParametersError([{"title": "parameter secret"}]),
-            "terminal", "validation",
+            "terminal",
+            "validation",
+        ),
+        (
+            telnyx.error.MethodNotSupportedError([{"title": "method secret"}]),
+            "terminal",
+            "validation",
+        ),
+        (
+            telnyx.error.UnsupportedMediaTypeError([{"title": "media secret"}]),
+            "terminal",
+            "validation",
         ),
         (
             telnyx.error.ResourceNotFoundError([{"title": "resource secret"}]),
-            "terminal", "not_found",
+            "terminal",
+            "not_found",
         ),
         (
             telnyx.error.APIError([{"title": "conflict secret"}], http_status=409),
-            "terminal", "conflict",
+            "terminal",
+            "conflict",
         ),
         (
             telnyx.error.APIError([{"title": "other client secret"}], http_status=418),
-            "terminal", "validation",
+            "terminal",
+            "validation",
         ),
         (
             telnyx.error.APIError(
                 [{"title": "internal provider secret"}],
                 http_status=500,
             ),
-            "retryable", "unavailable",
+            "retryable",
+            "unavailable",
         ),
         (
             telnyx.error.TelnyxError(
                 [{"title": "unexpected sdk secret"}],
                 http_status=418,
             ),
-            "terminal", "unknown",
+            "terminal",
+            "unknown",
         ),
     ],
 )
@@ -244,8 +283,100 @@ async def test_telnyx_malformed_dynamic_carrier_fields_fail_safely(
         await provider.lookup("+33612345678")
 
     assert (exc_info.value.disposition, exc_info.value.error_class) == (
-        "terminal", "validation"
+        "terminal",
+        "validation",
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "response",
+    [
+        None,
+        {},
+        {"data": None},
+        {
+            "data": {
+                "phone_number": 33_612_345_678,
+                "country_code": "FR",
+                "carrier": None,
+            }
+        },
+        {
+            "data": {
+                "phone_number": "+33612345678",
+                "country_code": 33,
+                "carrier": None,
+            }
+        },
+        {
+            "data": {
+                "phone_number": "+33612345678",
+                "country_code": "FR",
+                "carrier": [],
+            }
+        },
+    ],
+)
+async def test_telnyx_plain_malformed_lookup_responses_are_terminal_validation(
+    response: object,
+) -> None:
+    class MalformedNumberLookupResource:
+        @classmethod
+        def retrieve(cls, phone_number, /, *, api_key):
+            return response
+
+    provider = TelnyxCarrierLookupProvider(
+        api_key="lookup-key",
+        number_lookup_resource=MalformedNumberLookupResource,
+    )
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        await provider.lookup("+33612345678")
+
+    assert (
+        exc_info.value.provider,
+        exc_info.value.operation,
+        exc_info.value.disposition,
+        exc_info.value.error_class,
+    ) == ("telnyx", "lookup_carrier", "terminal", "validation")
+    assert "33612345678" not in str(exc_info.value)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("defect_type", [TypeError, RuntimeError, AttributeError])
+@pytest.mark.parametrize("accessor", ["property", "mapping"])
+async def test_telnyx_lookup_response_accessor_defects_propagate_exact_identity(
+    defect_type: type[Exception],
+    accessor: str,
+) -> None:
+    defect = defect_type("LOOKUP_ACCESSOR_PRIVATE_SENTINEL +33612345678")
+
+    class HostileResponse:
+        @property
+        def data(self) -> object:
+            raise defect
+
+    class HostileMapping(dict[str, object]):
+        def get(self, key: str, default: object = None) -> object:
+            raise defect
+
+    class HostileNumberLookupResource:
+        @classmethod
+        def retrieve(cls, phone_number, /, *, api_key):
+            if accessor == "property":
+                return HostileResponse()
+            return HostileMapping()
+
+    provider = TelnyxCarrierLookupProvider(
+        api_key="lookup-key",
+        number_lookup_resource=HostileNumberLookupResource,
+    )
+
+    with pytest.raises(defect_type) as exc_info:
+        await provider.lookup("+33612345678")
+
+    assert exc_info.value is defect
 
 
 @pytest.mark.anyio
