@@ -293,7 +293,7 @@ describe("activation page", () => {
     expect(redirectMock).not.toHaveBeenCalled();
   });
 
-  it("renders the authoritative carrier guide in the forwarding milestone", async () => {
+  it("renders forwarding for a completed legacy number without historical consent", async () => {
     getActivationSnapshotMock.mockResolvedValue(
       buildSnapshot({
         stage: "forwarding_required",
@@ -309,11 +309,12 @@ describe("activation page", () => {
       }),
     );
 
-    render(await Page({ searchParams: Promise.resolve({}) }));
+    render(await Page({ searchParams: Promise.resolve({ milestone: "forwarding" }) }));
 
     expect(screen.getByRole("heading", { name: /Forward missed calls to Presvo/i })).toBeInTheDocument();
     expect(screen.getByText("+33 1 87 65 43 21")).toBeInTheDocument();
     expect(activationStepCard().getByRole("button", { name: /Start 10-minute test/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Choose your Presvo number/i })).not.toBeInTheDocument();
   });
 
   it("renders the server-owned verification window and guarded local simulator in launch", async () => {
