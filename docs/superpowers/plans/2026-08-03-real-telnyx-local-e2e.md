@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Run the reviewed local stack against the existing real Telnyx number, complete Go live through the durable application path, and verify one real inbound voice call without fabricating application or provider state.
+**Goal:** Run the reviewed local stack against the existing real Telnyx number, complete Go live through the durable application path, and verify one real inbound voice call without fabricating application or provider state; recording is an explicitly accepted local limitation under Issues 26C and 27C.
 
 **Architecture:** A private Compose override changes only API and worker provider mode to `telnyx`; committed development defaults remain `fake`. A masked database check and read-only Telnyx lookup prove the exact legacy drift—Telnyx already uses the configured active connection while the durable projection is inactive—before the service restart. The account owner then triggers the existing Go-live API through the browser, and the normal worker outbox idempotently confirms the active provider connection before reconciling durable state.
 
@@ -21,6 +21,8 @@
 - Do not retry Go live while its latest `phone.enable` event is pending or processing.
 - Keep `/tmp/presvo-voice-e2e.override.yaml` and the new Telnyx override until the final provider state is explicitly resolved.
 - Do not disable Telnyx directly while leaving the application projection active. The current reversible product workflow has no Go-offline action; if the owner does not keep the number live, stop and review account deactivation or a new Go-offline feature as a separate issue.
+- Issue 26C is accepted: LiveKit Cloud recording egress to Docker-only `http://minio:9000` is unsupported for this session, and no external HTTPS S3-compatible bucket will be configured now.
+- Issue 27C is accepted: the premature call recording projection remains a documented deferred defect; do not patch or manually rewrite the failed call's recording state in this plan.
 
 ---
 
@@ -293,7 +295,7 @@ last_failure_code_present=false
 Do not infer success solely from the browser. All seven durable assertions must
 be true.
 
-### Task 3: Verify one real call and retain a consistent final provider state
+### Task 3: Verify one real voice call and retain a consistent final provider state
 
 **Files:**
 - Modify: none.
@@ -302,7 +304,7 @@ be true.
 
 **Interfaces:**
 - Consumes: the active Task 2 account and one real inbound call placed by the account owner.
-- Produces: database and log evidence for one complete voice path, followed by an explicit keep-live or separate-cleanup decision.
+- Produces: database and log evidence for one complete voice path, an explicit record of the accepted recording limitation, and an explicit keep-live or separate-cleanup decision.
 
 - [ ] **Step 1: Establish the real-call checkpoint**
 
@@ -325,7 +327,9 @@ Inspect API, worker, and agent logs only from the recorded UTC start. Confirm:
 - transcript append calls returned success after the required spoken exchange;
 - call completion returned success;
 - call finalization reached a terminal completed state;
-- no container restarted and no credential/configuration/provider failure was logged.
+- no container restarted and no call-path credential, configuration, or
+  provider failure was logged. The separately proven recording-egress failure
+  is accepted under 26C and does not fail the voice-path assertion.
 
 Print only safe counts, not matching log lines:
 
@@ -337,8 +341,11 @@ docker inspect bmad-opevo-api-1 bmad-opevo-worker-1 bmad-opevo-agent-1 --format 
 ```
 
 Expected: at least one accepted webhook and transcript request, exactly one
-successful completion request, zero agent/worker error counts, and zero
-container restarts.
+successful completion request, zero agent error count, and zero container
+restarts. A nonzero worker provider count is acceptable only when the masked
+database/LiveKit/storage trace proves every such failure belongs to the known
+Issue 26C recording egress; any call-dispatch, completion, summary, telephony,
+or unrelated provider failure stops the task.
 
 Use read-only SQL to assert exactly one new call after the UTC marker and print
 only boolean state classifications and counts—never call IDs, room names,
@@ -369,3 +376,12 @@ Present these two valid outcomes:
 
 The E2E is complete only after the owner selects one outcome and its stated
 consistency check passes.
+
+#### Accepted Task 3 recording outcome
+
+For this execution, the exact LiveKit egress identity and object key matched,
+but egress finished failed and the MinIO object was absent because LiveKit Cloud
+received the Docker-only `http://minio:9000` endpoint. The owner selected 26C
+and 27C: do not configure external storage, retry the failed recording, repair
+the false playback projection, or treat recording as a Task 3 blocker. Preserve
+this evidence for the deferred review.
