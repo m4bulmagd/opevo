@@ -148,6 +148,7 @@ def test_local_development_does_not_require_clerk_configuration() -> None:
             clerk_issuer="",
             clerk_authorized_parties=None,
             clerk_jwt_key=None,
+            local_auth_token="explicit-local-test-token",
         )
     )
 

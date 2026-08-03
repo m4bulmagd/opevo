@@ -428,6 +428,26 @@ def test_development_accepts_fake_api_providers() -> None:
     validate_api_runtime(settings)
 
 
+def test_local_runtime_rejects_an_omitted_local_auth_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LOCAL_AUTH_TOKEN", raising=False)
+    settings = Settings(
+        _env_file=None,
+        app_env="development",
+        auth_mode="local",
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+    )
+
+    with pytest.raises(RuntimeError) as error:
+        validate_api_runtime(settings)
+
+    assert str(error.value) == (
+        "Missing or invalid required runtime settings: LOCAL_AUTH_TOKEN"
+    )
+
+
 @pytest.mark.parametrize(
     ("field_name", "unsafe_value", "setting_name"),
     [
@@ -443,7 +463,12 @@ def test_production_requires_exact_provider_modes_without_echoing_values(
     unsafe_value: str,
     setting_name: str,
 ) -> None:
-    settings = base_settings.model_copy(update={field_name: unsafe_value})
+    settings = base_settings.model_copy(
+        update={
+            field_name: unsafe_value,
+            "local_auth_token": "explicit-local-test-token",
+        }
+    )
 
     with pytest.raises(RuntimeError, match=setting_name) as error:
         validate_api_runtime(settings)
