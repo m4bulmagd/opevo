@@ -101,10 +101,11 @@ def _classify_error(error: Exception) -> tuple[str, bool, bool]:
     if isinstance(error, OutboxPayloadError):
         return "invalid_payload", False, True
     if isinstance(error, ProviderFailure):
+        delivery_error = provider_failure_delivery_error(error)
         return (
-            "provider_retryable" if error.retryable else "provider_terminal",
-            error.retryable,
-            True,
+            delivery_error.error_code,
+            delivery_error.retryable,
+            delivery_error.exhaustible,
         )
     return "internal_defect", False, True
 
