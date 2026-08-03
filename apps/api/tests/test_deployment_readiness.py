@@ -959,7 +959,8 @@ def test_recording_runtime_does_not_require_an_agent_evaluation_model() -> None:
 
 
 def test_recording_runtime_has_one_reference_only_outbox_contract() -> None:
-    from app.core.observability import _OUTBOX_TOPICS, _PROVIDER_OPERATIONS
+    from app.core.observability import _OUTBOX_TOPICS
+    from app.core.provider_failures import is_safe_provider_operation
     from app.providers.livekit_recording.livekit import LiveKitRecordingProvider
     from app.services.outbox_service import (
         REFERENCE_PAYLOAD_FIELDS,
@@ -986,7 +987,7 @@ def test_recording_runtime_has_one_reference_only_outbox_contract() -> None:
         DEFAULT_OUTBOX_HANDLERS["recording.reconcile"]
         is deliver_recording_reconcile
     )
-    assert "list_recording_egresses" in _PROVIDER_OPERATIONS["livekit"]
+    assert is_safe_provider_operation("livekit", "list_recording_egresses")
     assert callable(LiveKitRecordingProvider.list_room_egresses)
 
 
