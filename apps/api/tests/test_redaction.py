@@ -379,7 +379,49 @@ def test_report_safe_exception_preserves_valid_operational_fields(caplog) -> Non
     assert "status=failed" in caplog.text
 
 
-def test_report_safe_exception_preserves_only_allowlisted_provider(caplog) -> None:
+def test_internal_diagnostic_logs_only_fixed_labels_and_exception_type(caplog) -> None:
+    sentinels = (
+        "RAW_MESSAGE_SENTINEL",
+        "NESTED_METADATA_SENTINEL",
+        "Bearer API_TOKEN_SENTINEL",
+        "+33612345678",
+        "PROVIDER_RESPONSE_BODY_SENTINEL",
+    )
+
+    with caplog.at_level(logging.CRITICAL):
+        report_safe_exception(
+            logging.getLogger("test.safe.internal_diagnostic"),
+            event="outbox_internal_defect",
+            operation="deliver_outbox_event",
+            error=TypeError(
+                " ".join(
+                    (
+                        sentinels[0],
+                        f"metadata={{'detail': '{sentinels[1]}'}}",
+                        sentinels[2],
+                        sentinels[3],
+                        sentinels[4],
+                    )
+                )
+            ),
+            provider="internal",
+            status="failed",
+            level=logging.CRITICAL,
+        )
+
+    assert caplog.text.endswith(
+        "event=outbox_internal_defect operation=deliver_outbox_event "
+        "error_type=TypeError status=failed provider=internal\n"
+    )
+    rendered = caplog.text + repr(caplog.records)
+    for sentinel in sentinels:
+        assert sentinel not in rendered
+    assert caplog.records[0].exc_info is None
+
+
+def test_report_safe_exception_preserves_only_allowlisted_provider_or_internal_diagnostic(
+    caplog,
+) -> None:
     logger = logging.getLogger("test.safe.provider_exception_fields")
 
     with caplog.at_level(logging.ERROR):
@@ -395,9 +437,16 @@ def test_report_safe_exception_preserves_only_allowlisted_provider(caplog) -> No
             operation="upload_recording",
             provider="PRIVATE_PROVIDER_SENTINEL",
         )
+        report_safe_exception(
+            logger,
+            event="outbox_internal_defect",
+            operation="deliver_outbox_event",
+            provider="internal",
+        )
 
     rendered = caplog.text
     assert "provider=s3" in rendered
+    assert "provider=internal" in rendered
     assert "PRIVATE_PROVIDER_SENTINEL" not in rendered
 
 

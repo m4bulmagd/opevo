@@ -47,7 +47,7 @@ The recommendations use these agreed priorities:
 | 4 | Worker isolation | **4A + 4B** — split critical/background queues and add explicit limits, metrics, and load criteria | Accepted |
 | 5 | Outbox structure | **5A** — split the topic god module by cohesive topic family | Accepted |
 | 6 | Dependency construction | **6A** — explicit, thin composition roots with typed dependencies | Accepted |
-| 7 | Provider failures | **7A** — one typed provider-failure vocabulary; distinguish internal defects | Accepted |
+| 7 | Provider failures | **7A** — one typed provider-failure vocabulary; distinguish internal defects | Accepted; implemented |
 | 8 | LiveKit compatibility | **8A** — staged upgrade and removal of private SDK dependencies | Accepted |
 | 9 | Python/test reliability | **9A-1R** — Python 3.13 contract, test-only cancellation-regression stabilization, per-test timeouts | Accepted; implemented |
 | 10 | Coverage | **10A** — measured line and branch coverage ratchets | Accepted; implemented |
@@ -480,7 +480,7 @@ alerts. The repeated taxonomies also drift.
 | **7B:** share helper functions while retaining provider-specific exception families | Low–medium | Less migration risk but partial consistency | Error mapping and worker only | Medium; several vocabularies remain |
 | **7C:** retain current classifications | None | High retry, diagnosis, and alerting risk | None | High repeated policy burden |
 
-### Recorded decision and proposed solution — 7A
+### Recorded decision and implemented solution — 7A
 
 Define an explicit, small failure value at the external-provider boundary:
 
@@ -511,6 +511,49 @@ mapping while remaining different boundary types.
   response bodies.
 - Retry tests prove terminal and internal-defect paths cannot loop
   indefinitely.
+
+### Implementation evidence — 7A
+
+The provider-boundary implementation is recorded in commits `1b70a95`
+(shared failure boundary), `866dabb` (Telnyx/carrier), `cf5fc9a` and
+`c12ce25` (Stripe/billing), `d84f1f1` (S3 and Gemini), and `ba22e13` plus
+`b5446f4` (LiveKit dispatch/recording). This cutover completes the root
+outbox policy: `ProviderFailure` retains the bounded provider retry or terminal
+codes, while an untranslated `Exception` becomes non-retryable,
+exhaustible `internal_defect` on its first attempt. The internal diagnostic is
+CRITICAL and has only fixed `event=outbox_internal_defect`,
+`operation=deliver_outbox_event`, `provider=internal`, `status=failed`, and
+the safe exception type.
+
+Measured focused evidence at the cutover:
+
+- Root classifier test: 1 passed. The tested branches are explicit domain
+  delivery error, invalid payload, retryable/terminal `ProviderFailure`, and
+  untranslated defect.
+- Provider observability tests: 3 passed. They prove exact `failure_kind`
+  labels (`provider` versus `internal`) and a cancellation outcome with no
+  provider-error counter.
+- Privacy/redaction tests: 2 passed. They reject raw message, nested metadata,
+  bearer/API token, French phone, and provider-response sentinels from the
+  internal diagnostic.
+- Controller-controlled PostgreSQL durable-outbox test selection: 4 passed,
+  36 deselected. It proves six-attempt retryable exhaustion, one-attempt
+  terminal and internal-defect durability, cancellation propagation with no
+  durable failure code, and reclaim through the existing processing lease.
+- Controller-controlled regression selection after preserving
+  `TelephonyProvisioningPending` and BaseException finalization: 13 passed,
+  260 deselected.
+- Complete affected API suite for this provider/outbox cutover: 1,126 passed,
+  1 warning in 210.21s. This is not the reserved complete API or agent
+  regression gate.
+- Changed-file Ruff completed without findings. No dependency, lockfile,
+  migration/schema, realtime/activation, deployment, or agent transport type
+  change was made. Scoped searches found no legacy API provider exception
+  family; the independent agent-to-API transport exceptions remain in
+  `apps/agent/agent/api_client.py` and its tests.
+
+The final Docker-backed full API and agent regression gates are pending the
+controller's separate measured run; no full-suite count is claimed here.
 
 ## Issue 8 — LiveKit Is Pinned to an Old Family and Uses Private APIs
 

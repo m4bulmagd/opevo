@@ -75,7 +75,7 @@ def test_recording_reconciliation_errors_are_bounded_and_safely_classified(
 
 
 @pytest.mark.anyio
-async def test_summary_provider_exception_is_translated_to_safe_retry(
+async def test_typed_summary_provider_failure_is_translated_to_safe_retry(
     db_session,
     active_user,
 ) -> None:
@@ -95,7 +95,12 @@ async def test_summary_provider_exception_is_translated_to_safe_retry(
 
     class SecretBearingProvider:
         async def generate_summary(self, _transcript):
-            raise RuntimeError("GEMINI_AUTHORIZATION_SENTINEL")
+            raise ProviderFailure(
+                provider="gemini",
+                operation="generate_summary",
+                disposition="retryable",
+                error_class="unavailable",
+            )
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await deliver_summary_generate(
@@ -112,7 +117,7 @@ async def test_summary_provider_exception_is_translated_to_safe_retry(
 
     assert exc_info.value.error_code == "provider_retryable"
     assert exc_info.value.retryable is True
-    assert "GEMINI_AUTHORIZATION_SENTINEL" not in str(exc_info.value)
+    assert "provider operation failed" not in str(exc_info.value)
 
 
 @pytest.mark.anyio
