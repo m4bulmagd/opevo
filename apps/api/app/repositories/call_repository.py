@@ -28,6 +28,7 @@ CALL_FAILURE_CODES = frozenset(
         "dispatch_ineligible",
         "dispatch_conflict",
         "dispatch_configuration",
+        "dispatch_internal_defect",
         "dispatch_provider_exhausted",
         "dispatch_timeout",
         "caller_left_before_connect",

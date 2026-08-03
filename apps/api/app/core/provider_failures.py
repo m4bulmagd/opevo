@@ -123,11 +123,31 @@ class ProviderFailure(RuntimeError):
                 raise ValueError("Unsafe provider failure context")
 
         super().__init__("provider operation failed")
-        self.provider = provider
-        self.operation = operation
-        self.disposition = disposition
-        self.error_class = error_class
-        self.context = MappingProxyType(safe_context)
+        self._provider = provider
+        self._operation = operation
+        self._disposition = disposition
+        self._error_class = error_class
+        self._context = MappingProxyType(safe_context)
+
+    @property
+    def provider(self) -> ProviderName:
+        return self._provider
+
+    @property
+    def operation(self) -> ProviderOperation:
+        return self._operation
+
+    @property
+    def disposition(self) -> ProviderFailureDisposition:
+        return self._disposition
+
+    @property
+    def error_class(self) -> ProviderFailureClass:
+        return self._error_class
+
+    @property
+    def context(self) -> Mapping[str, str]:
+        return self._context
 
     @property
     def retryable(self) -> bool:
