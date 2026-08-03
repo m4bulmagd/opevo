@@ -102,6 +102,23 @@ def get_webhook_receiver(request: Request):
     return api.WebhookReceiver(verifier)
 
 
+def _normalized_webhook_egress_object_key_evidence(
+    egress: object,
+    *,
+    bucket_name: str,
+    endpoint_url: str,
+) -> EgressObjectKeyEvidence:
+    """Fail closed on malformed objects received from the signed webhook SDK."""
+    try:
+        return normalized_egress_object_key_evidence(
+            egress,
+            bucket_name=bucket_name,
+            endpoint_url=endpoint_url,
+        )
+    except Exception:
+        return EgressObjectKeyEvidence("invalid")
+
+
 def _convert_livekit_event(
     event: object,
     *,
@@ -117,7 +134,7 @@ def _convert_livekit_event(
         evidence = (
             EgressObjectKeyEvidence("invalid")
             if egress is _ALIAS_CONFLICT
-            else normalized_egress_object_key_evidence(
+            else _normalized_webhook_egress_object_key_evidence(
                 egress,
                 bucket_name=bucket_name,
                 endpoint_url=endpoint_url,

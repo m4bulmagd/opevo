@@ -193,13 +193,14 @@ class _FieldAccessFailureMapping(Mapping[str, object]):
         self.target = target
         self.phase = phase
         self.failure_type = failure_type
+        self.failure = failure_type("mapping item unavailable")
         self.target_accesses = 0
 
     def __getitem__(self, key: str) -> object:
         if key == self.target:
             self.target_accesses += 1
             if self.phase == "item":
-                raise self.failure_type("mapping item unavailable")
+                raise self.failure
         return self.values[key]
 
     def __iter__(self) -> Iterator[str]:
@@ -225,12 +226,13 @@ class _SdkAttributeFailure:
         self.values = values
         self.target = target
         self.failure_type = failure_type
+        self.failure = failure_type("SDK attribute unavailable")
         self.target_accesses = 0
 
     def __getattr__(self, name: str) -> object:
         if name == self.target:
             self.target_accesses += 1
-            raise self.failure_type("SDK attribute unavailable")
+            raise self.failure
         try:
             return self.values[name]
         except KeyError:
@@ -244,10 +246,11 @@ class _ProtocolClassificationFailure:
         failure_type: type[BaseException] = RuntimeError,
     ) -> None:
         self.failure_type = failure_type
+        self.failure = failure_type("protocol classification unavailable")
 
     @property
     def __class__(self) -> type:
-        raise self.failure_type("protocol classification unavailable")
+        raise self.failure
 
 
 class _PresenceProbeRecord:
@@ -258,6 +261,8 @@ class _PresenceProbeRecord:
     )
 
     def __init__(self, *, mode: str, object_key: str) -> None:
+        self.presence_failure = RuntimeError("protobuf presence unavailable")
+        self.presence_abort = _AliasAbort("protobuf presence aborted")
         self.room_composite = SimpleNamespace(
             file=SimpleNamespace(filepath=object_key)
         )
@@ -270,13 +275,11 @@ class _PresenceProbeRecord:
         elif mode == "base_exception":
             self.HasField = self._raise_presence_abort
 
-    @staticmethod
-    def _raise_presence_error(_name: str) -> bool:
-        raise RuntimeError("protobuf presence unavailable")
+    def _raise_presence_error(self, _name: str) -> bool:
+        raise self.presence_failure
 
-    @staticmethod
-    def _raise_presence_abort(_name: str) -> bool:
-        raise _AliasAbort("protobuf presence aborted")
+    def _raise_presence_abort(self, _name: str) -> bool:
+        raise self.presence_abort
 
 
 class _DescriptorAccessFailure:
@@ -284,9 +287,12 @@ class _DescriptorAccessFailure:
         file=SimpleNamespace(filepath="calls/user-id/call-id.ogg")
     )
 
+    def __init__(self) -> None:
+        self.failure = RuntimeError("protobuf descriptor unavailable")
+
     @property
     def DESCRIPTOR(self) -> object:
-        raise RuntimeError("protobuf descriptor unavailable")
+        raise self.failure
 
 
 def _convert_event_with_duplicate_alias_extension(extension: object):
@@ -575,26 +581,33 @@ def test_convert_protocol_classification_failure_returns_fixed_fallback() -> Non
     assert converted.path_state == "invalid"
 
 
-def test_object_key_protocol_classification_failure_is_invalid() -> None:
-    evidence = normalized_egress_object_key_evidence(
-        _ProtocolClassificationFailure(),
+@pytest.mark.parametrize("boundary", ["object-key", "repeated-output"])
+def test_protocol_classification_failure_splits_strict_and_webhook_boundaries(
+    boundary: str,
+) -> None:
+    malformed = _ProtocolClassificationFailure()
+    egress = malformed if boundary == "object-key" else {"fileResults": malformed}
+
+    with pytest.raises(RuntimeError) as strict_info:
+        normalized_egress_object_key_evidence(
+            egress,
+            bucket_name="recordings",
+            endpoint_url="http://minio:9000",
+        )
+
+    assert strict_info.value is malformed.failure
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        {
+            "id": "EV_protocol_classification",
+            "event": "egress_updated",
+            "egressInfo": egress,
+        },
         bucket_name="recordings",
         endpoint_url="http://minio:9000",
     )
-
-    assert evidence.state == "invalid"
-    assert evidence.object_key is None
-
-
-def test_repeated_output_protocol_classification_failure_is_invalid() -> None:
-    evidence = normalized_egress_object_key_evidence(
-        {"fileResults": _ProtocolClassificationFailure()},
-        bucket_name="recordings",
-        endpoint_url="http://minio:9000",
-    )
-
-    assert evidence.state == "invalid"
-    assert evidence.object_key is None
+    assert converted.path_state == "invalid"
+    assert converted.payload["egress"]["object_key"] is None
 
 
 @pytest.mark.parametrize(
@@ -606,7 +619,7 @@ def test_protocol_classification_does_not_catch_base_exception(
 ) -> None:
     malformed = _ProtocolClassificationFailure(failure_type=_AliasAbort)
 
-    with pytest.raises(_AliasAbort):
+    with pytest.raises(_AliasAbort) as exc_info:
         if boundary == "alias":
             livekit_alias_values_equivalent(malformed, malformed)
         elif boundary == "converter":
@@ -623,6 +636,8 @@ def test_protocol_classification_does_not_catch_base_exception(
                 bucket_name="recordings",
                 endpoint_url="http://minio:9000",
             )
+
+    assert exc_info.value is malformed.failure
 
 
 @pytest.mark.parametrize(
@@ -1342,11 +1357,23 @@ def test_nested_file_result_mapping_access_boundaries(phase: str) -> None:
         "fileResults": [file_result],
     }
 
-    evidence = normalized_egress_object_key_evidence(
-        egress,
-        bucket_name="recordings",
-        endpoint_url="http://minio:9000",
-    )
+    if phase == "membership":
+        evidence = normalized_egress_object_key_evidence(
+            egress,
+            bucket_name="recordings",
+            endpoint_url="http://minio:9000",
+        )
+        assert evidence.state == "exact"
+        assert evidence.object_key == "calls/user-id/call-id.ogg"
+    else:
+        with pytest.raises(RuntimeError) as strict_info:
+            normalized_egress_object_key_evidence(
+                egress,
+                bucket_name="recordings",
+                endpoint_url="http://minio:9000",
+            )
+        assert strict_info.value is file_result.failure
+
     converted = livekit_webhook_module._convert_livekit_event(
         {
             "id": "EV_nested_mapping_access",
@@ -1358,15 +1385,11 @@ def test_nested_file_result_mapping_access_boundaries(phase: str) -> None:
     )
 
     if phase == "membership":
-        assert evidence.state == "exact"
-        assert evidence.object_key == "calls/user-id/call-id.ogg"
         assert converted.path_state == "exact"
         assert converted.payload["egress"]["object_key"] == (
             "calls/user-id/call-id.ogg"
         )
     else:
-        assert evidence.state == "invalid"
-        assert evidence.object_key is None
         assert converted.path_state == "invalid"
         assert converted.payload["egress"]["object_key"] is None
 
@@ -1435,41 +1458,95 @@ def test_missing_or_exact_empty_filename_can_use_exact_location(
     "mode",
     ["missing", "noncallable", "nonbool", "exception"],
 )
-def test_protobuf_presence_probe_failures_are_invalid(mode: str) -> None:
-    evidence = normalized_egress_object_key_evidence(
-        _PresenceProbeRecord(
-            mode=mode,
-            object_key="calls/user-id/call-id.ogg",
-        ),
-        bucket_name="recordings",
-        endpoint_url="http://minio:9000",
+def test_protobuf_presence_probe_failures_split_strict_and_webhook_boundaries(
+    mode: str,
+) -> None:
+    malformed = _PresenceProbeRecord(
+        mode=mode,
+        object_key="calls/user-id/call-id.ogg",
     )
+    expected_failure_type = {
+        "missing": AttributeError,
+        "noncallable": TypeError,
+        "nonbool": TypeError,
+        "exception": RuntimeError,
+    }[mode]
 
-    assert evidence.state == "invalid"
-    assert evidence.object_key is None
-
-
-def test_protobuf_descriptor_access_failure_is_invalid() -> None:
-    evidence = normalized_egress_object_key_evidence(
-        _DescriptorAccessFailure(),
-        bucket_name="recordings",
-        endpoint_url="http://minio:9000",
-    )
-
-    assert evidence.state == "invalid"
-    assert evidence.object_key is None
-
-
-def test_protobuf_presence_probe_does_not_catch_base_exception() -> None:
-    with pytest.raises(_AliasAbort):
+    with pytest.raises(expected_failure_type) as strict_info:
         normalized_egress_object_key_evidence(
-            _PresenceProbeRecord(
-                mode="base_exception",
-                object_key="calls/user-id/call-id.ogg",
-            ),
+            malformed,
             bucket_name="recordings",
             endpoint_url="http://minio:9000",
         )
+
+    if mode == "exception":
+        assert strict_info.value is malformed.presence_failure
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        {
+            "id": "EV_presence_probe",
+            "event": "egress_updated",
+            "egressInfo": malformed,
+        },
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+    assert converted.path_state == "invalid"
+    assert converted.payload["egress"]["object_key"] is None
+
+
+def test_protobuf_descriptor_access_failure_splits_strict_and_webhook_boundaries() -> (
+    None
+):
+    malformed = _DescriptorAccessFailure()
+
+    with pytest.raises(RuntimeError) as strict_info:
+        normalized_egress_object_key_evidence(
+            malformed,
+            bucket_name="recordings",
+            endpoint_url="http://minio:9000",
+        )
+
+    assert strict_info.value is malformed.failure
+
+    converted = livekit_webhook_module._convert_livekit_event(
+        {
+            "id": "EV_descriptor_access",
+            "event": "egress_updated",
+            "egressInfo": malformed,
+        },
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+    )
+    assert converted.path_state == "invalid"
+    assert converted.payload["egress"]["object_key"] is None
+
+
+def test_protobuf_presence_probe_does_not_catch_base_exception() -> None:
+    malformed = _PresenceProbeRecord(
+        mode="base_exception",
+        object_key="calls/user-id/call-id.ogg",
+    )
+
+    with pytest.raises(_AliasAbort) as strict_info:
+        normalized_egress_object_key_evidence(
+            malformed,
+            bucket_name="recordings",
+            endpoint_url="http://minio:9000",
+        )
+    assert strict_info.value is malformed.presence_abort
+
+    with pytest.raises(_AliasAbort) as webhook_info:
+        livekit_webhook_module._convert_livekit_event(
+            {
+                "id": "EV_presence_abort",
+                "event": "egress_updated",
+                "egressInfo": malformed,
+            },
+            bucket_name="recordings",
+            endpoint_url="http://minio:9000",
+        )
+    assert webhook_info.value is malformed.presence_abort
 
 
 def test_convert_egress_event_rejects_conflicting_identity_aliases() -> None:
