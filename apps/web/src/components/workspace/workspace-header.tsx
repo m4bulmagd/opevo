@@ -15,30 +15,40 @@ import { type WorkspaceCallerIdentity, WorkspaceCallerStatus } from "@/component
 import { WorkspaceNotificationsPreview } from "@/components/workspace/workspace-notifications-preview";
 import { authMode, shouldWrapClerk } from "@/lib/auth/clerk-config";
 
-export function resolveWorkspaceAccountControl(variant: "mobile" | "workspace" = "workspace"): ReactNode {
+export type WorkspaceAccountControls = Readonly<{
+  desktop: ReactNode;
+  mobile: ReactNode;
+}>;
+
+export function resolveWorkspaceAccountControls(): WorkspaceAccountControls {
   if (authMode === "local") {
-    return <Badge variant="secondary">Local development</Badge>;
+    return {
+      desktop: <Badge variant="secondary">Local development</Badge>,
+      mobile: <Badge variant="secondary">Local development</Badge>,
+    };
   }
 
   if (!shouldWrapClerk) {
-    return null;
+    return { desktop: null, mobile: null };
   }
 
-  return <ClerkSignOut variant={variant} />;
+  return {
+    desktop: <ClerkSignOut variant="workspace" />,
+    mobile: <ClerkSignOut variant="mobile" />,
+  };
 }
 
 type WorkspaceHeaderProps = {
-  accountControl: ReactNode;
+  accountControls: WorkspaceAccountControls;
   activeCaller: WorkspaceCallerIdentity | null;
   agentName: string;
-  mobileAccountControl: ReactNode;
 };
 
-export function WorkspaceHeader({ accountControl, activeCaller, agentName, mobileAccountControl }: WorkspaceHeaderProps) {
+export function WorkspaceHeader({ accountControls, activeCaller, agentName }: WorkspaceHeaderProps) {
   return (
     <header className="sticky top-0 z-20 flex items-center gap-2 border-border border-b bg-background/90 px-4 py-3 backdrop-blur lg:rounded-2xl lg:border lg:bg-card lg:shadow-card">
       <div className="flex min-w-0 items-center gap-2">
-        <MobileWorkspaceNavigation accountControl={mobileAccountControl} />
+        <MobileWorkspaceNavigation accountControl={accountControls.mobile} />
         <Link
           aria-label="Presvo overview"
           className="hidden min-h-11 min-w-0 items-center gap-2 rounded-md font-semibold tracking-tight outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:inline-flex lg:hidden"
@@ -100,7 +110,7 @@ export function WorkspaceHeader({ accountControl, activeCaller, agentName, mobil
       </Button>
 
       <div className="hidden xl:block" data-header-item="account-control">
-        {accountControl}
+        {accountControls.desktop}
       </div>
 
       <div data-header-item="theme-control">

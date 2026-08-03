@@ -10,7 +10,7 @@ import type { AccountStatus } from "@/lib/types/account";
 import type { AgentConfig } from "@/lib/types/agent";
 
 const testState = vi.hoisted(() => ({
-  clerkAllowed: false,
+  clerkSignOutVariants: [] as Array<"activation" | "mobile" | "workspace">,
   pathname: "/dashboard",
   reducedMotion: false,
   listCallsMock: vi.fn(),
@@ -22,16 +22,11 @@ const testState = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("@clerk/nextjs", async () => {
-  const { Children, cloneElement } = await import("react");
-
+vi.mock("@/components/auth/clerk-sign-out", () => {
   return {
-    SignOutButton: ({ children }: { children: React.ReactNode }) => {
-      if (!testState.clerkAllowed) {
-        throw new Error("Clerk sign-out must not render in local mode");
-      }
-
-      return cloneElement(Children.only(children) as React.ReactElement);
+    ClerkSignOut: ({ variant }: { variant: "activation" | "mobile" | "workspace" }) => {
+      testState.clerkSignOutVariants.push(variant);
+      return <button aria-label={`${variant} Clerk sign-out sentinel`} type="button" />;
     },
   };
 });
@@ -134,7 +129,6 @@ async function renderDashboardLayout({
   vi.stubEnv("AUTH_MODE", authMode);
   vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", authMode === "clerk" ? "pk_test_configured" : "");
   vi.stubEnv("CLERK_SECRET_KEY", authMode === "clerk" ? "clerk-test-fixture" : "");
-  testState.clerkAllowed = authMode === "clerk";
   testState.getAccountMock.mockResolvedValue(account);
   testState.getAgentConfigForRequestMock.mockResolvedValue(agentConfig(agentName, agentEnabled));
 
@@ -188,7 +182,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  testState.clerkAllowed = false;
+  testState.clerkSignOutVariants.length = 0;
   testState.pathname = "/dashboard";
   testState.reducedMotion = false;
   testState.listCallsMock.mockReset();
@@ -427,16 +421,17 @@ describe("app shell", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Workspace navigation" })).toBeNull());
   });
 
-  it("exposes labelled Clerk sign-out in the workspace drawer while retaining the desktop control", async () => {
+  it("delegates desktop and mobile account controls to explicit shared-leaf variants", async () => {
     await renderDashboardLayout({ authMode: "clerk" });
 
     const header = screen.getByRole("banner");
     const trigger = within(header).getByRole("button", { name: "Open navigation" });
-    expect(within(header).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+    expect(within(header).getByRole("button", { name: "workspace Clerk sign-out sentinel" })).toBeInTheDocument();
+    expect(new Set(testState.clerkSignOutVariants)).toEqual(new Set(["workspace"]));
 
     const { dialog } = await openMobileNavigation();
-    const mobileSignOut = within(dialog).getByRole("button", { name: "Sign out" });
-    expect(mobileSignOut).toHaveTextContent("Sign out");
+    expect(within(dialog).getByRole("button", { name: "mobile Clerk sign-out sentinel" })).toBeInTheDocument();
+    expect(new Set(testState.clerkSignOutVariants)).toEqual(new Set(["workspace", "mobile"]));
     expect(trigger).toHaveClass("xl:hidden");
     expect(trigger).not.toHaveClass("lg:hidden");
   });
@@ -446,6 +441,7 @@ describe("app shell", () => {
 
     const { dialog } = await openMobileNavigation();
     expect(within(dialog).getByText("Local development")).toBeVisible();
+    expect(testState.clerkSignOutVariants).toEqual([]);
   });
 
   it("loads the newest in-progress call and shows its number in the header", async () => {

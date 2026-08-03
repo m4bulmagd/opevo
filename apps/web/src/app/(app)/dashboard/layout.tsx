@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { WorkspaceCallerIdentity } from "@/components/workspace/workspace-caller-status";
-import { resolveWorkspaceAccountControl } from "@/components/workspace/workspace-header";
+import { resolveWorkspaceAccountControls } from "@/components/workspace/workspace-header";
 import { WorkspaceShell } from "@/components/workspace/workspace-shell";
 import { getAccount } from "@/lib/api/account";
 import { listCalls } from "@/lib/api/calls";
@@ -24,11 +24,10 @@ async function resolveActiveCaller(): Promise<WorkspaceCallerIdentity | null> {
 }
 
 export default async function AppLayout({ children }: Readonly<{ children: ReactNode }>) {
-  const [account, agentConfig, accountControl, mobileAccountControl, activeCaller] = await Promise.all([
+  const accountControls = resolveWorkspaceAccountControls();
+  const [account, agentConfig, activeCaller] = await Promise.all([
     getAccount(),
     getAgentConfigForRequest(),
-    resolveWorkspaceAccountControl(),
-    resolveWorkspaceAccountControl("mobile"),
     resolveActiveCaller(),
   ]);
   const agentName = normalizeAgentName(agentConfig.agent_name);
@@ -36,11 +35,10 @@ export default async function AppLayout({ children }: Readonly<{ children: React
   return (
     <WorkspaceShell
       account={account}
-      accountControl={accountControl}
+      accountControls={accountControls}
       activeCaller={activeCaller}
       agentEnabled={agentConfig.is_enabled}
       agentName={agentName}
-      mobileAccountControl={mobileAccountControl}
     >
       {children}
     </WorkspaceShell>
