@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Present terminal invalid number assignments as explicit non-retryable failures, restore provisioning-free legacy outbox coverage, and publish the changed readiness semantics as `runtime-v5`.
+**Goal:** Present terminal invalid number assignments as explicit non-retryable failures, restore provisioning-free legacy outbox coverage, publish the changed readiness semantics as `runtime-v5`, reject unassigned exact-link identities, and make explicit local-auth token validation fail closed on surrounding whitespace.
 
-**Architecture:** `ActivationPolicy` keeps the existing failure stage but distinguishes a provider failure from a terminal succeeded-yet-invalid assignment with one stable blocker. The number milestone renders that blocker explicitly, while the canonical number predicate and database state remain unchanged. Test fixtures expose activation assumptions through a boolean opt-in, and the existing readiness response carries the new semantic version.
+**Architecture:** `ActivationPolicy` keeps the existing failure stage but distinguishes a provider failure from a terminal succeeded-yet-invalid assignment with one stable blocker. The number milestone renders that blocker explicitly. The canonical number predicate keeps its existing persisted-data contract while explicitly rejecting a null relationship identity. Test fixtures expose activation assumptions through a boolean opt-in, the existing readiness response carries the new semantic version, and API/web local-auth boundaries reject padded secrets without normalizing them.
 
 **Tech Stack:** Python 3.13, FastAPI service policy, SQLAlchemy test models, pytest, Next.js 16, React 19, TypeScript, Vitest, Testing Library, Biome, Ruff, mypy.
 
@@ -18,7 +18,8 @@
 - A consented `succeeded` provisioning with `number_provisioned=False` is non-retryable, has no next action, and must not display the provisioning spinner or business-profile correction guidance.
 - `_seed_dispatch` defaults to no provisioning row. Only activation-enabled tests with an otherwise ready customer opt in through `with_provisioning=True`.
 - The readiness policy version is exactly `runtime-v5`; web code continues treating it as opaque data.
-- Do not change the canonical `number_is_provisioned` predicate, database schema, persisted provisioning status, provider state, or live account state.
+- Do not change the canonical `number_is_provisioned` predicate except for the approved 41A non-null link guard. Do not change the database schema, persisted provisioning status, provider state, or live account state.
+- `LOCAL_AUTH_TOKEN` remains exact secret material. Reject leading/trailing whitespace in API runtime validation and the server-only web session boundary; do not trim, expose, log, or echo it.
 - Do not add a provider retry, number order, compensation, repair command, support subsystem, route, dependency, cache, or migration.
 - Do not read or print `.env` files, credentials, provider identifiers, real phone numbers, transcripts, recordings, or private runtime overrides.
 - Do not inspect or modify `Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
@@ -583,3 +584,146 @@ Expected HTTP codes: `200`, `200`, and `307`. Do not run `docker compose up`, re
 - [ ] **Step 7: Run final plan-level and whole-branch read-only reviews**
 
 Generate a review package from this plan's committed base through final HEAD. Require reviewers to check 38A/39A/40A against the written design, confirm no semantic test weakening, and distinguish deferred Issues 33–35 from new implementation findings. Resolve any Critical or Important finding with one bounded test-first fix loop and scoped re-review before calling the plan complete.
+
+---
+
+### Task 6: Reject unassigned canonical number links
+
+**Files:**
+- Modify: `apps/api/app/services/number_provisioning_facts.py`
+- Modify: `apps/api/tests/services/test_number_provisioning_facts.py`
+- Modify: `apps/api/tests/activation/test_activation_snapshot_service.py`
+
+**Interfaces:**
+- Consumes: the existing provisioning link and assigned phone identity.
+- Produces: false when the provisioning link is null, including malformed
+  in-memory objects whose phone identity is also unassigned.
+- Preserves: every valid persisted exact link and all existing readiness
+  vocabulary, stages, schemas, and database constraints.
+
+- [ ] **Step 1: Add the unassigned-identity RED test**
+
+Construct an otherwise successful provisioning and assigned phone without
+explicit IDs, prove both attributes are `None`, and require
+`number_is_provisioned(...) is False`. Run the named test and require it to fail
+because the current comparison accepts `None == None`.
+
+- [ ] **Step 2: Implement the non-null guard and truthful fixtures**
+
+Require `provisioning.phone_number_id is not None` immediately before equality.
+Give the pure matrix and activation-snapshot persisted-record fixture explicit
+phone UUIDs. Add a matrix case whose provisioning link is explicitly missing.
+
+- [ ] **Step 3: Run Task 6 GREEN and static checks**
+
+From `apps/api`:
+
+```bash
+.venv/bin/python -m pytest \
+  tests/services/test_number_provisioning_facts.py \
+  tests/activation/test_activation_snapshot_service.py \
+  -q
+.venv/bin/ruff check \
+  app/services/number_provisioning_facts.py \
+  tests/services/test_number_provisioning_facts.py \
+  tests/activation/test_activation_snapshot_service.py
+.venv/bin/mypy app/services/number_provisioning_facts.py
+```
+
+- [ ] **Step 4: Prove mutation sensitivity and commit**
+
+Temporarily remove the non-null guard and require the unassigned-identity test
+to fail. Restore it, rerun GREEN, and commit:
+
+```bash
+git add \
+  apps/api/app/services/number_provisioning_facts.py \
+  apps/api/tests/services/test_number_provisioning_facts.py \
+  apps/api/tests/activation/test_activation_snapshot_service.py
+git commit -m "fix(api): reject unassigned number links"
+```
+
+---
+
+### Task 7: Reject padded explicit local-auth tokens
+
+**Files:**
+- Modify: `apps/api/app/core/runtime_validation.py`
+- Modify: `apps/api/tests/test_deployment_readiness.py`
+- Modify: `apps/web/src/lib/auth/server-session.ts`
+- Modify: `apps/web/tests/lib/server-session.test.ts`
+
+**Interfaces:**
+- Consumes: the existing server-only `LOCAL_AUTH_TOKEN` value in explicit local
+  mode.
+- Produces: bounded configuration errors for absent, blank, or padded values.
+- Preserves: the original exact token, constant-time API comparison, Clerk mode,
+  and the client/server secret boundary.
+
+- [ ] **Step 1: Add API and web RED cases**
+
+Extend API runtime/Compose validation with a nonblank padded token and require
+the existing safe `LOCAL_AUTH_TOKEN` error. Add a server-session test requiring
+the same padded value to throw without returning a normalized token. Run both
+named tests and require failures for the expected acceptance/trimming behavior.
+
+- [ ] **Step 2: Implement exact fail-closed validation**
+
+In API local-mode runtime validation, reject when the token is missing or is not
+equal to its stripped form. In the server-only web session boundary, reject when
+the raw value is absent or differs from `trim()`, then return the raw value.
+Do not change `LocalAuthProvider`, Clerk configuration, or client-visible code.
+
+- [ ] **Step 3: Run Task 7 GREEN and static checks**
+
+From `apps/api` and `apps/web`, respectively:
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_deployment_readiness.py \
+  tests/auth/test_local_auth.py \
+  -q
+.venv/bin/ruff check \
+  app/core/runtime_validation.py \
+  tests/test_deployment_readiness.py
+.venv/bin/mypy app/core/runtime_validation.py
+
+env PATH=/home/mo/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin \
+  npm test -- --run tests/lib/server-session.test.ts
+env PATH=/home/mo/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin \
+  npm run typecheck
+env PATH=/home/mo/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin \
+  npm run lint
+```
+
+- [ ] **Step 4: Prove both boundaries are mutation-sensitive and commit**
+
+Temporarily remove the API padded-token rejection and require its test to fail.
+Restore it. Temporarily restore web trimming and require its padded-token test to
+fail. Restore exact rejection, rerun GREEN, and commit:
+
+```bash
+git add \
+  apps/api/app/core/runtime_validation.py \
+  apps/api/tests/test_deployment_readiness.py \
+  apps/web/src/lib/auth/server-session.ts \
+  apps/web/tests/lib/server-session.test.ts
+git commit -m "fix(auth): reject padded local tokens"
+```
+
+---
+
+### Task 8: Verify and review Issues 41A and 42A
+
+**Files:**
+- Modify: none unless verification proves a Task 6–7 defect.
+
+- [ ] Run the focused Task 6–7 API/web tests and static checks.
+- [ ] Run complete API and web tests plus their documented static gates.
+- [ ] Run `git diff --check main...HEAD` and require status to contain only the
+  preserved untracked `apps/api/.venv`.
+- [ ] Recheck the unchanged live container IDs/restart counts, API/worker Telnyx
+  mode, web Clerk presence, and HTTP `200`, `200`, `307` without recreating any
+  service or touching live provider/database state.
+- [ ] Run independent plan-level and whole-branch scoped re-reviews. Resolve any
+  finding test-first before presenting deferred documentation Issues 33–35.
