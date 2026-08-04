@@ -282,6 +282,7 @@ async def _seed_dispatch(
     user_id: UUID | None = None,
     config_id: UUID | None = None,
     call_id: UUID | None = None,
+    with_provisioning: bool = False,
 ):
     from app.models.user import User
 
@@ -326,16 +327,17 @@ async def _seed_dispatch(
     )
     db_session.add_all([phone, config, subscription])
     await db_session.flush()
-    db_session.add(
-        PhoneNumberProvisioning(
-            user_id=user.id,
-            phone_number_id=phone.id,
-            target_country_code="FR",
-            status="succeeded",
-            attempt_count=1,
-            can_retry=False,
+    if with_provisioning:
+        db_session.add(
+            PhoneNumberProvisioning(
+                user_id=user.id,
+                phone_number_id=phone.id,
+                target_country_code="FR",
+                status="succeeded",
+                attempt_count=1,
+                can_retry=False,
+            )
         )
-    )
     call = Call(
         id=call_id,
         user_id=user.id,
@@ -426,6 +428,7 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
         db_session,
         owner_name=owner_name,
     )
+    assert await db_session.scalar(select(PhoneNumberProvisioning)) is None
     provider = _Provider()
     monkeypatch.setenv("LIVEKIT_AGENT_NAME", "configured-worker")
     monkeypatch.setenv("MAX_CALL_DURATION_SECONDS", "900")
@@ -530,6 +533,7 @@ async def test_activation_flow_missing_business_name_fails_dispatch_closed(
         db_session,
         owner_name="Legacy Owner",
         business_display_name=None,
+        with_provisioning=True,
     )
     from app.models.business_profile import BusinessProfile
     from app.models.customer_activation import CustomerActivation
@@ -606,6 +610,7 @@ async def test_default_guided_projection_serializes_through_dispatch_contract(
     call, event, _subscription = await _seed_dispatch(
         db_session,
         owner_name="Morgan Rivera",
+        with_provisioning=True,
     )
     from app.models.business_profile import BusinessProfile
     from app.models.customer_activation import CustomerActivation
