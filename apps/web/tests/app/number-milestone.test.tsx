@@ -383,6 +383,8 @@ describe("number milestone", () => {
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(/couldn't verify your assigned number/i);
     expect(screen.getByText(/Reference: number_assignment_inconsistent/i)).toBeInTheDocument();
+    expect(screen.queryByText("+33187654321")).not.toBeInTheDocument();
+    expect(screen.queryByText("+33 1 87 65 43 21")).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Retry provisioning/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Correct business profile/i })).not.toBeInTheDocument();
