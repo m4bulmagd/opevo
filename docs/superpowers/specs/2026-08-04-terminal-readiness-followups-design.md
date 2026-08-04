@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-04
 
-**Status:** Owner-approved direction; written contract awaiting owner review
+**Status:** Owner-approved written contract
 
 ## Context
 
