@@ -71,7 +71,7 @@ def test_live_snapshot_can_activate_route_and_dispatch() -> None:
     assert result.blockers == ()
     assert result.warnings == ()
     assert result.evaluated_at == NOW
-    assert result.policy_version == "runtime-v4"
+    assert result.policy_version == "runtime-v5"
 
 
 @pytest.mark.parametrize(
