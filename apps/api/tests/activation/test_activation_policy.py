@@ -113,7 +113,27 @@ def test_completed_legacy_number_advances_without_historical_consent() -> None:
 
 
 def test_missing_assigned_number_remains_in_provisioning() -> None:
-    decision = ActivationPolicy.evaluate(replace(ready_facts(), number_provisioned=False))
+    decision = ActivationPolicy.evaluate(
+        replace(
+            ready_facts(),
+            provisioning_status="running",
+            number_provisioned=False,
+        )
+    )
 
     assert decision.stage is ActivationStage.PROVISIONING
     assert decision.blockers == ("number_not_ready",)
+
+
+def test_succeeded_provisioning_with_invalid_assignment_is_terminal() -> None:
+    decision = ActivationPolicy.evaluate(
+        replace(
+            ready_facts(),
+            provisioning_status="succeeded",
+            number_provisioned=False,
+        )
+    )
+
+    assert decision.stage is ActivationStage.PROVISIONING_FAILED
+    assert decision.next_action is None
+    assert decision.blockers == ("number_assignment_inconsistent",)

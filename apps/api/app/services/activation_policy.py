@@ -72,6 +72,16 @@ class ActivationPolicy:
                 next_action="retry_provisioning",
                 blockers=("number_provisioning_failed",),
             )
+        if (
+            facts.provisioning_status == "succeeded"
+            and not facts.number_provisioned
+        ):
+            return ActivationDecision(
+                stage=ActivationStage.PROVISIONING_FAILED,
+                completed_milestones=completed_milestones,
+                next_action=None,
+                blockers=("number_assignment_inconsistent",),
+            )
         if not facts.number_provisioned:
             return ActivationDecision(
                 stage=ActivationStage.PROVISIONING,
