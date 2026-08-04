@@ -92,7 +92,7 @@ class CustomerReadinessResult:
 
 
 class CustomerReadinessPolicy:
-    POLICY_VERSION = "runtime-v4"
+    POLICY_VERSION = "runtime-v5"
     ELIGIBLE_SUBSCRIPTION_STATUSES = frozenset({"active", "trialing"})
     SUPPORTED_PLAN = "starter"
 
