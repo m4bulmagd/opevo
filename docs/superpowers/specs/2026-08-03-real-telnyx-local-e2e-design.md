@@ -61,8 +61,10 @@ selected provider mode and boolean credential-presence checks.
    inbound call and inspect API, worker, and agent logs for the complete voice
    path.
 8. Keep the override active until the owner explicitly chooses either to keep
-   the number live or to disable it. If disabling, confirm the Telnyx connection
-   is returned to the disabled connection before removing the override.
+   the number live or to open a separate reviewed offline-workflow issue. The
+   current product has no reversible Go-offline operation: do not call Telnyx
+   directly or remove the override while the application considers the number
+   active. For this execution, the owner selected 28A Keep live.
 
 ## Failure handling
 
