@@ -95,9 +95,11 @@ Verification is complete only when all of the following are observed:
   worker callbacks succeeding;
 - logs contain no credentials, raw provider identifiers, or unredacted phone
   numbers;
-- the final live-or-disabled provider state is explicitly chosen and verified;
-- temporary override files are retained while needed and removed only after
-  their provider state is safely resolved.
+- the final keep-live or separate-offline-workflow decision is explicitly
+  chosen and its stated consistency check passes;
+- temporary override files remain retained for Keep live. Removing them is
+  permitted only inside the separately reviewed offline workflow after
+  application and provider state are safely resolved.
 
 No production code change is required for Issue 24. The durable record of the
 root cause and selected solution is this design; the private runtime override
