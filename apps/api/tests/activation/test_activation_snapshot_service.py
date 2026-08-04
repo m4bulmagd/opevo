@@ -278,6 +278,8 @@ async def test_legacy_completion_requires_an_exact_provisioning_phone_link() -> 
     assert snapshot.stage is ActivationStage.PROVISIONING_CONSENT_REQUIRED
     assert "number_provisioned" not in snapshot.completed_milestones
     assert snapshot.number.provider_ready is False
+    assert snapshot.runtime_readiness.can_route is False
+    assert "number_not_provisioned" in snapshot.runtime_readiness.blockers
 
 
 @pytest.mark.anyio
@@ -295,6 +297,8 @@ async def test_legacy_completion_requires_a_nonblank_provider_number_identity(
     assert snapshot.stage is ActivationStage.PROVISIONING_CONSENT_REQUIRED
     assert "number_provisioned" not in snapshot.completed_milestones
     assert snapshot.number.provider_ready is False
+    assert snapshot.runtime_readiness.can_route is False
+    assert "number_not_provisioned" in snapshot.runtime_readiness.blockers
 
 
 @pytest.mark.anyio
@@ -314,6 +318,8 @@ async def test_incomplete_provisioning_never_uses_legacy_completion_path(
     assert snapshot.stage is ActivationStage.PROVISIONING_CONSENT_REQUIRED
     assert "number_provisioned" not in snapshot.completed_milestones
     assert snapshot.number.provider_ready is False
+    assert snapshot.runtime_readiness.can_route is False
+    assert "number_not_provisioned" in snapshot.runtime_readiness.blockers
 
 
 @pytest.mark.anyio
