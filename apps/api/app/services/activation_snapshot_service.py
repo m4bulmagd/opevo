@@ -113,37 +113,31 @@ class ActivationSnapshotService:
             phone_number=phone,
             agent_config=agent_config,
         )
-        readiness = CustomerReadinessPolicy.evaluate(
-            build_customer_readiness_snapshot(
-                user=user,
-                subscription=subscription,
-                balance=balance,
-                phone_number=phone,
-                provisioning=provisioning,
-                agent_config=agent_config,
-                activation_required=True,
-                business_profile_complete=(
-                    activation_prerequisites.business_profile_complete
-                ),
-                profile_projection_current=(
-                    activation_prerequisites.profile_projection_current
-                ),
-                forwarding_verified=activation_prerequisites.forwarding_verified,
-                go_live_approved=activation_prerequisites.go_live_approved,
-                go_live_activated=activation_prerequisites.go_live_activated,
+        readiness_snapshot = build_customer_readiness_snapshot(
+            user=user,
+            subscription=subscription,
+            balance=balance,
+            phone_number=phone,
+            provisioning=provisioning,
+            agent_config=agent_config,
+            activation_required=True,
+            business_profile_complete=(
+                activation_prerequisites.business_profile_complete
             ),
+            profile_projection_current=(
+                activation_prerequisites.profile_projection_current
+            ),
+            forwarding_verified=activation_prerequisites.forwarding_verified,
+            go_live_approved=activation_prerequisites.go_live_approved,
+            go_live_activated=activation_prerequisites.go_live_activated,
+        )
+        readiness = CustomerReadinessPolicy.evaluate(
+            readiness_snapshot,
             now=evaluation_time,
         )
         evaluated_at = readiness.evaluated_at
         billing_eligible = readiness.subscription_eligible
-        number_provisioned = bool(
-            provisioning is not None
-            and provisioning.status == "succeeded"
-            and phone is not None
-            and provisioning.phone_number_id == phone.id
-            and phone.provider_number_id is not None
-            and phone.provider_number_id.strip()
-        )
+        number_provisioned = readiness_snapshot.number_provisioned
         facts = ActivationFacts(
             profile_confirmed=bool(
                 profile is not None

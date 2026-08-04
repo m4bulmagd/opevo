@@ -19,6 +19,7 @@ class ReadinessBlocker(StrEnum):
     SUBSCRIPTION_PERIOD_MISSING = "subscription_period_missing"
     SUBSCRIPTION_PERIOD_INACTIVE = "subscription_period_inactive"
     MINUTES_EXHAUSTED = "minutes_exhausted"
+    NUMBER_NOT_PROVISIONED = "number_not_provisioned"
     PHONE_MISSING = "phone_missing"
     PHONE_PROVIDER_ID_MISSING = "phone_provider_id_missing"
     AGENT_CONFIG_MISSING = "agent_config_missing"
@@ -54,6 +55,7 @@ class CustomerReadinessSnapshot:
     current_period_end: datetime | None
     balance: int
     provisioning_status: str | None
+    number_provisioned: bool
     phone_present: bool
     phone_provider_id_present: bool
     phone_active: bool
@@ -112,6 +114,7 @@ class CustomerReadinessPolicy:
     )
     _ACTIVATION_BLOCKERS = _ACCESS_BLOCKERS | frozenset(
         {
+            ReadinessBlocker.NUMBER_NOT_PROVISIONED,
             ReadinessBlocker.PHONE_MISSING,
             ReadinessBlocker.PHONE_PROVIDER_ID_MISSING,
             ReadinessBlocker.AGENT_CONFIG_MISSING,
@@ -257,6 +260,8 @@ class CustomerReadinessPolicy:
     ) -> None:
         if not snapshot.activation_required:
             return
+        if not snapshot.number_provisioned:
+            found.add(ReadinessBlocker.NUMBER_NOT_PROVISIONED)
         if not snapshot.business_profile_complete:
             found.add(ReadinessBlocker.BUSINESS_PROFILE_INCOMPLETE)
         if not snapshot.profile_projection_current:
@@ -284,7 +289,11 @@ class CustomerReadinessPolicy:
         if found & cls._ACCESS_BLOCKERS:
             return CustomerReadinessStage.SUSPENDED
 
-        usable_phone = snapshot.phone_present and snapshot.phone_provider_id_present
+        usable_phone = (
+            snapshot.number_provisioned
+            if snapshot.activation_required
+            else snapshot.phone_present and snapshot.phone_provider_id_present
+        )
         inconsistent_phone = bool(
             snapshot.phone_present and not snapshot.phone_provider_id_present
         )
