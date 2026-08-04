@@ -794,6 +794,32 @@ def test_local_compose_defaults_interactive_services_to_clerk() -> None:
         assert setting not in worker_environment
 
 
+def test_local_compose_custom_web_port_updates_every_default_local_origin() -> None:
+    document = load_local_compose_yaml({"WEB_PORT": "3300"})
+    api_environment = resolved_service_environment(document, "api")
+    web_environment = resolved_service_environment(document, "web")
+
+    expected_origins = "http://127.0.0.1:3300,http://localhost:3300"
+    assert api_environment["CORS_ALLOWED_ORIGINS"] == expected_origins
+    assert api_environment["CLERK_AUTHORIZED_PARTIES"] == expected_origins
+    assert web_environment["NEXT_PUBLIC_APP_URL"] == "http://127.0.0.1:3300"
+
+
+def test_local_compose_explicit_clerk_authorized_parties_override_wins() -> None:
+    document = load_local_compose_yaml(
+        {
+            "WEB_PORT": "3300",
+            "CLERK_AUTHORIZED_PARTIES": "https://explicit.example",
+        }
+    )
+    api_environment = resolved_service_environment(document, "api")
+
+    assert api_environment["CLERK_AUTHORIZED_PARTIES"] == "https://explicit.example"
+    assert api_environment["CORS_ALLOWED_ORIGINS"] == (
+        "http://127.0.0.1:3300,http://localhost:3300"
+    )
+
+
 def test_local_compose_accepts_explicit_synthetic_auth_for_disposable_tests() -> None:
     document = load_local_compose_yaml(
         {
