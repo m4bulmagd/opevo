@@ -138,6 +138,32 @@ def test_activation_required_number_fact_blocks_enable_routing_and_dispatch() ->
     assert result.stage is CustomerReadinessStage.NUMBER_PROVISIONING_FAILED
 
 
+@pytest.mark.parametrize("provisioning_status", [None, "running"])
+def test_activation_required_incomplete_provisioning_remains_in_progress(
+    provisioning_status: str | None,
+) -> None:
+    result = evaluate(
+        provisioning_status=provisioning_status,
+        number_provisioned=False,
+        phone_present=True,
+        phone_provider_id_present=False,
+        activation_required=True,
+        business_profile_complete=True,
+        profile_projection_current=True,
+        forwarding_verified=True,
+        go_live_approved=True,
+        go_live_activated=True,
+    )
+
+    assert result.stage is CustomerReadinessStage.NUMBER_PROVISIONING
+    assert ReadinessBlocker.NUMBER_NOT_PROVISIONED in result.blockers
+    assert ReadinessBlocker.PHONE_PROVIDER_ID_MISSING in result.blockers
+    assert result.can_activate is False
+    assert result.should_enable_phone is False
+    assert result.can_route is False
+    assert result.can_dispatch(called_number_matches=True) is False
+
+
 def test_activation_disabled_mode_keeps_legacy_phone_compatibility() -> None:
     result = evaluate(number_provisioned=False, activation_required=False)
 

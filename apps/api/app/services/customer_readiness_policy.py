@@ -301,7 +301,7 @@ class CustomerReadinessPolicy:
             if (
                 snapshot.provisioning_status == "failed"
                 or snapshot.provisioning_status == "succeeded"
-                or inconsistent_phone
+                or (not snapshot.activation_required and inconsistent_phone)
             ):
                 return CustomerReadinessStage.NUMBER_PROVISIONING_FAILED
             return CustomerReadinessStage.NUMBER_PROVISIONING
