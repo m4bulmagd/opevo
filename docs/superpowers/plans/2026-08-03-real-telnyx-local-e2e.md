@@ -278,7 +278,7 @@ again.
 Run masked read-only SQL for the same account and assert:
 
 ```bash
-docker exec bmad-opevo-postgres-1 psql -U postgres -d ai_call -At -F '|' -c "WITH target AS (SELECT p.is_active, p.provider_connection_name, a.verification_status, a.forwarding_verified_at, a.go_live_requested_at, a.go_live_approved_at, a.activated_at, a.last_failure_code, c.is_enabled FROM phone_numbers AS p JOIN customer_activations AS a ON a.user_id = p.user_id JOIN agent_configs AS c ON c.user_id = p.user_id WHERE p.provider = 'telnyx' AND p.provider_number_id !~ '^fake-' AND a.verification_status = 'succeeded' AND a.forwarding_verified_at IS NOT NULL) SELECT 'target_count', count(*)::text FROM target UNION ALL SELECT 'forwarding_verified', coalesce(bool_and(verification_status = 'succeeded' AND forwarding_verified_at IS NOT NULL)::text, 'false') FROM target UNION ALL SELECT 'go_live_pending', coalesce(bool_or(go_live_requested_at IS NOT NULL OR go_live_approved_at IS NOT NULL)::text, 'false') FROM target UNION ALL SELECT 'activation_completed', coalesce(bool_and(activated_at IS NOT NULL)::text, 'false') FROM target UNION ALL SELECT 'phone_active', coalesce(bool_and(is_active)::text, 'false') FROM target UNION ALL SELECT 'provider_projection_active', coalesce(bool_and(provider_connection_name = 'app-active')::text, 'false') FROM target UNION ALL SELECT 'agent_enabled', coalesce(bool_and(is_enabled)::text, 'false') FROM target UNION ALL SELECT 'last_failure_code_present', coalesce(bool_or(last_failure_code IS NOT NULL)::text, 'false') FROM target;"
+docker exec bmad-opevo-postgres-1 psql -U postgres -d ai_call -At -F '|' -c "WITH target AS (SELECT p.is_active, p.provider_connection_name, a.verification_status, a.forwarding_verified_at, a.go_live_approved_at, a.activated_at, a.last_failure_code, c.is_enabled FROM phone_numbers AS p JOIN customer_activations AS a ON a.user_id = p.user_id JOIN agent_configs AS c ON c.user_id = p.user_id WHERE p.provider = 'telnyx' AND p.provider_number_id !~ '^fake-' AND a.verification_status = 'succeeded' AND a.forwarding_verified_at IS NOT NULL) SELECT 'target_count', count(*)::text FROM target UNION ALL SELECT 'forwarding_verified', coalesce(bool_and(verification_status = 'succeeded' AND forwarding_verified_at IS NOT NULL)::text, 'false') FROM target UNION ALL SELECT 'go_live_pending', coalesce(bool_or(go_live_approved_at IS NOT NULL AND activated_at IS NULL)::text, 'false') FROM target UNION ALL SELECT 'activation_completed', coalesce(bool_and(activated_at IS NOT NULL)::text, 'false') FROM target UNION ALL SELECT 'phone_active', coalesce(bool_and(is_active)::text, 'false') FROM target UNION ALL SELECT 'provider_projection_active', coalesce(bool_and(provider_connection_name = 'app-active')::text, 'false') FROM target UNION ALL SELECT 'agent_enabled', coalesce(bool_and(is_enabled)::text, 'false') FROM target UNION ALL SELECT 'last_failure_code_present', coalesce(bool_or(last_failure_code IS NOT NULL)::text, 'false') FROM target;"
 ```
 
 ```text
@@ -292,7 +292,7 @@ agent_enabled=true
 last_failure_code_present=false
 ```
 
-Do not infer success solely from the browser. All seven durable assertions must
+Do not infer success solely from the browser. All eight durable assertions must
 be true.
 
 ### Task 3: Verify one real voice call and retain a consistent final provider state
@@ -355,13 +355,13 @@ Pass the exact recorded ISO-8601 UTC marker from the file as the
 `observation_start` psql variable and run:
 
 ```bash
-docker exec bmad-opevo-postgres-1 psql -U postgres -d ai_call -v observation_start="$(tr -d '\n' < /tmp/presvo-call-observation-start.utc)" -At -F '|' -c "WITH target AS (SELECT p.user_id FROM phone_numbers AS p WHERE p.provider = 'telnyx' AND p.provider_number_id !~ '^fake-'), recent AS (SELECT c.id, c.status, c.started_at, c.ended_at, c.failure_code, c.duration_seconds FROM calls AS c WHERE c.user_id IN (SELECT user_id FROM target) AND c.created_at >= :'observation_start'::timestamptz) SELECT 'new_call_count', count(*)::text FROM recent UNION ALL SELECT 'call_connected', coalesce(bool_and(started_at IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'call_ended', coalesce(bool_and(ended_at IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'call_completed', coalesce(bool_and(status = 'completed')::text, 'false') FROM recent UNION ALL SELECT 'failure_code_present', coalesce(bool_or(failure_code IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'duration_recorded', coalesce(bool_and(duration_seconds IS NOT NULL AND duration_seconds >= 0)::text, 'false') FROM recent UNION ALL SELECT 'dispatch_delivered', coalesce(bool_and(EXISTS (SELECT 1 FROM outbox_events AS o WHERE o.aggregate_type = 'call' AND o.aggregate_id = recent.id AND o.topic = 'livekit.dispatch' AND o.status = 'delivered'))::text, 'false') FROM recent UNION ALL SELECT 'transcript_present', coalesce(bool_and(EXISTS (SELECT 1 FROM call_messages AS m WHERE m.call_id = recent.id))::text, 'false') FROM recent;"
+docker exec bmad-opevo-postgres-1 psql -U postgres -d ai_call -v observation_start="$(tr -d '\n' < /tmp/presvo-call-observation-start.utc)" -At -F '|' -c "WITH target AS (SELECT p.user_id FROM phone_numbers AS p WHERE p.provider = 'telnyx' AND p.provider_number_id !~ '^fake-'), recent AS (SELECT c.id, c.status, c.started_at, c.ended_at, c.failure_code, c.duration_seconds, c.summary_text, c.summary_data FROM calls AS c WHERE c.user_id IN (SELECT user_id FROM target) AND c.created_at >= :'observation_start'::timestamptz) SELECT 'new_call_count', count(*)::text FROM recent UNION ALL SELECT 'call_connected', coalesce(bool_and(started_at IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'call_ended', coalesce(bool_and(ended_at IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'call_completed', coalesce(bool_and(status = 'completed')::text, 'false') FROM recent UNION ALL SELECT 'failure_code_present', coalesce(bool_or(failure_code IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'duration_recorded', coalesce(bool_and(duration_seconds IS NOT NULL AND duration_seconds >= 0)::text, 'false') FROM recent UNION ALL SELECT 'dispatch_delivered', coalesce(bool_and(EXISTS (SELECT 1 FROM outbox_events AS o WHERE o.aggregate_type = 'call' AND o.aggregate_id = recent.id AND o.topic = 'livekit.dispatch' AND o.status = 'delivered'))::text, 'false') FROM recent UNION ALL SELECT 'transcript_present', coalesce(bool_and(EXISTS (SELECT 1 FROM call_messages AS m WHERE m.call_id = recent.id))::text, 'false') FROM recent UNION ALL SELECT 'summary_present', coalesce(bool_and(summary_text IS NOT NULL AND btrim(summary_text) <> '' AND summary_data IS NOT NULL)::text, 'false') FROM recent;"
 ```
 
 Expected values are `new_call_count|1`, `call_connected|true`,
 `call_ended|true`, `call_completed|true`, `failure_code_present|false`,
-`duration_recorded|true`, `dispatch_delivered|true`, and
-`transcript_present|true`.
+`duration_recorded|true`, `dispatch_delivered|true`,
+`transcript_present|true`, and `summary_present|true`.
 
 - [ ] **Step 3: Record the final provider-state decision**
 
@@ -376,6 +376,15 @@ Present these two valid outcomes:
 
 The E2E is complete only after the owner selects one outcome and its stated
 consistency check passes.
+
+#### Accepted Task 3 provider-state outcome
+
+The owner selected **28A Keep live**. Both private voice/Telnyx overrides remain
+retained; API and worker remain in Telnyx mode; and activation, phone,
+application-provider projection, and agent state remain active and consistent.
+No direct Telnyx disable, application projection rewrite, override removal, or
+database repair was performed. Any future offline transition requires the
+separate reviewed workflow described above.
 
 #### Accepted Task 3 recording outcome
 
