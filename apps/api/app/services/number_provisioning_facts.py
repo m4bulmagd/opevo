@@ -11,6 +11,7 @@ def number_is_provisioned(
         provisioning is not None
         and provisioning.status == "succeeded"
         and phone_number is not None
+        and provisioning.phone_number_id is not None
         and provisioning.phone_number_id == phone_number.id
         and phone_number.provider_number_id is not None
         and phone_number.provider_number_id.strip()

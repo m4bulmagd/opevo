@@ -72,6 +72,7 @@ def complete_hours() -> dict[str, dict[str, object]]:
 
 def build_records():
     user_id = uuid4()
+    phone_number_id = uuid4()
     user = User(
         id=user_id,
         clerk_user_id="snapshot-user",
@@ -94,6 +95,7 @@ def build_records():
         routing_revision=2,
     )
     phone = PhoneNumber(
+        id=phone_number_id,
         user_id=user_id,
         e164="+33912345678",
         country_code="FR",
@@ -126,7 +128,7 @@ def build_records():
     )
     provisioning = PhoneNumberProvisioning(
         user_id=user_id,
-        phone_number_id=phone.id,
+        phone_number_id=phone_number_id,
         target_country_code="FR",
         status="succeeded",
         attempt_count=1,
