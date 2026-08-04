@@ -362,6 +362,33 @@ describe("number milestone", () => {
     expect(refreshMock).not.toHaveBeenCalled();
   });
 
+  it("explains a terminal assignment inconsistency without retry or profile correction", () => {
+    render(
+      <NumberMilestone
+        localBilling={false}
+        snapshot={snapshot({
+          stage: "provisioning_failed",
+          blockers: ["number_assignment_inconsistent", "private-provider-detail"],
+          number: {
+            ...snapshot().number,
+            assigned_e164: "+33187654321",
+            provider_ready: false,
+            provisioning_status: "succeeded",
+            can_retry: false,
+          },
+        })}
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/couldn't verify your assigned number/i);
+    expect(screen.getByText(/Reference: number_assignment_inconsistent/i)).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Retry provisioning/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Correct business profile/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/private-provider-detail/i)).not.toBeInTheDocument();
+  });
+
   it("sends terminal failures to profile correction with only a safe reference", () => {
     render(
       <NumberMilestone
