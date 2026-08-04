@@ -42,6 +42,16 @@ describe("server session selection", () => {
     await expect(getServerSessionState()).rejects.toThrow("LOCAL_AUTH_TOKEN");
   });
 
+  it("fails closed when the local server token is padded", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("AUTH_MODE", "local");
+    vi.stubEnv("LOCAL_AUTH_TOKEN", " padded-local-token ");
+
+    const { getServerSessionState } = await importServerSession();
+
+    await expect(getServerSessionState()).rejects.toThrow("LOCAL_AUTH_TOKEN");
+  });
+
   it("cannot construct a server session module with incomplete Clerk configuration", async () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("AUTH_MODE", "clerk");

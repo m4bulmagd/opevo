@@ -13,9 +13,9 @@ export class ServerSessionRequiredError extends Error {
 
 export async function getServerSessionState() {
   if (authMode === "local") {
-    const token = process.env.LOCAL_AUTH_TOKEN?.trim();
+    const token = process.env.LOCAL_AUTH_TOKEN;
 
-    if (!token) {
+    if (!token || token !== token.trim()) {
       throw new Error("LOCAL_AUTH_TOKEN is required when AUTH_MODE=local");
     }
 
