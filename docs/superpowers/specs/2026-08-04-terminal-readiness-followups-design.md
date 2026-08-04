@@ -29,7 +29,9 @@ Finally, canonical number readiness adds a new public blocker and changes
 routing decisions while the returned readiness policy version remains
 `runtime-v4`. Earlier semantic readiness changes advanced this version.
 
-The owner selected Issues **38A**, **39A**, and **40A**.
+The owner selected Issues **38A**, **39A**, and **40A**. After the final
+whole-branch risk review, the owner also selected the bounded follow-ups
+**41A** and **42A** described below.
 
 ## Decisions
 
@@ -196,3 +198,46 @@ call site's activation assumptions visible.
 - Recreating or reconfiguring the live local stack.
 - Resolving deferred documentation Issues 33–35 in these implementation
   commits.
+
+## Approved final-review amendment — Issues 41A and 42A
+
+### 41A. Reject unassigned identities in the canonical number link
+
+The exact-link predicate must not interpret two unassigned ORM attributes as a
+valid relationship. `PhoneNumberProvisioning.phone_number_id` must be non-null
+before it can equal `PhoneNumber.id`. This remains a pure, constant-time check
+and does not change the database schema or any valid persisted row.
+
+Test fixtures that model a persisted phone assign an explicit UUID to
+`PhoneNumber.id` and reuse that UUID for the provisioning link. A separate
+malformed in-memory case deliberately leaves both values unassigned and must
+return false. The matrix also covers a missing provisioning link explicitly.
+
+### 42A. Reject padded explicit local-auth tokens
+
+`LOCAL_AUTH_TOKEN` remains an exact secret, not a value that either application
+silently normalizes. In local mode:
+
+- the API runtime validator rejects an absent, blank, or leading/trailing
+  whitespace-padded token before provider construction;
+- the server-only web session boundary rejects the same values and returns the
+  original exact token only after validation; and
+- `LocalAuthProvider` keeps its existing constant-time exact-byte comparison.
+
+The web must not move the token into client-visible auth configuration. The
+validation remains inside the `server-only` session module. No Clerk behavior,
+production authentication mode, Compose default, or live runtime state changes.
+
+### Amendment testing and mutation proof
+
+Implementation remains strict red-green-refactor:
+
+1. an unassigned-ID regression test fails against the current `None == None`
+   comparison before the non-null guard and explicit fixture identities land;
+2. padded-token API and web tests fail because the API currently accepts the
+   value while the web trims it;
+3. removing the new non-null guard must fail the unassigned-ID test;
+4. restoring API acceptance or web trimming must fail the corresponding
+   padded-token test; and
+5. focused and complete API/web gates, static checks, Git integrity, and live
+   service-continuity checks run after both fixes.
