@@ -11,6 +11,7 @@ from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.outbox_event import OutboxEvent
 from app.models.phone_number import PhoneNumber
+from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.recording_egress_operation import RecordingEgressOperation
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
@@ -325,6 +326,16 @@ async def _seed_dispatch(
     )
     db_session.add_all([phone, config, subscription])
     await db_session.flush()
+    db_session.add(
+        PhoneNumberProvisioning(
+            user_id=user.id,
+            phone_number_id=phone.id,
+            target_country_code="FR",
+            status="succeeded",
+            attempt_count=1,
+            can_retry=False,
+        )
+    )
     call = Call(
         id=call_id,
         user_id=user.id,
