@@ -235,7 +235,11 @@ class _FailingPool(_Pool):
         raise RuntimeError("redis unavailable")
 
 
-async def _seed_eligible_user(db_session):
+async def _seed_eligible_user(
+    db_session,
+    *,
+    with_provisioning: bool = False,
+):
     from app.models.user import User
 
     now = datetime.now(UTC)
@@ -284,16 +288,17 @@ async def _seed_eligible_user(db_session):
         ]
     )
     await db_session.flush()
-    db_session.add(
-        PhoneNumberProvisioning(
-            user_id=user.id,
-            phone_number_id=phone.id,
-            target_country_code="FR",
-            status="succeeded",
-            attempt_count=1,
-            can_retry=False,
+    if with_provisioning:
+        db_session.add(
+            PhoneNumberProvisioning(
+                user_id=user.id,
+                phone_number_id=phone.id,
+                target_country_code="FR",
+                status="succeeded",
+                attempt_count=1,
+                can_retry=False,
+            )
         )
-    )
     await db_session.commit()
     return user, phone, config
 
@@ -365,7 +370,10 @@ async def test_activation_flow_denies_before_go_live_and_admits_after_provider_s
     monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
     get_settings.cache_clear()
     try:
-        user, phone, config = await _seed_eligible_user(db_session)
+        user, phone, config = await _seed_eligible_user(
+            db_session,
+            with_provisioning=True,
+        )
         _profile, activation = await _seed_verified_activation(
             db_session,
             user=user,
@@ -421,7 +429,10 @@ async def test_livekit_outbox_rechecks_current_activation_prerequisites(
     monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
     get_settings.cache_clear()
     try:
-        user, phone, config = await _seed_eligible_user(db_session)
+        user, phone, config = await _seed_eligible_user(
+            db_session,
+            with_provisioning=True,
+        )
         profile, activation = await _seed_verified_activation(
             db_session,
             user=user,
@@ -469,6 +480,12 @@ async def test_disabled_activation_flow_preserves_legacy_dispatch(
     get_settings.cache_clear()
     try:
         await _seed_eligible_user(db_session)
+        assert (
+            await db_session.scalar(
+                select(func.count()).select_from(PhoneNumberProvisioning)
+            )
+            == 0
+        )
         service = LiveKitDispatchService(
             db_session,
             _ForbiddenDirectDispatch(),
