@@ -405,7 +405,10 @@ async def test_pending_go_live_replay_is_idempotent_and_does_not_wake_again(
         ("subscription_period_missing", ("subscription_period_missing",)),
         ("subscription_period_inactive", ("subscription_period_inactive",)),
         ("minutes_exhausted", ("minutes_exhausted",)),
-        ("provider_id_missing", ("phone_provider_id_missing",)),
+        (
+            "provider_id_missing",
+            ("number_not_provisioned", "phone_provider_id_missing"),
+        ),
     ],
 )
 async def test_go_live_returns_stable_prerequisite_blockers(

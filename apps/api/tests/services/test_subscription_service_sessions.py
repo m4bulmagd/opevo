@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -60,6 +61,27 @@ class UsageRepository:
         return await self.guard.operation(self.balance)
 
 
+def _provisioned_phone_pair(
+    *,
+    is_active: bool,
+) -> tuple[SimpleNamespace, SimpleNamespace]:
+    phone_number_id = UUID("00000000-0000-0000-0000-000000000101")
+    return (
+        SimpleNamespace(
+            id=phone_number_id,
+            e164="+33123456789",
+            provider_number_id="pn_123",
+            is_active=is_active,
+            provider_connection_name="app-active",
+        ),
+        SimpleNamespace(
+            phone_number_id=phone_number_id,
+            status="succeeded",
+            can_retry=False,
+        ),
+    )
+
+
 @pytest.mark.anyio
 async def test_billing_query_runs_same_session_reads_sequentially() -> None:
     guard = SingleSessionGuard()
@@ -117,16 +139,7 @@ async def test_onboarding_routes_only_with_central_subscription_access(
         current_period_start=datetime(2026, 1, 1, tzinfo=UTC),
         current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
     )
-    phone_number = SimpleNamespace(
-        e164="+33123456789",
-        provider_number_id="pn_123",
-        is_active=True,
-        provider_connection_name="app-active",
-    )
-    provisioning = SimpleNamespace(
-        status="succeeded",
-        can_retry=False,
-    )
+    phone_number, provisioning = _provisioned_phone_pair(is_active=True)
     config = SimpleNamespace(
         is_enabled=True,
         agent_name="Presvo Front Desk",
@@ -187,13 +200,7 @@ async def test_onboarding_is_not_live_when_routing_flags_diverge(
         current_period_start=datetime(2026, 1, 1, tzinfo=UTC),
         current_period_end=datetime(2099, 1, 1, tzinfo=UTC),
     )
-    phone_number = SimpleNamespace(
-        e164="+33123456789",
-        provider_number_id="pn_123",
-        provider_connection_name="app-active",
-        is_active=phone_active,
-    )
-    provisioning = SimpleNamespace(status="succeeded", can_retry=False)
+    phone_number, provisioning = _provisioned_phone_pair(is_active=phone_active)
     config = SimpleNamespace(
         is_enabled=config_enabled,
         agent_name="Presvo Front Desk",
