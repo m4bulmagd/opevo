@@ -13,6 +13,9 @@ const clerkConfigState = vi.hoisted(() => ({
   authMode: "local" as "local" | "clerk",
   shouldWrapClerk: false,
 }));
+const clerkSignOutState = vi.hoisted(() => ({
+  variants: [] as Array<"activation" | "mobile" | "workspace">,
+}));
 const { getAccountMock, getActivationSnapshotMock, getDevelopmentCapabilitiesMock, redirectMock, refreshMock } =
   vi.hoisted(() => ({
     getAccountMock: vi.fn(),
@@ -33,9 +36,14 @@ vi.mock("@/lib/auth/clerk-config", () => ({
   },
 }));
 
-vi.mock("@clerk/nextjs", () => ({
-  SignOutButton: ({ children }: { children: React.ReactNode }) => <div data-testid="sign-out-control">{children}</div>,
-}));
+vi.mock("@/components/auth/clerk-sign-out", () => {
+  return {
+    ClerkSignOut: ({ variant }: { variant: "activation" | "mobile" | "workspace" }) => {
+      clerkSignOutState.variants.push(variant);
+      return <button aria-label={`${variant} Clerk sign-out sentinel`} type="button" />;
+    },
+  };
+});
 
 vi.mock("next/navigation", () => ({
   redirect: redirectMock,
@@ -293,7 +301,7 @@ describe("activation page", () => {
     expect(redirectMock).not.toHaveBeenCalled();
   });
 
-  it("renders the authoritative carrier guide in the forwarding milestone", async () => {
+  it("renders forwarding for a completed legacy number without historical consent", async () => {
     getActivationSnapshotMock.mockResolvedValue(
       buildSnapshot({
         stage: "forwarding_required",
@@ -309,11 +317,12 @@ describe("activation page", () => {
       }),
     );
 
-    render(await Page({ searchParams: Promise.resolve({}) }));
+    render(await Page({ searchParams: Promise.resolve({ milestone: "forwarding" }) }));
 
     expect(screen.getByRole("heading", { name: /Forward missed calls to Presvo/i })).toBeInTheDocument();
     expect(screen.getByText("+33 1 87 65 43 21")).toBeInTheDocument();
     expect(activationStepCard().getByRole("button", { name: /Start 10-minute test/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Choose your Presvo number/i })).not.toBeInTheDocument();
   });
 
   it("renders the server-owned verification window and guarded local simulator in launch", async () => {
@@ -396,9 +405,13 @@ describe("authoritative stage refresh", () => {
 });
 
 describe("activation route feedback", () => {
-  it("keeps local context and skip navigation in the focused route layout", async () => {
+  beforeEach(() => {
     clerkConfigState.authMode = "local";
     clerkConfigState.shouldWrapClerk = false;
+    clerkSignOutState.variants.length = 0;
+  });
+
+  it("keeps local context and skip navigation in the focused route layout", async () => {
     const { default: ActivationLayout } = await import("@/app/(activation)/activate/layout");
 
     render(await ActivationLayout({ children: <div id="activation-content">Activation form</div> }));
@@ -407,17 +420,18 @@ describe("activation route feedback", () => {
     expect(screen.queryByRole("navigation", { name: "Account navigation" })).not.toBeInTheDocument();
     expect(screen.getByText(/Local development/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Skip to activation/i })).toHaveAttribute("href", "#activation-content");
+    expect(clerkSignOutState.variants).toEqual([]);
   });
 
-  it("renders a visible sign-out action when Clerk supplies it", async () => {
+  it("delegates Clerk sign-out to the shared activation leaf", async () => {
     clerkConfigState.authMode = "clerk";
     clerkConfigState.shouldWrapClerk = true;
     const { default: ActivationLayout } = await import("@/app/(activation)/activate/layout");
 
     render(await ActivationLayout({ children: <div id="activation-content">Activation form</div> }));
 
-    expect(screen.getByRole("button", { name: /Sign out/i })).toBeInTheDocument();
-    expect(screen.getByTestId("sign-out-control")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "activation Clerk sign-out sentinel" })).toBeInTheDocument();
+    expect(clerkSignOutState.variants).toEqual(["activation"]);
   });
 
   it("renders an accessible loading status", () => {

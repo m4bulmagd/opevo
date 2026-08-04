@@ -295,6 +295,28 @@ describe("number milestone", () => {
     );
   });
 
+  it("does not present an assigned number as ready without provider readiness", () => {
+    render(
+      <NumberMilestone
+        localBilling={false}
+        snapshot={snapshot({
+          stage: "provisioning",
+          number: {
+            assigned_e164: "+33187654321",
+            country_code: "FR",
+            provider_ready: false,
+            provisioning_status: "running",
+            can_retry: false,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(/Provisioning your French number/i);
+    expect(screen.queryByText("Number ready")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Continue to forwarding/i })).not.toBeInTheDocument();
+  });
+
   it("offers a safe retry without ordering a second number", async () => {
     render(
       <NumberMilestone
@@ -338,6 +360,35 @@ describe("number milestone", () => {
     expect(error.closest('[role="alert"]')).not.toBeNull();
     expect(screen.queryByText(/provider/i)).not.toBeInTheDocument();
     expect(refreshMock).not.toHaveBeenCalled();
+  });
+
+  it("explains a terminal assignment inconsistency without retry or profile correction", () => {
+    render(
+      <NumberMilestone
+        localBilling={false}
+        snapshot={snapshot({
+          stage: "provisioning_failed",
+          blockers: ["number_assignment_inconsistent", "private-provider-detail"],
+          number: {
+            ...snapshot().number,
+            assigned_e164: "+33187654321",
+            provider_ready: false,
+            provisioning_status: "succeeded",
+            can_retry: false,
+          },
+        })}
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/couldn't verify your assigned number/i);
+    expect(screen.getByText(/Reference: number_assignment_inconsistent/i)).toBeInTheDocument();
+    expect(screen.queryByText("+33187654321")).not.toBeInTheDocument();
+    expect(screen.queryByText("+33 1 87 65 43 21")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Retry provisioning/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Correct business profile/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/private-provider-detail/i)).not.toBeInTheDocument();
   });
 
   it("sends terminal failures to profile correction with only a safe reference", () => {

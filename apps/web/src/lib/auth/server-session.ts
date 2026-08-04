@@ -1,6 +1,6 @@
 import "server-only";
 
-import { authMode, isClerkConfigured } from "@/lib/auth/clerk-config";
+import { authMode } from "@/lib/auth/clerk-config";
 
 const LOCAL_USER_ID = "local_presvo_user";
 
@@ -13,9 +13,9 @@ export class ServerSessionRequiredError extends Error {
 
 export async function getServerSessionState() {
   if (authMode === "local") {
-    const token = process.env.LOCAL_AUTH_TOKEN?.trim();
+    const token = process.env.LOCAL_AUTH_TOKEN;
 
-    if (!token) {
+    if (!token || token !== token.trim()) {
       throw new Error("LOCAL_AUTH_TOKEN is required when AUTH_MODE=local");
     }
 
@@ -23,14 +23,6 @@ export async function getServerSessionState() {
       isAuthenticated: true,
       userId: LOCAL_USER_ID,
       getToken: async () => token,
-    };
-  }
-
-  if (!isClerkConfigured) {
-    return {
-      isAuthenticated: false,
-      userId: null,
-      getToken: async () => null,
     };
   }
 

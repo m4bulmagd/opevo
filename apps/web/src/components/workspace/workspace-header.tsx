@@ -2,9 +2,10 @@ import type { ReactNode } from "react";
 
 import Link from "next/link";
 
-import { History, LogOut, PhoneCall, Search } from "lucide-react";
+import { History, PhoneCall, Search } from "lucide-react";
 
 import { ThemeSwitcher } from "@/app/(app)/dashboard/_components/sidebar/theme-switcher";
+import { ClerkSignOut } from "@/components/auth/clerk-sign-out";
 import { CapabilityBadge } from "@/components/product/capability-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,37 +15,40 @@ import { type WorkspaceCallerIdentity, WorkspaceCallerStatus } from "@/component
 import { WorkspaceNotificationsPreview } from "@/components/workspace/workspace-notifications-preview";
 import { authMode, shouldWrapClerk } from "@/lib/auth/clerk-config";
 
-export async function resolveWorkspaceAccountControl(): Promise<ReactNode> {
+export type WorkspaceAccountControls = Readonly<{
+  desktop: ReactNode;
+  mobile: ReactNode;
+}>;
+
+export function resolveWorkspaceAccountControls(): WorkspaceAccountControls {
   if (authMode === "local") {
-    return <Badge variant="secondary">Local development</Badge>;
+    return {
+      desktop: <Badge variant="secondary">Local development</Badge>,
+      mobile: <Badge variant="secondary">Local development</Badge>,
+    };
   }
 
   if (!shouldWrapClerk) {
-    return null;
+    return { desktop: null, mobile: null };
   }
 
-  const { SignOutButton } = await import("@clerk/nextjs");
-
-  return (
-    <SignOutButton redirectUrl="/">
-      <Button aria-label="Sign out" className="size-11" size="icon" variant="ghost">
-        <LogOut aria-hidden="true" />
-      </Button>
-    </SignOutButton>
-  );
+  return {
+    desktop: <ClerkSignOut variant="workspace" />,
+    mobile: <ClerkSignOut variant="mobile" />,
+  };
 }
 
 type WorkspaceHeaderProps = {
-  accountControl: ReactNode;
+  accountControls: WorkspaceAccountControls;
   activeCaller: WorkspaceCallerIdentity | null;
   agentName: string;
 };
 
-export function WorkspaceHeader({ accountControl, activeCaller, agentName }: WorkspaceHeaderProps) {
+export function WorkspaceHeader({ accountControls, activeCaller, agentName }: WorkspaceHeaderProps) {
   return (
     <header className="sticky top-0 z-20 flex items-center gap-2 border-border border-b bg-background/90 px-4 py-3 backdrop-blur lg:rounded-2xl lg:border lg:bg-card lg:shadow-card">
       <div className="flex min-w-0 items-center gap-2">
-        <MobileWorkspaceNavigation />
+        <MobileWorkspaceNavigation accountControl={accountControls.mobile} />
         <Link
           aria-label="Presvo overview"
           className="hidden min-h-11 min-w-0 items-center gap-2 rounded-md font-semibold tracking-tight outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:inline-flex lg:hidden"
@@ -106,7 +110,7 @@ export function WorkspaceHeader({ accountControl, activeCaller, agentName }: Wor
       </Button>
 
       <div className="hidden xl:block" data-header-item="account-control">
-        {accountControl}
+        {accountControls.desktop}
       </div>
 
       <div data-header-item="theme-control">

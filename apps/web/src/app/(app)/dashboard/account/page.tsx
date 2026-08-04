@@ -5,14 +5,12 @@ import { AccountSettingsPreview } from "@/components/account/account-settings-pr
 import { CompactAccountStatusCard } from "@/components/account/account-status-card";
 import { AssignedNumberCard } from "@/components/account/assigned-number-card";
 import { DeactivateAccountDialog } from "@/components/account/deactivate-account-dialog";
-import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { PageIntro } from "@/components/product/page-intro";
 import { ProductSurface } from "@/components/product/product-surface";
 import { Button } from "@/components/ui/button";
 import { getAccount } from "@/lib/api/account";
 import { getActivationSnapshot } from "@/lib/api/activation";
 import { resolveAccountIdentity } from "@/lib/auth/account-identity";
-import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 import type { AccountProfileValues } from "@/lib/types/account-settings";
 
 function UnavailableProfile() {
@@ -42,15 +40,6 @@ function UnavailableAssignedNumber() {
 }
 
 export default async function AccountPage() {
-  if (!isAppAuthConfigured) {
-    return (
-      <ClerkSetupNotice
-        title="Account settings are unavailable"
-        description="Configure Clerk in your local environment before loading account lifecycle settings."
-      />
-    );
-  }
-
   const [account, activation, identity] = await Promise.all([
     getAccount(),
     getActivationSnapshot().catch(() => null),

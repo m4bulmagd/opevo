@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { requireProductionWebAuth, resolveWebAuthMode } from "@/lib/auth/auth-mode";
+import { requireWebAuthConfiguration, resolveWebAuthMode } from "@/lib/auth/auth-mode";
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const productionConfig = {
-  nodeEnv: "production",
+const developmentClerkConfig = {
+  nodeEnv: "development",
   authMode: "clerk",
-  publishableKey: "pk_live_test",
-  secretKey: "sk_live_test",
-  backendBaseUrl: "https://api.example.com",
+  publishableKey: "pk_test_configured",
+  secretKey: "clerk-test-fixture",
+  backendBaseUrl: "http://api:8000",
 };
 
 function readSourceTree(directory: string): string {
@@ -39,25 +39,44 @@ describe("resolveWebAuthMode", () => {
   });
 });
 
-describe("requireProductionWebAuth", () => {
-  it("requires Clerk keys and a backend URL in production", () => {
-    expect(() =>
-      requireProductionWebAuth({
-        nodeEnv: "production",
-        authMode: "clerk",
-        publishableKey: " ",
+describe("requireWebAuthConfiguration", () => {
+  it.each([
+    ["publishable key", { publishableKey: " " }, "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"],
+    ["secret key", { secretKey: "" }, "CLERK_SECRET_KEY"],
+  ])("rejects a missing Clerk %s in development", (_label, override, missingName) => {
+    expect(() => requireWebAuthConfiguration({ ...developmentClerkConfig, ...override })).toThrow(missingName);
+  });
+
+  it("accepts explicit local development without Clerk keys", () => {
+    expect(
+      requireWebAuthConfiguration({
+        nodeEnv: "development",
+        authMode: "local",
+        publishableKey: "",
         secretKey: "",
-        backendBaseUrl: undefined,
+        backendBaseUrl: "http://api:8000",
       }),
-    ).toThrow("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY, API_BASE_URL or NEXT_PUBLIC_API_BASE_URL");
+    ).toBe("local");
+  });
+
+  it("requires the backend URL only in production", () => {
+    expect(() =>
+      requireWebAuthConfiguration({
+        ...developmentClerkConfig,
+        nodeEnv: "production",
+        backendBaseUrl: "",
+      }),
+    ).toThrow("API_BASE_URL or NEXT_PUBLIC_API_BASE_URL");
   });
 
   it("accepts complete production Clerk configuration", () => {
-    expect(() => requireProductionWebAuth(productionConfig)).not.toThrow();
+    expect(() => requireWebAuthConfiguration({ ...developmentClerkConfig, nodeEnv: "production" })).not.toThrow();
   });
 
   it("rejects local auth in production even when Clerk settings exist", () => {
-    expect(() => requireProductionWebAuth({ ...productionConfig, authMode: "local" })).toThrow(/AUTH_MODE=local/);
+    expect(() =>
+      requireWebAuthConfiguration({ ...developmentClerkConfig, nodeEnv: "production", authMode: "local" }),
+    ).toThrow(/AUTH_MODE=local/);
   });
 
   it("does not expose the local server credential as a public environment variable", () => {

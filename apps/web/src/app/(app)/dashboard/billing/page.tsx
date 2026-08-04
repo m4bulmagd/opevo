@@ -1,22 +1,11 @@
-import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { BillingActionsCard } from "@/components/billing/billing-actions-card";
 import { BillingSummaryCards } from "@/components/billing/billing-summary-cards";
 import { PlanComparisonPreview } from "@/components/billing/plan-comparison-preview";
 import { UsageLedgerList } from "@/components/billing/usage-ledger-list";
 import { PageIntro } from "@/components/product/page-intro";
 import { getSubscription, getUsageLedger, getUsageSnapshot } from "@/lib/api/billing";
-import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 
 export default async function BillingPage() {
-  if (!isAppAuthConfigured) {
-    return (
-      <ClerkSetupNotice
-        title="Billing is unavailable"
-        description="Configure Clerk in your local environment before loading subscription and usage data."
-      />
-    );
-  }
-
   const [subscription, usageSnapshot, ledger] = await Promise.all([
     getSubscription(),
     getUsageSnapshot(),

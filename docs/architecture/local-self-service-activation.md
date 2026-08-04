@@ -31,9 +31,9 @@ and model providers.
    dashboard.
 
 Reloads between milestones read the canonical workflow snapshot from
-PostgreSQL. The proof intentionally has no database-reset endpoint. The local
-identity represents one fixed account, so the browser suite is one serial test
-with one worker.
+PostgreSQL. The proof intentionally has no database-reset endpoint. The
+provider-free browser suite explicitly selects a fixed local identity, so it
+is one serial test with one worker.
 
 ## Account lifecycle and reactivation
 
@@ -72,11 +72,32 @@ it performs no external purchase.
 
 ## Local runtime modes and credential scope
 
-`compose.dev.yaml` explicitly selects these modes:
+Normal `compose.dev.yaml` development uses Clerk authentication. Configure web
+publishable and secret keys in `apps/web/.env`, and configure the API issuer,
+authorized parties, JWKS URL, and webhook secret in `apps/api/.env`. Compose
+defaults `AUTH_MODE` to Clerk, but each application validates its own required
+credentials.
+
+Provider fakes are independent of identity: fake billing or telephony does not
+provide a synthetic authenticated user. `scripts/run-local-e2e.sh` is the
+disposable CI-equivalent path; it explicitly opts into local auth and owns its
+isolation, credentials, ports, and cleanup.
+
+Manual provider-free testing requires both opt-in variables on the same
+command, and the token is development-only:
+
+```bash
+AUTH_MODE=local \
+LOCAL_AUTH_TOKEN=replace-with-a-development-only-token \
+docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker web
+```
+
+For that explicit local-auth command, the services use these development-only
+values:
 
 | Service | Explicit local values | Deliberately absent |
 |---|---|---|
-| API | `AUTH_MODE=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `CARRIER_LOOKUP_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Cloud credentials are unnecessary |
+| API | `AUTH_MODE=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `CARRIER_LOOKUP_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Clerk credentials are not used for this explicit test mode |
 | Worker | `BILLING_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Local token and carrier lookup |
 | Web server | `AUTH_MODE=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `TELEPHONY_MODE=fake` | Carrier credentials and public local token |
 
@@ -104,20 +125,25 @@ production.
 
 ## Start and exercise the local journey
 
-Prerequisites are Docker with Compose and Node.js 22. No hosted-provider
-credentials are needed.
+Prerequisites are Docker with Compose, Node.js 22, and Clerk credentials for
+the standard interactive stack. Fake providers remain separate from identity.
 
-Start the application services:
+Start the standard Clerk-authenticated application services:
 
 ```bash
 docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker web
 ```
 
-Open `http://127.0.0.1:3000/activate` and complete the five milestones above.
-Compose defaults remain available for normal development, while every exposed
-host port is parameterized for isolated runs.
+`WEB_PORT` changes the published web port, application URL, CORS origins, and
+the two default local Clerk authorized parties together. Set
+`CLERK_AUTHORIZED_PARTIES` explicitly only when the token's exact authorized
+party is intentionally different from those standard loopback origins.
 
-To run the same disposable proof as CI:
+Open `http://127.0.0.1:3000/activate`, sign in with Clerk, and complete the
+five milestones above. Compose defaults remain available for normal
+development, while every exposed host port is parameterized for isolated runs.
+
+To run the same disposable provider-free proof as CI:
 
 ```bash
 npm exec --prefix apps/web -- playwright install chromium

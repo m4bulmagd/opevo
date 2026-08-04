@@ -94,6 +94,23 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
     );
   }
 
+  const assignmentInconsistent =
+    snapshot.stage === "provisioning_failed" && snapshot.blockers.includes("number_assignment_inconsistent");
+  if (assignmentInconsistent) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Alert variant="destructive">
+          <AlertTitle>We couldn't verify your assigned number</AlertTitle>
+          <AlertDescription>
+            Presvo recorded provisioning as complete, but the assigned number no longer matches the completed request.
+            Refresh once. If this continues, contact support and share the reference below.
+          </AlertDescription>
+        </Alert>
+        <p className="font-mono text-muted-foreground text-xs">Reference: number_assignment_inconsistent</p>
+      </div>
+    );
+  }
+
   const retryable = snapshot.stage === "provisioning_failed" && snapshot.number.can_retry;
   if (retryable) {
     return (

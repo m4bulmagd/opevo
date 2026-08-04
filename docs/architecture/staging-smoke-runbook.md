@@ -32,8 +32,21 @@ Use this to verify:
 
 Fill these local files before starting:
 
+- `apps/web/.env`
 - `apps/api/.env`
 - `apps/agent/.env`
+
+For the standard local Clerk stack, keep web publishable/secret keys in
+`apps/web/.env`, and API verifier/webhook values in `apps/api/.env`. Compose
+defaults `AUTH_MODE` to Clerk, but each application still validates its own
+required credentials.
+
+Minimum Clerk values from `apps/web/.env`:
+
+```dotenv
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_replace_me
+CLERK_SECRET_KEY=sk_test_replace_me
+```
 
 Minimum required values from `apps/api/.env`:
 
@@ -42,9 +55,11 @@ APP_ENV=development
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ai_call
 REDIS_URL=redis://localhost:6379/0
 AGENT_DISPATCH_JWT_SECRET=<long-random-api-and-worker-secret>
-CLERK_ISSUER=<your-clerk-issuer>
-CLERK_JWKS_URL=<your-clerk-jwks-url>
-CLERK_WEBHOOK_SECRET=<your-clerk-webhook-secret>
+AUTH_MODE=clerk
+CLERK_ISSUER=https://your-instance.clerk.accounts.dev
+CLERK_AUTHORIZED_PARTIES=http://127.0.0.1:3000,http://localhost:3000
+CLERK_JWKS_URL=https://your-instance.clerk.accounts.dev/.well-known/jwks.json
+CLERK_WEBHOOK_SECRET=whsec_...
 STRIPE_WEBHOOK_SECRET=<your-stripe-webhook-secret>
 STRIPE_SECRET_KEY=<your-stripe-secret-key>
 STRIPE_PRICE_STARTER=<your-starter-price-id>
@@ -66,12 +81,6 @@ S3_SECRET_KEY=minioadmin
 S3_REGION=us-east-1
 FIREBASE_CREDENTIALS_JSON=
 ```
-
-Recommended Clerk values:
-
-- `CLERK_ISSUER=https://your-instance.clerk.accounts.dev`
-- `CLERK_JWKS_URL=https://your-instance.clerk.accounts.dev/.well-known/jwks.json`
-- `CLERK_WEBHOOK_SECRET=whsec_...`
 
 `CLERK_JWT_KEY` is still supported by the code as a fallback, but `CLERK_JWKS_URL` is the easier option for this repo because it avoids multiline PEM handling in `.env`.
 
