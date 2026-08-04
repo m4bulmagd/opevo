@@ -144,10 +144,30 @@ healthcheck.
 
 ### 4. Preserve durable failure and cancellation semantics
 
-Call finalization remains idempotent. A transient exception can consume at most
-three ARQ attempts. If all attempts fail, the existing call-reconciliation
-state machine remains the durable recovery path; the queue layer does not add a
-second lifecycle state machine.
+Call finalization remains idempotent. Its retry adapter retries only the
+following failures:
+
+- the 30-second semantic timeout;
+- SQLAlchemy pool-acquisition timeout;
+- SQLAlchemy operational or disconnection errors; and
+- SQLAlchemy database errors explicitly marked `connection_invalidated`.
+
+The adapter explicitly does not retry integrity errors, validation failures,
+malformed payloads, programming defects, unclassified exceptions, or shutdown
+cancellation. Raw exception text is not used to classify a failure. After the
+first retryable failure ARQ delays the second attempt by one second; after the
+second it delays the third attempt by five seconds. A retryable failure on the
+third attempt is allowed to fail normally. The existing call-reconciliation
+state machine then remains the durable recovery path; the queue layer does not
+add a second lifecycle state machine.
+
+The semantic timeout and instrumentation wrapper run inside the retry adapter.
+This ordering lets observability record the real attempt outcome as `timeout`
+or `error` before the adapter converts an eligible failure into ARQ's `Retry`
+signal. The adapter obtains the one-based attempt number from ARQ's job context,
+bounds it before metric use, and never converts `CancelledError` into a retry.
+ARQ's function registration still declares `max_tries=3` as the hard attempt
+ceiling.
 
 Outbox delivery continues catching and durably classifying provider failures
 inside the outbox job. ARQ does not multiply that retry schedule. A database or
@@ -312,6 +332,12 @@ authorization after merge.
   remain idempotent.
 - Simultaneous lifecycle workers compete through existing database locks and
   generation checks.
+- Call-finalization semantic timeouts and recognized transient SQLAlchemy
+  connection failures retry after one and five seconds, with no fourth attempt.
+- Call-finalization integrity, validation, payload, programming, and
+  unclassified failures do not retry.
+- A shutdown-cancelled call-finalization attempt remains cancelled and does not
+  consume a retry delay.
 - A cancelled provider call does not become a retryable provider failure.
 - An observer failure cannot cancel a business job or close the shared Redis
   pool.
