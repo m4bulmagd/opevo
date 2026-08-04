@@ -839,7 +839,7 @@ def test_local_compose_accepts_explicit_synthetic_auth_for_disposable_tests() ->
     ["", "   ", " padded-local-token "],
     ids=("blank", "whitespace", "padded"),
 )
-def test_local_compose_runtime_rejects_incomplete_synthetic_auth(
+def test_local_compose_runtime_rejects_invalid_synthetic_auth_token(
     local_auth_token: str,
 ) -> None:
     document = load_local_compose_yaml(
