@@ -134,6 +134,11 @@ Start the standard Clerk-authenticated application services:
 docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker web
 ```
 
+`WEB_PORT` changes the published web port, application URL, CORS origins, and
+the two default local Clerk authorized parties together. Set
+`CLERK_AUTHORIZED_PARTIES` explicitly only when the token's exact authorized
+party is intentionally different from those standard loopback origins.
+
 Open `http://127.0.0.1:3000/activate`, sign in with Clerk, and complete the
 five milestones above. Compose defaults remain available for normal
 development, while every exposed host port is parameterized for isolated runs.
