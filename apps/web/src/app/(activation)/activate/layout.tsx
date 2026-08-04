@@ -2,13 +2,13 @@ import type { ReactNode } from "react";
 
 import Link from "next/link";
 
-import { LogOut, PhoneCall } from "lucide-react";
+import { PhoneCall } from "lucide-react";
 
+import { ClerkSignOut } from "@/components/auth/clerk-sign-out";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { authMode, shouldWrapClerk } from "@/lib/auth/clerk-config";
 
-async function AccountControl() {
+function AccountControl() {
   if (authMode === "local") {
     return (
       <Badge variant="secondary">
@@ -22,20 +22,11 @@ async function AccountControl() {
     return null;
   }
 
-  const { SignOutButton } = await import("@clerk/nextjs");
-
-  return (
-    <SignOutButton redirectUrl="/">
-      <Button variant="ghost" size="sm" aria-label="Sign out">
-        <LogOut data-icon="inline-start" />
-        <span className="hidden sm:inline">Sign out</span>
-      </Button>
-    </SignOutButton>
-  );
+  return <ClerkSignOut variant="activation" />;
 }
 
-export default async function ActivationLayout({ children }: Readonly<{ children: ReactNode }>) {
-  const accountControl = await AccountControl();
+export default function ActivationLayout({ children }: Readonly<{ children: ReactNode }>) {
+  const accountControl = AccountControl();
 
   return (
     <div className="flex min-h-svh flex-col bg-background text-foreground">

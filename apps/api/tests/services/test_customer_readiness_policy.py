@@ -28,6 +28,7 @@ def ready_snapshot(**overrides: object) -> CustomerReadinessSnapshot:
         "current_period_end": datetime(2026, 8, 1, tzinfo=UTC),
         "balance": 30,
         "provisioning_status": "succeeded",
+        "number_provisioned": True,
         "phone_present": True,
         "phone_provider_id_present": True,
         "phone_active": True,
@@ -70,7 +71,7 @@ def test_live_snapshot_can_activate_route_and_dispatch() -> None:
     assert result.blockers == ()
     assert result.warnings == ()
     assert result.evaluated_at == NOW
-    assert result.policy_version == "runtime-v4"
+    assert result.policy_version == "runtime-v5"
 
 
 @pytest.mark.parametrize(
@@ -116,6 +117,59 @@ def test_flag_off_ignores_activation_prerequisites() -> None:
         ReadinessBlocker.GO_LIVE_NOT_APPROVED,
         ReadinessBlocker.GO_LIVE_NOT_ACTIVATED,
     } & set(result.blockers)
+
+
+def test_activation_required_number_fact_blocks_enable_routing_and_dispatch() -> None:
+    result = evaluate(
+        number_provisioned=False,
+        activation_required=True,
+        business_profile_complete=True,
+        profile_projection_current=True,
+        forwarding_verified=True,
+        go_live_approved=True,
+        go_live_activated=True,
+    )
+
+    assert ReadinessBlocker.NUMBER_NOT_PROVISIONED in result.blockers
+    assert result.can_activate is False
+    assert result.should_enable_phone is False
+    assert result.can_route is False
+    assert result.can_dispatch(called_number_matches=True) is False
+    assert result.stage is CustomerReadinessStage.NUMBER_PROVISIONING_FAILED
+
+
+@pytest.mark.parametrize("provisioning_status", [None, "running"])
+def test_activation_required_incomplete_provisioning_remains_in_progress(
+    provisioning_status: str | None,
+) -> None:
+    result = evaluate(
+        provisioning_status=provisioning_status,
+        number_provisioned=False,
+        phone_present=True,
+        phone_provider_id_present=False,
+        activation_required=True,
+        business_profile_complete=True,
+        profile_projection_current=True,
+        forwarding_verified=True,
+        go_live_approved=True,
+        go_live_activated=True,
+    )
+
+    assert result.stage is CustomerReadinessStage.NUMBER_PROVISIONING
+    assert ReadinessBlocker.NUMBER_NOT_PROVISIONED in result.blockers
+    assert ReadinessBlocker.PHONE_PROVIDER_ID_MISSING in result.blockers
+    assert result.can_activate is False
+    assert result.should_enable_phone is False
+    assert result.can_route is False
+    assert result.can_dispatch(called_number_matches=True) is False
+
+
+def test_activation_disabled_mode_keeps_legacy_phone_compatibility() -> None:
+    result = evaluate(number_provisioned=False, activation_required=False)
+
+    assert ReadinessBlocker.NUMBER_NOT_PROVISIONED not in result.blockers
+    assert result.can_activate is True
+    assert result.can_route is True
 
 
 @pytest.mark.parametrize(

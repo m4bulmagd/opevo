@@ -29,6 +29,7 @@ from app.services.customer_readiness_policy import (
     CustomerReadinessResult,
     CustomerReadinessSnapshot,
 )
+from app.services.number_provisioning_facts import number_is_provisioned
 from app.services.routing_fingerprint import routing_fingerprint
 
 
@@ -141,6 +142,10 @@ def build_customer_readiness_snapshot(
         balance=balance,
         provisioning_status=(
             provisioning.status if provisioning is not None else None
+        ),
+        number_provisioned=number_is_provisioned(
+            provisioning=provisioning,
+            phone_number=phone_number,
         ),
         phone_present=phone_number is not None,
         phone_provider_id_present=bool(

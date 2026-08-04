@@ -20,7 +20,7 @@ Presvo gives professionals and small businesses a configurable AI receptionist a
 ### Done
 
 - Public landing page, authentication shell, and tenant-isolated dashboard
-- Resumable local activation journey with fake billing and telephony providers
+- Clerk-authenticated local activation journey with fake billing and telephony providers
 - Stripe billing and queued Telnyx number-provisioning integrations
 - LiveKit voice-agent runtime with configurable speech and language providers
 - Durable call lifecycle, transcripts, summaries, private recordings, and usage accounting
@@ -87,18 +87,32 @@ voice agent, which persists durable results through the API for later review.
 - Docker with Docker Compose
 - Node.js 22 only when running browser tests from the host
 
-Start the provider-free development stack from the repository root:
+Configure Clerk credentials in `apps/web/.env` and the API verifier credentials
+in `apps/api/.env` (see the [staging smoke runbook](docs/architecture/staging-smoke-runbook.md)).
+Then start the standard Clerk-authenticated development stack from the repository
+root:
 
 ```bash
 docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker web
 ```
 
 Open [http://127.0.0.1:3000/activate](http://127.0.0.1:3000/activate).
-This path uses local identity and fake billing, carrier, telephony, and
-verification providers, so hosted credentials are not required. It does not
-start the LiveKit voice agent.
+This uses Clerk for identity. The fake billing, carrier, telephony, and
+verification providers are separate from authentication; they do not create a
+synthetic user. It does not start the LiveKit voice agent.
 
-Run the disposable browser proof with:
+For a manual, provider-free local-auth test only, explicitly opt in to the
+development token:
+
+```bash
+AUTH_MODE=local \
+LOCAL_AUTH_TOKEN=replace-with-a-development-only-token \
+docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker web
+```
+
+For disposable CI-equivalent proof, run the isolated provider-free browser
+suite. The script explicitly selects local authentication and owns isolation,
+credentials, ports, and cleanup:
 
 ```bash
 npm exec --prefix apps/web -- playwright install chromium

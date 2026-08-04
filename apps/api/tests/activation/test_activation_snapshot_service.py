@@ -72,6 +72,7 @@ def complete_hours() -> dict[str, dict[str, object]]:
 
 def build_records():
     user_id = uuid4()
+    phone_number_id = uuid4()
     user = User(
         id=user_id,
         clerk_user_id="snapshot-user",
@@ -94,6 +95,7 @@ def build_records():
         routing_revision=2,
     )
     phone = PhoneNumber(
+        id=phone_number_id,
         user_id=user_id,
         e164="+33912345678",
         country_code="FR",
@@ -126,7 +128,7 @@ def build_records():
     )
     provisioning = PhoneNumberProvisioning(
         user_id=user_id,
-        phone_number_id=phone.id,
+        phone_number_id=phone_number_id,
         target_country_code="FR",
         status="succeeded",
         attempt_count=1,
@@ -211,7 +213,7 @@ async def test_get_loads_each_authoritative_row_once_and_returns_active_snapshot
     assert snapshot.number.assigned_e164 == "+33912345678"
     assert snapshot.number.provider_ready is True
     assert snapshot.runtime_readiness.can_route is True
-    assert snapshot.runtime_readiness.policy_version == "runtime-v4"
+    assert snapshot.runtime_readiness.policy_version == "runtime-v5"
     assert "last_error_payload" not in snapshot.model_dump_json()
     assert "secret_provider_detail" not in snapshot.model_dump_json()
     for repository in repositories.values():
@@ -240,6 +242,106 @@ async def test_provider_pending_number_order_remains_in_refreshable_provisioning
     assert snapshot.stage is ActivationStage.PROVISIONING
     assert snapshot.number.provisioning_status == "running"
     assert snapshot.number.can_retry is False
+    assert snapshot.number.provider_ready is False
+
+
+@pytest.mark.anyio
+async def test_consented_terminal_assignment_inconsistency_fails_explicitly() -> None:
+    records = list(build_records())
+    records[4].phone_number_id = uuid4()
+    records[4].can_retry = True
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW)
+
+    assert snapshot.stage is ActivationStage.PROVISIONING_FAILED
+    assert snapshot.next_action is None
+    assert snapshot.blockers == ["number_assignment_inconsistent"]
+    assert snapshot.number.provisioning_status == "succeeded"
+    assert snapshot.number.provider_ready is False
+    assert snapshot.number.can_retry is False
+    assert snapshot.runtime_readiness.stage == "number_provisioning_failed"
+    assert snapshot.runtime_readiness.can_route is False
+    assert "number_not_provisioned" in snapshot.runtime_readiness.blockers
+
+
+@pytest.mark.anyio
+async def test_completed_legacy_number_advances_without_historical_consent() -> None:
+    records = list(build_records())
+    activation = records[2]
+    activation.provisioning_consented_at = None
+    activation.verification_status = "not_started"
+    activation.forwarding_verified_at = None
+    activation.verified_routing_fingerprint = None
+    activation.go_live_approved_at = None
+    activation.activated_at = None
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW)
+
+    assert snapshot.stage is ActivationStage.FORWARDING_REQUIRED
+    assert snapshot.next_action == "configure_forwarding"
+    assert snapshot.blockers == ["forwarding_not_verified"]
+    assert "number_provisioned" in snapshot.completed_milestones
+    assert "provisioning_consented" not in snapshot.completed_milestones
+    assert snapshot.activation.provisioning_consented_at is None
+
+
+@pytest.mark.anyio
+async def test_legacy_completion_requires_an_exact_provisioning_phone_link() -> None:
+    records = list(build_records())
+    activation = records[2]
+    activation.provisioning_consented_at = None
+    records[4].phone_number_id = uuid4()
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW)
+
+    assert snapshot.stage is ActivationStage.PROVISIONING_CONSENT_REQUIRED
+    assert "number_provisioned" not in snapshot.completed_milestones
+    assert snapshot.number.provider_ready is False
+    assert snapshot.runtime_readiness.can_route is False
+    assert "number_not_provisioned" in snapshot.runtime_readiness.blockers
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("provider_number_id", [None, " "])
+async def test_legacy_completion_requires_a_nonblank_provider_number_identity(
+    provider_number_id: str | None,
+) -> None:
+    records = list(build_records())
+    records[2].provisioning_consented_at = None
+    records[5].provider_number_id = provider_number_id
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW)
+
+    assert snapshot.stage is ActivationStage.PROVISIONING_CONSENT_REQUIRED
+    assert "number_provisioned" not in snapshot.completed_milestones
+    assert snapshot.number.provider_ready is False
+    assert snapshot.runtime_readiness.can_route is False
+    assert "number_not_provisioned" in snapshot.runtime_readiness.blockers
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", [None, "queued", "running", "failed"])
+async def test_incomplete_provisioning_never_uses_legacy_completion_path(
+    status: str | None,
+) -> None:
+    records = list(build_records())
+    records[2].provisioning_consented_at = None
+    records[4] = None if status is None else records[4]
+    if records[4] is not None:
+        records[4].status = status
+    service, _repositories = build_service(records=tuple(records))
+
+    snapshot = await service.get(records[0].id, now=NOW)
+
+    assert snapshot.stage is ActivationStage.PROVISIONING_CONSENT_REQUIRED
+    assert "number_provisioned" not in snapshot.completed_milestones
+    assert snapshot.number.provider_ready is False
+    assert snapshot.runtime_readiness.can_route is False
+    assert "number_not_provisioned" in snapshot.runtime_readiness.blockers
 
 
 @pytest.mark.anyio

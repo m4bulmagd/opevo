@@ -1,11 +1,9 @@
 import { redirect } from "next/navigation";
 
-import { ClerkSetupNotice } from "@/components/auth/clerk-setup-notice";
 import { CallHistoryPagination, CallHistorySearch } from "@/components/calls/call-history-controls";
 import { CallsTable } from "@/components/calls/calls-table";
 import { PageIntro } from "@/components/product/page-intro";
 import { listCalls } from "@/lib/api/calls";
-import { isAppAuthConfigured } from "@/lib/auth/clerk-config";
 import {
   buildCallHistoryHref,
   type CallHistorySearchParams,
@@ -18,15 +16,6 @@ type CallsPageProps = {
 };
 
 export default async function CallsPage({ searchParams }: CallsPageProps) {
-  if (!isAppAuthConfigured) {
-    return (
-      <ClerkSetupNotice
-        title="Call history is unavailable"
-        description="Configure Clerk in your local environment before loading protected call records."
-      />
-    );
-  }
-
   const navigation = parseCallHistoryNavigation(await searchParams);
   const result = await listCalls({
     limit: navigation.limit,

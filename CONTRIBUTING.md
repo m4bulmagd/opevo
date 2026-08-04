@@ -36,8 +36,10 @@ docker compose -f compose.dev.yaml up --build
 ```
 
 This starts PostgreSQL, Redis, MinIO, migrations, the API, the ARQ worker, and
-the web application. Without Clerk credentials, the web application shows
-configuration notices instead of authenticated customer data.
+the web application. The standard stack uses Clerk and fails closed when its
+required server configuration is missing; it never substitutes an authenticated
+local identity. Synthetic local authentication must be enabled explicitly and
+is limited to disposable development and E2E workflows.
 
 Live phone calls require hosted provider configuration. Copy only the example
 files you need, keep the resulting `.env` files untracked, and start the voice

@@ -1,23 +1,28 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 
 import Link from "next/link";
 
 import { Menu, PhoneCall, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { WorkspaceNavigation } from "@/components/workspace/workspace-navigation";
 
-export function MobileWorkspaceNavigation() {
+type MobileWorkspaceNavigationProps = {
+  accountControl: ReactNode;
+};
+
+export function MobileWorkspaceNavigation({ accountControl }: MobileWorkspaceNavigationProps) {
   const firstDestinationRef = useRef<HTMLAnchorElement>(null);
   const [open, setOpen] = useState(false);
 
   return (
     <Sheet onOpenChange={setOpen} open={open}>
       <SheetTrigger asChild>
-        <Button aria-label="Open navigation" className="min-h-11 min-w-11 lg:hidden" size="icon" variant="outline">
+        <Button aria-label="Open navigation" className="min-h-11 min-w-11 xl:hidden" size="icon" variant="outline">
           <Menu aria-hidden="true" />
         </Button>
       </SheetTrigger>
@@ -60,6 +65,10 @@ export function MobileWorkspaceNavigation() {
             firstDestinationRef={firstDestinationRef}
             onNavigate={() => setOpen(false)}
           />
+          <div className="mt-auto flex flex-col gap-4">
+            <Separator />
+            <div>{accountControl}</div>
+          </div>
         </div>
       </SheetContent>
     </Sheet>

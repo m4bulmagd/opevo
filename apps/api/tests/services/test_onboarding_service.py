@@ -130,7 +130,7 @@ async def test_get_status_returns_subscription_required_defaults(
     assert "subscription_missing" in status.blockers
     assert "minutes_exhausted" in status.blockers
     assert status.warnings == []
-    assert status.policy_version == "runtime-v4"
+    assert status.policy_version == "runtime-v5"
     assert status.evaluated_at.tzinfo is not None
 
 
