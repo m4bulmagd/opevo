@@ -836,8 +836,8 @@ def test_local_compose_accepts_explicit_synthetic_auth_for_disposable_tests() ->
 
 @pytest.mark.parametrize(
     "local_auth_token",
-    ["", "   "],
-    ids=("blank", "whitespace"),
+    ["", "   ", " padded-local-token "],
+    ids=("blank", "whitespace", "padded"),
 )
 def test_local_compose_runtime_rejects_incomplete_synthetic_auth(
     local_auth_token: str,
@@ -857,8 +857,12 @@ def test_local_compose_runtime_rejects_incomplete_synthetic_auth(
         local_auth_token=api_environment["LOCAL_AUTH_TOKEN"],
     )
 
-    with pytest.raises(RuntimeError, match="LOCAL_AUTH_TOKEN"):
+    with pytest.raises(RuntimeError) as error:
         validate_api_runtime(settings)
+
+    assert str(error.value) == (
+        "Missing or invalid required runtime settings: LOCAL_AUTH_TOKEN"
+    )
 
 
 def test_clerk_example_documents_session_verifier_without_real_origin() -> None:
