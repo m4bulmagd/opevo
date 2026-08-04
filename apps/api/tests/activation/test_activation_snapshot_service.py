@@ -247,6 +247,7 @@ async def test_provider_pending_number_order_remains_in_refreshable_provisioning
 async def test_consented_terminal_assignment_inconsistency_fails_explicitly() -> None:
     records = list(build_records())
     records[4].phone_number_id = uuid4()
+    records[4].can_retry = True
     service, _repositories = build_service(records=tuple(records))
 
     snapshot = await service.get(records[0].id, now=NOW)

@@ -208,7 +208,11 @@ class ActivationSnapshotService:
                 provisioning_status=(
                     provisioning.status if provisioning is not None else None
                 ),
-                can_retry=bool(provisioning is not None and provisioning.can_retry),
+                can_retry=bool(
+                    provisioning is not None
+                    and provisioning.can_retry
+                    and "number_assignment_inconsistent" not in decision.blockers
+                ),
             ),
             forwarding=self._forwarding_guide(profile, phone),
             runtime_readiness=RuntimeReadinessResponse(
