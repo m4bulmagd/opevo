@@ -11,7 +11,9 @@ def build_case(
     case: str,
 ) -> tuple[PhoneNumberProvisioning | None, PhoneNumber | None]:
     user_id = uuid4()
+    phone_number_id = uuid4()
     phone_number = PhoneNumber(
+        id=phone_number_id,
         user_id=user_id,
         e164="+33999000000",
         country_code="FR",
@@ -22,7 +24,7 @@ def build_case(
     )
     provisioning = PhoneNumberProvisioning(
         user_id=user_id,
-        phone_number_id=phone_number.id,
+        phone_number_id=phone_number_id,
         target_country_code="FR",
         status="succeeded",
         attempt_count=1,
@@ -31,7 +33,9 @@ def build_case(
 
     if case == "missing_provisioning":
         return None, phone_number
-    if case == "running":
+    if case == "missing_phone_number_link":
+        provisioning.phone_number_id = None
+    elif case == "running":
         provisioning.status = "running"
     elif case == "failed":
         provisioning.status = "failed"
@@ -50,11 +54,40 @@ def build_case(
     return provisioning, phone_number
 
 
+def test_number_is_provisioned_rejects_unassigned_relationship_identities() -> None:
+    user_id = uuid4()
+    phone_number = PhoneNumber(
+        user_id=user_id,
+        e164="+33999000000",
+        country_code="FR",
+        provider="telnyx",
+        provider_number_id="pn_readiness",
+        provider_connection_name="app-disabled",
+        is_active=False,
+    )
+    provisioning = PhoneNumberProvisioning(
+        user_id=user_id,
+        phone_number_id=phone_number.id,
+        target_country_code="FR",
+        status="succeeded",
+        attempt_count=1,
+        can_retry=False,
+    )
+
+    assert phone_number.id is None
+    assert provisioning.phone_number_id is None
+    assert number_is_provisioned(
+        provisioning=provisioning,
+        phone_number=phone_number,
+    ) is False
+
+
 @pytest.mark.parametrize(
     ("case", "expected"),
     [
         ("valid", True),
         ("missing_provisioning", False),
+        ("missing_phone_number_link", False),
         ("running", False),
         ("failed", False),
         ("missing_phone", False),
