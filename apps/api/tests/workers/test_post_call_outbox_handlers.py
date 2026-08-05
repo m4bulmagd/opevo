@@ -20,13 +20,13 @@ from app.services.outbox_service import (
 )
 from app.workers.outbox.delivery import outbox_delivery_job
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.jobs import outbox_topics
 from app.workers.outbox import post_call
 from app.workers.outbox.post_call import (
     deliver_recording_reconcile,
     deliver_summary_generate,
 )
 from app.workers.outbox.recording_reconciliation import ReconciliationResult
+from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
 
 
 class ExplodingNotificationProvider:
@@ -701,7 +701,7 @@ def test_default_handlers_exactly_match_supported_topics_without_placeholders() 
 
     assert set(SUPPORTED_OUTBOX_TOPICS) == expected_topics
     assert set(REFERENCE_PAYLOAD_FIELDS) == expected_topics
-    assert set(outbox_topics.DEFAULT_OUTBOX_HANDLERS) == expected_topics
+    assert set(DEFAULT_OUTBOX_HANDLERS) == expected_topics
 
 
 @pytest.mark.anyio

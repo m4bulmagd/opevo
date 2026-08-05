@@ -23,10 +23,10 @@ from app.models.customer_activation import CustomerActivation
 from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.services.outbox_service import OutboxService, SUPPORTED_OUTBOX_TOPICS
-from app.workers.jobs.outbox_topics import DEFAULT_OUTBOX_HANDLERS
 from app.workers.outbox.delivery import _validated_event_call_id
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.outbox import verification_dispatch
+from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
 from app.workers.outbox.verification_dispatch import (
     deliver_livekit_verification_dispatch,
 )

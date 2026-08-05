@@ -290,6 +290,6 @@ async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:
 
 def get_default_outbox_handlers() -> Mapping[str, OutboxHandler]:
     # Imports stay local so worker startup does not eagerly initialize provider SDKs.
-    from app.workers.jobs.outbox_topics import DEFAULT_OUTBOX_HANDLERS
+    from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
 
     return DEFAULT_OUTBOX_HANDLERS

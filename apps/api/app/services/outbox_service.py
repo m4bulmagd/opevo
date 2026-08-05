@@ -8,20 +8,6 @@ from app.models.outbox_event import OutboxEvent
 from app.repositories.outbox_repository import OutboxRepository
 
 
-SUPPORTED_OUTBOX_TOPICS = frozenset(
-    {
-        "phone.provision",
-        "phone.enable",
-        "phone.disable",
-        "livekit.dispatch",
-        "livekit.verification_dispatch",
-        "summary.generate",
-        "recording.reconcile",
-        "account.deactivate",
-        "provider.cleanup",
-    }
-)
-
 REFERENCE_PAYLOAD_FIELDS = {
     "phone.provision": frozenset({"user_id", "lifecycle_generation"}),
     "phone.enable": frozenset({"user_id", "lifecycle_generation"}),
@@ -35,6 +21,8 @@ REFERENCE_PAYLOAD_FIELDS = {
     "account.deactivate": frozenset({"operation_id"}),
     "provider.cleanup": frozenset({"cleanup_operation_id"}),
 }
+
+SUPPORTED_OUTBOX_TOPICS = frozenset(REFERENCE_PAYLOAD_FIELDS)
 
 
 class OutboxPayloadError(ValueError):
