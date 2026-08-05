@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -18,16 +17,14 @@ def test_delivery_import_does_not_eagerly_import_topic_providers() -> None:
             "    'app.providers.telephony.factory',",
             "}",
             "loaded = forbidden.intersection(sys.modules)",
-            "assert not loaded, sorted(loaded)",
+            "if loaded:",
+            "    raise SystemExit(f'Eager topic providers: {sorted(loaded)}')",
         )
     )
-    environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(API_ROOT)
 
     result = subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, "-E", "-c", script],
         cwd=API_ROOT,
-        env=environment,
         capture_output=True,
         text=True,
         check=False,
