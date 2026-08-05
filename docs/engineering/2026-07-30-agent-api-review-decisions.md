@@ -339,12 +339,12 @@ expiry (4 default slots). They report
 remains authoritative; Redis is execution and wakeup only.
 
 The implemented proof is controlled ten-call local/CI evidence: four
-background slots are held while ten lifecycle probes simultaneously start. It
-does not prove cloud scheduling, provider/database saturation, production SLOs,
-alert routing, a recovery drill, or production certification. Direct and cron
-reconciliation retain zero ARQ results; their durable state is the recovery
-record. Issue 16A load, monitoring, and recovery drills remain open, and
-realtime remains deferred.
+background slots are held while ten lifecycle probes simultaneously start, with
+local/CI queue-delay p95 `<= 2 seconds`. It does not prove cloud scheduling,
+provider/database saturation, production SLOs, alert routing, a recovery drill,
+or production certification. Direct and cron reconciliation retain zero ARQ
+results; their durable state is the recovery record. Issue 16A load, monitoring,
+and recovery drills remain open, and realtime remains deferred.
 
 ### Required validation
 

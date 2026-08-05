@@ -30,9 +30,10 @@ Each worker emits its own health key and snapshots
 `presvo.worker.queue.depth{queue_class}` and
 `presvo.worker.queue.oldest_due.age{queue_class}`. The implemented evidence is
 controlled ten-call local/CI evidence: four background slots are deliberately
-blocked while ten lifecycle probes start. It establishes local queue isolation
-only; it does not establish cloud scheduling, provider or database saturation,
-production SLOs, alert routing, a recovery drill, or production certification.
+blocked while ten lifecycle probes start simultaneously, with local/CI
+queue-delay p95 `<= 2 seconds`. It establishes local queue isolation only; it
+does not establish cloud scheduling, provider or database saturation, production
+SLOs, alert routing, a recovery drill, or production certification.
 Issue 16A load, monitoring, and recovery gates remain open, and realtime
 remains deferred.
 

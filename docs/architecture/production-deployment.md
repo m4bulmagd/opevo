@@ -77,11 +77,13 @@ the old generic worker still consumes the default queue; roll out the new API
 so all new wakeups route explicitly; verify both health keys, both queue-depth
 and oldest-due metrics, and both reconciliation jobs; wait for old API replicas
 to disappear and the legacy/default backlog to drain; then drain and remove the
-generic worker. An unknown-function error from the generic worker during this
-bounded overlap is a migration signal, not evidence of durable loss: stop the
-transition, retain only the normalized function/attempt signal, and reconcile
-from PostgreSQL after compatible routing is restored. It does not justify a
-zero-delay recovery claim.
+generic worker. `worker-lifecycle` can consume and reject a legacy outbox
+wakeup from the shared default queue during this bounded overlap; the old
+generic worker knows that legacy function. This unknown-function result is a
+migration signal, not evidence of durable loss: stop the transition, retain
+only the normalized function/attempt signal, restore compatible routing, and
+let background reconciliation recover the PostgreSQL row on schedule. It does
+not justify a zero-delay recovery claim.
 
 ### Voice-agent rollout boundary
 

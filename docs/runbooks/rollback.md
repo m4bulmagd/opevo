@@ -138,6 +138,10 @@ explicit queues drain second; restore the old generic worker third; remove the
 new workers last. In operational shorthand, this is **previous API routing →
 explicit queues drain → generic worker restoration → new workers removed last**.
 
+Before cutover, record the actual previous worker service identity as
+`<legacy-worker-service>` in the change record. This is a captured identity,
+not a service to create or a replacement service name.
+
 Keep `worker-lifecycle` and `worker-background` running while their respective
 `arq:queue` and `arq:queue:background` work drains. Check
 `presvo:worker:call-lifecycle:health`,
@@ -171,7 +175,7 @@ services, and restore the agent one service at a time:
 <deployctl> service wait-queue-drain worker-background --queue arq:queue:background \
   --reason <incident-id> --wait
 
-<deployctl> service deploy legacy-generic-worker \
+<deployctl> service deploy <legacy-worker-service> \
   --image <previous-api-image@sha256:digest> \
   --reason <incident-id> --wait
 
@@ -183,8 +187,9 @@ services, and restore the agent one service at a time:
   --reason <incident-id> --wait
 ```
 
-The legacy generic worker must use the same previous API artifact as the API service. If only
-one component changed or failed, do not roll unrelated healthy components.
+`<legacy-worker-service>` must use the same previous API artifact as the API
+service. If only one component changed or failed, do not roll unrelated healthy
+components.
 
 After every service replacement, verify the orchestrator reports only the
 approved previous digest and a stable healthy count before touching the next

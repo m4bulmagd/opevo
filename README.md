@@ -92,6 +92,9 @@ expiry (default 4 slots). PostgreSQL outbox/call state is authoritative; Redis
 is only the execution and wakeup path. Operational rollout, recovery, and the
 bounded local/CI isolation evidence are recorded in the
 [deployment runbook](docs/runbooks/deploy.md).
+That evidence holds four background slots while ten lifecycle probes start
+simultaneously, with local/CI queue-delay p95 `<= 2 seconds`; it is not
+production certification.
 
 ## Run locally
 

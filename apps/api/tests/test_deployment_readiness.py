@@ -1560,6 +1560,9 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     deployment = (
         REPO_ROOT / "docs" / "architecture" / "production-deployment.md"
     ).read_text()
+    staging = (
+        REPO_ROOT / "docs" / "architecture" / "staging-smoke-runbook.md"
+    ).read_text()
     deploy = (REPO_ROOT / "docs" / "runbooks" / "deploy.md").read_text()
     rollback = (REPO_ROOT / "docs" / "runbooks" / "rollback.md").read_text()
     incident = (REPO_ROOT / "docs" / "runbooks" / "incident-response.md").read_text()
@@ -1571,21 +1574,37 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
         REPO_ROOT / "docs" / "engineering" / "2026-07-30-agent-api-review-decisions.md"
     ).read_text()
 
-    ownership_terms = (
-        "worker-lifecycle",
-        "worker-background",
-        "arq:queue",
-        "arq:queue:background",
-        "presvo:worker:call-lifecycle:health",
-        "presvo:worker:background:health",
-        "call finalization; call reconciliation",
-        "outbox delivery/reconciliation; verification expiry",
-        "10",
-        "4",
-    )
+    ownership_rows = {
+        "worker-lifecycle": (
+            "arq:queue",
+            "call finalization; call reconciliation",
+            "presvo:worker:call-lifecycle:health",
+            "10",
+        ),
+        "worker-background": (
+            "arq:queue:background",
+            "outbox delivery/reconciliation; verification expiry",
+            "presvo:worker:background:health",
+            "4",
+        ),
+    }
     for document in (backend, deployment):
-        for term in ownership_terms:
-            assert term in document
+        rows = {
+            match.group("service"): (
+                match.group("queue"),
+                match.group("jobs"),
+                match.group("health"),
+                match.group("slots"),
+            )
+            for match in re.finditer(
+                r"^\| `(?P<service>worker-[^`]+)` \| `(?P<queue>[^`]+)` \| "
+                r"(?P<jobs>[^|]+) \| `(?P<health>[^`]+)` \| "
+                r"(?P<slots>\d+) \|$",
+                document,
+                re.MULTILINE,
+            )
+        }
+        assert rows == ownership_rows
 
     for document in (backend, incident):
         assert "PostgreSQL outbox/call state" in document
@@ -1596,13 +1615,21 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     rollout = (
         "worker-background",
         "worker-lifecycle",
-        "Roll out the new API",
+        "new API so new wakeups route explicitly",
         "Verify both health keys",
         "legacy/default backlog to drain",
         "remove the generic worker",
     )
     rollout_positions = [normalized_deploy.index(step) for step in rollout]
     assert rollout_positions == sorted(rollout_positions)
+    for document in (deployment, deploy):
+        normalized_document = " ".join(document.split())
+        assert "`worker-lifecycle` can consume and reject a legacy outbox wakeup" in (
+            normalized_document
+        )
+        assert "background reconciliation recover the PostgreSQL row on schedule" in (
+            normalized_document
+        )
 
     normalized_rollback = " ".join(rollback.replace("**", "").split())
     reverse_rollout = (
@@ -1614,6 +1641,10 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     rollback_positions = [normalized_rollback.index(step) for step in reverse_rollout]
     assert rollback_positions == sorted(rollback_positions)
     assert "not a zero-delay guarantee" in rollback
+    assert "<legacy-worker-service>" in rollback
+    assert "legacy-generic-worker" not in rollback
+    assert "actual previous worker service identity" in rollback
+    assert "not a service to create" in rollback
 
     for metric in (
         "presvo.worker.queue.depth{queue_class}",
@@ -1628,11 +1659,27 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     assert "worker-lifecycle" in contributing
     assert "worker-background" in contributing
 
+    assert "worker-lifecycle" in staging
+    assert "worker-background" in staging
+
+    status_worker_isolation = next(
+        line for line in status.splitlines() if "Worker isolation (4A + 4B)" in line
+    )
+    ledger_issue_four = next(
+        line for line in ledger.splitlines() if line.startswith("| 4 |")
+    )
+    for line in (status_worker_isolation, ledger_issue_four):
+        assert "Implemented" in line
+
     for document in (status, ledger):
         assert "4A + 4B" in document
-        assert "Implemented" in document
         assert "controlled ten-call local/CI evidence" in document
         assert "Issue 16A" in document
         assert "load" in document
         assert "recovery drills" in document
+    for document in (readme, backend, status, ledger):
+        assert "p95 `<= 2 seconds`" in document
+        assert "background slots" in document
+        assert "ten lifecycle probes" in document
+        assert "simultaneously" in document
     assert "realtime remains deferred" in ledger

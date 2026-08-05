@@ -28,13 +28,14 @@ slots; `worker-background` consumes `arq:queue:background`, reports
 `presvo.worker.queue.oldest_due.age{queue_class}` for each class. PostgreSQL
 outbox/call state is authoritative; Redis is execution and wakeup only.
 
-During this bounded overlap, a legacy unknown-function result is a migration
-signal: stop the transition, preserve the normalized function and attempt
-evidence, restore compatible routing, and let durable reconciliation recover
-the work. An orphaned outbox wakeup recovers on outbox reconciliation and an
-orphaned lifecycle attempt recovers on call reconciliation after service
-restoration. Both are reconciliation-schedule delays, not a zero-delay
-guarantee.
+During this bounded overlap, `worker-lifecycle` can consume and reject a legacy
+outbox wakeup from the shared default queue; the old generic worker knows that
+legacy function. This unknown-function result is a migration signal: stop the
+transition, preserve the normalized function and attempt evidence, restore
+compatible routing, and let background reconciliation recover the PostgreSQL
+row on schedule. An orphaned lifecycle attempt recovers on call reconciliation
+after service restoration. Both are reconciliation-schedule delays, not a
+zero-delay guarantee.
 
 ## Scope and owners
 
