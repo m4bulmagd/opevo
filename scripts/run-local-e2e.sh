@@ -28,7 +28,7 @@ cleanup() {
   trap - EXIT HUP INT TERM
   if [ "$status" -ne 0 ]; then
     compose ps || true
-    compose logs api worker web || true
+    compose logs api worker-lifecycle worker-background web || true
   fi
   down_stack
   if [ -n "$e2e_state_dir" ] && [ -d "$e2e_state_dir" ]; then
@@ -111,30 +111,8 @@ wait_for_success() {
   return 1
 }
 
-wait_for_running() {
-  service=$1
-  attempt=0
-  while [ "$attempt" -lt 60 ]; do
-    container_id=$(compose ps -q "$service")
-    if [ -n "$container_id" ]; then
-      state=$(docker inspect --format '{{.State.Status}}' "$container_id")
-      if [ "$state" = "running" ]; then
-        return 0
-      fi
-      if [ "$state" = "exited" ] || [ "$state" = "dead" ]; then
-        compose logs "$service" || true
-        return 1
-      fi
-    fi
-    attempt=$((attempt + 1))
-    sleep 1
-  done
-  compose logs "$service" || true
-  return 1
-}
-
 down_stack
-compose build migrate api worker web
+compose build migrate api worker-lifecycle worker-background web
 compose up --detach postgres redis minio
 wait_for_health postgres
 wait_for_health redis
@@ -142,9 +120,10 @@ wait_for_health minio
 compose up --detach minio-init migrate
 wait_for_success minio-init
 wait_for_success migrate
-compose up --detach api worker web
+compose up --detach api worker-lifecycle worker-background web
 wait_for_health api
-wait_for_running worker
+wait_for_health worker-lifecycle
+wait_for_health worker-background
 wait_for_health web
 
 if [ "$e2e_focus" = "all" ]; then
@@ -192,9 +171,10 @@ if [ "$e2e_focus" = "all" ]; then
   E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
     npm --prefix apps/web run test:e2e -- tests/e2e/deactivation-start.spec.ts
 
-  compose restart api worker
+  compose restart api worker-lifecycle worker-background
   wait_for_health api
-  wait_for_running worker
+  wait_for_health worker-lifecycle
+  wait_for_health worker-background
 
   E2E_AFTER_SERVICE_RESTART=true E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
     npm --prefix apps/web run test:e2e -- tests/e2e/restart-resume.spec.ts

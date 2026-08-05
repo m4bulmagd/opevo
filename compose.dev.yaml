@@ -1,3 +1,33 @@
+x-worker-service: &worker-service
+  build:
+    context: .
+    dockerfile: apps/api/Dockerfile
+    target: development
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+  environment:
+    APP_ENV: development
+    DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call
+    REDIS_URL: redis://redis:6379/0
+    BILLING_MODE: fake
+    TELEPHONY_MODE: fake
+    ACTIVATION_FLOW_ENABLED: "true"
+    STORAGE_BUCKET_NAME: recordings
+    S3_ENDPOINT_URL: http://minio:9000
+    S3_ACCESS_KEY: minioadmin
+    S3_SECRET_KEY: minioadmin
+    S3_REGION: us-east-1
+    WORKER_LIFECYCLE_MAX_JOBS: ${WORKER_LIFECYCLE_MAX_JOBS:-10}
+    WORKER_BACKGROUND_MAX_JOBS: ${WORKER_BACKGROUND_MAX_JOBS:-4}
+  volumes:
+    - ./apps/api/app:/app/app
+  restart: unless-stopped
+
 services:
   postgres:
     image: postgres:17.8-bookworm
@@ -126,34 +156,25 @@ services:
       retries: 20
     restart: unless-stopped
 
-  worker:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
-      target: development
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-    environment:
-      APP_ENV: development
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call
-      REDIS_URL: redis://redis:6379/0
-      BILLING_MODE: fake
-      TELEPHONY_MODE: fake
-      ACTIVATION_FLOW_ENABLED: "true"
-      STORAGE_BUCKET_NAME: recordings
-      S3_ENDPOINT_URL: http://minio:9000
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
-      S3_REGION: us-east-1
-    command: ["/app/.venv/bin/arq", "app.workers.arq_worker.WorkerSettings"]
-    volumes:
-      - ./apps/api/app:/app/app
-    restart: unless-stopped
+  worker-lifecycle:
+    <<: *worker-service
+    command: ["/app/.venv/bin/arq", "app.workers.arq_worker.CallLifecycleWorkerSettings"]
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/arq", "--check", "app.workers.arq_worker.CallLifecycleWorkerSettings"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    stop_grace_period: 75s
+
+  worker-background:
+    <<: *worker-service
+    command: ["/app/.venv/bin/arq", "app.workers.arq_worker.BackgroundWorkerSettings"]
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/arq", "--check", "app.workers.arq_worker.BackgroundWorkerSettings"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    stop_grace_period: 45s
 
   agent:
     profiles: ["voice"]
@@ -167,8 +188,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
-      worker:
-        condition: service_started
+      worker-lifecycle:
+        condition: service_healthy
     environment:
       APP_ENV: development
       API_BASE_URL: http://api:8000

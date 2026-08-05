@@ -75,6 +75,12 @@ LOCAL_COMPOSE_AUTH_DEFAULTS = {
     "AUTH_MODE": "",
     "LOCAL_AUTH_TOKEN": "",
     "CLERK_AUTHORIZED_PARTIES": "",
+    "COMPOSE_PROFILES": "voice",
+}
+WORKER_SERVICES = ("worker-lifecycle", "worker-background")
+WORKER_CAPACITY = {
+    "WORKER_LIFECYCLE_MAX_JOBS": "10",
+    "WORKER_BACKGROUND_MAX_JOBS": "4",
 }
 
 
@@ -114,6 +120,11 @@ def load_compose_yaml() -> dict:
 
 def resolved_service_environment(document: dict, service: str) -> dict[str, str]:
     return document["services"][service].get("environment", {})
+
+
+def worker_service_dictionaries(document: dict) -> tuple[dict, dict]:
+    services = document["services"]
+    return services["worker-lifecycle"], services["worker-background"]
 
 
 def load_local_compose_yaml(
@@ -727,6 +738,68 @@ def test_compose_separates_required_production_inputs_from_local_services() -> N
     assert "service_completed_successfully" in compose_dev
 
 
+@pytest.mark.parametrize(
+    "load_document",
+    (load_local_compose_yaml, load_compose_yaml),
+    ids=("development", "production"),
+)
+def test_compose_runs_isolated_workers_with_explicit_process_policy(
+    load_document,
+) -> None:
+    document = load_document()
+    services = document["services"]
+    worker_service_names = {
+        name for name in services if name == "worker" or name.startswith("worker-")
+    }
+
+    assert worker_service_names == set(WORKER_SERVICES)
+    lifecycle, background = worker_service_dictionaries(document)
+    assert lifecycle.get("build") == background.get("build")
+    assert lifecycle.get("image") == background.get("image")
+    assert lifecycle.get("build") == services["api"].get("build")
+    assert lifecycle.get("image") == services["api"].get("image")
+    assert lifecycle["environment"] == background["environment"]
+    assert {
+        setting: lifecycle["environment"][setting]
+        for setting in WORKER_CAPACITY
+    } == WORKER_CAPACITY
+    assert lifecycle["command"] == [
+        "/app/.venv/bin/arq",
+        "app.workers.arq_worker.CallLifecycleWorkerSettings",
+    ]
+    assert background["command"] == [
+        "/app/.venv/bin/arq",
+        "app.workers.arq_worker.BackgroundWorkerSettings",
+    ]
+    assert lifecycle["healthcheck"]["test"] == [
+        "CMD",
+        "/app/.venv/bin/arq",
+        "--check",
+        "app.workers.arq_worker.CallLifecycleWorkerSettings",
+    ]
+    assert background["healthcheck"]["test"] == [
+        "CMD",
+        "/app/.venv/bin/arq",
+        "--check",
+        "app.workers.arq_worker.BackgroundWorkerSettings",
+    ]
+    assert lifecycle["stop_grace_period"] == "1m15s"
+    assert background["stop_grace_period"] == "45s"
+
+
+@pytest.mark.parametrize(
+    "load_document",
+    (load_local_compose_yaml, load_compose_yaml),
+    ids=("development", "production"),
+)
+def test_agent_waits_only_for_healthy_lifecycle_worker(load_document) -> None:
+    agent_dependencies = load_document()["services"]["agent"]["depends_on"]
+
+    assert agent_dependencies["worker-lifecycle"]["condition"] == "service_healthy"
+    assert "worker-background" not in agent_dependencies
+    assert "worker" not in agent_dependencies
+
+
 def test_production_compose_scopes_clerk_session_verifier_settings_to_api() -> None:
     document = load_compose_yaml()
     api_environment = resolved_service_environment(document, "api")
@@ -734,7 +807,7 @@ def test_production_compose_scopes_clerk_session_verifier_settings_to_api() -> N
     for setting in CLERK_SESSION_VERIFIER_SETTINGS:
         assert setting in api_environment
     assert api_environment.get("REALTIME_ENABLED", "false") == "false"
-    for service in ("worker", "agent", "web"):
+    for service in (*WORKER_SERVICES, "agent", "web"):
         environment = resolved_service_environment(document, service)
         for setting in CLERK_SESSION_VERIFIER_SETTINGS:
             assert setting not in environment
@@ -780,7 +853,6 @@ def test_local_compose_defaults_interactive_services_to_clerk() -> None:
     document = load_local_compose_yaml()
     api_environment = resolved_service_environment(document, "api")
     web_environment = resolved_service_environment(document, "web")
-    worker_environment = resolved_service_environment(document, "worker")
 
     assert api_environment["AUTH_MODE"] == "clerk"
     assert web_environment["AUTH_MODE"] == "clerk"
@@ -790,8 +862,10 @@ def test_local_compose_defaults_interactive_services_to_clerk() -> None:
         "http://127.0.0.1:3000,http://localhost:3000"
     )
     assert api_environment.get("REALTIME_ENABLED", "false") == "false"
-    for setting in ("AUTH_MODE", "LOCAL_AUTH_TOKEN", "CLERK_AUTHORIZED_PARTIES"):
-        assert setting not in worker_environment
+    for worker in WORKER_SERVICES:
+        worker_environment = resolved_service_environment(document, worker)
+        for setting in ("AUTH_MODE", "LOCAL_AUTH_TOKEN", "CLERK_AUTHORIZED_PARTIES"):
+            assert setting not in worker_environment
 
 
 def test_local_compose_custom_web_port_updates_every_default_local_origin() -> None:
@@ -904,29 +978,29 @@ def test_api_ci_supplies_network_free_clerk_construction_values() -> None:
 
 
 def test_compose_requires_explicit_telnyx_ordering_for_worker_and_api() -> None:
-    compose = (REPO_ROOT / "compose.yaml").read_text()
-    required_setting = (
-        "TELNYX_ORDERING_ENABLED: "
-        "${TELNYX_ORDERING_ENABLED:?TELNYX_ORDERING_ENABLED is required}"
-    )
+    document = load_compose_yaml()
 
-    assert compose.count(required_setting) == 1
-    worker_environment = compose.split("x-api-environment:", maxsplit=1)[0]
-    assert required_setting in worker_environment
+    assert resolved_service_environment(document, "api")[
+        "TELNYX_ORDERING_ENABLED"
+    ] == "true"
+    for worker in WORKER_SERVICES:
+        assert resolved_service_environment(document, worker)[
+            "TELNYX_ORDERING_ENABLED"
+        ] == "true"
 
 
 def test_production_compose_scopes_modes_and_passes_runtime_validation(
     base_settings: Settings,
 ) -> None:
-    compose = (REPO_ROOT / "compose.yaml").read_text()
-    worker_environment = compose.split(
-        "x-worker-environment: &worker-environment",
-        1,
-    )[1].split("x-api-environment: &api-environment", 1)[0]
-    api_environment = compose.split(
-        "x-api-environment: &api-environment",
-        1,
-    )[1].split("x-service-hardening: &service-hardening", 1)[0]
+    document = load_compose_yaml()
+    api_environment = resolved_service_environment(document, "api")
+    lifecycle_environment = resolved_service_environment(
+        document, "worker-lifecycle"
+    )
+    background_environment = resolved_service_environment(
+        document, "worker-background"
+    )
+    assert lifecycle_environment == background_environment
     api_only_modes = {
         "AUTH_MODE": ("auth_mode", "clerk"),
         "BILLING_MODE": ("billing_mode", "stripe"),
@@ -934,33 +1008,21 @@ def test_production_compose_scopes_modes_and_passes_runtime_validation(
     }
     resolved_modes: dict[str, str] = {}
     for environment_name, (field_name, expected_value) in api_only_modes.items():
-        match = re.search(
-            rf"^  {environment_name}: ([a-z]+)$",
-            api_environment,
-            flags=re.MULTILINE,
-        )
-        assert match is not None
-        assert match.group(1) == expected_value
-        resolved_modes[field_name] = match.group(1)
+        assert api_environment[environment_name] == expected_value
+        resolved_modes[field_name] = api_environment[environment_name]
         if environment_name == "BILLING_MODE":
-            assert environment_name in worker_environment
+            assert environment_name in lifecycle_environment
         else:
-            assert environment_name not in worker_environment
+            assert environment_name not in lifecycle_environment
 
-    telephony_match = re.search(
-        r"^  TELEPHONY_MODE: ([a-z]+)$",
-        worker_environment,
-        flags=re.MULTILINE,
+    assert lifecycle_environment["TELEPHONY_MODE"] == "telnyx"
+    resolved_modes["telephony_mode"] = lifecycle_environment["TELEPHONY_MODE"]
+
+    assert lifecycle_environment["ACTIVATION_FLOW_ENABLED"] == "true"
+    assert all(
+        "LOCAL_AUTH_TOKEN" not in service.get("environment", {})
+        for service in document["services"].values()
     )
-    assert telephony_match is not None
-    assert telephony_match.group(1) == "telnyx"
-    resolved_modes["telephony_mode"] = telephony_match.group(1)
-
-    assert (
-        "ACTIVATION_FLOW_ENABLED: "
-        "${ACTIVATION_FLOW_ENABLED:?ACTIVATION_FLOW_ENABLED is required}"
-    ) in worker_environment
-    assert "LOCAL_AUTH_TOKEN" not in compose
 
     validate_api_runtime(base_settings.model_copy(update=resolved_modes))
 
@@ -1105,23 +1167,19 @@ def test_recording_runtime_has_one_reference_only_outbox_contract() -> None:
 
 
 def test_development_services_load_local_env_files_without_leaking_api_identity_to_worker() -> None:
-    compose_dev = (REPO_ROOT / "compose.dev.yaml").read_text()
-    api_service = compose_dev.split("\n  api:", 1)[1].split("\n  worker:", 1)[0]
-    worker_service = compose_dev.split("\n  worker:", 1)[1].split("\n  agent:", 1)[0]
-    agent_service = compose_dev.split("\n  agent:", 1)[1].split("\n  web:", 1)[0]
-    web_service = compose_dev.split("\n  web:", 1)[1].split("\nvolumes:", 1)[0]
+    services = load_local_compose_yaml()["services"]
 
-    for service, env_path in (
-        (api_service, "./apps/api/.env"),
-        (agent_service, "./apps/agent/.env"),
-        (web_service, "./apps/web/.env"),
+    for service_name, env_path in (
+        ("api", REPO_ROOT / "apps" / "api" / ".env"),
+        ("agent", REPO_ROOT / "apps" / "agent" / ".env"),
+        ("web", REPO_ROOT / "apps" / "web" / ".env"),
     ):
-        assert "env_file:" in service
-        assert f"path: {env_path}" in service
-        assert "required: false" in service
+        assert services[service_name]["env_file"] == [
+            {"path": str(env_path), "required": False}
+        ]
 
-    assert "env_file:" not in worker_service
-    assert "./apps/api/.env" not in worker_service
+    for worker in WORKER_SERVICES:
+        assert "env_file" not in services[worker]
 
     for provider_key in (
         "LIVEKIT_URL",
@@ -1133,20 +1191,21 @@ def test_development_services_load_local_env_files_without_leaking_api_identity_
         "ELEVENLABS_API_KEY",
         "DEEPGRAM_API_KEY",
     ):
-        assert f"{provider_key}:" not in agent_service
+        assert provider_key not in services["agent"]["environment"]
 
-    assert "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:" not in web_service
-    assert "CLERK_SECRET_KEY:" not in web_service
-    assert "DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call" in api_service
-    assert "API_BASE_URL: http://api:8000" in agent_service
-    assert "API_BASE_URL: http://api:8000" in web_service
+    assert "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" not in services["web"]["environment"]
+    assert "CLERK_SECRET_KEY" not in services["web"]["environment"]
+    assert services["api"]["environment"]["DATABASE_URL"] == (
+        "postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call"
+    )
+    assert services["agent"]["environment"]["API_BASE_URL"] == "http://api:8000"
+    assert services["web"]["environment"]["API_BASE_URL"] == "http://api:8000"
 
 
 def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
     document = load_local_compose_yaml()
     api_env_example = (REPO_ROOT / "apps" / "api" / ".env.example").read_text()
     api_environment = resolved_service_environment(document, "api")
-    worker_environment = resolved_service_environment(document, "worker")
     web_environment = resolved_service_environment(document, "web")
 
     assert api_environment["AUTH_MODE"] == "clerk"
@@ -1155,17 +1214,19 @@ def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
     assert api_environment["TELEPHONY_MODE"] == "fake"
     assert api_environment["ACTIVATION_FLOW_ENABLED"] == "true"
 
-    assert worker_environment["TELEPHONY_MODE"] == "fake"
-    assert worker_environment["ACTIVATION_FLOW_ENABLED"] == "true"
-    for forbidden_setting in (
-        "AUTH_MODE",
-        "CARRIER_LOOKUP_MODE",
-        "LOCAL_AUTH_TOKEN",
-    ):
-        assert forbidden_setting not in worker_environment
-    for setting in CLERK_SESSION_VERIFIER_SETTINGS:
-        assert setting not in worker_environment
-    assert worker_environment["BILLING_MODE"] == "fake"
+    for worker in WORKER_SERVICES:
+        worker_environment = resolved_service_environment(document, worker)
+        assert worker_environment["TELEPHONY_MODE"] == "fake"
+        assert worker_environment["ACTIVATION_FLOW_ENABLED"] == "true"
+        for forbidden_setting in (
+            "AUTH_MODE",
+            "CARRIER_LOOKUP_MODE",
+            "LOCAL_AUTH_TOKEN",
+        ):
+            assert forbidden_setting not in worker_environment
+        for setting in CLERK_SESSION_VERIFIER_SETTINGS:
+            assert setting not in worker_environment
+        assert worker_environment["BILLING_MODE"] == "fake"
     assert web_environment["AUTH_MODE"] == "clerk"
     assert web_environment["BILLING_MODE"] == "fake"
     assert web_environment["TELEPHONY_MODE"] == "fake"
@@ -1213,6 +1274,22 @@ def test_local_e2e_runner_is_disposable_and_never_starts_voice_agent() -> None:
     assert "trap cleanup" in runner
     assert "down --volumes" in runner
     assert "wait_for_health" in runner
+    build_commands = [
+        line.strip().split()
+        for line in runner.splitlines()
+        if line.startswith("compose build ")
+    ]
+    assert build_commands == [
+        [
+            "compose",
+            "build",
+            "migrate",
+            "api",
+            "worker-lifecycle",
+            "worker-background",
+            "web",
+        ]
+    ]
     up_commands = re.findall(r"^compose up --detach (.+)$", runner, re.MULTILINE)
     started_services = set(" ".join(up_commands).split())
     assert started_services == {
@@ -1222,7 +1299,8 @@ def test_local_e2e_runner_is_disposable_and_never_starts_voice_agent() -> None:
         "minio-init",
         "migrate",
         "api",
-        "worker",
+        "worker-lifecycle",
+        "worker-background",
         "web",
     }
     assert "agent" not in started_services
@@ -1230,26 +1308,24 @@ def test_local_e2e_runner_is_disposable_and_never_starts_voice_agent() -> None:
 
 def test_local_e2e_runner_scopes_dashboard_metrics_reference_time_to_api() -> None:
     runner = (REPO_ROOT / "scripts" / "run-local-e2e.sh").read_text()
-    compose_dev = (REPO_ROOT / "compose.dev.yaml").read_text()
-    production_compose = (REPO_ROOT / "compose.yaml").read_text()
-    migration_service = compose_dev.split("\n  migrate:", 1)[1].split("\n  api:", 1)[0]
-    api_service = compose_dev.split("\n  api:", 1)[1].split("\n  worker:", 1)[0]
-    worker_service = compose_dev.split("\n  worker:", 1)[1].split("\n  agent:", 1)[0]
-    agent_service = compose_dev.split("\n  agent:", 1)[1].split("\n  web:", 1)[0]
-    web_service = compose_dev.split("\n  web:", 1)[1].split("\nvolumes:", 1)[0]
+    local_services = load_local_compose_yaml()["services"]
+    production_services = load_compose_yaml()["services"]
     reference_setting = "DASHBOARD_METRICS_REFERENCE_TIME"
     reference_export = (
         "export DASHBOARD_METRICS_REFERENCE_TIME=2026-07-29T12:00:00Z"
     )
 
     assert reference_export in runner
-    assert f"{reference_setting}:" in api_service
-    for service in (migration_service, worker_service, agent_service, web_service):
-        assert reference_setting not in service
-    assert reference_setting not in production_compose
+    assert reference_setting in local_services["api"]["environment"]
+    for service_name in ("migrate", *WORKER_SERVICES, "agent", "web"):
+        assert reference_setting not in local_services[service_name].get(
+            "environment", {}
+        )
+    for service in production_services.values():
+        assert reference_setting not in service.get("environment", {})
 
 
-def test_local_e2e_runner_proves_deactivation_survives_api_worker_restart() -> None:
+def test_local_e2e_runner_proves_deactivation_survives_api_worker_restarts() -> None:
     runner = (REPO_ROOT / "scripts" / "run-local-e2e.sh").read_text()
 
     activation_phase = "tests/e2e/activation.spec.ts"
@@ -1265,7 +1341,15 @@ def test_local_e2e_runner_proves_deactivation_survives_api_worker_restart() -> N
         for line in runner.splitlines()
         if line.strip().startswith("compose restart")
     ]
-    assert restart_commands == [["compose", "restart", "api", "worker"]]
+    assert restart_commands == [
+        [
+            "compose",
+            "restart",
+            "api",
+            "worker-lifecycle",
+            "worker-background",
+        ]
+    ]
     restart_command = " ".join(restart_commands[0])
 
     assert activation_phase in runner
@@ -1277,21 +1361,31 @@ def test_local_e2e_runner_proves_deactivation_survives_api_worker_restart() -> N
     activation_index = runner.index(activation_phase)
     deactivation_index = runner.index(deactivation_phase)
     restart_index = runner.index(restart_command)
-    restart_wait_index = runner.index("wait_for_running worker", restart_index)
+    lifecycle_wait_index = runner.index(
+        "wait_for_health worker-lifecycle", restart_index
+    )
+    background_wait_index = runner.index(
+        "wait_for_health worker-background", restart_index
+    )
     marker_index = runner.index(restart_marker)
     resume_index = runner.index(resume_phase)
     assert (
         activation_index
         < deactivation_index
         < restart_index
-        < restart_wait_index
+        < lifecycle_wait_index
+        < background_wait_index
         < marker_index
         < resume_index
     )
     before_restart = runner[:restart_index]
     restart_to_resume = runner[restart_index:resume_index]
     assert restart_to_resume.count(restart_marker) == 1
-    for wait_command in ("wait_for_health api", "wait_for_running worker"):
+    for wait_command in (
+        "wait_for_health api",
+        "wait_for_health worker-lifecycle",
+        "wait_for_health worker-background",
+    ):
         assert before_restart.count(wait_command) == 1
         assert restart_to_resume.count(wait_command) == 1
         assert restart_to_resume.index(wait_command) < restart_to_resume.index(
@@ -1365,7 +1459,7 @@ exit 0
     assert all(call.startswith("local|configured|") for call in docker_calls)
     docker_calls = "\n".join(docker_calls)
     assert " ps" in docker_calls
-    assert " logs api worker web" in docker_calls
+    assert " logs api worker-lifecycle worker-background web" in docker_calls
     assert " down --volumes --remove-orphans" in docker_calls
 
 
@@ -1382,12 +1476,11 @@ def test_ci_runs_the_disposable_browser_journey_without_deployment() -> None:
 
 
 def test_worker_secrets_are_least_privilege_and_agent_shutdown_can_drain() -> None:
-    compose = (REPO_ROOT / "compose.yaml").read_text()
-    worker_environment = compose.split(
-        "x-worker-environment: &worker-environment", 1
-    )[1].split("x-api-environment: &api-environment", 1)[0]
-    worker_service = compose.split("\n  worker:", 1)[1].split("\n  agent:", 1)[0]
-    agent_service = compose.split("\n  agent:", 1)[1].split("\n  api:", 1)[0]
+    document = load_compose_yaml()
+    services = document["services"]
+    lifecycle, background = worker_service_dictionaries(document)
+    assert lifecycle["environment"] == background["environment"]
+    worker_environment = lifecycle["environment"]
 
     for forbidden_secret in (
         "CLERK_WEBHOOK_SECRET",
@@ -1406,9 +1499,8 @@ def test_worker_secrets_are_least_privilege_and_agent_shutdown_can_drain() -> No
     ):
         assert required_worker_setting in worker_environment
 
-    assert "environment: *worker-environment" in worker_service
-    assert "environment: *api-environment" not in worker_service
-    assert "stop_grace_period: 66m" in agent_service
+    assert worker_environment != services["api"]["environment"]
+    assert services["agent"]["stop_grace_period"] == "1h6m0s"
 
 
 def test_deployment_and_rollback_runbooks_define_safe_release_boundaries() -> None:

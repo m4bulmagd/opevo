@@ -29,6 +29,8 @@ x-worker-environment: &worker-environment
   CALL_RECONCILIATION_ENDING_GRACE_SECONDS: ${CALL_RECONCILIATION_ENDING_GRACE_SECONDS:-60}
   CALL_RECONCILIATION_FINALIZING_LEASE_SECONDS: ${CALL_RECONCILIATION_FINALIZING_LEASE_SECONDS:-300}
   CALL_RECONCILIATION_MAX_ATTEMPTS: ${CALL_RECONCILIATION_MAX_ATTEMPTS:-5}
+  WORKER_LIFECYCLE_MAX_JOBS: ${WORKER_LIFECYCLE_MAX_JOBS:-10}
+  WORKER_BACKGROUND_MAX_JOBS: ${WORKER_BACKGROUND_MAX_JOBS:-4}
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
 
 x-api-environment: &api-environment
@@ -66,15 +68,32 @@ x-service-hardening: &service-hardening
     - ALL
   init: true
 
+x-worker-service: &worker-service
+  <<: *service-hardening
+  image: ${API_IMAGE:?API_IMAGE is required}
+  environment: *worker-environment
+  restart: unless-stopped
+
 services:
-  worker:
-    <<: *service-hardening
-    image: ${API_IMAGE:?API_IMAGE is required}
-    environment: *worker-environment
-    command: ["/app/.venv/bin/arq", "app.workers.arq_worker.WorkerSettings"]
-    restart: unless-stopped
+  worker-lifecycle:
+    <<: *worker-service
+    command: ["/app/.venv/bin/arq", "app.workers.arq_worker.CallLifecycleWorkerSettings"]
     healthcheck:
-      disable: true
+      test: ["CMD", "/app/.venv/bin/arq", "--check", "app.workers.arq_worker.CallLifecycleWorkerSettings"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    stop_grace_period: 75s
+
+  worker-background:
+    <<: *worker-service
+    command: ["/app/.venv/bin/arq", "app.workers.arq_worker.BackgroundWorkerSettings"]
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/arq", "--check", "app.workers.arq_worker.BackgroundWorkerSettings"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    stop_grace_period: 45s
 
   agent:
     <<: *service-hardening
@@ -94,6 +113,9 @@ services:
       ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-}
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
       AGENT_DEBUG_STREAMS: "false"
+    depends_on:
+      worker-lifecycle:
+        condition: service_healthy
     restart: unless-stopped
     stop_grace_period: 66m
 
