@@ -45,7 +45,7 @@ The recommendations use these agreed priorities:
 | 2 | Cross-app contracts | **2A** — small, versioned shared wire-contract package | Accepted; implemented |
 | 3 | Authentication boundary | **3A** — validate Clerk authorized parties | Accepted; implemented |
 | 4 | Worker isolation | **4A + 4B** — split critical/background queues and add explicit limits, metrics, and load criteria | Implemented — controlled ten-call local/CI evidence; Issue 16A load, monitoring, and recovery drills remain open |
-| 5 | Outbox structure | **5A** — split the topic god module by cohesive topic family | Accepted |
+| 5 | Outbox structure | **5A** — split the topic god module by cohesive topic family | Accepted; implemented |
 | 6 | Dependency construction | **6A** — explicit, thin composition roots with typed dependencies | Accepted |
 | 7 | Provider failures | **7A** — one typed provider-failure vocabulary; distinguish internal defects | Accepted; implemented |
 | 8 | LiveKit compatibility | **8A** — staged upgrade and removal of private SDK dependencies | Accepted |
@@ -410,6 +410,17 @@ should remain:
 4. Dependencies arrive through the composition root from 6A.
 5. Characterization tests lock current transaction and idempotency behavior
    before moving code.
+
+Implementation completed through the
+[Outbox Worker Module Decomposition Design](../superpowers/specs/2026-08-05-outbox-worker-module-decomposition-design.md)
+and
+[Implementation Plan](../superpowers/plans/2026-08-05-outbox-worker-module-decomposition.md).
+The facade-free `app.workers.outbox` package, explicit complete registry,
+dead summary-path deletion, provisioning-operation rename, and shared typed
+LiveKit delivery primitive passed the repository lock, Ruff, mypy, complete API,
+PostgreSQL/Redis integration, and line/branch coverage-ratchet gates. No
+database schema/data, queue, environment, provider, deployment, recording, or
+realtime behavior changed.
 
 ### Required validation
 
@@ -1512,12 +1523,12 @@ recommended separate change is explicit per-test schema/database isolation,
 not ad hoc row deletion.
 
 No deployment, remote push, merge, or realtime activation occurred. Issue 4A +
-4B is implemented with controlled ten-call local/CI evidence; Issues 5, 6, and
-8 remain the agreed next order. Issues 1A and 14A remain deferred until
-realtime work resumes. Issue 16A remains open for representative load,
-monitoring, alert routing, and recovery-drill evidence; it is not implemented
-by the bounded worker-isolation proof. Accepted risks 11C, 12C, and 18A are
-unchanged.
+4B is implemented with controlled ten-call local/CI evidence; Issue 5A is
+implemented, and Issues 6A and 8A remain the agreed next order. Issues 1A and
+14A remain deferred until realtime work resumes. Issue 16A remains open for
+representative load, monitoring, alert routing, and recovery-drill evidence; it
+is not implemented by the bounded worker-isolation proof. Accepted risks 11C,
+12C, and 18A are unchanged.
 
 ## Implementation Authorization Boundary
 
