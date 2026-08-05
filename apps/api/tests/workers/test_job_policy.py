@@ -8,6 +8,7 @@ from sqlalchemy.exc import (
     DisconnectionError,
     IntegrityError,
     OperationalError,
+    ProgrammingError,
     TimeoutError as SQLAlchemyTimeoutError,
 )
 
@@ -60,6 +61,15 @@ def test_worker_job_policies_are_immutable_and_bounded() -> None:
         (DisconnectionError(), True),
         (DBAPIError("statement", {}, Exception(), connection_invalidated=True), True),
         (IntegrityError("statement", {}, Exception()), False),
+        (
+            ProgrammingError(
+                "statement",
+                {},
+                Exception(),
+                connection_invalidated=True,
+            ),
+            False,
+        ),
         (ValueError("bad payload"), False),
         (RuntimeError("defect"), False),
         (asyncio.CancelledError(), False),
@@ -132,6 +142,30 @@ async def test_non_retryable_finalization_failures_are_unchanged(
         await wrapped({"job_try": 1})
 
     assert captured.value is error
+
+
+@pytest.mark.anyio
+async def test_invalidated_programming_error_is_not_converted_to_retry() -> None:
+    original = ProgrammingError(
+        "statement",
+        {},
+        Exception(),
+        connection_invalidated=True,
+    )
+
+    async def fail(_ctx: dict) -> None:
+        raise original
+
+    wrapped = apply_job_policy(
+        fail,
+        policy=CALL_FINALIZATION_POLICY,
+        queue_class="call_lifecycle",
+    )
+
+    with pytest.raises(ProgrammingError) as captured:
+        await wrapped({"job_try": 1})
+
+    assert captured.value is original
 
 
 @pytest.mark.anyio

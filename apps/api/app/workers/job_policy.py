@@ -10,6 +10,7 @@ from sqlalchemy.exc import (
     DisconnectionError,
     IntegrityError,
     OperationalError,
+    ProgrammingError,
     TimeoutError as SQLAlchemyTimeoutError,
 )
 
@@ -51,7 +52,10 @@ VERIFICATION_EXPIRY_POLICY = JobPolicy(
 
 
 def is_retryable_call_finalization_error(error: BaseException) -> bool:
-    if isinstance(error, (asyncio.CancelledError, IntegrityError)):
+    if isinstance(
+        error,
+        (asyncio.CancelledError, IntegrityError, ProgrammingError),
+    ):
         return False
     if isinstance(error, (TimeoutError, SQLAlchemyTimeoutError)):
         return True
