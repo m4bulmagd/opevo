@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -1670,10 +1671,11 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     ]
     assert staging_log_commands
     for command in staging_log_commands:
+        tokens = shlex.split(command)
         assert "presvo-worker" not in command
         assert re.search(r"(?<![-\w])worker(?![-\w])", command) is None
-        assert "worker-lifecycle" in command
-        assert "worker-background" in command
+        assert "worker-lifecycle" in tokens
+        assert "worker-background" in tokens
 
     status_worker_isolation = next(
         line for line in status.splitlines() if "Worker isolation (4A + 4B)" in line
