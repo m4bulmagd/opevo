@@ -21,10 +21,12 @@ PostgreSQL outbox/call state is authoritative. Redis is the execution and
 wakeup mechanism, not a source of truth: a missed wakeup is recovered from the
 durable record by reconciliation after the affected service is restored.
 Call reconciliation owns orphaned lifecycle attempts; outbox reconciliation
-owns orphaned outbox wakeups. Their direct wakeups and scheduled cron runs use
-zero result retention because durable state, not an ARQ result, records the
-outcome. Recovery follows the respective reconciliation schedule and is not a
-zero-delay guarantee.
+owns orphaned outbox wakeups. Direct and cron-triggered call reconciliation,
+plus the cron-only outbox reconciliation and verification-expiry jobs, use zero
+result retention because durable state, not an ARQ result, records the outcome.
+Direct call finalization and direct outbox delivery use worker-default result
+retention. Recovery follows the respective reconciliation schedule and is not
+a zero-delay guarantee.
 
 Each worker emits its own health key and snapshots
 `presvo.worker.queue.depth{queue_class}` and

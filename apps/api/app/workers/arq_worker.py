@@ -6,7 +6,7 @@ from arq.typing import WorkerCoroutine
 from arq.worker import func
 
 from app.core.config import get_settings
-from app.core.logging import setup_logging
+from app.core.logging import install_arq_worker_log_sanitizer, setup_logging
 from app.core.observability import (
     initialize_observability,
     shutdown_observability,
@@ -46,6 +46,7 @@ async def _on_startup(
     include_outbox_handlers: bool,
 ) -> None:
     setup_logging()
+    install_arq_worker_log_sanitizer()
     settings = get_settings()
     validate_worker_runtime(settings)
     redis = ctx["redis"]
@@ -170,6 +171,7 @@ class CallLifecycleWorkerSettings:
             policy_call_reconciliation_job,
             minute=set(range(60)),
             name=CALL_RECONCILIATION_POLICY.arq_name,
+            keep_result=0,
             timeout=CALL_RECONCILIATION_POLICY.hard_timeout_seconds,
             max_tries=CALL_RECONCILIATION_POLICY.max_tries,
         ),
@@ -199,6 +201,7 @@ class BackgroundWorkerSettings:
             policy_outbox_reconciliation_job,
             minute=set(range(60)),
             name=OUTBOX_RECONCILIATION_POLICY.arq_name,
+            keep_result=0,
             timeout=OUTBOX_RECONCILIATION_POLICY.hard_timeout_seconds,
             max_tries=OUTBOX_RECONCILIATION_POLICY.max_tries,
         ),
@@ -206,6 +209,7 @@ class BackgroundWorkerSettings:
             policy_verification_expiry_job,
             minute=set(range(60)),
             name=VERIFICATION_EXPIRY_POLICY.arq_name,
+            keep_result=0,
             timeout=VERIFICATION_EXPIRY_POLICY.hard_timeout_seconds,
             max_tries=VERIFICATION_EXPIRY_POLICY.max_tries,
         ),

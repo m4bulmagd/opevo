@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -7,6 +8,7 @@ import pytest
 from arq.connections import RedisSettings
 from arq.worker import Worker
 
+from app.core import logging as app_logging
 from app.core.config import get_settings
 from app.workers import arq_worker
 
@@ -21,6 +23,21 @@ def cron_names(cron_jobs: list[Any]) -> set[str]:
 
 def registrations_by_name(registrations: list[Any]) -> dict[str, Any]:
     return {registration.name: registration for registration in registrations}
+
+
+def test_arq_worker_log_sanitizer_install_is_idempotent() -> None:
+    sanitizer_type = getattr(app_logging, "ArqWorkerLogSanitizer", None)
+    installer = getattr(app_logging, "install_arq_worker_log_sanitizer", None)
+    assert sanitizer_type is not None
+    assert installer is not None
+    logger = logging.getLogger("arq.worker")
+
+    installer()
+    installer()
+
+    assert sum(
+        isinstance(item, sanitizer_type) for item in logger.filters
+    ) == 1
 
 
 def test_worker_registries_are_exact_and_disjoint() -> None:
@@ -122,6 +139,37 @@ def test_cron_policies_schedule_and_zero_result_retention_are_explicit() -> None
     assert all(
         registration.keep_result_s == 0
         for registration in [*lifecycle.values(), *background.values()]
+    )
+
+
+def test_cron_construction_supplies_explicit_zero_result_retention(
+    monkeypatch,
+) -> None:
+    cron_module = importlib.import_module("arq.cron")
+    real_cron = cron_module.cron
+    constructed: list[tuple[str | None, dict[str, Any]]] = []
+
+    def capture_cron(*args, **kwargs):
+        constructed.append((kwargs.get("name"), dict(kwargs)))
+        return real_cron(*args, **kwargs)
+
+    monkeypatch.setattr(cron_module, "cron", capture_cron)
+    try:
+        importlib.reload(arq_worker)
+    finally:
+        monkeypatch.setattr(cron_module, "cron", real_cron)
+        get_settings.cache_clear()
+        importlib.reload(arq_worker)
+
+    by_name = {name: kwargs for name, kwargs in constructed}
+    assert set(by_name) == {
+        "call_reconciliation_job",
+        "outbox_reconciliation_job",
+        "verification_expiry_job",
+    }
+    assert all(
+        "keep_result" in kwargs and kwargs["keep_result"] == 0
+        for kwargs in by_name.values()
     )
 
 
@@ -228,6 +276,11 @@ def _patch_startup_dependencies(monkeypatch, *, expected_service_name: str):
     observer_arguments: dict[str, Any] = {}
 
     monkeypatch.setattr(arq_worker, "setup_logging", lambda: events.append("logging"))
+    monkeypatch.setattr(
+        arq_worker,
+        "install_arq_worker_log_sanitizer",
+        lambda: events.append("arq.logging"),
+    )
     monkeypatch.setattr(arq_worker, "get_settings", lambda: settings)
 
     def validate(actual_settings) -> None:
@@ -285,6 +338,7 @@ async def test_call_lifecycle_startup_uses_only_arq_owned_resources(
 
     assert events == [
         "logging",
+        "arq.logging",
         "validation",
         "telemetry",
         "observer",
@@ -319,6 +373,7 @@ async def test_background_startup_constructs_handlers_after_telemetry(
 
     assert events == [
         "logging",
+        "arq.logging",
         "validation",
         "telemetry",
         "handlers",
@@ -407,6 +462,11 @@ async def test_worker_startup_rejects_unsafe_runtime_before_resources(
     events: list[str] = []
     settings = SimpleNamespace(otel_exporter_otlp_endpoint=None)
     monkeypatch.setattr(arq_worker, "setup_logging", lambda: events.append("logging"))
+    monkeypatch.setattr(
+        arq_worker,
+        "install_arq_worker_log_sanitizer",
+        lambda: events.append("arq.logging"),
+    )
     monkeypatch.setattr(arq_worker, "get_settings", lambda: settings)
 
     def reject_runtime(actual_settings) -> None:
@@ -420,7 +480,7 @@ async def test_worker_startup_rejects_unsafe_runtime_before_resources(
     with pytest.raises(RuntimeError, match="TELNYX_ORDERING_ENABLED"):
         await arq_worker.on_background_startup(ctx)
 
-    assert events == ["logging", "validation"]
+    assert events == ["logging", "arq.logging", "validation"]
     assert "observability" not in ctx
     assert "outbox_handlers" not in ctx
     assert "queue_observer" not in ctx

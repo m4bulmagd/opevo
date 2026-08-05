@@ -70,7 +70,7 @@ _SENSITIVE_EXTRA_KEY_MARKERS = (
     "token",
     "transcript",
 )
-_STANDARD_LOG_RECORD_KEYS = frozenset(logging.makeLogRecord({}).__dict__)
+STANDARD_LOG_RECORD_KEYS = frozenset(logging.makeLogRecord({}).__dict__)
 _SAFE_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _SAFE_FIXED_AUTH_LABELS = frozenset(
@@ -187,7 +187,7 @@ def _is_safe_operational_extra(key: object, value: object) -> bool:
 class SafeExtraFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         for key in tuple(record.__dict__):
-            if key in _STANDARD_LOG_RECORD_KEYS:
+            if key in STANDARD_LOG_RECORD_KEYS:
                 continue
             value = record.__dict__[key]
             if not _is_safe_operational_extra(key, value):
