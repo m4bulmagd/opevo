@@ -16,13 +16,9 @@ from app.core.dispatch_token import (
     DispatchTokenError,
     create_dispatch_token,
 )
-from app.core.provider_failures import ProviderFailure
 from app.models.outbox_event import OutboxEvent
 from app.providers.livekit_dispatch.base import LiveKitDispatch
-from app.providers.livekit_dispatch.livekit import (
-    LiveKitDispatchAPIProvider,
-    LiveKitDispatchConfigurationError,
-)
+from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.call_repository import CallRepository
@@ -43,10 +39,8 @@ from app.services.livekit_dispatch_service import (
     expected_agent_identity,
 )
 from app.workers.outbox._account_lifecycle import _require_current_worker_account
-from app.workers.outbox.failures import (
-    OutboxDeliveryError,
-    provider_failure_delivery_error,
-)
+from app.workers.outbox._livekit_delivery import ensure_livekit_dispatch
+from app.workers.outbox.failures import OutboxDeliveryError
 
 
 @dataclass(frozen=True)
@@ -72,81 +66,28 @@ async def deliver_livekit_dispatch(
         provider = ctx.get("livekit_dispatch_provider")
         if provider is None:
             provider = LiveKitDispatchAPIProvider()
-        await _require_current_worker_account(
-            session_factory,
-            snapshot.user_id,
-            lifecycle_generation=lifecycle_generation,
-        )
 
-        try:
-            dispatches = await provider.list_dispatches(room_name=snapshot.room_name)
-        except LiveKitDispatchConfigurationError:
-            raise OutboxDeliveryError(
-                "dispatch_configuration",
-                retryable=False,
-            ) from None
-        except ProviderFailure as error:
-            raise provider_failure_delivery_error(error) from error
-        await _require_current_worker_account(
-            session_factory,
-            snapshot.user_id,
-            lifecycle_generation=lifecycle_generation,
-        )
-
-        dispatch = _reconcile_dispatches(snapshot, dispatches)
-        if dispatch is None:
-            if snapshot.persisted_dispatch_id is not None:
-                raise OutboxDeliveryError(
-                    "dispatch_conflict",
-                    retryable=False,
-                )
+        async def revalidate_account() -> None:
             await _require_current_worker_account(
                 session_factory,
                 snapshot.user_id,
                 lifecycle_generation=lifecycle_generation,
             )
-            try:
-                created_dispatch = await provider.create_dispatch(
-                    agent_name=snapshot.worker_name,
-                    room_name=snapshot.room_name,
-                    metadata=snapshot.metadata,
-                )
-            except LiveKitDispatchConfigurationError:
-                raise OutboxDeliveryError(
-                    "dispatch_configuration",
-                    retryable=False,
-                ) from None
-            except ProviderFailure as error:
-                if not error.retryable:
-                    raise provider_failure_delivery_error(error) from error
-                try:
-                    dispatches = await provider.list_dispatches(
-                        room_name=snapshot.room_name
-                    )
-                except ProviderFailure as list_error:
-                    raise provider_failure_delivery_error(list_error) from list_error
-                await _require_current_worker_account(
-                    session_factory,
-                    snapshot.user_id,
-                    lifecycle_generation=lifecycle_generation,
-                )
-                dispatch = _reconcile_dispatches(snapshot, dispatches)
-                if dispatch is None:
-                    raise OutboxDeliveryError(
-                        "provider_retryable",
-                        retryable=True,
-                    ) from None
-            else:
-                dispatch = _reconcile_dispatches(
-                    snapshot,
-                    [created_dispatch],
-                )
 
-        if dispatch is None:
-            raise OutboxDeliveryError(
-                "provider_retryable",
-                retryable=True,
-            )
+        def reconcile(
+            dispatches: list[LiveKitDispatch],
+        ) -> LiveKitDispatch | None:
+            return _reconcile_dispatches(snapshot, dispatches)
+
+        dispatch = await ensure_livekit_dispatch(
+            provider=provider,
+            room_name=snapshot.room_name,
+            worker_name=snapshot.worker_name,
+            metadata=snapshot.metadata,
+            persisted_dispatch_id=snapshot.persisted_dispatch_id,
+            revalidate_account=revalidate_account,
+            reconcile=reconcile,
+        )
         await _persist_dispatch_identity(
             session_factory,
             call_id=call_id,
