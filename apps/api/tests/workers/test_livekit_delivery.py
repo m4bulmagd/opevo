@@ -1,6 +1,12 @@
+from typing import Literal
+
 import pytest
 
-from app.core.provider_failures import ProviderFailure
+from app.core.provider_failures import (
+    ProviderFailure,
+    ProviderFailureDisposition,
+    ProviderOperation,
+)
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchConfigurationError
 from app.workers.outbox.failures import OutboxDeliveryError
@@ -16,12 +22,16 @@ def _dispatch(dispatch_id: str) -> LiveKitDispatch:
     )
 
 
-def _retryable_failure() -> ProviderFailure:
+def _provider_failure(
+    *,
+    operation: ProviderOperation,
+    disposition: ProviderFailureDisposition,
+) -> ProviderFailure:
     return ProviderFailure(
         provider="livekit",
-        operation="create_dispatch",
-        disposition="retryable",
-        error_class="timeout",
+        operation=operation,
+        disposition=disposition,
+        error_class="timeout" if disposition == "retryable" else "authentication",
     )
 
 
@@ -166,7 +176,10 @@ async def test_retryable_create_failure_relists_and_recovers() -> None:
     provider = _Provider(
         trace,
         list_results=[[], [recovered]],
-        create_result=_retryable_failure(),
+        create_result=_provider_failure(
+            operation="create_dispatch",
+            disposition="retryable",
+        ),
     )
 
     dispatch = await _ensure(provider, trace)
@@ -189,7 +202,10 @@ async def test_retryable_create_failure_relists_and_recovers() -> None:
 @pytest.mark.anyio
 async def test_retryable_create_failure_without_recovery_is_retryable() -> None:
     trace: list[str] = []
-    retryable_failure = _retryable_failure()
+    retryable_failure = _provider_failure(
+        operation="create_dispatch",
+        disposition="retryable",
+    )
     provider = _Provider(
         trace,
         list_results=[[], []],
@@ -222,11 +238,9 @@ async def test_retryable_create_failure_without_recovery_is_retryable() -> None:
 @pytest.mark.anyio
 async def test_terminal_create_failure_does_not_relist() -> None:
     trace: list[str] = []
-    terminal_failure = ProviderFailure(
-        provider="livekit",
+    terminal_failure = _provider_failure(
         operation="create_dispatch",
         disposition="terminal",
-        error_class="authentication",
     )
     provider = _Provider(trace, create_result=terminal_failure)
 
@@ -271,16 +285,30 @@ async def test_initial_provider_configuration_failure_is_terminal_configuration(
 
 
 @pytest.mark.anyio
-async def test_initial_provider_failure_is_mapped_with_its_exact_cause() -> None:
+@pytest.mark.parametrize(
+    ("disposition", "expected_code", "expected_retryable"),
+    [
+        ("retryable", "provider_retryable", True),
+        ("terminal", "provider_terminal", False),
+    ],
+)
+async def test_initial_list_provider_failure_preserves_its_policy_and_cause(
+    disposition: ProviderFailureDisposition,
+    expected_code: Literal["provider_retryable", "provider_terminal"],
+    expected_retryable: bool,
+) -> None:
     trace: list[str] = []
-    initial_failure = _retryable_failure()
+    initial_failure = _provider_failure(
+        operation="list_dispatches",
+        disposition=disposition,
+    )
     provider = _Provider(trace, list_results=[initial_failure])
 
     with pytest.raises(OutboxDeliveryError) as caught:
         await _ensure(provider, trace)
 
-    assert caught.value.error_code == "provider_retryable"
-    assert caught.value.retryable is True
+    assert caught.value.error_code == expected_code
+    assert caught.value.retryable is expected_retryable
     assert caught.value.exhaustible is True
     assert caught.value.__cause__ is initial_failure
     assert provider.list_requests == ["room"]
@@ -314,25 +342,37 @@ async def test_create_configuration_failure_is_terminal_with_suppressed_context(
 
 
 @pytest.mark.anyio
-async def test_recovery_list_provider_failure_is_mapped_with_its_exact_cause() -> None:
+@pytest.mark.parametrize(
+    ("disposition", "expected_code", "expected_retryable"),
+    [
+        ("retryable", "provider_retryable", True),
+        ("terminal", "provider_terminal", False),
+    ],
+)
+async def test_recovery_list_provider_failure_preserves_its_policy_and_cause(
+    disposition: ProviderFailureDisposition,
+    expected_code: Literal["provider_retryable", "provider_terminal"],
+    expected_retryable: bool,
+) -> None:
     trace: list[str] = []
-    recovery_failure = ProviderFailure(
-        provider="livekit",
+    recovery_failure = _provider_failure(
         operation="list_dispatches",
-        disposition="terminal",
-        error_class="authentication",
+        disposition=disposition,
     )
     provider = _Provider(
         trace,
         list_results=[[], recovery_failure],
-        create_result=_retryable_failure(),
+        create_result=_provider_failure(
+            operation="create_dispatch",
+            disposition="retryable",
+        ),
     )
 
     with pytest.raises(OutboxDeliveryError) as caught:
         await _ensure(provider, trace)
 
-    assert caught.value.error_code == "provider_terminal"
-    assert caught.value.retryable is False
+    assert caught.value.error_code == expected_code
+    assert caught.value.retryable is expected_retryable
     assert caught.value.exhaustible is True
     assert caught.value.__cause__ is recovery_failure
     assert provider.list_requests == ["room", "room"]
@@ -354,7 +394,10 @@ async def test_recovery_list_configuration_failure_propagates_unchanged() -> Non
     provider = _Provider(
         trace,
         list_results=[[], configuration_error],
-        create_result=_retryable_failure(),
+        create_result=_provider_failure(
+            operation="create_dispatch",
+            disposition="retryable",
+        ),
     )
 
     with pytest.raises(LiveKitDispatchConfigurationError) as caught:
@@ -470,7 +513,10 @@ async def test_lifecycle_invalidation_after_recovery_list_prevents_persistence_r
     provider = _Provider(
         trace,
         list_results=[[], [_dispatch("recovered")]],
-        create_result=_retryable_failure(),
+        create_result=_provider_failure(
+            operation="create_dispatch",
+            disposition="retryable",
+        ),
     )
     lifecycle_error = OutboxDeliveryError("dispatch_ineligible", retryable=False)
 

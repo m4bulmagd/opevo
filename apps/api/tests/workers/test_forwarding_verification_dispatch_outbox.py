@@ -204,6 +204,57 @@ async def test_verification_reconciliation_never_persists_foreign_agent_identity
     assert "FOREIGN_AGENT_IDENTITY_SENTINEL" not in caplog.text
 
 
+@pytest.mark.anyio
+async def test_verification_empty_provider_dispatch_id_is_conflict_without_creation_or_persistence(
+    db_session,
+) -> None:
+    user, activation, event = await _seed_verification_dispatch(db_session)
+    activation_id = activation.id
+    snapshot = verification_dispatch._VerificationDispatchSnapshot(
+        activation_id=activation.id,
+        user_id=user.id,
+        session_id=activation.verification_session_id,
+        room_name="verification-dispatch-room",
+        worker_name="ai-call-agent",
+        metadata="",
+        persisted_dispatch_id=None,
+    )
+    empty_id_dispatch = _verification_reconciliation_dispatch(
+        snapshot,
+        json.dumps(_verification_reconciliation_metadata(snapshot)),
+        dispatch_id="",
+    )
+    with pytest.raises(OutboxDeliveryError) as reconciliation_error:
+        verification_dispatch._reconcile_verification_dispatches(
+            snapshot,
+            [empty_id_dispatch],
+        )
+
+    provider = _Provider()
+    provider.dispatches.append(empty_id_dispatch)
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(OutboxDeliveryError) as caught:
+        await _handler()(
+            {
+                "session_factory": session_factory,
+                "livekit_dispatch_provider": provider,
+                "verification_now": lambda: FIXED_NOW,
+            },
+            event,
+        )
+
+    db_session.expire_all()
+    stored = await db_session.get(CustomerActivation, activation_id)
+    assert reconciliation_error.value.error_code == "dispatch_conflict"
+    assert reconciliation_error.value.retryable is False
+    assert caught.value.error_code == "dispatch_conflict"
+    assert caught.value.retryable is False
+    assert stored is not None
+    assert stored.verification_dispatch_id is None
+    assert provider.create_calls == []
+
+
 class _Provider:
     def __init__(
         self,

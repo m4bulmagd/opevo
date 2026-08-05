@@ -275,6 +275,59 @@ async def test_customer_reconciliation_never_persists_foreign_agent_identity(
     assert "FOREIGN_AGENT_IDENTITY_SENTINEL" not in caplog.text
 
 
+@pytest.mark.anyio
+async def test_customer_empty_provider_dispatch_id_is_conflict_without_creation_or_persistence(
+    db_session,
+    monkeypatch,
+) -> None:
+    call, event, _subscription = await _seed_dispatch(db_session)
+    call_id = call.id
+    snapshot = customer_dispatch._DispatchSnapshot(
+        call_id=call.id,
+        user_id=call.user_id,
+        agent_config_id=call.agent_config_id,
+        room_name=call.livekit_room_id,
+        worker_name="reconciliation-worker",
+        metadata="",
+        persisted_dispatch_id=None,
+    )
+    empty_id_dispatch = _customer_reconciliation_dispatch(
+        snapshot,
+        json.dumps(_customer_reconciliation_metadata(snapshot)),
+        dispatch_id="",
+    )
+    with pytest.raises(OutboxDeliveryError) as reconciliation_error:
+        customer_dispatch._reconcile_dispatches(snapshot, [empty_id_dispatch])
+
+    provider = _Provider()
+    provider.dispatches.append(empty_id_dispatch)
+    monkeypatch.setenv("LIVEKIT_AGENT_NAME", snapshot.worker_name)
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(OutboxDeliveryError) as caught:
+        await deliver_livekit_dispatch(
+            {"session_factory": session_factory, "livekit_dispatch_provider": provider},
+            event,
+        )
+
+    db_session.expire_all()
+    stored = await db_session.get(Call, call_id)
+    assert reconciliation_error.value.error_code == "dispatch_conflict"
+    assert reconciliation_error.value.retryable is False
+    assert caught.value.error_code == "dispatch_conflict"
+    assert caught.value.retryable is False
+    assert stored is not None
+    assert stored.livekit_dispatch_id is None
+    assert provider.create_calls == []
+
+
 async def _seed_dispatch(
     db_session,
     *,
