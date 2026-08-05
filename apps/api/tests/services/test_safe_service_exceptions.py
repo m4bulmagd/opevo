@@ -14,7 +14,7 @@ from app.models.phone_number import PhoneNumber
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.core.provider_failures import ProviderFailure
-from app.workers.jobs.outbox_delivery import (
+from app.workers.outbox.failures import (
     OutboxDeliveryError,
     _outbox_error_class,
 )

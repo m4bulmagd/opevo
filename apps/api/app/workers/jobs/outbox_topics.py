@@ -81,7 +81,7 @@ from app.services.livekit_recording_service import LiveKitRecordingService
 from app.services.provider_work_policy import UnresolvedProviderWorkError
 from app.services.forwarding_verification_service import COMPLETION_GRACE, as_utc
 from app.services.summary_service import SummaryService
-from app.workers.jobs.outbox_delivery import (
+from app.workers.outbox.failures import (
     OutboxDeliveryError,
     provider_failure_delivery_error,
 )

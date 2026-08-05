@@ -846,7 +846,7 @@ async def test_retryable_provider_failure_retries_all_backoffs_then_exhausts(
 def test_root_outbox_classifier_separates_provider_and_internal_failures() -> None:
     from app.core.provider_failures import ProviderFailure
     from app.services.outbox_service import OutboxPayloadError
-    from app.workers.jobs.outbox_delivery import OutboxDeliveryError, _classify_error
+    from app.workers.outbox.failures import OutboxDeliveryError, _classify_error
 
     assert _classify_error(
         OutboxDeliveryError("account_call_draining", retryable=True, exhaustible=False)
@@ -881,12 +881,9 @@ def test_root_outbox_classifier_separates_provider_and_internal_failures() -> No
 
 def test_provider_failure_delivery_error_preserves_default_durable_policy() -> None:
     from app.core.provider_failures import ProviderFailure
-    from app.workers.jobs import outbox_delivery
+    from app.workers.outbox.failures import provider_failure_delivery_error
 
-    convert = getattr(outbox_delivery, "provider_failure_delivery_error", None)
-    assert convert is not None
-
-    retryable = convert(
+    retryable = provider_failure_delivery_error(
         ProviderFailure(
             provider="livekit",
             operation="list_dispatches",
@@ -894,7 +891,7 @@ def test_provider_failure_delivery_error_preserves_default_durable_policy() -> N
             error_class="timeout",
         )
     )
-    terminal = convert(
+    terminal = provider_failure_delivery_error(
         ProviderFailure(
             provider="livekit",
             operation="list_dispatches",
@@ -1558,9 +1555,9 @@ async def test_non_exhausting_delivery_error_keeps_using_bounded_backoff(
 ) -> None:
     from app.workers.jobs.outbox_delivery import (
         OUTBOX_RETRY_DELAYS,
-        OutboxDeliveryError,
         outbox_delivery_job,
     )
+    from app.workers.outbox.failures import OutboxDeliveryError
 
     event = await _add_event(outbox_session_factory)
     current_time = event.next_attempt_at + timedelta(seconds=1)

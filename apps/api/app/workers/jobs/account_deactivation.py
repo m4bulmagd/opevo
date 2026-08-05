@@ -25,7 +25,7 @@ from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.user_repository import UserRepository
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+from app.workers.outbox.failures import OutboxDeliveryError
 
 
 _RETRYABLE_OPERATION_CODES = frozenset({"provider_retryable", "account_call_draining"})

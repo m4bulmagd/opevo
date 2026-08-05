@@ -16,7 +16,7 @@ from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
 )
 from app.repositories.user_repository import UserRepository
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.provider_single_flight import provider_single_flight
 
 
