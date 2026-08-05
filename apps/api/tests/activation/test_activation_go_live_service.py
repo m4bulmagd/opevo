@@ -48,10 +48,10 @@ def _activation_flow_enabled(monkeypatch: pytest.MonkeyPatch):
 
 class _Pool:
     def __init__(self) -> None:
-        self.jobs: list[tuple[str, dict]] = []
+        self.jobs: list[tuple[str, dict, dict]] = []
 
-    async def enqueue_job(self, name: str, payload: dict) -> None:
-        self.jobs.append((name, payload))
+    async def enqueue_job(self, name: str, payload: dict, **kwargs) -> None:
+        self.jobs.append((name, payload, kwargs))
 
 
 class _RoutingProvider:
@@ -326,7 +326,9 @@ async def test_go_live_records_one_pending_attempt_and_returns_activating(
     }
     assert str(active_user.id) not in outbox[0].idempotency_key
     assert [event.event_type for event in events] == ["go_live_requested"]
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
 
 
 @pytest.mark.anyio
@@ -392,7 +394,9 @@ async def test_pending_go_live_replay_is_idempotent_and_does_not_wake_again(
     assert first.stage == second.stage == "activating"
     assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
     assert await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 1
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
 
 
 @pytest.mark.anyio

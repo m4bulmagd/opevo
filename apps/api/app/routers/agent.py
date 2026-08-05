@@ -35,6 +35,7 @@ from app.services.transcript_service import (
     TranscriptService,
 )
 from app.workers.call_finalization_queue import CallFinalizationQueue
+from app.workers.queueing import enqueue_outbox_wakeup
 from presvo_contracts import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
@@ -53,7 +54,7 @@ async def _best_effort_outbox_wakeup(request: Request) -> None:
     if arq_pool is None:
         return
     try:
-        await arq_pool.enqueue_job("outbox_delivery_job", {})
+        await enqueue_outbox_wakeup(arq_pool)
     except Exception:
         logger.warning(
             "outbox wakeup enqueue failed operation=complete_call error_type=unknown"

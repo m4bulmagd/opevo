@@ -20,6 +20,7 @@ from app.services.call_history_service import (
 from app.services.account_access_policy import AccountStateBlockedError
 from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.services.recording_service import RecordingService, get_recording_service
+from app.workers.queueing import enqueue_outbox_wakeup
 
 
 router = APIRouter(prefix="/api/calls", tags=["calls"])
@@ -121,7 +122,7 @@ async def delete_call(
     arq_pool = getattr(request.app.state, "arq_pool", None)
     if arq_pool is not None:
         try:
-            await arq_pool.enqueue_job("outbox_delivery_job", {})
+            await enqueue_outbox_wakeup(arq_pool)
         except Exception:
             logger.warning(
                 "outbox wakeup enqueue failed operation=delete_call "

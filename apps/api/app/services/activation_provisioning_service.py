@@ -31,6 +31,7 @@ from app.services.business_profile_service import REQUIRED_PROFILE_FIELDS
 from app.services.customer_readiness_policy import CustomerReadinessPolicy
 from app.services.outbox_service import OutboxService
 from app.services.provider_work_policy import unresolved_provider_work_blocker
+from app.workers.queueing import enqueue_outbox_wakeup
 
 
 logger = logging.getLogger(__name__)
@@ -362,7 +363,7 @@ class ActivationProvisioningService:
         if arq_pool is None:
             return
         try:
-            await arq_pool.enqueue_job("outbox_delivery_job", {})
+            await enqueue_outbox_wakeup(arq_pool)
         except Exception as error:
             logger.warning(
                 "outbox wakeup enqueue failed operation=%s error_type=%s",

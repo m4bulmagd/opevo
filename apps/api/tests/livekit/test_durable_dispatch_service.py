@@ -592,7 +592,9 @@ async def test_sip_join_commits_call_and_dispatch_intent_without_provider_io(
         "lifecycle_generation": user.lifecycle_generation,
     }
     assert direct.calls == 0
-    assert pool.jobs == [("outbox_delivery_job", {}, {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
     assert realtime.events == [
         {
             "user_id": user.id,
@@ -622,7 +624,9 @@ async def test_sip_join_is_durable_without_realtime_service(db_session) -> None:
     assert len(calls) == len(events) == 1
     assert calls[0].livekit_room_id == "room-no-realtime"
     assert events[0].aggregate_id == calls[0].id
-    assert pool.jobs == [("outbox_delivery_job", {}, {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
 
 
 @pytest.mark.anyio
@@ -932,13 +936,16 @@ async def test_sip_leave_commits_and_enqueues_finalization_without_realtime(
     assert call.status == "ending"
     assert call.ended_at is not None
     assert pool.jobs == [
-        ("outbox_delivery_job", {}, {}),
-        ("outbox_delivery_job", {}, {}),
-        ("outbox_delivery_job", {}, {}),
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"}),
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"}),
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"}),
         (
             "call_finalization_job",
             {"call_id": str(call.id)},
-            {"_job_id": f"call-finalization:{call.id}"},
+            {
+                "_job_id": f"call-finalization:{call.id}",
+                "_queue_name": "arq:queue",
+            },
         ),
     ]
 
@@ -1065,8 +1072,8 @@ async def test_lost_begin_claim_wakes_reconciliation_without_provider_io(
     assert len(lifecycle.claims) == 1
     assert recording.starts == []
     assert pool.jobs == [
-        ("outbox_delivery_job", {}, {}),
-        ("outbox_delivery_job", {}, {}),
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"}),
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"}),
     ]
 
 

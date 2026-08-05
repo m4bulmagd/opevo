@@ -2080,6 +2080,9 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe_without_pro
         [("outbox_delivery_job", {})] if expected_outbox else []
     )
     assert pool.enqueued_jobs == expected_jobs
+    assert pool.enqueued_job_kwargs == (
+        [{"_queue_name": "arq:queue:background"}] if expected_outbox else []
+    )
 
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -2129,7 +2132,7 @@ async def test_invoice_payment_does_not_enable_phone_or_require_redis_wakeup(
     stripe_invoice_paid_payload,
 ) -> None:
     class FailingPool:
-        async def enqueue_job(self, _name, _payload):
+        async def enqueue_job(self, _name, _payload, **_kwargs):
             raise ConnectionError("redis unavailable")
 
     engine = create_async_engine(client_database_url, future=True)

@@ -1250,10 +1250,10 @@ async def test_delete_call_outbox_wake_failure_does_not_change_provider_free_204
 ) -> None:
     class FailingPool:
         def __init__(self) -> None:
-            self.jobs: list[tuple[str, dict]] = []
+            self.jobs: list[tuple[str, dict, dict]] = []
 
-        async def enqueue_job(self, name: str, payload: dict) -> None:
-            self.jobs.append((name, payload))
+        async def enqueue_job(self, name: str, payload: dict, **kwargs) -> None:
+            self.jobs.append((name, payload, kwargs))
             raise RuntimeError("redis unavailable")
 
     pool = FailingPool()
@@ -1274,7 +1274,9 @@ async def test_delete_call_outbox_wake_failure_does_not_change_provider_free_204
     stored = await fetch_call(client_database_url, call_id=call_id)
 
     assert response.status_code == 204
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
     assert stored.deleted_at is not None
     assert stored.recording_object_key is None
     assert stored.recording_egress_id is None

@@ -20,7 +20,7 @@ class FakeArqPool:
     def __init__(self) -> None:
         self.jobs: list[tuple[str, dict]] = []
 
-    async def enqueue_job(self, name: str, payload: dict) -> None:
+    async def enqueue_job(self, name: str, payload: dict, **_kwargs) -> None:
         self.jobs.append((name, payload))
 
 

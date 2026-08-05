@@ -27,6 +27,7 @@ from app.services.outbox_service import OutboxService
 from app.services.provider_work_policy import unresolved_provider_work_blocker
 from app.services.subscription_access_policy import SubscriptionAccessPolicy
 from app.services.usage_accounting_service import UsageAccountingService
+from app.workers.queueing import enqueue_outbox_wakeup
 
 
 PLAN_MINUTES = {
@@ -721,7 +722,7 @@ class BillingService:
         if not self._outbox_wakeup_needed or self.arq_pool is None:
             return
         try:
-            await self.arq_pool.enqueue_job("outbox_delivery_job", {})
+            await enqueue_outbox_wakeup(self.arq_pool)
         except Exception as error:
             logger.warning(
                 "outbox wakeup enqueue failed operation=stripe_webhook error_type=%s",

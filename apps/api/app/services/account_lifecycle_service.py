@@ -27,6 +27,7 @@ from app.schemas.account import (
 from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.outbox_service import OutboxService
 from app.services.provider_work_policy import unresolved_provider_work_blocker
+from app.workers.queueing import enqueue_outbox_wakeup
 
 
 logger = logging.getLogger(__name__)
@@ -264,6 +265,6 @@ class AccountLifecycleService:
         if self.arq_pool is None:
             return
         try:
-            await self.arq_pool.enqueue_job("outbox_delivery_job", {})
+            await enqueue_outbox_wakeup(self.arq_pool)
         except Exception:
             logger.warning("outbox wakeup enqueue failed operation=deactivate_account")

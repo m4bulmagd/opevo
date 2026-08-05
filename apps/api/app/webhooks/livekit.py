@@ -33,6 +33,7 @@ from app.services.recording_lifecycle_service import (
     RecordingLifecycleService,
 )
 from app.services.realtime_service import RealtimeService
+from app.workers.queueing import enqueue_outbox_wakeup
 
 
 router = APIRouter(prefix="/webhooks", tags=["livekit"])
@@ -355,7 +356,7 @@ async def _best_effort_outbox_wakeup(request: Request) -> None:
     if arq_pool is None:
         return
     try:
-        await arq_pool.enqueue_job("outbox_delivery_job", {})
+        await enqueue_outbox_wakeup(arq_pool)
     except Exception:
         logger.warning(
             "outbox wakeup enqueue failed operation=livekit_egress_webhook "

@@ -6,6 +6,7 @@ from app.core.config import get_settings
 from app.core.logging import report_safe_exception
 from app.repositories.call_repository import CallRepository
 from app.services.call_reconciliation_service import CallReconciliationService
+from app.workers.queueing import enqueue_outbox_wakeup
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ async def call_reconciliation_job(ctx: dict) -> dict[str, int]:
     arq_pool = ctx.get("arq_pool")
     if result.scanned and arq_pool is not None:
         try:
-            await arq_pool.enqueue_job("outbox_delivery_job", {})
+            await enqueue_outbox_wakeup(arq_pool)
         except Exception:
             logger.warning(
                 "outbox wakeup enqueue failed operation=call_reconciliation "

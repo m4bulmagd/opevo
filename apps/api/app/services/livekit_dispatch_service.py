@@ -36,6 +36,8 @@ from app.services.livekit_recording_service import LiveKitRecordingService
 from app.services.outbox_service import OutboxService
 from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.services.realtime_service import RealtimeService
+from app.workers.call_finalization_queue import CallFinalizationQueue
+from app.workers.queueing import enqueue_outbox_wakeup
 
 
 logger = logging.getLogger(__name__)
@@ -193,10 +195,8 @@ class LiveKitDispatchService:
         await self._best_effort_outbox_wakeup()
         if ended.status == "ending" and self.arq_pool is not None:
             try:
-                await self.arq_pool.enqueue_job(
-                    "call_finalization_job",
-                    {"call_id": str(call.id)},
-                    _job_id=f"call-finalization:{call.id}",
+                await CallFinalizationQueue(self.arq_pool).enqueue(
+                    {"call_id": str(call.id)}
                 )
             except Exception:
                 logger.warning(
@@ -477,7 +477,7 @@ class LiveKitDispatchService:
         if self.arq_pool is None:
             return
         try:
-            await self.arq_pool.enqueue_job("outbox_delivery_job", {})
+            await enqueue_outbox_wakeup(self.arq_pool)
         except Exception as error:
             logger.warning(
                 "outbox wakeup enqueue failed operation=livekit_dispatch "

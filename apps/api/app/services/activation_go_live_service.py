@@ -29,6 +29,7 @@ from app.services.customer_readiness_policy import ReadinessBlocker
 from app.services.customer_readiness_service import evaluate_customer_readiness
 from app.services.forwarding_verification_service import as_utc
 from app.services.outbox_service import OutboxService
+from app.workers.queueing import enqueue_outbox_wakeup
 
 
 logger = logging.getLogger(__name__)
@@ -247,7 +248,7 @@ class ActivationGoLiveService:
         if arq_pool is None:
             return
         try:
-            await arq_pool.enqueue_job("outbox_delivery_job", {})
+            await enqueue_outbox_wakeup(arq_pool)
         except Exception as error:
             logger.warning(
                 "outbox wakeup enqueue failed operation=activation_go_live "

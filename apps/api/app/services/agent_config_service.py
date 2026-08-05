@@ -18,6 +18,7 @@ from app.services.customer_readiness_policy import ReadinessBlocker
 from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.outbox_service import OutboxService
 from app.services.receptionist_projection_service import ReceptionistProjectionService
+from app.workers.queueing import enqueue_outbox_wakeup
 
 
 class AgentConfigNotFoundError(Exception):
@@ -191,7 +192,7 @@ class AgentConfigService:
 
         if should_toggle and self.arq_pool is not None:
             try:
-                await self.arq_pool.enqueue_job("outbox_delivery_job", {})
+                await enqueue_outbox_wakeup(self.arq_pool)
             except Exception as error:
                 logger.warning(
                     "outbox wakeup enqueue failed operation=agent_config_routing "

@@ -105,10 +105,10 @@ class _Realtime:
 class _Pool:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
-        self.jobs: list[tuple[str, dict]] = []
+        self.jobs: list[tuple[str, dict, dict]] = []
 
-    async def enqueue_job(self, name: str, payload: dict) -> None:
-        self.jobs.append((name, payload))
+    async def enqueue_job(self, name: str, payload: dict, **kwargs) -> None:
+        self.jobs.append((name, payload, kwargs))
         if self.fail:
             raise RuntimeError("queue unavailable")
 
@@ -1770,7 +1770,9 @@ async def test_signed_exact_egress_is_atomic_empty_payload_and_wakes_once(
     )
     assert stored is not None
     assert stored.payload == {}
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
     assert provider_calls == {"recording": 0, "storage": 0}
     assert telemetry.mismatch_categories == []
 
@@ -1839,7 +1841,9 @@ async def test_signed_missing_or_mismatched_egress_is_safe_and_still_acknowledge
     stored = await db_session.scalar(select(WebhookEvent))
     assert stored is not None
     assert stored.payload == {}
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
     assert provider_calls == {"recording": 0, "storage": 0}
     assert telemetry.mismatch_categories == [expected_category]
     assert "PRIVATE_ROOM_SENTINEL" not in repr(telemetry.mismatch_categories)
@@ -1903,7 +1907,9 @@ async def test_signed_invalid_path_is_not_treated_as_absent_for_known_identity(
     await db_session.refresh(operation)
     assert operation.provider_terminal_at is None
     assert operation.last_error_code is None
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
     assert provider_calls == {"recording": 0, "storage": 0}
 
 
@@ -1961,7 +1967,9 @@ async def test_signed_real_protobuf_empty_path_cannot_change_known_terminal_stat
     assert call.recording_object_key == operation.expected_object_key
     assert call.recording_egress_id == "EG_exact"
     assert call.recording_url == "s3://private/preserved"
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
     assert provider_calls == {"recording": 0, "storage": 0}
 
 
@@ -2026,8 +2034,8 @@ async def test_signed_conflict_hides_projection_and_terminal_event_records_fact(
     assert len(stored) == 2
     assert all(item.payload == {} for item in stored)
     assert pool.jobs == [
-        ("outbox_delivery_job", {}),
-        ("outbox_delivery_job", {}),
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"}),
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"}),
     ]
     assert provider_calls == {"recording": 0, "storage": 0}
     assert telemetry.mismatch_categories == ["conflict", "conflict"]
@@ -2104,7 +2112,9 @@ async def test_signed_egress_queue_failure_keeps_committed_sql_authoritative(
     await db_session.refresh(operation)
     assert operation.provider_egress_id == "EG_exact"
     assert await db_session.scalar(select(func.count()).select_from(WebhookEvent)) == 1
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
     assert provider_calls == {"recording": 0, "storage": 0}
 
 
@@ -2188,7 +2198,9 @@ async def test_signed_egress_uses_app_bound_nondefault_storage_normalization(
     await db_session.refresh(operation)
     assert operation.provider_egress_id == "EG_exact"
     assert call.recording_object_key == operation.expected_object_key
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
     assert provider_calls == {"recording": 0, "storage": 0}
 
 
@@ -2219,9 +2231,9 @@ async def test_signed_egress_orders_generic_lifecycle_commit_metric_then_wake(
         await original_commit()
 
     class OrderedPool(_Pool):
-        async def enqueue_job(self, name: str, payload: dict) -> None:
+        async def enqueue_job(self, name: str, payload: dict, **kwargs) -> None:
             order.append("wake")
-            await super().enqueue_job(name, payload)
+            await super().enqueue_job(name, payload, **kwargs)
 
     monkeypatch.setattr(WebhookEventRepository, "record_if_new", ordered_record)
     monkeypatch.setattr(

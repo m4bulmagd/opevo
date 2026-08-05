@@ -1168,7 +1168,7 @@ async def test_patch_agent_config_commit_survives_redis_wakeup_failure(
     async_client, client_database_url, rs256_clerk_token_for
 ) -> None:
     class FailingPool:
-        async def enqueue_job(self, _name, _payload):
+        async def enqueue_job(self, _name, _payload, **_kwargs):
             raise ConnectionError("redis unavailable")
 
     await seed_agent_config(

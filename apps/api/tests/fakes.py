@@ -135,6 +135,8 @@ class CaptureTracer:
 class MockArqPool:
     def __init__(self):
         self.enqueued_jobs = []
-    
-    async def enqueue_job(self, name, payload):
+        self.enqueued_job_kwargs = []
+
+    async def enqueue_job(self, name, payload, **kwargs):
         self.enqueued_jobs.append((name, payload))
+        self.enqueued_job_kwargs.append(kwargs)

@@ -7,10 +7,10 @@ from app.workers.jobs import call_reconciliation as job_module
 class _Pool:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
-        self.jobs: list[tuple[str, dict]] = []
+        self.jobs: list[tuple[str, dict, dict]] = []
 
-    async def enqueue_job(self, name: str, payload: dict) -> None:
-        self.jobs.append((name, payload))
+    async def enqueue_job(self, name: str, payload: dict, **kwargs) -> None:
+        self.jobs.append((name, payload, kwargs))
         if self.fail:
             raise RuntimeError("redis unavailable")
 
@@ -45,7 +45,9 @@ async def test_recovered_calls_wake_outbox_after_reconciliation_without_affectin
         "failed": 0,
         "deferred": 0,
     }
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]
 
 
 @pytest.mark.anyio
@@ -78,4 +80,6 @@ async def test_any_scanned_stale_work_wakes_possible_recording_intent(
         }
     )
 
-    assert pool.jobs == [("outbox_delivery_job", {})]
+    assert pool.jobs == [
+        ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
+    ]

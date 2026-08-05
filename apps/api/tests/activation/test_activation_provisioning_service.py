@@ -266,7 +266,7 @@ async def test_repeat_confirm_accepts_completed_matching_provisioning_without_ne
 
 
 class _FailingArqPool:
-    async def enqueue_job(self, _name: str, _payload: dict) -> None:
+    async def enqueue_job(self, _name: str, _payload: dict, **_kwargs) -> None:
         raise ConnectionError("redis unavailable")
 
 
