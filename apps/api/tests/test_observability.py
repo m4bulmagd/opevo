@@ -1689,6 +1689,34 @@ async def test_worker_observability_collapses_unbounded_attributes() -> None:
     assert job_id_sentinel not in rendered
 
 
+def test_worker_queue_snapshot_gauges_use_only_bounded_queue_class() -> None:
+    meter = _SpecificationMeter()
+    telemetry = _observability(meter=meter)
+
+    assert meter.specifications["presvo.worker.queue.depth"] == ("gauge", None)
+    assert meter.specifications["presvo.worker.queue.oldest_due.age"] == ("gauge", "s")
+
+    telemetry.record_worker_queue_snapshot(
+        "call_lifecycle",
+        depth=3,
+        oldest_due_age_seconds=2.5,
+    )
+    telemetry.record_worker_queue_snapshot(
+        "PRIVATE_QUEUE_CLASS",
+        depth=9,
+        oldest_due_age_seconds=99.0,
+    )
+
+    assert meter.instruments["presvo.worker.queue.depth"].measurements == [
+        (3, {"queue_class": "call_lifecycle"}),
+        (9, {"queue_class": "unknown"}),
+    ]
+    assert meter.instruments["presvo.worker.queue.oldest_due.age"].measurements == [
+        (2.5, {"queue_class": "call_lifecycle"}),
+        (99.0, {"queue_class": "unknown"}),
+    ]
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "job_name",

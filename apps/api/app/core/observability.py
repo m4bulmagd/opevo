@@ -448,6 +448,11 @@ class Observability:
             "presvo.worker.queue.delay",
             unit="s",
         )
+        self.worker_queue_depth = meter.create_gauge("presvo.worker.queue.depth")
+        self.worker_queue_oldest_due_age = meter.create_gauge(
+            "presvo.worker.queue.oldest_due.age",
+            unit="s",
+        )
         self.worker_job_duration = meter.create_histogram(
             "presvo.worker.job.duration",
             unit="s",
@@ -1084,6 +1089,28 @@ class Observability:
         _safe_call(
             "record_worker_queue_delay",
             lambda: self.worker_queue_delay.record(seconds, attributes),
+        )
+
+    def record_worker_queue_snapshot(
+        self,
+        queue_class: str,
+        *,
+        depth: int,
+        oldest_due_age_seconds: float,
+    ) -> None:
+        attributes = {
+            "queue_class": _safe_label(queue_class, _WORKER_QUEUE_CLASSES),
+        }
+        _safe_call(
+            "record_worker_queue_snapshot_depth",
+            lambda: self.worker_queue_depth.set(depth, attributes),
+        )
+        _safe_call(
+            "record_worker_queue_snapshot_oldest_due_age",
+            lambda: self.worker_queue_oldest_due_age.set(
+                oldest_due_age_seconds,
+                attributes,
+            ),
         )
 
     def record_worker_job_duration(
