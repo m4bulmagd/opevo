@@ -44,6 +44,28 @@ async def test_call_finalization_keeps_id_and_uses_lifecycle_queue() -> None:
     ]
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        {},
+        {"call_id": str(uuid4()), "transcript": "PRIVATE_TRANSCRIPT"},
+    ],
+)
+async def test_call_finalization_rejects_noncanonical_payloads_without_enqueue(
+    payload: object,
+) -> None:
+    """Malformed or expanded payloads must not cross the lifecycle queue boundary."""
+    pool = CapturePool()
+
+    with pytest.raises(ValueError, match="must contain call_id only"):
+        await CallFinalizationQueue(pool).enqueue(payload)  # type: ignore[arg-type]
+
+    assert pool.calls == []
+
+
 def _enqueue_job_literals(source: Path) -> list[str]:
     tree = ast.parse(source.read_text())
     literals: list[str] = []

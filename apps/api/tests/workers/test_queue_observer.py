@@ -137,6 +137,36 @@ async def test_sample_handles_racy_or_invalid_replies_without_payload_access(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("items", "now"),
+    [
+        ([(b"ignored",)], 12.5),
+        ([(b"ignored", 10_000.0)], float("nan")),
+    ],
+)
+async def test_sample_rejects_malformed_score_pairs_and_nonfinite_clock(
+    items: object,
+    now: float,
+) -> None:
+    """Malformed Redis scores or a broken clock must export a safe zero age."""
+    from app.workers.queue_observer import QueueObserver
+
+    redis = _Redis(depths=[1], ranges=[items])
+    telemetry = _Telemetry()
+    observer = QueueObserver(
+        redis,
+        telemetry,
+        queue_name="arq:queue",
+        queue_class="call_lifecycle",
+        now=lambda: now,
+    )
+
+    await observer.sample()
+
+    assert telemetry.snapshots == [("call_lifecycle", 1, 0.0)]
+
+
+@pytest.mark.anyio
 async def test_runner_logs_safe_failure_then_samples_again(monkeypatch, caplog) -> None:
     """A transient Redis failure must not stop later observation cycles."""
     redis = _Redis(
@@ -293,6 +323,20 @@ async def test_runner_propagates_cancellation_from_sleep(monkeypatch) -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.anyio
+async def test_runner_propagates_cancellation_from_redis_without_warning(caplog) -> None:
+    """Redis cancellation is worker control flow, not an observation failure."""
+    redis = _Redis(depths=[asyncio.CancelledError()], ranges=[])
+    telemetry = _Telemetry()
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(asyncio.CancelledError):
+            await _observer(redis, telemetry)._run()
+
+    assert telemetry.snapshots == []
+    assert caplog.messages == []
 
 
 @pytest.mark.anyio
