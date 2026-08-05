@@ -14,7 +14,7 @@ from app.core.observability import (
 from app.core.runtime_validation import validate_worker_runtime
 from app.workers.jobs.call_finalization import call_finalization_job
 from app.workers.jobs.call_reconciliation import call_reconciliation_job
-from app.workers.jobs.outbox_delivery import (
+from app.workers.outbox.delivery import (
     get_default_outbox_handlers,
     outbox_delivery_job,
     outbox_reconciliation_job,

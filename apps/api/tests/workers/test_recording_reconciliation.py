@@ -28,7 +28,7 @@ from app.services.recording_lifecycle_service import (
     RecordingLifecycleService,
 )
 from app.workers.jobs import outbox_topics
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.jobs.outbox_topics import deliver_recording_reconcile
 from app.workers.jobs.recording_reconciliation import (
     ReconciliationResult,

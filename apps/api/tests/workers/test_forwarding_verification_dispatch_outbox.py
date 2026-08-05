@@ -24,10 +24,8 @@ from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.services.outbox_service import OutboxService, SUPPORTED_OUTBOX_TOPICS
 from app.workers.jobs import outbox_topics
-from app.workers.jobs.outbox_delivery import (
-    OutboxDeliveryError,
-    _validated_event_call_id,
-)
+from app.workers.outbox.delivery import _validated_event_call_id
+from app.workers.outbox.failures import OutboxDeliveryError
 
 
 FIXED_NOW = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)

@@ -390,7 +390,7 @@ async def test_phone_provision_outbox_missing_provider_identity_is_terminal_befo
     case: str,
 ) -> None:
     from app.workers.jobs import outbox_topics
-    from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+    from app.workers.outbox.failures import OutboxDeliveryError
 
     user_id = uuid4()
     job_called = False
@@ -455,7 +455,7 @@ async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.workers.jobs import outbox_topics
-    from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+    from app.workers.outbox.failures import OutboxDeliveryError
 
     user_id = uuid4()
     provider_operation_key = f"activation:phone.provision:{uuid4()}"

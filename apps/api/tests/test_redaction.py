@@ -6,7 +6,7 @@ import pytest
 
 from app.core.logging import report_safe_exception, setup_logging
 from app.core.redaction import SafeExtraFilter, redact_phone, safe_log_label
-from app.workers.jobs.outbox_delivery import emit_outbox_terminal_failure_metric
+from app.workers.outbox.delivery import emit_outbox_terminal_failure_metric
 
 
 class RecordStateFormatter(logging.Formatter):
@@ -307,7 +307,7 @@ async def test_outbox_terminal_failure_metric_survives_safe_extra_filter(
     try:
         with caplog.at_level(
             logging.ERROR,
-            logger="app.workers.jobs.outbox_delivery",
+            logger="app.workers.outbox.delivery",
         ):
             await emit_outbox_terminal_failure_metric(
                 "phone.disable",
@@ -319,7 +319,7 @@ async def test_outbox_terminal_failure_metric_survives_safe_extra_filter(
     record = next(
         item
         for item in caplog.records
-        if item.name == "app.workers.jobs.outbox_delivery"
+        if item.name == "app.workers.outbox.delivery"
     )
     assert record.event == "outbox_terminal_failure"
     assert record.operation == "deliver_outbox_event"

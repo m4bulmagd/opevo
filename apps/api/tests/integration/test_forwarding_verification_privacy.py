@@ -26,7 +26,7 @@ from app.models.usage_ledger import UsageLedger
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.services.forwarding_verification_service import ForwardingVerificationService
 from app.services.livekit_dispatch_service import LiveKitDispatchService
-from app.workers.jobs.outbox_delivery import outbox_delivery_job
+from app.workers.outbox.delivery import outbox_delivery_job
 
 
 # ARCEP-reserved fictional ranges: 019900 for source lines and 099900 for

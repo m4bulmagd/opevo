@@ -29,7 +29,7 @@ from app.providers.carrier_lookup.fake import FakeCarrierLookupProvider
 from app.providers.telephony.fake import FakeTelephonyProvider
 from app.routers.activation import get_carrier_lookup_service
 from app.services.carrier_lookup_service import CarrierLookupService
-from app.workers.jobs.outbox_delivery import outbox_delivery_job
+from app.workers.outbox.delivery import outbox_delivery_job
 
 
 LOCAL_TOKEN = "presvo-local-development-token"

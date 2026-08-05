@@ -14,7 +14,7 @@ from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.services.account_access_policy import AccountStateBlockedError
 from app.services.outbox_service import OutboxService
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+from app.workers.outbox.failures import OutboxDeliveryError
 
 
 @pytest.fixture(autouse=True)
@@ -115,7 +115,7 @@ async def test_routing_uses_local_factory_without_injected_provider(
     active_user,
 ) -> None:
     from app.services.outbox_service import OutboxService
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     user_id = active_user.id
     now = datetime.now(UTC)

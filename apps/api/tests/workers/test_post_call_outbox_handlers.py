@@ -18,7 +18,8 @@ from app.services.outbox_service import (
     OutboxService,
     SUPPORTED_OUTBOX_TOPICS,
 )
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
+from app.workers.outbox.delivery import outbox_delivery_job
+from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.jobs import outbox_topics
 from app.workers.jobs.recording_reconciliation import ReconciliationResult
 

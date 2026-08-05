@@ -27,7 +27,8 @@ from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.forwarding_verification_service import as_utc
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 from app.services.routing_fingerprint import routing_fingerprint
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
+from app.workers.outbox.delivery import outbox_delivery_job
+from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.jobs.outbox_topics import deliver_phone_routing
 
 
@@ -718,7 +719,7 @@ async def test_retry_exhaustion_performs_the_same_safe_failure_transition(
     async def retryable(_ctx: dict, _event: OutboxEvent) -> None:
         raise OutboxDeliveryError("provider_retryable", retryable=True)
 
-    from app.workers.jobs.outbox_delivery import OUTBOX_RETRY_DELAYS
+    from app.workers.outbox.delivery import OUTBOX_RETRY_DELAYS
 
     for delay in OUTBOX_RETRY_DELAYS:
         result = await outbox_delivery_job(

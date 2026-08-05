@@ -38,7 +38,7 @@ from app.repositories.account_deactivation_repository import (
 from app.services.account_lifecycle_service import AccountLifecycleService
 from app.workers.jobs import account_deactivation as account_deactivation_module
 from app.workers.jobs.account_deactivation import deliver_account_deactivation
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+from app.workers.outbox.failures import OutboxDeliveryError
 
 
 NOW = datetime(2026, 7, 25, 10, 0, tzinfo=UTC)

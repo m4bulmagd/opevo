@@ -19,7 +19,7 @@ from app.models.usage_ledger import UsageLedger
 from app.models.webhook_event import WebhookEvent
 from app.providers.subscriptions.fake import FakeSubscriptionProvider
 from app.providers.telephony.fake import FakeTelephonyProvider
-from app.workers.jobs.outbox_delivery import outbox_delivery_job
+from app.workers.outbox.delivery import outbox_delivery_job
 
 from tests.fakes import MockArqPool
 

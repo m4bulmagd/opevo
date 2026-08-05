@@ -1240,7 +1240,7 @@ def test_outbox_metric_topic_allowlist_exactly_matches_supported_topics() -> Non
 async def test_recording_operation_uuid_is_never_bound_as_call_context() -> None:
     from app.core.observability import bind_call_id
     from app.models.outbox_event import OutboxEvent
-    from app.workers.jobs.outbox_delivery import _validated_event_call_id
+    from app.workers.outbox.delivery import _validated_event_call_id
 
     operation_id = uuid4()
     event = OutboxEvent(
@@ -1267,7 +1267,7 @@ async def test_recording_operation_uuid_is_never_bound_as_call_context() -> None
 
 
 def test_call_bound_outbox_topics_are_exactly_call_scoped_aggregates() -> None:
-    from app.workers.jobs.outbox_delivery import _CALL_TOPIC_AGGREGATE_TYPES
+    from app.workers.outbox.delivery import _CALL_TOPIC_AGGREGATE_TYPES
 
     assert _CALL_TOPIC_AGGREGATE_TYPES == {
         "livekit.dispatch": "call",
@@ -1793,7 +1793,7 @@ async def test_validated_outbox_call_reference_correlates_nested_provider_span(
     from app.core.observability import instrument_provider
     from app.models import Base
     from app.models.outbox_event import OutboxEvent
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     database_path = tmp_path / f"outbox-correlation-{operation}.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
@@ -1859,7 +1859,7 @@ async def test_validated_outbox_call_reference_correlates_nested_provider_span(
 @pytest.mark.anyio
 async def test_mismatched_outbox_aggregate_cannot_seed_provider_call_context() -> None:
     from app.core.observability import bind_call_id, instrument_provider
-    from app.workers.jobs.outbox_delivery import _validated_event_call_id
+    from app.workers.outbox.delivery import _validated_event_call_id
 
     call_id = uuid4()
     tracer = _Tracer()
@@ -1949,10 +1949,8 @@ async def test_terminal_outbox_metric_runs_once_after_durable_failed_commit(
 
     from app.models import Base
     from app.models.outbox_event import OutboxEvent
-    from app.workers.jobs.outbox_delivery import (
-        OutboxDeliveryError,
-        outbox_delivery_job,
-    )
+    from app.workers.outbox.delivery import outbox_delivery_job
+    from app.workers.outbox.failures import OutboxDeliveryError
 
     database_path = tmp_path / "terminal-observability.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")

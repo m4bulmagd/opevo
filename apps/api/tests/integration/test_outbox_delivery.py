@@ -736,7 +736,7 @@ async def test_claim_preserves_aggregate_order(
 async def test_terminal_failure_does_not_block_later_same_user_event(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     aggregate_id = uuid4()
     first = await _add_event(
@@ -788,7 +788,7 @@ async def test_retryable_provider_failure_retries_all_backoffs_then_exhausts(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     from app.core.provider_failures import ProviderFailure
-    from app.workers.jobs.outbox_delivery import (
+    from app.workers.outbox.delivery import (
         OUTBOX_RETRY_DELAYS,
         outbox_delivery_job,
     )
@@ -919,7 +919,7 @@ async def test_dispatch_provider_failure_retains_provider_exhausted_call_code(
     disposition: str,
 ) -> None:
     from app.core.provider_failures import ProviderFailure
-    from app.workers.jobs.outbox_delivery import (
+    from app.workers.outbox.delivery import (
         OUTBOX_RETRY_DELAYS,
         outbox_delivery_job,
     )
@@ -985,7 +985,7 @@ async def test_missing_livekit_dispatch_settings_are_durable_configuration_failu
     provider_operation: str,
 ) -> None:
     from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     verification_now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
     event = (
@@ -1021,7 +1021,7 @@ async def test_missing_livekit_dispatch_settings_are_durable_configuration_failu
         lambda **_kwargs: "verification-jwt",
     )
     terminal_metrics: list[tuple[str, str]] = []
-    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+    caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
     result = await outbox_delivery_job(
         {
             "session_factory": outbox_session_factory,
@@ -1071,7 +1071,7 @@ async def test_untyped_livekit_provider_value_error_is_durable_internal_defect(
     dispatch_kind: str,
     provider_operation: str,
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     verification_now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
     event = (
@@ -1113,7 +1113,7 @@ async def test_untyped_livekit_provider_value_error_is_durable_internal_defect(
         "app.workers.jobs.outbox_topics.create_verification_token",
         lambda **_kwargs: "verification-jwt",
     )
-    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+    caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
     result = await outbox_delivery_job(
         {
             "session_factory": outbox_session_factory,
@@ -1128,7 +1128,7 @@ async def test_untyped_livekit_provider_value_error_is_durable_internal_defect(
     alerts = [
         record
         for record in caplog.records
-        if record.name == "app.workers.jobs.outbox_delivery"
+        if record.name == "app.workers.outbox.delivery"
         and record.levelno == logging.CRITICAL
     ]
     assert len(alerts) == 1
@@ -1158,7 +1158,7 @@ async def test_terminal_provider_failure_stops_on_first_attempt(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     from app.core.provider_failures import ProviderFailure
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     event = await _add_event(outbox_session_factory)
     current_time = event.next_attempt_at + timedelta(seconds=1)
@@ -1204,7 +1204,7 @@ async def test_composed_internal_defect_redacts_exception_alert_telemetry_and_st
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from app.core.observability import Observability
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     event = await _add_event(outbox_session_factory)
     current_time = event.next_attempt_at + timedelta(seconds=1)
@@ -1244,7 +1244,7 @@ async def test_composed_internal_defect_redacts_exception_alert_telemetry_and_st
         ):
             raise defect
 
-    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+    caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
     result = await outbox_delivery_job(
         {
             "session_factory": outbox_session_factory,
@@ -1276,7 +1276,7 @@ async def test_composed_internal_defect_redacts_exception_alert_telemetry_and_st
     alert = next(
         record
         for record in caplog.records
-        if record.name == "app.workers.jobs.outbox_delivery"
+        if record.name == "app.workers.outbox.delivery"
         and record.levelno == logging.CRITICAL
     )
     assert alert.getMessage() == (
@@ -1330,7 +1330,7 @@ async def test_customer_snapshot_type_error_becomes_durable_internal_defect(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from app.workers.jobs import outbox_topics
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     event = await _seed_customer_dispatch_event(outbox_session_factory)
     current_time = event.next_attempt_at + timedelta(seconds=1)
@@ -1340,7 +1340,7 @@ async def test_customer_snapshot_type_error_becomes_durable_internal_defect(
         raise defect
 
     monkeypatch.setattr(outbox_topics, "create_dispatch_token", fail_token_builder)
-    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+    caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
 
     result = await outbox_delivery_job(
         {
@@ -1359,7 +1359,7 @@ async def test_customer_snapshot_type_error_becomes_durable_internal_defect(
     alerts = [
         record
         for record in caplog.records
-        if record.name == "app.workers.jobs.outbox_delivery"
+        if record.name == "app.workers.outbox.delivery"
         and record.levelno == logging.CRITICAL
     ]
     assert len(alerts) == 1
@@ -1377,7 +1377,7 @@ async def test_verification_snapshot_runtime_error_becomes_durable_internal_defe
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from app.workers.jobs import outbox_topics
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     verification_now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
     event = await _seed_verification_dispatch_event(
@@ -1395,7 +1395,7 @@ async def test_verification_snapshot_runtime_error_becomes_durable_internal_defe
         "create_verification_token",
         fail_token_builder,
     )
-    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+    caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
 
     result = await outbox_delivery_job(
         {
@@ -1415,7 +1415,7 @@ async def test_verification_snapshot_runtime_error_becomes_durable_internal_defe
     alerts = [
         record
         for record in caplog.records
-        if record.name == "app.workers.jobs.outbox_delivery"
+        if record.name == "app.workers.outbox.delivery"
         and record.levelno == logging.CRITICAL
     ]
     assert len(alerts) == 1
@@ -1430,8 +1430,8 @@ async def test_verification_snapshot_runtime_error_becomes_durable_internal_defe
 async def test_raising_internal_defect_logger_cannot_block_terminal_persistence(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs import outbox_delivery
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox import delivery as outbox_delivery
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     class RaisingFilter(logging.Filter):
         def filter(self, _record: logging.LogRecord) -> bool:
@@ -1489,7 +1489,7 @@ async def test_cancellation_propagates_without_failure_and_lease_reclaims_event(
     outbox_session_factory: async_sessionmaker[AsyncSession],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     event = await _add_event(outbox_session_factory)
     current_time = event.next_attempt_at + timedelta(seconds=1)
@@ -1510,7 +1510,7 @@ async def test_cancellation_propagates_without_failure_and_lease_reclaims_event(
         "outbox_now": lambda: current_time,
         "outbox_terminal_failure_metric": metric,
     }
-    caplog.set_level(logging.CRITICAL, logger="app.workers.jobs.outbox_delivery")
+    caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
 
     with pytest.raises(asyncio.CancelledError) as caught:
         await outbox_delivery_job(ctx)
@@ -1553,7 +1553,7 @@ async def test_cancellation_propagates_without_failure_and_lease_reclaims_event(
 async def test_non_exhausting_delivery_error_keeps_using_bounded_backoff(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.outbox_delivery import (
+    from app.workers.outbox.delivery import (
         OUTBOX_RETRY_DELAYS,
         outbox_delivery_job,
     )
@@ -1595,7 +1595,7 @@ async def test_non_exhausting_delivery_error_keeps_using_bounded_backoff(
 async def test_delivered_event_is_not_repeated_by_harmless_duplicate_wakeup(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     await _add_event(outbox_session_factory)
     delivery_keys: list[str] = []
@@ -1620,7 +1620,7 @@ async def test_delivered_event_is_not_repeated_by_harmless_duplicate_wakeup(
 async def test_provider_handler_runs_after_claim_transaction_releases_row_lock(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     await _add_event(outbox_session_factory)
 
@@ -1648,7 +1648,7 @@ async def test_provider_handler_runs_after_claim_transaction_releases_row_lock(
 async def test_delivery_claims_each_event_only_when_its_handler_is_ready(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     first = await _add_event(outbox_session_factory)
     second = await _add_event(outbox_session_factory)
@@ -1677,7 +1677,7 @@ async def test_delivery_claims_each_event_only_when_its_handler_is_ready(
 async def test_unknown_topic_is_terminal_without_provider_retry(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     async with outbox_session_factory() as session:
         event = OutboxEvent(
@@ -1715,7 +1715,7 @@ async def test_unknown_topic_is_terminal_without_provider_retry(
 async def test_reconciliation_sweep_recovers_committed_event_without_wakeup(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_reconciliation_job
+    from app.workers.outbox.delivery import outbox_reconciliation_job
 
     event = await _add_event(outbox_session_factory)
     calls: list[str] = []
@@ -1753,7 +1753,7 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
     failure_target: str,
     failed_operation: str,
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_reconciliation_job
+    from app.workers.outbox.delivery import outbox_reconciliation_job
 
     event = await _add_event(outbox_session_factory)
     delivered: list[str] = []
@@ -1875,7 +1875,7 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
     )
     caplog.set_level(
         logging.WARNING,
-        logger="app.workers.jobs.outbox_delivery",
+        logger="app.workers.outbox.delivery",
     )
 
     result = await outbox_reconciliation_job(
@@ -1908,7 +1908,7 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
     warning_records = [
         record
         for record in caplog.records
-        if record.name == "app.workers.jobs.outbox_delivery"
+        if record.name == "app.workers.outbox.delivery"
         and record.levelno == logging.WARNING
     ]
     assert len(warning_records) == 1
@@ -2003,7 +2003,7 @@ async def _seed_routing_state(
 async def test_stale_enable_after_cancellation_converges_to_disabled_current_state(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     user_id = await _seed_routing_state(
         outbox_session_factory,
@@ -2041,7 +2041,7 @@ async def test_stale_disable_after_reactivation_converges_to_enabled_current_sta
     outbox_session_factory: async_sessionmaker[AsyncSession],
     activation_flow_disabled,
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     user_id = await _seed_routing_state(
         outbox_session_factory,
@@ -2078,7 +2078,7 @@ async def test_stale_disable_after_reactivation_converges_to_enabled_current_sta
 async def test_disable_replay_reapplies_provider_when_projection_already_disabled(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     user_id = await _seed_routing_state(
         outbox_session_factory,
@@ -2110,7 +2110,7 @@ async def test_routing_retries_and_reapplies_new_desired_state_after_mid_call_ch
     outbox_session_factory: async_sessionmaker[AsyncSession],
     activation_flow_disabled,
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     user_id = await _seed_routing_state(
         outbox_session_factory,
@@ -2333,7 +2333,7 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.workers.jobs import outbox_topics
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     async with outbox_session_factory() as session:
         user = User(
@@ -2393,7 +2393,7 @@ async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_rout
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     from app.core.provider_failures import ProviderFailure
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     operation_key = "outbox:phone-provision:crash-safe-disabled"
     async with outbox_session_factory() as session:
@@ -2496,8 +2496,8 @@ async def test_reclaimed_crashed_provision_recovers_reference_only_cleanup(
     outbox_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.workers.jobs import outbox_delivery
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox import delivery as outbox_delivery
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     class SimulatedWorkerCrash(BaseException):
         pass
@@ -2671,7 +2671,7 @@ async def test_pending_order_retries_outbox_without_customer_retry(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     from app.providers.telephony.base import TelephonyProvisioningPending
-    from app.workers.jobs.outbox_delivery import (
+    from app.workers.outbox.delivery import (
         OUTBOX_RETRY_DELAYS,
         outbox_delivery_job,
     )
@@ -2762,7 +2762,7 @@ async def test_existing_order_conflict_is_terminal_and_disables_customer_retry(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     from app.providers.telephony.base import TelephonyProvisioningReviewRequired
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     operation_key = "outbox:phone-provision:order-conflict"
     async with outbox_session_factory() as session:
@@ -2836,7 +2836,7 @@ async def test_existing_order_conflict_is_terminal_and_disables_customer_retry(
 async def test_customer_retry_new_event_reuses_original_provider_operation_key(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     async with outbox_session_factory() as session:
         user = User(
@@ -2910,7 +2910,7 @@ async def test_provider_idempotency_key_closes_side_effect_before_ack_crash_boun
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     from app.core.provider_failures import ProviderFailure
-    from app.workers.jobs.outbox_delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import outbox_delivery_job
 
     event = await _add_event(
         outbox_session_factory,

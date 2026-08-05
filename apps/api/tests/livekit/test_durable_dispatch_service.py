@@ -423,7 +423,7 @@ async def test_livekit_outbox_rechecks_current_activation_prerequisites(
     invalidation: str,
 ) -> None:
     from app.core.config import get_settings
-    from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+    from app.workers.outbox.failures import OutboxDeliveryError
     from app.workers.jobs.outbox_topics import _dispatch_snapshot
 
     monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")

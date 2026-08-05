@@ -28,7 +28,8 @@ from presvo_contracts import (
 )
 from app.services.outbox_service import OutboxService
 from app.services.recording_lifecycle_service import RecordingLifecycleService
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError, outbox_delivery_job
+from app.workers.outbox.delivery import outbox_delivery_job
+from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.jobs import outbox_topics
 from app.workers.jobs.outbox_topics import deliver_livekit_dispatch
 

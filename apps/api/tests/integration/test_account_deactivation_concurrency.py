@@ -68,7 +68,7 @@ from app.workers.jobs import account_deactivation as account_deactivation_module
 from app.workers.jobs.account_deactivation import deliver_account_deactivation
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
 from app.workers.jobs.provider_cleanup import deliver_provider_cleanup
-from app.workers.jobs.outbox_delivery import OutboxDeliveryError
+from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.jobs.outbox_topics import (
     deliver_livekit_verification_dispatch,
     deliver_phone_provision,

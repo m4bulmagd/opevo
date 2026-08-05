@@ -13,11 +13,11 @@ from app.models.user import User
 from app.services.account_access_policy import AccountStateBlockedError
 from app.services.outbox_service import OutboxService
 from app.services.provider_work_policy import UnresolvedProviderWorkError
-from app.workers.jobs.outbox_delivery import (
+from app.workers.outbox.delivery import (
     OUTBOX_RETRY_DELAYS,
-    OutboxDeliveryError,
     outbox_delivery_job,
 )
+from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.jobs.outbox_topics import deliver_phone_provision
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
 from app.workers.jobs.provider_cleanup import deliver_provider_cleanup
