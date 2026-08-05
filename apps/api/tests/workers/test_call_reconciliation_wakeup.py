@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from app.services.call_reconciliation_service import ReconciliationResult
@@ -89,12 +91,12 @@ async def test_any_scanned_stale_work_wakes_possible_recording_intent(
 @pytest.mark.parametrize("snapshot_fails", [False, True])
 async def test_call_reconciliation_snapshot_is_observed_without_changing_result(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     snapshot_fails: bool,
 ) -> None:
     """Optional worker telemetry must never change durable reconciliation outcomes."""
     result = ReconciliationResult(scanned=0, recovered=0, failed=0, deferred=0)
     snapshot = object()
-    observed_results: list[dict[str, int]] = []
     observed_snapshots: list[object] = []
 
     class _Service:
@@ -122,8 +124,8 @@ async def test_call_reconciliation_snapshot_is_observed_without_changing_result(
             return snapshot
 
     class _Telemetry:
-        def record_reconciliation_outcomes(self, value: dict[str, int]) -> None:
-            observed_results.append(value)
+        def record_reconciliation_outcomes(self, _value: dict[str, int]) -> None:
+            pass
 
         def record_call_snapshot(self, value: object) -> None:
             observed_snapshots.append(value)
@@ -132,12 +134,13 @@ async def test_call_reconciliation_snapshot_is_observed_without_changing_result(
     monkeypatch.setattr(job_module, "CallRepository", _Repository)
     monkeypatch.setattr(job_module, "get_settings", object)
 
-    response = await job_module.call_reconciliation_job(
-        {
-            "session_factory": _SessionContext,
-            "observability": _Telemetry(),
-        }
-    )
+    with caplog.at_level(logging.WARNING, logger=job_module.logger.name):
+        response = await job_module.call_reconciliation_job(
+            {
+                "session_factory": _SessionContext,
+                "observability": _Telemetry(),
+            }
+        )
 
     assert response == {
         "scanned": 0,
@@ -145,5 +148,18 @@ async def test_call_reconciliation_snapshot_is_observed_without_changing_result(
         "failed": 0,
         "deferred": 0,
     }
-    assert observed_results == [response]
     assert observed_snapshots == ([] if snapshot_fails else [snapshot])
+    expected_logs = (
+        [
+            (
+                job_module.logger.name,
+                logging.WARNING,
+                "event=observability_snapshot_failed "
+                "operation=collect_call_snapshot error_type=RuntimeError status=failed",
+            )
+        ]
+        if snapshot_fails
+        else []
+    )
+    assert caplog.record_tuples == expected_logs
+    assert "PRIVATE_SNAPSHOT_DETAIL" not in caplog.text

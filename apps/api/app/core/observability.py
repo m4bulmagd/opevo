@@ -1189,8 +1189,8 @@ class _Lifecycle:
             timeout_seconds=0.8,
         )
 
-    def shutdown(self) -> None:
-        _run_independent_signal_actions(
+    def shutdown(self) -> bool:
+        return _run_independent_signal_actions(
             (
                 ("traces", self.tracer_provider.shutdown),
                 ("metrics", self.meter_provider.shutdown),

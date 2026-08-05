@@ -17,6 +17,8 @@ from tests.fakes import CaptureMeter, CaptureTracer
             "https://collector.example/v1/metrics",
             {"trace", "metric"},
         ),
+        ("https://collector.example/v1/traces", None, {"trace"}),
+        (None, "https://collector.example/v1/metrics", {"metric"}),
         (None, None, set()),
     ],
 )
@@ -165,10 +167,48 @@ def test_worker_signal_lifecycle_flushes_and_shuts_down_both_signals() -> None:
     lifecycle = _Lifecycle(trace_provider, metric_provider)
 
     assert lifecycle.force_flush() is True
-    lifecycle.shutdown()
+    assert lifecycle.shutdown() is True
 
     assert trace_provider.calls == [("flush", 750), ("shutdown", None)]
     assert metric_provider.calls == [("flush", 750), ("shutdown", None)]
+
+
+def test_worker_observability_shutdown_propagates_real_signal_failure(caplog) -> None:
+    """Public worker shutdown must report a failure from either real signal path."""
+    from app.core.observability import Observability, _Lifecycle
+
+    calls: list[str] = []
+
+    class FailingTraceProvider:
+        def shutdown(self) -> None:
+            calls.append("traces")
+            raise RuntimeError("PRIVATE_TRACE_SHUTDOWN_DETAIL")
+
+    class RejectingMetricProvider:
+        def shutdown(self) -> bool:
+            calls.append("metrics")
+            return False
+
+    telemetry = Observability(
+        meter=CaptureMeter(),
+        tracer=CaptureTracer(),
+        lifecycle=_Lifecycle(FailingTraceProvider(), RejectingMetricProvider()),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = telemetry.shutdown()
+
+    assert result is False
+    assert set(calls) == {"traces", "metrics"}
+    assert caplog.record_tuples == [
+        (
+            "app.core.observability",
+            logging.WARNING,
+            "event=observability_shutdown_failed operation=shutdown_traces "
+            "error_type=RuntimeError status=failed",
+        )
+    ]
+    assert "PRIVATE_TRACE_SHUTDOWN_DETAIL" not in caplog.text
 
 
 def test_worker_exporters_preserve_success_and_isolate_cleanup_failures(caplog) -> None:
@@ -235,83 +275,56 @@ def test_worker_exporters_preserve_success_and_isolate_cleanup_failures(caplog) 
     assert "PRIVATE_METRIC_SHUTDOWN_DETAIL" not in caplog.text
 
 
-def test_worker_signal_actions_are_independent_and_fail_closed(caplog) -> None:
-    """A trace cleanup failure must not prevent metric cleanup from running."""
-    from app.core.observability import _run_independent_signal_actions
-
-    calls: list[str] = []
-
-    def fail_traces() -> None:
-        calls.append("traces")
-        raise RuntimeError("PRIVATE_TRACE_SHUTDOWN_DETAIL")
-
-    def reject_metrics() -> bool:
-        calls.append("metrics")
-        return False
-
-    with caplog.at_level(logging.WARNING):
-        result = _run_independent_signal_actions(
-            (("traces", fail_traces), ("metrics", reject_metrics)),
-            event="observability_shutdown_failed",
-            operation_prefix="shutdown",
-            timeout_seconds=0.2,
-        )
-
-    assert result is False
-    assert set(calls) == {"traces", "metrics"}
-    assert "PRIVATE_TRACE_SHUTDOWN_DETAIL" not in caplog.text
-
-
 def test_worker_signal_actions_do_not_wait_for_a_stalled_provider(caplog) -> None:
     """A stalled exporter cannot hold an isolated worker past its cleanup bound."""
     from app.core.observability import _run_independent_signal_actions
 
     release = threading.Event()
+    stalled_signal_started = threading.Event()
+    stalled_signal_finished = threading.Event()
     fast_signal_finished = threading.Event()
+    helper_finished = threading.Event()
+    results: list[bool] = []
 
     def stalled_trace() -> None:
-        release.wait(timeout=1)
+        stalled_signal_started.set()
+        try:
+            release.wait()
+        finally:
+            stalled_signal_finished.set()
 
     def fast_metric() -> None:
         fast_signal_finished.set()
 
-    started = time.monotonic()
+    def run_actions() -> None:
+        try:
+            results.append(
+                _run_independent_signal_actions(
+                    (("traces", stalled_trace), ("metrics", fast_metric)),
+                    event="observability_shutdown_failed",
+                    operation_prefix="shutdown",
+                    timeout_seconds=0.02,
+                )
+            )
+        finally:
+            helper_finished.set()
+
+    controller = threading.Thread(target=run_actions, daemon=True)
     try:
         with caplog.at_level(logging.WARNING):
-            result = _run_independent_signal_actions(
-                (("traces", stalled_trace), ("metrics", fast_metric)),
-                event="observability_shutdown_failed",
-                operation_prefix="shutdown",
-                timeout_seconds=0.02,
-            )
+            controller.start()
+            assert stalled_signal_started.wait(timeout=1)
+            assert fast_signal_finished.wait(timeout=1)
+            # This is a condition wait with 25x headroom over the 20ms bound.
+            assert helper_finished.wait(timeout=0.5)
     finally:
         release.set()
 
-    assert result is False
-    assert time.monotonic() - started < 0.2
-    assert fast_signal_finished.is_set()
+    assert stalled_signal_finished.wait(timeout=1)
+    controller.join(timeout=1)
+    assert not controller.is_alive()
+    assert results == [False]
     assert "event=observability_shutdown_failed" in caplog.text
-
-
-def test_worker_observability_propagates_explicit_lifecycle_rejection() -> None:
-    """Worker shutdown must expose a provider's explicit failure result."""
-    from app.core.observability import Observability
-
-    class RejectingLifecycle:
-        def force_flush(self) -> bool:
-            return False
-
-        def shutdown(self) -> bool:
-            return False
-
-    telemetry = Observability(
-        meter=CaptureMeter(),
-        tracer=CaptureTracer(),
-        lifecycle=RejectingLifecycle(),
-    )
-
-    assert telemetry.force_flush() is False
-    assert telemetry.shutdown() is False
 
 
 def test_lifecycle_worker_snapshot_exports_only_bounded_call_states() -> None:
