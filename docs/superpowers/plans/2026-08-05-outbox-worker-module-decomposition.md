@@ -1062,11 +1062,25 @@ def test_default_handler_lookup_returns_the_explicit_registry() -> None:
     assert get_default_outbox_handlers() is DEFAULT_OUTBOX_HANDLERS
 
 
-def test_worker_settings_import_with_complete_registry() -> None:
-    from app.workers import arq_worker
+def test_worker_settings_imports_with_the_complete_registry() -> None:
+    script = """
+from app.services.outbox_service import SUPPORTED_OUTBOX_TOPICS
+from app.workers import arq_worker
+from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
 
-    assert arq_worker.on_background_startup is not None
-    assert DEFAULT_OUTBOX_HANDLERS
+assert arq_worker.on_background_startup is not None
+assert frozenset(DEFAULT_OUTBOX_HANDLERS) == SUPPORTED_OUTBOX_TOPICS
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=API_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.anyio
@@ -1520,22 +1534,13 @@ git commit -m "refactor(api): share livekit delivery orchestration"
 - Preserves: verification lock, window/session validation, metadata, reconciliation, and activation persistence.
 - Completes: removal of the duplicated provider list/create/recovery algorithm.
 
-- [ ] **Step 1: Add a verification seam assertion before migration**
+- [ ] **Step 1: Record the verification behavior characterization baseline**
 
-In `test_forwarding_verification_dispatch_outbox.py`, monkeypatch the verification module's imported `ensure_livekit_dispatch` with an async capture function. Invoke the handler with a valid snapshot and assert the capture receives:
+This task is an explicitly approved, narrow exception to the failing-test-first rule because it is a pure dependency-ownership refactor with no intended observable behavior change. Do not add a permanent test that monkeypatches `ensure_livekit_dispatch` or asserts helper-call arguments; that would lock tests to implementation wiring instead of behavior.
 
-```text
-room_name == snapshot.room_name
-worker_name == snapshot.worker_name
-metadata == snapshot.metadata
-persisted_dispatch_id == snapshot.persisted_dispatch_id
-revalidate_account is callable
-reconcile is callable
-```
+Before production edits, inspect the existing verification suite against every behavior preserved by this task: lock ownership, window/session validation, metadata, provider list/create/recovery outcomes, reconciliation, account lifecycle revalidation, and activation persistence. If a real behavioral gap is found, add the smallest behavior-level test, run it RED for the missing behavior, and make it GREEN before continuing. Do not invent a seam assertion merely to force RED.
 
-Have the capture return one matching `LiveKitDispatch`; assert the existing activation persistence path receives that dispatch ID. This test must not duplicate the common algorithm matrix.
-
-- [ ] **Step 2: Run RED for verification helper delegation**
+- [ ] **Step 2: Run the unchanged characterization suite before migration**
 
 Run:
 
@@ -1544,7 +1549,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
   tests/workers/test_forwarding_verification_dispatch_outbox.py
 ```
 
-Expected: the new seam assertion fails because the verification handler still calls the provider directly.
+Expected: the complete verification suite passes before migration, establishing the characterization baseline. Record its test count in the task report.
 
 - [ ] **Step 3: Replace only the verification provider block**
 
