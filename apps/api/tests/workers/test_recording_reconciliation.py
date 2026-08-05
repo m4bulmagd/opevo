@@ -27,10 +27,10 @@ from app.services.recording_lifecycle_service import (
     START_RESULT_LEASE,
     RecordingLifecycleService,
 )
-from app.workers.jobs import outbox_topics
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.jobs.outbox_topics import deliver_recording_reconcile
-from app.workers.jobs.recording_reconciliation import (
+from app.workers.outbox import post_call
+from app.workers.outbox.post_call import deliver_recording_reconcile
+from app.workers.outbox.recording_reconciliation import (
     ReconciliationResult,
     RecordingReconciler,
 )
@@ -2703,7 +2703,7 @@ async def test_recording_handler_does_not_emit_for_invalid_payload(
         observability_gets += 1
         return observability
 
-    monkeypatch.setattr(outbox_topics, "get_observability", get_observability)
+    monkeypatch.setattr(post_call, "get_observability", get_observability)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await deliver_recording_reconcile(
@@ -2823,7 +2823,7 @@ async def test_recording_handler_uses_default_observability_for_valid_payload(
     operation_id = uuid4()
     observability = _RecordingObservability()
     monkeypatch.setattr(
-        outbox_topics,
+        post_call,
         "get_observability",
         lambda: observability,
         raising=False,

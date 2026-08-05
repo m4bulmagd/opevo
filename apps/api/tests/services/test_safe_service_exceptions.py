@@ -19,7 +19,7 @@ from app.workers.outbox.failures import (
     _outbox_error_class,
 )
 from app.workers.outbox.phone import deliver_phone_provision, deliver_phone_routing
-from app.workers.jobs.outbox_topics import deliver_summary_generate
+from app.workers.outbox.post_call import deliver_summary_generate
 
 
 @pytest.fixture(autouse=True)

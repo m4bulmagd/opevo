@@ -36,7 +36,7 @@ from app.models.outbox_event import OutboxEvent  # noqa: E402
 from app.models.usage_ledger import UsageLedger  # noqa: E402
 from app.providers.summaries.base import StructuredSummary  # noqa: E402
 from app.services.call_lifecycle_service import CallLifecycleService  # noqa: E402
-from app.workers.jobs.outbox_topics import deliver_summary_generate  # noqa: E402
+from app.workers.outbox.post_call import deliver_summary_generate  # noqa: E402
 
 
 class NoopEventPublisher:

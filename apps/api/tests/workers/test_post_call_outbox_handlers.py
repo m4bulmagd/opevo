@@ -21,23 +21,12 @@ from app.services.outbox_service import (
 from app.workers.outbox.delivery import outbox_delivery_job
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.jobs import outbox_topics
-from app.workers.jobs.recording_reconciliation import ReconciliationResult
-
-
-async def _missing_handler(*_args, **_kwargs):
-    pytest.fail("post-call outbox handler is not implemented")
-
-
-deliver_recording_reconcile = getattr(
-    outbox_topics,
-    "deliver_recording_reconcile",
-    _missing_handler,
+from app.workers.outbox import post_call
+from app.workers.outbox.post_call import (
+    deliver_recording_reconcile,
+    deliver_summary_generate,
 )
-deliver_summary_generate = getattr(
-    outbox_topics,
-    "deliver_summary_generate",
-    _missing_handler,
-)
+from app.workers.outbox.recording_reconciliation import ReconciliationResult
 
 
 class ExplodingNotificationProvider:
@@ -601,7 +590,7 @@ async def test_recording_reconcile_validates_reference_before_building_dependenc
         built = True
         raise AssertionError("builder must not run for invalid input")
 
-    monkeypatch.setattr(outbox_topics, "build_recording_reconciler", build)
+    monkeypatch.setattr(post_call, "build_recording_reconciler", build)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await deliver_recording_reconcile({}, malformed)
@@ -658,7 +647,7 @@ async def test_recording_reconcile_unexpected_failures_escape_the_outbox_wrapper
         def explode(_ctx):
             raise RuntimeError("BUILDER_CREDENTIAL_SENTINEL")
 
-        monkeypatch.setattr(outbox_topics, "build_recording_reconciler", explode)
+        monkeypatch.setattr(post_call, "build_recording_reconciler", explode)
         ctx = {}
     else:
         ctx = {"recording_reconciler": ExplodingReconciler()}

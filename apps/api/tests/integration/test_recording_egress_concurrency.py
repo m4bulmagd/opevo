@@ -38,8 +38,8 @@ from app.services.recording_lifecycle_service import (
     RecordingStartClaim,
 )
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.jobs.outbox_topics import deliver_recording_reconcile
-from app.workers.jobs.recording_reconciliation import RecordingReconciler
+from app.workers.outbox.post_call import deliver_recording_reconcile
+from app.workers.outbox.recording_reconciliation import RecordingReconciler
 
 
 FIXED_NOW = datetime(2026, 7, 20, 10, 0, tzinfo=UTC)

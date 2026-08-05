@@ -1,6 +1,5 @@
 """
 Unit tests for individual ARQ worker jobs:
-  - summary_job     (app/workers/jobs/summary.py)
   - notifications_job (app/workers/jobs/notifications.py)
 
 Each job is tested in isolation using fake providers/services and, where the job
@@ -10,7 +9,6 @@ factory with the in-memory SQLite session from the shared db_session fixture.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 from types import SimpleNamespace
 import traceback
@@ -31,100 +29,6 @@ from app.repositories.notification_repository import NotificationRepository
 # ---------------------------------------------------------------------------
 
 CTX: dict = {}
-
-
-# ===========================================================================
-# summary_job tests
-# ===========================================================================
-
-
-@dataclass(frozen=True)
-class FakeSummaryResult:
-    text: str | None
-    data: dict | None
-    job_enqueued: bool
-
-
-class FakeSummaryService:
-    """SummaryService replacement that returns a successful result."""
-
-    async def create_summary(self, payload: dict) -> FakeSummaryResult:
-        return FakeSummaryResult(
-            text="Caller enquired about opening hours.",
-            data={
-                "summary_text": "Caller enquired about opening hours.",
-                "caller_intent": "Ask about opening hours",
-                "action_items": ["Provide opening hours"],
-                "sentiment": "neutral",
-                "follow_up_required": False,
-            },
-            job_enqueued=True,
-        )
-
-
-class FakeFailingSummaryService:
-    """SummaryService replacement that signals a generation failure."""
-
-    async def create_summary(self, payload: dict) -> FakeSummaryResult:
-        return FakeSummaryResult(text=None, data=None, job_enqueued=False)
-
-
-@pytest.mark.anyio
-async def test_summary_job_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """summary_job returns structured data when the provider succeeds."""
-    from app.workers.jobs import summary as summary_module
-
-    monkeypatch.setattr(summary_module, "SummaryService", lambda provider=None: FakeSummaryService())
-
-    payload = {
-        "call_id": str(uuid4()),
-        "user_id": str(uuid4()),
-        "transcript": [
-            {"speaker": "CALLER", "text": "What are your opening hours?"},
-            {"speaker": "AGENT", "text": "We are open nine to five."},
-        ],
-    }
-
-    result = await summary_module.summary_job(CTX, payload)
-
-    assert result["summary_text"] == "Caller enquired about opening hours."
-    assert result["summary_data"]["caller_intent"] == "Ask about opening hours"
-    assert result["job_enqueued"] is True
-
-
-@pytest.mark.anyio
-async def test_summary_job_provider_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """summary_job returns empty result when the provider cannot generate a summary."""
-    from app.workers.jobs import summary as summary_module
-
-    monkeypatch.setattr(summary_module, "SummaryService", lambda provider=None: FakeFailingSummaryService())
-
-    payload = {
-        "call_id": str(uuid4()),
-        "user_id": str(uuid4()),
-        "transcript": [],
-    }
-
-    result = await summary_module.summary_job(CTX, payload)
-
-    assert result["summary_text"] is None
-    assert result["summary_data"] is None
-    assert result["job_enqueued"] is False
-
-
-@pytest.mark.anyio
-async def test_summary_job_empty_transcript(monkeypatch: pytest.MonkeyPatch) -> None:
-    """summary_job handles a payload with no transcript key gracefully."""
-    from app.workers.jobs import summary as summary_module
-
-    monkeypatch.setattr(summary_module, "SummaryService", lambda provider=None: FakeFailingSummaryService())
-
-    # transcript key is entirely absent — payload is "missing" the field
-    payload: dict = {"call_id": str(uuid4()), "user_id": str(uuid4())}
-
-    result = await summary_module.summary_job(CTX, payload)
-
-    assert result["job_enqueued"] is False
 
 
 # ===========================================================================

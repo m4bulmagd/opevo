@@ -1142,10 +1142,8 @@ def test_recording_runtime_has_one_reference_only_outbox_contract() -> None:
         REFERENCE_PAYLOAD_FIELDS,
         SUPPORTED_OUTBOX_TOPICS,
     )
-    from app.workers.jobs.outbox_topics import (
-        DEFAULT_OUTBOX_HANDLERS,
-        deliver_recording_reconcile,
-    )
+    from app.workers.jobs.outbox_topics import DEFAULT_OUTBOX_HANDLERS
+    from app.workers.outbox.post_call import deliver_recording_reconcile
 
     assert {
         topic for topic in SUPPORTED_OUTBOX_TOPICS if topic.startswith("recording.")
