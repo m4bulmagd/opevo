@@ -36,8 +36,8 @@ from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
 )
 from app.services.account_lifecycle_service import AccountLifecycleService
-from app.workers.jobs import account_deactivation as account_deactivation_module
-from app.workers.jobs.account_deactivation import deliver_account_deactivation
+from app.workers.outbox import account_deactivation as account_deactivation_module
+from app.workers.outbox.account_deactivation import deliver_account_deactivation
 from app.workers.outbox.failures import OutboxDeliveryError
 
 

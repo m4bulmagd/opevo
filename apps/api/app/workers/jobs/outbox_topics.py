@@ -85,9 +85,9 @@ from app.workers.outbox.failures import (
     OutboxDeliveryError,
     provider_failure_delivery_error,
 )
-from app.workers.jobs.account_deactivation import deliver_account_deactivation
+from app.workers.outbox.account_deactivation import deliver_account_deactivation
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
-from app.workers.jobs.provider_cleanup import deliver_provider_cleanup
+from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
 
 
 @dataclass(frozen=True)

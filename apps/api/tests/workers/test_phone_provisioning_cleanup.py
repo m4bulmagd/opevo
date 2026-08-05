@@ -20,7 +20,7 @@ from app.workers.outbox.delivery import (
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.jobs.outbox_topics import deliver_phone_provision
 from app.workers.jobs.phone_provisioning import phone_provisioning_job
-from app.workers.jobs.provider_cleanup import deliver_provider_cleanup
+from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
 
 
 class LateProvisioningProvider:

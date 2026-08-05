@@ -11,7 +11,7 @@ from app.core.provider_failures import ProviderFailure
 from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.services.outbox_service import OutboxService
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.jobs.provider_cleanup import deliver_provider_cleanup
+from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
 
 
 class RecordingTelephony:
