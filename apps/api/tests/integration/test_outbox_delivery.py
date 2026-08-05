@@ -2167,7 +2167,7 @@ async def test_routing_retries_and_reapplies_new_desired_state_after_mid_call_ch
 async def test_provisioning_provider_runs_without_provisioning_row_lock(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     async with outbox_session_factory() as session:
         user = User(
@@ -2234,7 +2234,7 @@ async def test_provisioning_provider_runs_without_provisioning_row_lock(
         async def disable_number(self, *, provider_number_id: str) -> str:
             return "app-disabled"
 
-    await phone_provisioning_job(
+    await provision_phone_number(
         {
             "session_factory": tracking_factory,
             "telephony_provider": LockProbingProvider(),
@@ -2254,7 +2254,7 @@ async def test_provisioning_provider_runs_without_provisioning_row_lock(
 async def test_same_provisioning_key_serializes_provider_execution_past_lease_overlap(
     outbox_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     async with outbox_session_factory() as session:
         user = User(
@@ -2303,7 +2303,7 @@ async def test_same_provisioning_key_serializes_provider_execution_past_lease_ov
     payload = {"user_id": str(user_id), "lifecycle_generation": 1}
     operation_key = "outbox:phone-provision:lease-overlap"
     first = asyncio.create_task(
-        phone_provisioning_job(
+        provision_phone_number(
             ctx,
             payload,
             provider_operation_key=operation_key,
@@ -2311,7 +2311,7 @@ async def test_same_provisioning_key_serializes_provider_execution_past_lease_ov
     )
     await asyncio.wait_for(first_provider_started.wait(), timeout=2)
     reclaimed = asyncio.create_task(
-        phone_provisioning_job(
+        provision_phone_number(
             ctx,
             payload,
             provider_operation_key=operation_key,
@@ -2332,7 +2332,7 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
     outbox_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.workers.jobs import outbox_topics
+    from app.workers.outbox import phone as phone_outbox
     from app.workers.outbox.delivery import outbox_delivery_job
 
     async with outbox_session_factory() as session:
@@ -2368,7 +2368,7 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
     async def capture(_ctx, payload, *, provider_operation_key):
         calls.append((payload, provider_operation_key))
 
-    monkeypatch.setattr(outbox_topics, "phone_provisioning_job", capture)
+    monkeypatch.setattr(phone_outbox, "provision_phone_number", capture)
 
     result = await outbox_delivery_job(
         {"session_factory": outbox_session_factory}

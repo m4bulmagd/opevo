@@ -18,8 +18,8 @@ from app.workers.outbox.delivery import (
     outbox_delivery_job,
 )
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.jobs.outbox_topics import deliver_phone_provision
-from app.workers.jobs.phone_provisioning import phone_provisioning_job
+from app.workers.outbox.phone import deliver_phone_provision
+from app.workers.outbox.phone_provisioning import provision_phone_number
 from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
 
 
@@ -136,7 +136,7 @@ async def test_phone_provisioning_admission_waits_for_prior_provider_cleanup(
 
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     with pytest.raises(UnresolvedProviderWorkError) as raised:
-        await phone_provisioning_job(
+        await provision_phone_number(
             {
                 "session_factory": session_factory,
                 "telephony_provider": ForbiddenProvider(),
@@ -170,7 +170,7 @@ async def test_late_provisioning_adopts_exact_identity_for_durable_cleanup(
     provider = LateProvisioningProvider(session_factory, user_id)
 
     with pytest.raises(AccountStateBlockedError):
-        await phone_provisioning_job(
+        await provision_phone_number(
             {
                 "session_factory": session_factory,
                 "telephony_provider": provider,
@@ -236,7 +236,7 @@ async def test_crash_before_cleanup_adoption_recovers_same_provider_order(
     }
 
     with pytest.raises(RuntimeError, match="simulated crash"):
-        await phone_provisioning_job(
+        await provision_phone_number(
             ctx,
             payload,
             provider_operation_key="activation:phone.provision:crash-boundary",
@@ -249,7 +249,7 @@ async def test_crash_before_cleanup_adoption_recovers_same_provider_order(
     )
 
     with pytest.raises(AccountStateBlockedError):
-        await phone_provisioning_job(
+        await provision_phone_number(
             ctx,
             payload,
             provider_operation_key="activation:phone.provision:crash-boundary",

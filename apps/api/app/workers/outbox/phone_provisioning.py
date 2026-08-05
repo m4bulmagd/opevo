@@ -309,7 +309,7 @@ async def _run_provider_attempt(
     ) from None
 
 
-async def phone_provisioning_job(
+async def provision_phone_number(
     ctx: dict[str, Any],
     payload: dict[str, Any],
     *,
@@ -317,7 +317,7 @@ async def phone_provisioning_job(
 ) -> None:
     user_id_str = payload.get("user_id")
     if not user_id_str:
-        logger.error("phone_provisioning_job: missing user_id in payload")
+        logger.error("provision_phone_number: missing user_id in payload")
         return
 
     user_id = UUID(user_id_str)
@@ -333,7 +333,7 @@ async def phone_provisioning_job(
         cleanup_repo = ProviderCleanupRepository(session)
         user = await user_repo.get_by_id_for_update(user_id)
         if not user:
-            logger.error(f"phone_provisioning_job: user {user_id} not found")
+            logger.error(f"provision_phone_number: user {user_id} not found")
             return
         country_code = (user.country_code or "FR").upper()
         if country_code != "FR":

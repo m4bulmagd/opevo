@@ -226,7 +226,7 @@ async def test_phone_provisioning_outbox_preserves_safe_provider_category(
     category: str,
     retryable: bool,
 ) -> None:
-    from app.workers.jobs import outbox_topics
+    from app.workers.outbox import phone as phone_outbox
 
     async def fail_provisioning(*_args, **_kwargs) -> None:
         raise ProviderFailure(
@@ -237,8 +237,8 @@ async def test_phone_provisioning_outbox_preserves_safe_provider_category(
         )
 
     monkeypatch.setattr(
-        outbox_topics,
-        "phone_provisioning_job",
+        phone_outbox,
+        "provision_phone_number",
         fail_provisioning,
     )
     from app.models.phone_number_provisioning import PhoneNumberProvisioning

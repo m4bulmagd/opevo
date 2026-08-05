@@ -29,7 +29,7 @@ from app.services.livekit_dispatch_service import LiveKitDispatchService
 from app.services.routing_fingerprint import routing_fingerprint
 from app.workers.outbox.delivery import outbox_delivery_job
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.jobs.outbox_topics import deliver_phone_routing
+from app.workers.outbox.phone import deliver_phone_routing
 
 
 FIXED_NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)

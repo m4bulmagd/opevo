@@ -66,7 +66,7 @@ from app.services.local_billing_service import (
 from app.services.outbox_service import OutboxService
 from app.workers.outbox import account_deactivation as account_deactivation_module
 from app.workers.outbox.account_deactivation import deliver_account_deactivation
-from app.workers.jobs.phone_provisioning import phone_provisioning_job
+from app.workers.outbox.phone_provisioning import provision_phone_number
 from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.jobs.outbox_topics import (
@@ -434,7 +434,7 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
     resume = asyncio.Event()
     provider = _BarrierProvisioningProvider(entered=entered, resume=resume)
     provisioning_task = asyncio.create_task(
-        phone_provisioning_job(
+        provision_phone_number(
             {
                 "session_factory": account_session_factory,
                 "telephony_provider": provider,

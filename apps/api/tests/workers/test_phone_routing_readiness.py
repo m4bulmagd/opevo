@@ -57,7 +57,7 @@ async def test_routing_stays_disabled_without_current_financial_access(
     period_end: datetime,
     balance: int,
 ) -> None:
-    from app.workers.jobs.outbox_topics import _routing_snapshot
+    from app.workers.outbox.phone import _routing_snapshot
 
     db_session.add(
         Subscription(
@@ -191,7 +191,7 @@ async def test_claimed_phone_provision_rechecks_account_before_provider_io(
     active_user,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.workers.jobs import phone_provisioning
+    from app.workers.outbox import phone_provisioning
 
     user_id = active_user.id
     operation_key = f"phone-provision-race:{user_id}"
@@ -225,7 +225,7 @@ async def test_claimed_phone_provision_rechecks_account_before_provider_io(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(AccountStateBlockedError) as raised:
-        await phone_provisioning.phone_provisioning_job(
+        await phone_provisioning.provision_phone_number(
             {
                 "session_factory": session_factory,
                 "telephony_provider": Provider(),
@@ -246,7 +246,7 @@ async def test_stale_account_generation_never_provisions_phone(
     db_session,
     active_user,
 ) -> None:
-    from app.workers.jobs import outbox_topics
+    from app.workers.outbox import phone as phone_outbox
 
     user_id = active_user.id
     active_user.lifecycle_generation = 2
@@ -281,7 +281,7 @@ async def test_stale_account_generation_never_provisions_phone(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await outbox_topics.deliver_phone_provision(
+        await phone_outbox.deliver_phone_provision(
             {
                 "session_factory": session_factory,
                 "telephony_provider": Provider(),
@@ -300,7 +300,7 @@ async def test_claimed_phone_enable_rechecks_account_before_provider_io(
     active_user,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.workers.jobs import outbox_topics
+    from app.workers.outbox import phone as phone_outbox
 
     user_id = active_user.id
     now = datetime.now(UTC)
@@ -367,7 +367,7 @@ async def test_claimed_phone_enable_rechecks_account_before_provider_io(
             provider_calls.append(f"disable:{provider_number_id}")
             return "app-disabled"
 
-    real_set_routing_target = outbox_topics._set_routing_target
+    real_set_routing_target = phone_outbox._set_routing_target
 
     async def set_target_then_deactivate(*args, **kwargs):
         await real_set_routing_target(*args, **kwargs)
@@ -376,14 +376,14 @@ async def test_claimed_phone_enable_rechecks_account_before_provider_io(
         await db_session.commit()
 
     monkeypatch.setattr(
-        outbox_topics,
+        phone_outbox,
         "_set_routing_target",
         set_target_then_deactivate,
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as raised:
-        await outbox_topics.deliver_phone_routing(
+        await phone_outbox.deliver_phone_routing(
             {
                 "session_factory": session_factory,
                 "telephony_provider": Provider(),
@@ -401,7 +401,7 @@ async def test_stale_account_generation_never_enables_phone(
     db_session,
     active_user,
 ) -> None:
-    from app.workers.jobs import outbox_topics
+    from app.workers.outbox import phone as phone_outbox
 
     user_id = active_user.id
     active_user.lifecycle_generation = 2
@@ -476,7 +476,7 @@ async def test_stale_account_generation_never_enables_phone(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await outbox_topics.deliver_phone_routing(
+        await phone_outbox.deliver_phone_routing(
             {
                 "session_factory": session_factory,
                 "telephony_provider": Provider(),

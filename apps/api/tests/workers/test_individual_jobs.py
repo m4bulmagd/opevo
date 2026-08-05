@@ -288,7 +288,7 @@ async def test_notifications_job_missing_user_id(
 
 
 # ===========================================================================
-# phone_provisioning_job tests
+# provision_phone_number tests
 # ===========================================================================
 
 
@@ -389,7 +389,7 @@ async def test_phone_provision_outbox_missing_provider_identity_is_terminal_befo
     monkeypatch: pytest.MonkeyPatch,
     case: str,
 ) -> None:
-    from app.workers.jobs import outbox_topics
+    from app.workers.outbox import phone as phone_outbox
     from app.workers.outbox.failures import OutboxDeliveryError
 
     user_id = uuid4()
@@ -428,9 +428,9 @@ async def test_phone_provision_outbox_missing_provider_identity_is_terminal_befo
         nonlocal job_called
         job_called = True
 
-    monkeypatch.setattr(outbox_topics, "UserRepository", Users)
-    monkeypatch.setattr(outbox_topics, "PhoneNumberProvisioningRepository", Provisionings)
-    monkeypatch.setattr(outbox_topics, "phone_provisioning_job", capture)
+    monkeypatch.setattr(phone_outbox, "UserRepository", Users)
+    monkeypatch.setattr(phone_outbox, "PhoneNumberProvisioningRepository", Provisionings)
+    monkeypatch.setattr(phone_outbox, "provision_phone_number", capture)
     event = SimpleNamespace(
         payload={
             "user_id": str(user_id),
@@ -440,7 +440,7 @@ async def test_phone_provision_outbox_missing_provider_identity_is_terminal_befo
     )
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await outbox_topics.deliver_phone_provision(
+        await phone_outbox.deliver_phone_provision(
             {"session_factory": SessionContext},
             event,
         )
@@ -454,7 +454,7 @@ async def test_phone_provision_outbox_missing_provider_identity_is_terminal_befo
 async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.workers.jobs import outbox_topics
+    from app.workers.outbox import phone as phone_outbox
     from app.workers.outbox.failures import OutboxDeliveryError
 
     user_id = uuid4()
@@ -507,10 +507,10 @@ async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key
     async def capture(_ctx, payload, *, provider_operation_key):
         captured.append((payload, provider_operation_key))
 
-    monkeypatch.setattr(outbox_topics, "UserRepository", Users)
-    monkeypatch.setattr(outbox_topics, "PhoneNumberProvisioningRepository", Provisionings)
-    monkeypatch.setattr(outbox_topics, "PhoneNumberRepository", Phones)
-    monkeypatch.setattr(outbox_topics, "phone_provisioning_job", capture)
+    monkeypatch.setattr(phone_outbox, "UserRepository", Users)
+    monkeypatch.setattr(phone_outbox, "PhoneNumberProvisioningRepository", Provisionings)
+    monkeypatch.setattr(phone_outbox, "PhoneNumberRepository", Phones)
+    monkeypatch.setattr(phone_outbox, "provision_phone_number", capture)
     event = SimpleNamespace(
         payload={
             "user_id": str(user_id),
@@ -520,7 +520,7 @@ async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key
     )
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await outbox_topics.deliver_phone_provision(
+        await phone_outbox.deliver_phone_provision(
             {"session_factory": SessionContext},
             event,
         )
@@ -545,7 +545,7 @@ class CapturingPhoneProvisioningNotificationRepository:
         self.calls.append(kwargs)
 
 
-def install_phone_provisioning_job_fakes(
+def install_provision_phone_number_fakes(
     monkeypatch: pytest.MonkeyPatch,
     *,
     error: Exception,
@@ -554,7 +554,7 @@ def install_phone_provisioning_job_fakes(
     CapturingPhoneProvisioningRepository,
     CapturingPhoneProvisioningNotificationRepository,
 ]:
-    from app.workers.jobs import phone_provisioning as phone_provisioning_module
+    from app.workers.outbox import phone_provisioning as phone_provisioning_module
 
     session = FakePhoneProvisioningSession()
     provisioning_repository = CapturingPhoneProvisioningRepository()
@@ -623,11 +623,11 @@ def install_phone_provisioning_job_fakes(
 
 
 @pytest.mark.anyio
-async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_default(
+async def test_provision_phone_number_persists_successful_state_and_forces_fr_default(
     db_session, active_user
 ) -> None:
     from app.models.phone_number_provisioning import PhoneNumberProvisioning
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     active_user.country_code = None
     await db_session.commit()
@@ -635,7 +635,7 @@ async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_de
     provider = CapturingProvisioningProvider()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await phone_provisioning_job(
+    await provision_phone_number(
         {
             "telephony_provider": provider,
             "session_factory": session_factory,
@@ -671,12 +671,12 @@ async def test_phone_provisioning_job_persists_successful_state_and_forces_fr_de
 
 
 @pytest.mark.anyio
-async def test_phone_provisioning_job_defaults_to_local_factory_without_credentials(
+async def test_provision_phone_number_defaults_to_local_factory_without_credentials(
     db_session,
     active_user,
 ) -> None:
     from app.models.phone_number_provisioning import PhoneNumberProvisioning
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     user_id = active_user.id
     active_user.country_code = "FR"
@@ -684,7 +684,7 @@ async def test_phone_provisioning_job_defaults_to_local_factory_without_credenti
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     operation_key = "activation:phone.provision:local-default"
 
-    await phone_provisioning_job(
+    await provision_phone_number(
         {"session_factory": session_factory},
         {
             "user_id": str(user_id),
@@ -718,7 +718,7 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
 ) -> None:
     from app.models.phone_number_provisioning import PhoneNumberProvisioning
     from app.providers.telephony.base import TelephonyProvisioningReviewRequired
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     class RetryThenSucceedProvider(CapturingProvisioningProvider):
         async def provision_number(
@@ -747,7 +747,7 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
     provider = RetryThenSucceedProvider()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await phone_provisioning_job(
+    await provision_phone_number(
         {
             "telephony_provider": provider,
             "session_factory": session_factory,
@@ -758,7 +758,7 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
         },
         provider_operation_key="activation:phone.provision:stable",
     )
-    await phone_provisioning_job(
+    await provision_phone_number(
         {
             "telephony_provider": provider,
             "session_factory": session_factory,
@@ -790,7 +790,7 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
 @pytest.mark.anyio
 async def test_phone_provider_pending_attempt_uses_refreshable_running_state() -> None:
     from app.providers.telephony.base import TelephonyProvisioningPending
-    from app.workers.jobs.phone_provisioning import _run_provider_attempt
+    from app.workers.outbox.phone_provisioning import _run_provider_attempt
 
     class Session:
         commits = 0
@@ -839,7 +839,7 @@ async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
 ) -> None:
     from app.models.phone_number_provisioning import PhoneNumberProvisioning
     from app.providers.telephony.base import TelephonyProvisioningPending
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     class PendingProvider(CapturingProvisioningProvider):
         async def provision_number(
@@ -855,7 +855,7 @@ async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(TelephonyProvisioningPending):
-        await phone_provisioning_job(
+        await provision_phone_number(
             {
                 "telephony_provider": provider,
                 "session_factory": session_factory,
@@ -883,15 +883,15 @@ async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
 
 
 @pytest.mark.anyio
-async def test_phone_provisioning_job_persists_retryable_failure_state(
+async def test_provision_phone_number_persists_retryable_failure_state(
     db_session, active_user
 ) -> None:
     from app.models.phone_number_provisioning import PhoneNumberProvisioning
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await phone_provisioning_job(
+    await provision_phone_number(
         {
             "telephony_provider": ReviewRequiredProvisioningProvider(),
             "session_factory": session_factory,
@@ -931,7 +931,7 @@ async def test_phone_provisioning_review_failure_does_not_log_exception_message(
     caplog,
 ) -> None:
     from app.providers.telephony.base import TelephonyProvisioningReviewRequired
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     error = TelephonyProvisioningReviewRequired(
         reason="provider_review_required",
@@ -939,11 +939,11 @@ async def test_phone_provisioning_review_failure_does_not_log_exception_message(
     )
     error.args = ("AUTHORIZATION_SENTINEL_FROM_REVIEW_EXCEPTION",)
     session, provisioning_repository, notification_repository = (
-        install_phone_provisioning_job_fakes(monkeypatch, error=error)
+        install_provision_phone_number_fakes(monkeypatch, error=error)
     )
 
     with caplog.at_level(logging.WARNING):
-        await phone_provisioning_job(
+        await provision_phone_number(
             {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
             {
                 "user_id": "00000000-0000-0000-0000-000000000123",
@@ -965,14 +965,14 @@ async def test_phone_provisioning_unexpected_failure_does_not_log_or_persist_exc
     monkeypatch: pytest.MonkeyPatch,
     caplog,
 ) -> None:
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     error_message = (
         "PHONE_SENTINEL_+33612345678 "
         "AUTHORIZATION_SENTINEL_FROM_PROVISIONING_PROVIDER"
     )
     session, provisioning_repository, _notification_repository = (
-        install_phone_provisioning_job_fakes(
+        install_provision_phone_number_fakes(
             monkeypatch,
             error=RuntimeError(error_message),
         )
@@ -980,7 +980,7 @@ async def test_phone_provisioning_unexpected_failure_does_not_log_or_persist_exc
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError) as exc_info:
-            await phone_provisioning_job(
+            await provision_phone_number(
                 {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
                 {
                     "user_id": "00000000-0000-0000-0000-000000000123",
@@ -1017,10 +1017,10 @@ async def test_phone_provisioning_preserves_safe_provider_category(
     can_retry: bool,
 ) -> None:
     from app.core.provider_failures import ProviderFailure
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     session, provisioning_repository, _notification_repository = (
-        install_phone_provisioning_job_fakes(
+        install_provision_phone_number_fakes(
             monkeypatch,
             error=ProviderFailure(
                 provider="telnyx",
@@ -1032,7 +1032,7 @@ async def test_phone_provisioning_preserves_safe_provider_category(
     )
 
     with pytest.raises(ProviderFailure) as exc_info:
-        await phone_provisioning_job(
+        await provision_phone_number(
             {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
             {
                 "user_id": "00000000-0000-0000-0000-000000000123",
@@ -1053,12 +1053,12 @@ async def test_phone_provisioning_sanitizes_sensitive_exception_class_name(
     monkeypatch: pytest.MonkeyPatch,
     caplog,
 ) -> None:
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     sensitive_type_sentinel = "ProviderAuthorizationTokenSentinelError"
     sensitive_error_type = type(sensitive_type_sentinel, (RuntimeError,), {})
     session, provisioning_repository, _notification_repository = (
-        install_phone_provisioning_job_fakes(
+        install_provision_phone_number_fakes(
             monkeypatch,
             error=sensitive_error_type("provider failure"),
         )
@@ -1066,7 +1066,7 @@ async def test_phone_provisioning_sanitizes_sensitive_exception_class_name(
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError) as exc_info:
-            await phone_provisioning_job(
+            await provision_phone_number(
                 {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
                 {
                     "user_id": "00000000-0000-0000-0000-000000000123",
@@ -1101,12 +1101,12 @@ async def test_phone_provisioning_mark_failed_error_does_not_chain_provider_secr
     monkeypatch: pytest.MonkeyPatch,
     caplog,
 ) -> None:
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     provider_sentinel = "PROVIDER_AUTHORIZATION_SENTINEL_FROM_MARK_FAILED_PATH"
     persistence_sentinel = "PERSISTENCE_TOKEN_SENTINEL_FROM_MARK_FAILED"
     session, provisioning_repository, _notification_repository = (
-        install_phone_provisioning_job_fakes(
+        install_provision_phone_number_fakes(
             monkeypatch,
             error=RuntimeError(provider_sentinel),
         )
@@ -1119,7 +1119,7 @@ async def test_phone_provisioning_mark_failed_error_does_not_chain_provider_secr
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError) as exc_info:
-            await phone_provisioning_job(
+            await provision_phone_number(
                 {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
                 {
                     "user_id": "00000000-0000-0000-0000-000000000123",
@@ -1141,12 +1141,12 @@ async def test_phone_provisioning_commit_error_does_not_chain_provider_secrets(
     monkeypatch: pytest.MonkeyPatch,
     caplog,
 ) -> None:
-    from app.workers.jobs.phone_provisioning import phone_provisioning_job
+    from app.workers.outbox.phone_provisioning import provision_phone_number
 
     provider_sentinel = "PROVIDER_AUTHORIZATION_SENTINEL_FROM_COMMIT_PATH"
     persistence_sentinel = "PERSISTENCE_TOKEN_SENTINEL_FROM_COMMIT"
     session, _provisioning_repository, _notification_repository = (
-        install_phone_provisioning_job_fakes(
+        install_provision_phone_number_fakes(
             monkeypatch,
             error=RuntimeError(provider_sentinel),
         )
@@ -1159,7 +1159,7 @@ async def test_phone_provisioning_commit_error_does_not_chain_provider_secrets(
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError) as exc_info:
-            await phone_provisioning_job(
+            await provision_phone_number(
                 {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
                 {
                     "user_id": "00000000-0000-0000-0000-000000000123",
