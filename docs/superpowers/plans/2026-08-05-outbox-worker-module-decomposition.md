@@ -1068,19 +1068,22 @@ from app.services.outbox_service import SUPPORTED_OUTBOX_TOPICS
 from app.workers import arq_worker
 from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
 
-assert arq_worker.on_background_startup is not None
-assert frozenset(DEFAULT_OUTBOX_HANDLERS) == SUPPORTED_OUTBOX_TOPICS
+if arq_worker.on_background_startup is None:
+    raise SystemExit("Background worker startup hook is missing")
+if frozenset(DEFAULT_OUTBOX_HANDLERS) != SUPPORTED_OUTBOX_TOPICS:
+    raise SystemExit("Default outbox registry is incomplete")
 """
 
     completed = subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, "-E", "-c", script],
         cwd=API_ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
 
-    assert completed.returncode == 0, completed.stderr
+    if completed.returncode != 0:
+        pytest.fail(completed.stderr)
 
 
 @pytest.mark.anyio
