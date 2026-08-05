@@ -36,10 +36,12 @@ class _Provider:
         self.trace = trace
         self.list_results = list_results or [[]]
         self.create_result = create_result
+        self.list_requests: list[str] = []
         self.create_requests: list[dict[str, str]] = []
 
     async def list_dispatches(self, *, room_name: str) -> list[LiveKitDispatch]:
         self.trace.append("list")
+        self.list_requests.append(room_name)
         result = self.list_results.pop(0)
         if isinstance(result, Exception):
             raise result
@@ -123,22 +125,26 @@ async def _ensure(
 @pytest.mark.anyio
 async def test_existing_dispatch_is_returned_without_create() -> None:
     trace: list[str] = []
-    provider = _Provider(trace, list_results=[[_dispatch("existing")]])
+    existing = _dispatch("existing")
+    provider = _Provider(trace, list_results=[[existing]])
 
     dispatch = await _ensure(provider, trace)
 
-    assert dispatch.id == "existing"
+    assert dispatch is existing
+    assert provider.list_requests == ["room"]
     assert trace == ["validate", "list", "validate", "reconcile(existing)"]
 
 
 @pytest.mark.anyio
 async def test_missing_dispatch_is_created_and_reconciled() -> None:
     trace: list[str] = []
-    provider = _Provider(trace)
+    created = _dispatch("created")
+    provider = _Provider(trace, create_result=created)
 
     dispatch = await _ensure(provider, trace)
 
-    assert dispatch.id == "created"
+    assert dispatch is created
+    assert provider.list_requests == ["room"]
     assert provider.create_requests == [
         {"agent_name": "worker", "room_name": "room", "metadata": "metadata"}
     ]
@@ -156,15 +162,17 @@ async def test_missing_dispatch_is_created_and_reconciled() -> None:
 @pytest.mark.anyio
 async def test_retryable_create_failure_relists_and_recovers() -> None:
     trace: list[str] = []
+    recovered = _dispatch("recovered")
     provider = _Provider(
         trace,
-        list_results=[[], [_dispatch("recovered")]],
+        list_results=[[], [recovered]],
         create_result=_retryable_failure(),
     )
 
     dispatch = await _ensure(provider, trace)
 
-    assert dispatch.id == "recovered"
+    assert dispatch is recovered
+    assert provider.list_requests == ["room", "room"]
     assert trace == [
         "validate",
         "list",
@@ -181,10 +189,11 @@ async def test_retryable_create_failure_relists_and_recovers() -> None:
 @pytest.mark.anyio
 async def test_retryable_create_failure_without_recovery_is_retryable() -> None:
     trace: list[str] = []
+    retryable_failure = _retryable_failure()
     provider = _Provider(
         trace,
         list_results=[[], []],
-        create_result=_retryable_failure(),
+        create_result=retryable_failure,
     )
 
     with pytest.raises(OutboxDeliveryError) as caught:
@@ -192,6 +201,11 @@ async def test_retryable_create_failure_without_recovery_is_retryable() -> None:
 
     assert caught.value.error_code == "provider_retryable"
     assert caught.value.retryable is True
+    assert caught.value.exhaustible is True
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is retryable_failure
+    assert caught.value.__suppress_context__ is True
+    assert provider.list_requests == ["room", "room"]
     assert trace == [
         "validate",
         "list",
@@ -221,6 +235,9 @@ async def test_terminal_create_failure_does_not_relist() -> None:
 
     assert caught.value.error_code == "provider_terminal"
     assert caught.value.retryable is False
+    assert caught.value.exhaustible is True
+    assert caught.value.__cause__ is terminal_failure
+    assert provider.list_requests == ["room"]
     assert trace == [
         "validate",
         "list",
@@ -234,9 +251,10 @@ async def test_terminal_create_failure_does_not_relist() -> None:
 @pytest.mark.anyio
 async def test_initial_provider_configuration_failure_is_terminal_configuration() -> None:
     trace: list[str] = []
+    configuration_error = LiveKitDispatchConfigurationError("missing")
     provider = _Provider(
         trace,
-        list_results=[LiveKitDispatchConfigurationError("missing")],
+        list_results=[configuration_error],
     )
 
     with pytest.raises(OutboxDeliveryError) as caught:
@@ -244,7 +262,148 @@ async def test_initial_provider_configuration_failure_is_terminal_configuration(
 
     assert caught.value.error_code == "dispatch_configuration"
     assert caught.value.retryable is False
+    assert caught.value.exhaustible is True
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is configuration_error
+    assert caught.value.__suppress_context__ is True
+    assert provider.list_requests == ["room"]
     assert trace == ["validate", "list"]
+
+
+@pytest.mark.anyio
+async def test_initial_provider_failure_is_mapped_with_its_exact_cause() -> None:
+    trace: list[str] = []
+    initial_failure = _retryable_failure()
+    provider = _Provider(trace, list_results=[initial_failure])
+
+    with pytest.raises(OutboxDeliveryError) as caught:
+        await _ensure(provider, trace)
+
+    assert caught.value.error_code == "provider_retryable"
+    assert caught.value.retryable is True
+    assert caught.value.exhaustible is True
+    assert caught.value.__cause__ is initial_failure
+    assert provider.list_requests == ["room"]
+    assert trace == ["validate", "list"]
+
+
+@pytest.mark.anyio
+async def test_create_configuration_failure_is_terminal_with_suppressed_context() -> None:
+    trace: list[str] = []
+    configuration_error = LiveKitDispatchConfigurationError("missing")
+    provider = _Provider(trace, create_result=configuration_error)
+
+    with pytest.raises(OutboxDeliveryError) as caught:
+        await _ensure(provider, trace)
+
+    assert caught.value.error_code == "dispatch_configuration"
+    assert caught.value.retryable is False
+    assert caught.value.exhaustible is True
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is configuration_error
+    assert caught.value.__suppress_context__ is True
+    assert provider.list_requests == ["room"]
+    assert trace == [
+        "validate",
+        "list",
+        "validate",
+        "reconcile(empty)",
+        "validate",
+        "create",
+    ]
+
+
+@pytest.mark.anyio
+async def test_recovery_list_provider_failure_is_mapped_with_its_exact_cause() -> None:
+    trace: list[str] = []
+    recovery_failure = ProviderFailure(
+        provider="livekit",
+        operation="list_dispatches",
+        disposition="terminal",
+        error_class="authentication",
+    )
+    provider = _Provider(
+        trace,
+        list_results=[[], recovery_failure],
+        create_result=_retryable_failure(),
+    )
+
+    with pytest.raises(OutboxDeliveryError) as caught:
+        await _ensure(provider, trace)
+
+    assert caught.value.error_code == "provider_terminal"
+    assert caught.value.retryable is False
+    assert caught.value.exhaustible is True
+    assert caught.value.__cause__ is recovery_failure
+    assert provider.list_requests == ["room", "room"]
+    assert trace == [
+        "validate",
+        "list",
+        "validate",
+        "reconcile(empty)",
+        "validate",
+        "create",
+        "list",
+    ]
+
+
+@pytest.mark.anyio
+async def test_recovery_list_configuration_failure_propagates_unchanged() -> None:
+    trace: list[str] = []
+    configuration_error = LiveKitDispatchConfigurationError("missing")
+    provider = _Provider(
+        trace,
+        list_results=[[], configuration_error],
+        create_result=_retryable_failure(),
+    )
+
+    with pytest.raises(LiveKitDispatchConfigurationError) as caught:
+        await _ensure(provider, trace)
+
+    assert caught.value is configuration_error
+    assert provider.list_requests == ["room", "room"]
+    assert trace == [
+        "validate",
+        "list",
+        "validate",
+        "reconcile(empty)",
+        "validate",
+        "create",
+        "list",
+    ]
+
+
+@pytest.mark.anyio
+async def test_created_dispatch_rejected_by_reconciliation_is_retryable() -> None:
+    trace: list[str] = []
+    created = _dispatch("created")
+    provider = _Provider(trace, create_result=created)
+
+    def reconcile(dispatches: list[LiveKitDispatch]) -> LiveKitDispatch | None:
+        trace.append(
+            f"reconcile({','.join(dispatch.id for dispatch in dispatches) or 'empty'})"
+        )
+        return None
+
+    with pytest.raises(OutboxDeliveryError) as caught:
+        await _ensure(provider, trace, reconcile=reconcile)
+
+    assert caught.value.error_code == "provider_retryable"
+    assert caught.value.retryable is True
+    assert caught.value.exhaustible is True
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert caught.value.__suppress_context__ is False
+    assert provider.list_requests == ["room"]
+    assert trace == [
+        "validate",
+        "list",
+        "validate",
+        "reconcile(empty)",
+        "validate",
+        "create",
+        "reconcile(created)",
+    ]
 
 
 @pytest.mark.anyio
@@ -257,6 +416,11 @@ async def test_persisted_identity_without_provider_match_is_conflict() -> None:
 
     assert caught.value.error_code == "dispatch_conflict"
     assert caught.value.retryable is False
+    assert caught.value.exhaustible is True
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert caught.value.__suppress_context__ is False
+    assert provider.list_requests == ["room"]
     assert trace == ["validate", "list", "validate", "reconcile(empty)"]
 
 
@@ -274,6 +438,7 @@ async def test_reconciliation_conflict_propagates_without_create() -> None:
         await _ensure(provider, trace, reconcile=reconcile)
 
     assert caught.value is reconciliation_error
+    assert provider.list_requests == ["room"]
     assert trace == ["validate", "list", "validate", "reconcile(existing)"]
 
 
@@ -295,6 +460,7 @@ async def test_lifecycle_invalidation_before_list_prevents_provider_io() -> None
         )
 
     assert caught.value is lifecycle_error
+    assert provider.list_requests == []
     assert trace == ["validate"]
 
 
@@ -320,6 +486,7 @@ async def test_lifecycle_invalidation_after_recovery_list_prevents_persistence_r
         )
 
     assert caught.value is lifecycle_error
+    assert provider.list_requests == ["room", "room"]
     assert trace == [
         "validate",
         "list",
