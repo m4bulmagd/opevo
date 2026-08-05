@@ -222,6 +222,36 @@ async def test_aclose_twice_cancels_sleeper_once_without_closing_redis(monkeypat
 
 
 @pytest.mark.anyio
+async def test_aclose_propagates_external_cancellation(monkeypatch) -> None:
+    """Cancelling shutdown must not be mistaken for owned-task cancellation."""
+    redis = _Redis(depths=[1], ranges=[[(b"ignored", 10_000.0)]])
+    telemetry = _Telemetry()
+    sleep_started = asyncio.Event()
+    owned_cancellation_started = asyncio.Event()
+
+    async def cancellation_cleanup(_seconds: float) -> None:
+        sleep_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            owned_cancellation_started.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr("app.workers.queue_observer.asyncio.sleep", cancellation_cleanup)
+    observer = _observer(redis, telemetry)
+    observer.start()
+    await sleep_started.wait()
+
+    close_task = asyncio.create_task(observer.aclose())
+    await owned_cancellation_started.wait()
+    close_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+    await observer.aclose()
+
+
+@pytest.mark.anyio
 async def test_runner_propagates_cancellation_from_sleep(monkeypatch) -> None:
     """Cancellation is control flow and must not become a Redis warning."""
     redis = _Redis(depths=[1], ranges=[[(b"ignored", 10_000.0)]])
