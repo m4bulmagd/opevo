@@ -1659,19 +1659,21 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     assert "worker-lifecycle" in contributing
     assert "worker-background" in contributing
 
-    staging_operational_commands = [
-        line.strip()
-        for line in staging.splitlines()
-        if line.startswith("docker compose")
-        and re.search(r"\s(logs|ps|restart)\b", line)
+    staging_shell_blocks = re.findall(
+        r"```(?:bash|sh)\n(?P<body>.*?)\n```", staging, re.DOTALL
+    )
+    staging_log_commands = [
+        command.strip()
+        for block in staging_shell_blocks
+        for command in re.sub(r"\\\n[ \t]*", " ", block).splitlines()
+        if re.search(r"^\s*docker compose\b.*\blogs\b", command)
     ]
-    assert staging_operational_commands
-    for command in staging_operational_commands:
+    assert staging_log_commands
+    for command in staging_log_commands:
         assert "presvo-worker" not in command
         assert re.search(r"(?<![-\w])worker(?![-\w])", command) is None
-        if "worker-" in command:
-            assert "worker-lifecycle" in command
-            assert "worker-background" in command
+        assert "worker-lifecycle" in command
+        assert "worker-background" in command
 
     status_worker_isolation = next(
         line for line in status.splitlines() if "Worker isolation (4A + 4B)" in line
