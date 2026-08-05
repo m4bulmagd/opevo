@@ -30,8 +30,8 @@ from app.services.outbox_service import OutboxService
 from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.workers.outbox.delivery import outbox_delivery_job
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.jobs import outbox_topics
-from app.workers.jobs.outbox_topics import deliver_livekit_dispatch
+from app.workers.outbox import customer_dispatch
+from app.workers.outbox.customer_dispatch import deliver_livekit_dispatch
 
 
 @pytest.fixture(autouse=True)
@@ -105,7 +105,7 @@ class _ForeignCreateProvider(_Provider):
 
 def _reconciliation_snapshot(*, persisted_dispatch_id: str | None = None):
     call_id = UUID("00000000-0000-0000-0000-000000000011")
-    return outbox_topics._DispatchSnapshot(
+    return customer_dispatch._DispatchSnapshot(
         call_id=call_id,
         user_id=UUID("00000000-0000-0000-0000-000000000012"),
         agent_config_id=UUID("00000000-0000-0000-0000-000000000013"),
@@ -187,7 +187,7 @@ def test_customer_reconciliation_requires_a_valid_matching_customer_contract() -
         ),
     }
 
-    reconciled = outbox_topics._reconcile_dispatches(
+    reconciled = customer_dispatch._reconcile_dispatches(
         snapshot,
         [_customer_reconciliation_dispatch(snapshot, json.dumps(valid))],
     )
@@ -196,7 +196,7 @@ def test_customer_reconciliation_requires_a_valid_matching_customer_contract() -
     assert reconciled.id == "reconciled-dispatch"
     for metadata in invalid_metadata.values():
         with pytest.raises(OutboxDeliveryError) as caught:
-            outbox_topics._reconcile_dispatches(
+            customer_dispatch._reconcile_dispatches(
                 snapshot,
                 [_customer_reconciliation_dispatch(snapshot, metadata)],
             )
@@ -207,7 +207,7 @@ def test_customer_reconciliation_requires_a_valid_matching_customer_contract() -
 def test_customer_reconciliation_rejects_mismatched_persisted_identity() -> None:
     snapshot = _reconciliation_snapshot(persisted_dispatch_id="persisted-other")
     with pytest.raises(OutboxDeliveryError) as caught:
-        outbox_topics._reconcile_dispatches(
+        customer_dispatch._reconcile_dispatches(
             snapshot,
             [
                 _customer_reconciliation_dispatch(
@@ -229,7 +229,7 @@ async def test_customer_reconciliation_never_persists_foreign_agent_identity(
 ) -> None:
     call, event, _subscription = await _seed_dispatch(db_session)
     call_id = call.id
-    snapshot = outbox_topics._DispatchSnapshot(
+    snapshot = customer_dispatch._DispatchSnapshot(
         call_id=call.id,
         user_id=call.user_id,
         agent_config_id=call.agent_config_id,
@@ -254,7 +254,7 @@ async def test_customer_reconciliation_never_persists_foreign_agent_identity(
 
     get_settings.cache_clear()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -437,7 +437,7 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
 
     get_settings.cache_clear()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -503,7 +503,7 @@ async def test_dispatch_greeting_uses_projected_business_name_and_bounds_owner_c
     await db_session.commit()
     provider = _Provider()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -581,7 +581,7 @@ async def test_activation_flow_missing_business_name_fails_dispatch_closed(
 
     get_settings.cache_clear()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -663,7 +663,7 @@ async def test_default_guided_projection_serializes_through_dispatch_contract(
 
     get_settings.cache_clear()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -704,7 +704,7 @@ async def test_unnamed_automatic_dispatch_does_not_block_named_dispatch(
 
     get_settings.cache_clear()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -727,7 +727,7 @@ async def test_create_then_timeout_reconciles_to_one_effective_dispatch(
     call, event, _subscription = await _seed_dispatch(db_session)
     provider = _Provider(timeout_after_create=True)
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -774,7 +774,7 @@ async def test_terminal_create_failure_bypasses_dispatch_reconciliation(
     _call, event, _subscription = await _seed_dispatch(db_session)
     provider = TerminalCreateProvider()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -806,7 +806,7 @@ async def test_stale_account_generation_never_dispatches_customer_call(
     await db_session.commit()
     provider = _Provider()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -847,7 +847,7 @@ async def test_deactivation_during_customer_dispatch_reconciliation_prevents_cre
 
     provider = _DeactivatingListProvider()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
 
@@ -920,7 +920,7 @@ async def test_stale_readiness_never_calls_provider(
     await db_session.commit()
     provider = _Provider()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -975,7 +975,7 @@ async def test_foreign_dispatch_is_a_terminal_conflict(db_session, monkeypatch) 
         )
     )
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -999,7 +999,7 @@ async def test_successful_create_response_must_match_requested_dispatch(
     call, event, _subscription = await _seed_dispatch(db_session)
     provider = _ForeignCreateProvider()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -1049,7 +1049,7 @@ async def test_sixth_provider_failure_atomically_fails_call(
     await db_session.commit()
     provider = _Provider(always_fail=True)
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
@@ -1115,7 +1115,7 @@ async def test_terminal_dispatch_failure_rolls_back_when_recording_stop_fails(
     await db_session.commit()
     provider = _Provider(always_fail=True)
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
 

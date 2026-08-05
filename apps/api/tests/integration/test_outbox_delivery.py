@@ -47,6 +47,7 @@ from app.services.activation_provisioning_service import ActivationProvisioningS
 from app.services.activation_go_live_service import ActivationGoLiveService
 from app.services.onboarding_service import OnboardingRetryNotAllowedError, OnboardingService
 from app.services.routing_fingerprint import routing_fingerprint
+from app.workers.outbox import customer_dispatch
 from tests.fakes import CaptureMeter, CaptureTracer
 
 
@@ -1013,7 +1014,7 @@ async def test_missing_livekit_dispatch_settings_are_durable_configuration_failu
         ),
     )
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     monkeypatch.setattr(
@@ -1106,7 +1107,7 @@ async def test_untyped_livekit_provider_value_error_is_durable_internal_defect(
             raise defect
 
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_dispatch_token",
+        "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",
     )
     monkeypatch.setattr(
@@ -1329,7 +1330,6 @@ async def test_customer_snapshot_type_error_becomes_durable_internal_defect(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from app.workers.jobs import outbox_topics
     from app.workers.outbox.delivery import outbox_delivery_job
 
     event = await _seed_customer_dispatch_event(outbox_session_factory)
@@ -1339,7 +1339,11 @@ async def test_customer_snapshot_type_error_becomes_durable_internal_defect(
     def fail_token_builder(**_kwargs) -> str:
         raise defect
 
-    monkeypatch.setattr(outbox_topics, "create_dispatch_token", fail_token_builder)
+    monkeypatch.setattr(
+        customer_dispatch,
+        "create_dispatch_token",
+        fail_token_builder,
+    )
     caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
 
     result = await outbox_delivery_job(
