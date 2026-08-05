@@ -452,9 +452,16 @@ assert not hasattr(arq_worker, "WorkerSettings")
 
 Add literal assertions for queues, max jobs, 0.5-second polling, completion waits 60/30, health update interval 15, health keys `presvo:worker:call-lifecycle:health` and `presvo:worker:background:health`, and every registered function/cron's `timeout_s` and `max_tries`. Reload the module after setting each concurrency environment value and prove 10/4 defaults plus valid overrides are consumed by the correct class.
 
-Assert explicitly that enqueued functions retain `keep_result_s is None` so
-ARQ's current worker-level result retention remains in force, while cron jobs
-retain their existing zero-result-retention behavior.
+Assert the owner-approved 4B-M-A result-retention contract at both levels. In
+the settings lists, direct call finalization and outbox delivery retain
+`keep_result_s is None`, direct call reconciliation has `keep_result_s == 0`,
+and every cron job has `keep_result_s == 0`. Also construct a real ARQ 0.27
+`Worker` from the lifecycle function and cron lists and assert its effective
+name-keyed registry contains exactly `call_finalization_job` and
+`call_reconciliation_job`, with reconciliation retention equal to zero. This
+runtime assertion is required because ARQ builds the registry from functions
+and then overwrites same-name entries with cron metadata; list-only assertions
+cannot prove the effective contract.
 
 - [ ] **Step 2: Add failing startup/shutdown isolation tests**
 
@@ -468,7 +475,7 @@ Expected: FAIL because only mixed `WorkerSettings` exists.
 
 - [ ] **Step 4: Implement the two settings classes**
 
-Register each callable with `arq.worker.func` using the policy's `arq_name`, `hard_timeout_seconds`, and `max_tries`. Register cron jobs once per minute with the same explicit timeout/tries. Configure these class values exactly:
+Register each callable with `arq.worker.func` using the policy's `arq_name`, `hard_timeout_seconds`, and `max_tries`. Direct `call_reconciliation_job` also passes `keep_result=0`, matching its same-name cron registration. This is deliberate because no current caller consumes `Job.result()`; reconciliation outcomes remain in safe logs/metrics and PostgreSQL state. Register cron jobs once per minute with the same explicit timeout/tries. Configure these class values exactly:
 
 ```python
 class CallLifecycleWorkerSettings:

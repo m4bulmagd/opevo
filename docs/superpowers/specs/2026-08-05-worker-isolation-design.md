@@ -125,11 +125,22 @@ timeout five seconds greater than the semantic timeout so the application can
 record a timeout outcome before ARQ's final cancellation bound. The hard bound
 remains a safety mechanism if instrumentation or cleanup itself stalls.
 
-Both classes retain ARQ's current 0.5-second polling cadence and result-
-retention behavior. The lifecycle worker accepts up to ten concurrent jobs and
-waits up to 60 seconds for active work during shutdown. Its Compose service has
-a 75-second stop grace. The background worker accepts up to four concurrent
-jobs, waits up to 30 seconds during shutdown, and has a 45-second stop grace.
+Both classes retain ARQ's current 0.5-second polling cadence. Result retention
+follows the owner-approved 4B-M-A contract. ARQ 0.27 builds one effective
+name-keyed function registry and then overwrites same-name function metadata
+with cron metadata. Because direct and cron reconciliation intentionally share
+the single `call_reconciliation_job` name, both registrations explicitly use
+zero result retention. No current caller consumes `Job.result()`;
+reconciliation outcomes remain available through safe logs and metrics and
+durable PostgreSQL state. Direct call finalization and outbox delivery retain
+worker-level/default result retention, while all cron jobs retain zero result
+retention. Tests assert both source lists and a constructed real ARQ `Worker`
+so the effective name-keyed contract cannot diverge silently.
+
+The lifecycle worker accepts up to ten concurrent jobs and waits up to 60
+seconds for active work during shutdown. Its Compose service has a 75-second
+stop grace. The background worker accepts up to four concurrent jobs, waits up
+to 30 seconds during shutdown, and has a 45-second stop grace.
 
 Each class has a distinct ARQ health key and a 15-second health update interval:
 

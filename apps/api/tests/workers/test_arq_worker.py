@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from arq.connections import RedisSettings
+from arq.worker import Worker
 
 from app.core.config import get_settings
 from app.workers import arq_worker
@@ -84,10 +85,9 @@ def test_enqueued_function_policies_and_result_retention_are_explicit() -> None:
         305,
         1,
     )
-    assert all(
-        registration.keep_result_s is None
-        for registration in [*lifecycle.values(), *background.values()]
-    )
+    assert lifecycle["call_finalization_job"].keep_result_s is None
+    assert lifecycle["call_reconciliation_job"].keep_result_s == 0
+    assert background["outbox_delivery_job"].keep_result_s is None
 
 
 def test_cron_policies_schedule_and_zero_result_retention_are_explicit() -> None:
@@ -123,6 +123,22 @@ def test_cron_policies_schedule_and_zero_result_retention_are_explicit() -> None
         registration.keep_result_s == 0
         for registration in [*lifecycle.values(), *background.values()]
     )
+
+
+@pytest.mark.anyio
+async def test_effective_lifecycle_registry_uses_one_reconciliation_contract() -> None:
+    worker = Worker(
+        functions=arq_worker.CallLifecycleWorkerSettings.functions,
+        cron_jobs=arq_worker.CallLifecycleWorkerSettings.cron_jobs,
+        handle_signals=False,
+    )
+
+    assert set(worker.functions) == {
+        "call_finalization_job",
+        "call_reconciliation_job",
+    }
+    assert worker.functions["call_finalization_job"].keep_result_s is None
+    assert worker.functions["call_reconciliation_job"].keep_result_s == 0
 
 
 def test_worker_settings_use_configured_redis_url(monkeypatch) -> None:

@@ -160,6 +160,7 @@ class CallLifecycleWorkerSettings:
         func(
             policy_call_reconciliation_job,
             name=CALL_RECONCILIATION_POLICY.arq_name,
+            keep_result=0,
             timeout=CALL_RECONCILIATION_POLICY.hard_timeout_seconds,
             max_tries=CALL_RECONCILIATION_POLICY.max_tries,
         ),
