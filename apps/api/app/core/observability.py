@@ -143,7 +143,14 @@ SAFE_ERROR_CLASSES = frozenset(
         "unknown",
     }
 )
-_SERVICE_NAMES = frozenset({"presvo-api", "presvo-worker"})
+_SERVICE_NAMES = frozenset(
+    {
+        "presvo-api",
+        "presvo-worker",
+        "presvo-worker-background",
+        "presvo-worker-call-lifecycle",
+    }
+)
 _HTTP_METHODS = frozenset(
     {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 )

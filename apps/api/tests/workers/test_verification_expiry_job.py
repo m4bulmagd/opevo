@@ -172,7 +172,7 @@ async def test_job_processes_a_bounded_batch(
 def test_worker_registers_expiry_cron_once_per_minute() -> None:
     matches = [
         job
-        for job in arq_worker.WorkerSettings.cron_jobs
+        for job in arq_worker.BackgroundWorkerSettings.cron_jobs
         if getattr(job, "name", None) == "verification_expiry_job"
     ]
 
