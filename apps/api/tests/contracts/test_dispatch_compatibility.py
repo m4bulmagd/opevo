@@ -10,8 +10,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.core.config import get_settings
 from app.models.agent_config import AgentConfig
 from app.models.usage_ledger import UsageLedger
-from app.workers.jobs.outbox_topics import deliver_livekit_verification_dispatch
 from app.workers.outbox.customer_dispatch import deliver_livekit_dispatch
+from app.workers.outbox.verification_dispatch import (
+    deliver_livekit_verification_dispatch,
+)
 from tests.workers.test_forwarding_verification_dispatch_outbox import (
     FIXED_NOW,
     _Provider as VerificationProvider,
@@ -102,7 +104,7 @@ async def test_verification_outbox_producer_matches_golden_fixture_exactly(
     monkeypatch.setenv("LIVEKIT_AGENT_NAME", "fixture-worker")
     get_settings.cache_clear()
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_verification_token",
+        "app.workers.outbox.verification_dispatch.create_verification_token",
         lambda **_kwargs: "fixture-completion-token",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)

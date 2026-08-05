@@ -1018,7 +1018,7 @@ async def test_missing_livekit_dispatch_settings_are_durable_configuration_failu
         lambda **_kwargs: "dispatch-jwt",
     )
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_verification_token",
+        "app.workers.outbox.verification_dispatch.create_verification_token",
         lambda **_kwargs: "verification-jwt",
     )
     terminal_metrics: list[tuple[str, str]] = []
@@ -1111,7 +1111,7 @@ async def test_untyped_livekit_provider_value_error_is_durable_internal_defect(
         lambda **_kwargs: "dispatch-jwt",
     )
     monkeypatch.setattr(
-        "app.workers.jobs.outbox_topics.create_verification_token",
+        "app.workers.outbox.verification_dispatch.create_verification_token",
         lambda **_kwargs: "verification-jwt",
     )
     caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
@@ -1380,7 +1380,7 @@ async def test_verification_snapshot_runtime_error_becomes_durable_internal_defe
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from app.workers.jobs import outbox_topics
+    from app.workers.outbox import verification_dispatch
     from app.workers.outbox.delivery import outbox_delivery_job
 
     verification_now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
@@ -1395,7 +1395,7 @@ async def test_verification_snapshot_runtime_error_becomes_durable_internal_defe
         raise defect
 
     monkeypatch.setattr(
-        outbox_topics,
+        verification_dispatch,
         "create_verification_token",
         fail_token_builder,
     )

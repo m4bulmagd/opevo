@@ -70,7 +70,7 @@ from app.workers.outbox.phone import deliver_phone_provision, deliver_phone_rout
 from app.workers.outbox.phone_provisioning import provision_phone_number
 from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.jobs.outbox_topics import (
+from app.workers.outbox.verification_dispatch import (
     deliver_livekit_verification_dispatch,
 )
 from app.routers.calls import get_call_history_service

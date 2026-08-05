@@ -23,9 +23,13 @@ from app.models.customer_activation import CustomerActivation
 from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.services.outbox_service import OutboxService, SUPPORTED_OUTBOX_TOPICS
-from app.workers.jobs import outbox_topics
+from app.workers.jobs.outbox_topics import DEFAULT_OUTBOX_HANDLERS
 from app.workers.outbox.delivery import _validated_event_call_id
 from app.workers.outbox.failures import OutboxDeliveryError
+from app.workers.outbox import verification_dispatch
+from app.workers.outbox.verification_dispatch import (
+    deliver_livekit_verification_dispatch,
+)
 
 
 FIXED_NOW = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
@@ -33,13 +37,11 @@ SUCCESS_MESSAGE = VERIFICATION_MESSAGE
 
 
 def _handler():
-    handler = getattr(outbox_topics, "deliver_livekit_verification_dispatch", None)
-    assert handler is not None, "verification dispatch handler is missing"
-    return handler
+    return deliver_livekit_verification_dispatch
 
 
 def _reconciliation_snapshot(*, persisted_dispatch_id: str | None = None):
-    return outbox_topics._VerificationDispatchSnapshot(
+    return verification_dispatch._VerificationDispatchSnapshot(
         activation_id=UUID("00000000-0000-0000-0000-000000000021"),
         user_id=UUID("00000000-0000-0000-0000-000000000022"),
         session_id="00000000-0000-0000-0000-000000000023",
@@ -119,7 +121,7 @@ def test_verification_reconciliation_requires_a_valid_matching_verification_cont
         ),
     }
 
-    reconciled = outbox_topics._reconcile_verification_dispatches(
+    reconciled = verification_dispatch._reconcile_verification_dispatches(
         snapshot,
         [_verification_reconciliation_dispatch(snapshot, json.dumps(valid))],
     )
@@ -128,7 +130,7 @@ def test_verification_reconciliation_requires_a_valid_matching_verification_cont
     assert reconciled.id == "reconciled-verification-dispatch"
     for metadata in invalid_metadata.values():
         with pytest.raises(OutboxDeliveryError) as caught:
-            outbox_topics._reconcile_verification_dispatches(
+            verification_dispatch._reconcile_verification_dispatches(
                 snapshot,
                 [_verification_reconciliation_dispatch(snapshot, metadata)],
             )
@@ -139,7 +141,7 @@ def test_verification_reconciliation_requires_a_valid_matching_verification_cont
 def test_verification_reconciliation_rejects_mismatched_persisted_identity() -> None:
     snapshot = _reconciliation_snapshot(persisted_dispatch_id="persisted-other")
     with pytest.raises(OutboxDeliveryError) as caught:
-        outbox_topics._reconcile_verification_dispatches(
+        verification_dispatch._reconcile_verification_dispatches(
             snapshot,
             [
                 _verification_reconciliation_dispatch(
@@ -160,7 +162,7 @@ async def test_verification_reconciliation_never_persists_foreign_agent_identity
 ) -> None:
     user, activation, event = await _seed_verification_dispatch(db_session)
     activation_id = activation.id
-    snapshot = outbox_topics._VerificationDispatchSnapshot(
+    snapshot = verification_dispatch._VerificationDispatchSnapshot(
         activation_id=activation.id,
         user_id=user.id,
         session_id=activation.verification_session_id,
@@ -700,7 +702,7 @@ async def test_claimed_verification_dispatch_rechecks_account_before_provider_io
     user, _activation, event = await _seed_verification_dispatch(db_session)
     provider = _Provider()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    real_snapshot = outbox_topics._verification_dispatch_snapshot
+    real_snapshot = verification_dispatch._verification_dispatch_snapshot
 
     async def snapshot_then_deactivate(*args, **kwargs):
         snapshot = await real_snapshot(*args, **kwargs)
@@ -712,7 +714,7 @@ async def test_claimed_verification_dispatch_rechecks_account_before_provider_io
         return snapshot
 
     monkeypatch.setattr(
-        outbox_topics,
+        verification_dispatch,
         "_verification_dispatch_snapshot",
         snapshot_then_deactivate,
     )
@@ -807,7 +809,7 @@ async def test_verification_topic_is_registered_but_never_classified_as_call(
 
     assert "livekit.verification_dispatch" in SUPPORTED_OUTBOX_TOPICS
     assert (
-        outbox_topics.DEFAULT_OUTBOX_HANDLERS["livekit.verification_dispatch"]
+        DEFAULT_OUTBOX_HANDLERS["livekit.verification_dispatch"]
         is _handler()
     )
     assert _validated_event_call_id(event) is None
