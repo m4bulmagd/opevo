@@ -668,7 +668,7 @@ async def test_http_and_job_tracer_start_failures_do_not_change_outcomes() -> No
     with TestClient(app) as client:
         assert client.get("/ok").json() == {"status": "ok"}
 
-    @instrument_job("call_finalization")
+    @instrument_job("call_finalization", queue_class="call_lifecycle")
     async def job(_ctx: dict) -> str:
         return "ok"
 
@@ -1321,7 +1321,7 @@ async def test_internal_provider_and_worker_spans_use_semantic_kinds() -> None:
     async with telemetry.provider_operation("gemini", "generate_summary"):
         pass
 
-    @instrument_job("call_finalization")
+    @instrument_job("call_finalization", queue_class="call_lifecycle")
     async def job(_ctx: dict) -> None:
         return None
 
@@ -1581,7 +1581,7 @@ async def test_instrumented_job_records_queue_delay_duration_and_no_job_id() -> 
     meter = _Meter()
     telemetry = _observability(meter=meter)
 
-    @instrument_job("call_finalization")
+    @instrument_job("call_finalization", queue_class="call_lifecycle")
     async def job(ctx: dict) -> str:
         return "ok"
 
@@ -1590,6 +1590,7 @@ async def test_instrumented_job_records_queue_delay_duration_and_no_job_id() -> 
             "observability": telemetry,
             "enqueue_time": datetime.now(UTC) - timedelta(seconds=3),
             "job_id": "JOB_ID_SECRET",
+            "job_try": 2,
         }
     )
 
@@ -1597,9 +1598,122 @@ async def test_instrumented_job_records_queue_delay_duration_and_no_job_id() -> 
     delay = meter.instruments["presvo.worker.queue.delay"].measurements
     duration = meter.instruments["presvo.worker.job.duration"].measurements
     assert delay[0][0] == pytest.approx(3, abs=0.2)
-    assert delay[0][1] == {}
-    assert duration[0][1] == {"job": "call_finalization", "outcome": "success"}
+    assert delay[0][1] == {
+        "queue_class": "call_lifecycle",
+        "job": "call_finalization",
+        "attempt": 2,
+    }
+    assert duration[0][1] == {
+        "queue_class": "call_lifecycle",
+        "job": "call_finalization",
+        "outcome": "success",
+        "attempt": 2,
+    }
     assert "JOB_ID_SECRET" not in repr(delay) + repr(duration)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("error", "outcome"),
+    [
+        (TimeoutError("timeout detail"), "timeout"),
+        (asyncio.CancelledError("cancel detail"), "cancelled"),
+        (RuntimeError("ordinary error detail"), "error"),
+    ],
+)
+async def test_instrumented_job_records_bounded_failure_outcomes(
+    error: BaseException,
+    outcome: str,
+) -> None:
+    from app.core.observability import instrument_job
+
+    meter = _Meter()
+    telemetry = _observability(meter=meter)
+
+    @instrument_job("call_finalization", queue_class="call_lifecycle")
+    async def job(_ctx: dict) -> None:
+        raise error
+
+    with pytest.raises(type(error)) as captured:
+        await job({"observability": telemetry, "job_try": 3})
+
+    assert captured.value is error
+    assert meter.instruments["presvo.worker.job.duration"].measurements[0][1] == {
+        "queue_class": "call_lifecycle",
+        "job": "call_finalization",
+        "outcome": outcome,
+        "attempt": 3,
+    }
+
+
+@pytest.mark.anyio
+async def test_worker_observability_collapses_unbounded_attributes() -> None:
+    from app.core.observability import instrument_job
+
+    queue_sentinel = "PRIVATE_QUEUE_SENTINEL"
+    job_sentinel = "PRIVATE_JOB_SENTINEL"
+    job_id_sentinel = "PRIVATE_JOB_ID_SENTINEL"
+    meter = _Meter()
+    tracer = _Tracer()
+    telemetry = _observability(meter=meter, tracer=tracer)
+
+    @instrument_job(job_sentinel, queue_class=queue_sentinel)
+    async def job(_ctx: dict) -> None:
+        return None
+
+    await job(
+        {
+            "observability": telemetry,
+            "enqueue_time": datetime.now(),
+            "job_try": 999,
+            "job_id": job_id_sentinel,
+        }
+    )
+
+    delay = meter.instruments["presvo.worker.queue.delay"].measurements
+    duration = meter.instruments["presvo.worker.job.duration"].measurements
+    assert delay[0][1] == {
+        "queue_class": "unknown",
+        "job": "unknown",
+        "attempt": 0,
+    }
+    assert duration[0][1] == {
+        "queue_class": "unknown",
+        "job": "unknown",
+        "outcome": "success",
+        "attempt": 0,
+    }
+    rendered = repr(delay) + repr(duration) + repr(tracer.spans[0].attributes)
+    assert queue_sentinel not in rendered
+    assert job_sentinel not in rendered
+    assert job_id_sentinel not in rendered
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "job_name",
+    [
+        "call_finalization",
+        "call_reconciliation",
+        "outbox_delivery",
+        "outbox_reconciliation",
+        "verification_expiry",
+    ],
+)
+async def test_worker_observability_accepts_fixed_job_names(job_name: str) -> None:
+    from app.core.observability import instrument_job
+
+    meter = _Meter()
+    telemetry = _observability(meter=meter)
+
+    @instrument_job(job_name, queue_class="background")
+    async def job(_ctx: dict) -> None:
+        return None
+
+    await job({"observability": telemetry, "job_try": 1})
+
+    duration = meter.instruments["presvo.worker.job.duration"].measurements
+    assert duration[0][1]["job"] == job_name
 
 
 @pytest.mark.anyio
@@ -1610,7 +1724,7 @@ async def test_call_finalization_instrumentation_extracts_only_valid_call_refere
     telemetry = _observability(tracer=tracer)
     call_id = str(uuid4())
 
-    @instrument_job("call_finalization")
+    @instrument_job("call_finalization", queue_class="call_lifecycle")
     async def job(_ctx: dict, payload: dict) -> str:
         return payload["call_id"]
 

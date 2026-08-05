@@ -17,6 +17,10 @@ from app.workers.jobs.outbox_delivery import (
     outbox_reconciliation_job,
 )
 from app.workers.jobs.verification_expiry import verification_expiry_job
+from app.workers.queueing import (
+    QUEUE_CLASS_BACKGROUND,
+    QUEUE_CLASS_CALL_LIFECYCLE,
+)
 
 
 async def on_startup(ctx: dict) -> None:
@@ -36,21 +40,26 @@ async def on_shutdown(ctx: dict) -> None:
         await shutdown_observability(telemetry)
 
 
-observed_call_finalization_job = instrument_job("call_finalization")(
-    call_finalization_job
-)
-observed_outbox_delivery_job = instrument_job("outbox_delivery")(
-    outbox_delivery_job
-)
-observed_outbox_reconciliation_job = instrument_job("outbox_reconciliation")(
-    outbox_reconciliation_job
-)
-observed_call_reconciliation_job = instrument_job("call_reconciliation")(
-    call_reconciliation_job
-)
-observed_verification_expiry_job = instrument_job("verification_expiry")(
-    verification_expiry_job
-)
+observed_call_finalization_job = instrument_job(
+    "call_finalization",
+    queue_class=QUEUE_CLASS_CALL_LIFECYCLE,
+)(call_finalization_job)
+observed_outbox_delivery_job = instrument_job(
+    "outbox_delivery",
+    queue_class=QUEUE_CLASS_BACKGROUND,
+)(outbox_delivery_job)
+observed_outbox_reconciliation_job = instrument_job(
+    "outbox_reconciliation",
+    queue_class=QUEUE_CLASS_BACKGROUND,
+)(outbox_reconciliation_job)
+observed_call_reconciliation_job = instrument_job(
+    "call_reconciliation",
+    queue_class=QUEUE_CLASS_CALL_LIFECYCLE,
+)(call_reconciliation_job)
+observed_verification_expiry_job = instrument_job(
+    "verification_expiry",
+    queue_class=QUEUE_CLASS_BACKGROUND,
+)(verification_expiry_job)
 
 
 class WorkerSettings:

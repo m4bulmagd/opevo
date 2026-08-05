@@ -61,8 +61,14 @@ _JOB_NAMES = frozenset(
         "outbox_delivery",
         "outbox_reconciliation",
         "call_reconciliation",
+        "verification_expiry",
     }
 )
+_WORKER_QUEUE_CLASSES = frozenset({"call_lifecycle", "background"})
+_WORKER_JOB_OUTCOMES = frozenset(
+    {"success", "error", "timeout", "cancelled"}
+)
+_WORKER_JOB_ATTEMPTS = frozenset({1, 2, 3})
 _OUTBOX_STATUSES = frozenset({"pending", "processing", "delivered", "failed"})
 _CALL_STATES = frozenset(
     {"pending", "connected", "ending", "finalizing", "completed", "failed"}
@@ -259,6 +265,10 @@ def _safe_label(
     fallback: str = "unknown",
 ) -> str:
     return value if value in allowed else fallback
+
+
+def _safe_worker_attempt(value: object) -> int:
+    return value if type(value) is int and value in _WORKER_JOB_ATTEMPTS else 0
 
 
 def _provider_labels(provider: str, operation: str) -> tuple[str, str]:
@@ -1059,26 +1069,42 @@ class Observability:
             lambda: self.recording_multiple_exact_match_conflicts.add(1, {}),
         )
 
-    def record_worker_queue_delay(self, job: str, seconds: float) -> None:
-        _safe_label(job, _JOB_NAMES)
+    def record_worker_queue_delay(
+        self,
+        queue_class: str,
+        job: str,
+        attempt: int,
+        seconds: float,
+    ) -> None:
+        attributes = {
+            "queue_class": _safe_label(queue_class, _WORKER_QUEUE_CLASSES),
+            "job": _safe_label(job, _JOB_NAMES),
+            "attempt": _safe_worker_attempt(attempt),
+        }
         _safe_call(
             "record_worker_queue_delay",
-            lambda: self.worker_queue_delay.record(seconds, {}),
+            lambda: self.worker_queue_delay.record(seconds, attributes),
         )
 
     def record_worker_job_duration(
         self,
+        queue_class: str,
         job: str,
         outcome: str,
+        attempt: int,
         seconds: float,
     ) -> None:
-        job = _safe_label(job, _JOB_NAMES)
-        outcome = outcome if outcome in {"success", "error"} else "error"
+        attributes = {
+            "queue_class": _safe_label(queue_class, _WORKER_QUEUE_CLASSES),
+            "job": _safe_label(job, _JOB_NAMES),
+            "outcome": _safe_label(outcome, _WORKER_JOB_OUTCOMES),
+            "attempt": _safe_worker_attempt(attempt),
+        }
         _safe_call(
             "record_worker_job_duration",
             lambda: self.worker_job_duration.record(
                 seconds,
-                {"job": job, "outcome": outcome},
+                attributes,
             ),
         )
 
@@ -1348,22 +1374,30 @@ def install_http_observability(app) -> None:
                 )
 
 
-def instrument_job(job_name: str):
+def instrument_job(job_name: str, *, queue_class: str):
     job_name = _safe_label(job_name, _JOB_NAMES)
+    queue_class = _safe_label(queue_class, _WORKER_QUEUE_CLASSES)
 
     def decorator(function):
         @wraps(function)
         async def wrapped(ctx: dict, *args, **kwargs):
             telemetry = ctx.get("observability") or get_observability()
+            attempt = _safe_worker_attempt(ctx.get("job_try"))
             enqueue_time = ctx.get("enqueue_time")
             if isinstance(enqueue_time, datetime):
                 if enqueue_time.tzinfo is None:
                     enqueue_time = enqueue_time.replace(tzinfo=UTC)
                 telemetry.record_worker_queue_delay(
+                    queue_class,
                     job_name,
+                    attempt,
                     max(0.0, (datetime.now(UTC) - enqueue_time).total_seconds()),
                 )
-            span_attributes = {"presvo.job.name": job_name}
+            span_attributes = {
+                "presvo.queue.class": queue_class,
+                "presvo.job.name": job_name,
+                "presvo.job.attempt": attempt,
+            }
             call_id = _reference_call_id(args, kwargs)
             if call_id is not None:
                 span_attributes["presvo.call.id"] = call_id
@@ -1376,6 +1410,12 @@ def instrument_job(job_name: str):
                     started = time.monotonic()
                     try:
                         result = await function(ctx, *args, **kwargs)
+                    except asyncio.CancelledError:
+                        outcome = "cancelled"
+                        raise
+                    except TimeoutError:
+                        outcome = "timeout"
+                        raise
                     except BaseException:
                         outcome = "error"
                         raise
@@ -1384,8 +1424,10 @@ def instrument_job(job_name: str):
                         return result
                     finally:
                         telemetry.record_worker_job_duration(
+                            queue_class,
                             job_name,
                             outcome,
+                            attempt,
                             time.monotonic() - started,
                         )
 

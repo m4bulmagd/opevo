@@ -66,3 +66,24 @@ def test_connected_reconciliation_timeout_accepts_exact_two_minute_buffer() -> N
     )
 
     assert settings.call_reconciliation_connected_stale_seconds == 180
+
+
+def test_worker_capacity_defaults_and_boundaries() -> None:
+    settings = Settings(
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost",
+    )
+    assert settings.worker_lifecycle_max_jobs == 10
+    assert settings.worker_background_max_jobs == 4
+    for name, value in (
+        ("worker_lifecycle_max_jobs", 0),
+        ("worker_lifecycle_max_jobs", 101),
+        ("worker_background_max_jobs", 0),
+        ("worker_background_max_jobs", 51),
+    ):
+        with pytest.raises(ValidationError):
+            Settings(
+                database_url="sqlite+aiosqlite://",
+                redis_url="redis://localhost",
+                **{name: value},
+            )

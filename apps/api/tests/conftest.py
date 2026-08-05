@@ -38,6 +38,8 @@ def _construction_settings_environment() -> dict[str, str]:
             "TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL
         ),
         "REDIS_URL": os.environ.get("TEST_REDIS_URL", DEFAULT_TEST_REDIS_URL),
+        "WORKER_LIFECYCLE_MAX_JOBS": "10",
+        "WORKER_BACKGROUND_MAX_JOBS": "4",
         "REALTIME_ENABLED": "false",
         "ACTIVATION_FLOW_ENABLED": "false",
         "AUTH_MODE": "clerk",

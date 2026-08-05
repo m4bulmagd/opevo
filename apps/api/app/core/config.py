@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     call_reconciliation_ending_grace_seconds: int = Field(default=60, ge=1)
     call_reconciliation_finalizing_lease_seconds: int = Field(default=300, ge=1)
     call_reconciliation_max_attempts: int = Field(default=5, ge=1, le=5)
+    worker_lifecycle_max_jobs: int = Field(default=10, ge=1, le=100)
+    worker_background_max_jobs: int = Field(default=4, ge=1, le=50)
     dashboard_metrics_reference_time: AwareDatetime | None = None
 
     model_config = SettingsConfigDict(
