@@ -66,13 +66,12 @@ from app.services.local_billing_service import (
 from app.services.outbox_service import OutboxService
 from app.workers.outbox import account_deactivation as account_deactivation_module
 from app.workers.outbox.account_deactivation import deliver_account_deactivation
+from app.workers.outbox.phone import deliver_phone_provision, deliver_phone_routing
 from app.workers.outbox.phone_provisioning import provision_phone_number
 from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.jobs.outbox_topics import (
     deliver_livekit_verification_dispatch,
-    deliver_phone_provision,
-    deliver_phone_routing,
 )
 from app.routers.calls import get_call_history_service
 from app.routers.calls import router as calls_router

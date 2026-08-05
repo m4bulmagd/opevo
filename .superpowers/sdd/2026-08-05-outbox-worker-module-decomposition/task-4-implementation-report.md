@@ -47,3 +47,20 @@ The complete phone delivery family was moved intact. It retains lifecycle-genera
 ## Concerns
 
 None. PostgreSQL-only tests were skipped because this environment did not provide `TEST_DATABASE_URL`; the required suite reported those skips explicitly.
+
+## Fix round 1
+
+Commit: `test(api): retarget phone characterization imports` (this commit)
+
+- Retargeted `test_account_deactivation_concurrency.py` and
+  `test_safe_service_exceptions.py` so `deliver_phone_provision` and
+  `deliver_phone_routing` import directly from `app.workers.outbox.phone`.
+- Kept `deliver_livekit_verification_dispatch` and
+  `deliver_summary_generate` on `app.workers.jobs.outbox_topics`.
+- Import-block inspection confirms neither file obtains a phone handler from
+  `outbox_topics`.
+- Covering pytest gate: 12 passed, 20 skipped (PostgreSQL cases without
+  `TEST_DATABASE_URL`).
+- Ruff for both files and `git diff --check` passed.
+
+Concerns: none; the expected PostgreSQL skips remain environment-dependent.
