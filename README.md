@@ -64,21 +64,34 @@ flowchart TB
 
     subgraph Platform["Durable platform"]
         API <--> DB[(PostgreSQL)]
-        API --> Redis[(Redis / ARQ)] --> Worker[Background worker]
-        Worker <--> DB
+        API --> Redis[(Redis / ARQ)]
+        Redis --> Lifecycle[worker-lifecycle]
+        Redis --> Background[worker-background]
+        Lifecycle <--> DB
+        Background <--> DB
         API --> Storage[(Private object storage)]
-        Worker --> Storage
+        Background --> Storage
     end
 
     API <--> Stripe[Stripe]
-    Worker <--> Telnyx
-    Worker <--> LiveKit
+    Background <--> Telnyx
+    Background <--> LiveKit
     LiveKit -->|recordings| Storage
 ```
 
 The owner journey configures and reviews the service through the dashboard. The
 call journey routes an inbound phone call through Telnyx and LiveKit to the
 voice agent, which persists durable results through the API for later review.
+
+### Worker ownership
+
+`worker-lifecycle` consumes `arq:queue` for call finalization and call
+reconciliation (default 10 slots). `worker-background` consumes
+`arq:queue:background` for outbox delivery/reconciliation and verification
+expiry (default 4 slots). PostgreSQL outbox/call state is authoritative; Redis
+is only the execution and wakeup path. Operational rollout, recovery, and the
+bounded local/CI isolation evidence are recorded in the
+[deployment runbook](docs/runbooks/deploy.md).
 
 ## Run locally
 
@@ -93,7 +106,7 @@ Then start the standard Clerk-authenticated development stack from the repositor
 root:
 
 ```bash
-docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker web
+docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
 
 Open [http://127.0.0.1:3000/activate](http://127.0.0.1:3000/activate).
@@ -107,7 +120,7 @@ development token:
 ```bash
 AUTH_MODE=local \
 LOCAL_AUTH_TOKEN=replace-with-a-development-only-token \
-docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker web
+docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
 
 For disposable CI-equivalent proof, run the isolated provider-free browser

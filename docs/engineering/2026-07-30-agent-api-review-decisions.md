@@ -44,7 +44,7 @@ The recommendations use these agreed priorities:
 | 1 | Realtime correctness | **1A** — API-authoritative realtime observer with resynchronization | Accepted |
 | 2 | Cross-app contracts | **2A** — small, versioned shared wire-contract package | Accepted; implemented |
 | 3 | Authentication boundary | **3A** — validate Clerk authorized parties | Accepted; implemented |
-| 4 | Worker isolation | **4A + 4B** — split critical/background queues and add explicit limits, metrics, and load criteria | Accepted |
+| 4 | Worker isolation | **4A + 4B** — split critical/background queues and add explicit limits, metrics, and load criteria | Implemented — controlled ten-call local/CI evidence; Issue 16A load, monitoring, and recovery drills remain open |
 | 5 | Outbox structure | **5A** — split the topic god module by cohesive topic family | Accepted |
 | 6 | Dependency construction | **6A** — explicit, thin composition roots with typed dependencies | Accepted |
 | 7 | Provider failures | **7A** — one typed provider-failure vocabulary; distinguish internal defects | Accepted; implemented |
@@ -310,7 +310,7 @@ single queue is also a deployment-level single failure and scaling domain.
 | **4B — Also selected:** add per-class concurrency, timeout, graceful-shutdown, metrics, and measured load thresholds | Medium | Incorrect guessed limits if not load-tested | Job definitions, telemetry, dashboards, alerts, deployment settings | Medium; limits must be revisited with traffic |
 | **4C:** keep one unbounded workload class | None | High noisy-neighbor and incident blast-radius risk | None | Low code burden; high operational burden |
 
-### Recorded decision and proposed solution — 4A + 4B
+### Recorded decision and implemented solution — 4A + 4B
 
 1. Define two explicit worker classes:
    - **Critical:** call finalization and lifecycle reconciliation required to
@@ -327,6 +327,24 @@ single queue is also a deployment-level single failure and scaling domain.
    saturation, timeout, and dead-letter/exhaustion outcomes.
 6. Derive replica counts and concurrency from load evidence under 16A, not from
    arbitrary constants.
+
+Implementation now uses `worker-lifecycle` on `arq:queue` for call finalization
+and call reconciliation (10 default slots), and `worker-background` on
+`arq:queue:background` for outbox delivery/reconciliation and verification
+expiry (4 default slots). They report
+`presvo:worker:call-lifecycle:health` and
+`presvo:worker:background:health`, respectively, plus
+`presvo.worker.queue.depth{queue_class}` and
+`presvo.worker.queue.oldest_due.age{queue_class}`. PostgreSQL outbox/call state
+remains authoritative; Redis is execution and wakeup only.
+
+The implemented proof is controlled ten-call local/CI evidence: four
+background slots are held while ten lifecycle probes simultaneously start. It
+does not prove cloud scheduling, provider/database saturation, production SLOs,
+alert routing, a recovery drill, or production certification. Direct and cron
+reconciliation retain zero ARQ results; their durable state is the recovery
+record. Issue 16A load, monitoring, and recovery drills remain open, and
+realtime remains deferred.
 
 ### Required validation
 
@@ -1493,10 +1511,13 @@ skips. If shared-PostgreSQL client fixtures become a required gate, the
 recommended separate change is explicit per-test schema/database isolation,
 not ad hoc row deletion.
 
-No deployment, remote push, merge, or realtime activation occurred. Issues 4,
-5, 6, 7, and 8 remain the agreed next order. Issues 1A and 14A remain deferred
-until realtime work resumes; Issues 15 and 16 also remain accepted but not
-implemented. Accepted risks 11C, 12C, and 18A are unchanged.
+No deployment, remote push, merge, or realtime activation occurred. Issue 4A +
+4B is implemented with controlled ten-call local/CI evidence; Issues 5, 6, and
+8 remain the agreed next order. Issues 1A and 14A remain deferred until
+realtime work resumes. Issue 16A remains open for representative load,
+monitoring, alert routing, and recovery-drill evidence; it is not implemented
+by the bounded worker-isolation proof. Accepted risks 11C, 12C, and 18A are
+unchanged.
 
 ## Implementation Authorization Boundary
 

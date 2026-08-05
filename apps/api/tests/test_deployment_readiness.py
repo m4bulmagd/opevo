@@ -1551,3 +1551,88 @@ def test_deployment_and_rollback_runbooks_define_safe_release_boundaries() -> No
     assert "backward-compatible" in rollback
     assert "forward-fix" in rollback
     assert "irreversible" in rollback
+
+
+def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> None:
+    readme = (REPO_ROOT / "README.md").read_text()
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text()
+    backend = (REPO_ROOT / "docs" / "architecture" / "backend-context.md").read_text()
+    deployment = (
+        REPO_ROOT / "docs" / "architecture" / "production-deployment.md"
+    ).read_text()
+    deploy = (REPO_ROOT / "docs" / "runbooks" / "deploy.md").read_text()
+    rollback = (REPO_ROOT / "docs" / "runbooks" / "rollback.md").read_text()
+    incident = (REPO_ROOT / "docs" / "runbooks" / "incident-response.md").read_text()
+    local_activation = (
+        REPO_ROOT / "docs" / "architecture" / "local-self-service-activation.md"
+    ).read_text()
+    status = (REPO_ROOT / "docs" / "PROJECT_STATUS.md").read_text()
+    ledger = (
+        REPO_ROOT / "docs" / "engineering" / "2026-07-30-agent-api-review-decisions.md"
+    ).read_text()
+
+    ownership_terms = (
+        "worker-lifecycle",
+        "worker-background",
+        "arq:queue",
+        "arq:queue:background",
+        "presvo:worker:call-lifecycle:health",
+        "presvo:worker:background:health",
+        "call finalization; call reconciliation",
+        "outbox delivery/reconciliation; verification expiry",
+        "10",
+        "4",
+    )
+    for document in (backend, deployment):
+        for term in ownership_terms:
+            assert term in document
+
+    for document in (backend, incident):
+        assert "PostgreSQL outbox/call state" in document
+        assert "Redis" in document
+        assert "authoritative" in document
+
+    normalized_deploy = " ".join(deploy.replace("**", "").split())
+    rollout = (
+        "worker-background",
+        "worker-lifecycle",
+        "Roll out the new API",
+        "Verify both health keys",
+        "legacy/default backlog to drain",
+        "remove the generic worker",
+    )
+    rollout_positions = [normalized_deploy.index(step) for step in rollout]
+    assert rollout_positions == sorted(rollout_positions)
+
+    normalized_rollback = " ".join(rollback.replace("**", "").split())
+    reverse_rollout = (
+        "previous API routing",
+        "explicit queues drain",
+        "generic worker restoration",
+        "new workers removed last",
+    )
+    rollback_positions = [normalized_rollback.index(step) for step in reverse_rollout]
+    assert rollback_positions == sorted(rollback_positions)
+    assert "not a zero-delay guarantee" in rollback
+
+    for metric in (
+        "presvo.worker.queue.depth{queue_class}",
+        "presvo.worker.queue.oldest_due.age{queue_class}",
+    ):
+        assert metric in incident
+
+    for document in (readme, local_activation, deploy, rollback, incident):
+        assert "presvo-worker" not in document
+        assert "api worker web" not in document
+    assert "the ARQ worker" not in contributing
+    assert "worker-lifecycle" in contributing
+    assert "worker-background" in contributing
+
+    for document in (status, ledger):
+        assert "4A + 4B" in document
+        assert "Implemented" in document
+        assert "controlled ten-call local/CI evidence" in document
+        assert "Issue 16A" in document
+        assert "load" in document
+        assert "recovery drills" in document
+    assert "realtime remains deferred" in ledger

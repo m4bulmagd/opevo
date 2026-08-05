@@ -56,6 +56,7 @@ real-provider certification remain controlled-beta gates.
 | Rich call-review workflow | **Partial** | Server-rendered pagination and caller-number/summary/intent search, inline original-audio playback, and structured next-action presentation are implemented; tags and notes remain. |
 | Recording lifecycle | **Implemented** | A private recording operation and reference-only reconciliation intent commit before recording-start provider I/O. Completion requests stop reconciliation even without a provider ID; signed egress webhooks store sanitized facts and wake reconciliation after commit. Private object storage, signed playback, and asynchronous owner-removal cleanup are implemented; no automatic bucket lifecycle is configured. |
 | Transactional outbox | **Implemented** | Handlers cover `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, `recording.reconcile`, and `account.deactivate`. Recording and account-deactivation events use private operation aggregates and carry only `operation_id`. |
+| Worker isolation (4A + 4B) | **Implemented** | `worker-lifecycle` owns `arq:queue` call finalization/reconciliation at 10 default slots; `worker-background` owns `arq:queue:background` outbox delivery/reconciliation and verification expiry at 4. Health and class-specific queue metrics are present. The evidence is controlled ten-call local/CI evidence only: four blocked background slots while ten lifecycle probes start. |
 | Call finalization effects | **Implemented** | Usage debit and the pending notification row are direct writes in the same call-finalization transaction. |
 | Live dashboard and intervention | **Partial** | A complete, visibly labelled local-only live-call Preview exists. The optional backend WebSocket observer remains disabled by default, has a documented identity-key mismatch, and is not connected to the Preview; live monitoring and intervention remain unimplemented. |
 | Push notifications | **Partial** | A visibly labelled local notification Preview exists, and notification records/provider boundaries exist, but private device-token delivery is not part of the launch path. |
@@ -84,6 +85,10 @@ real-provider certification remain controlled-beta gates.
 - The optional realtime observer is not a supported customer feature. The
   live-call interface is explicitly local-only Preview UI and makes no
   telephony or realtime mutation.
+- Worker isolation is implemented, but its controlled ten-call local/CI evidence
+  does not establish cloud scheduling, provider/database saturation, production
+  SLOs, alert routing, a recovery drill, or production certification. Issue 16A
+  load, monitoring, and recovery drills remain open; realtime remains deferred.
 - The application lacks French localization, approved legal pages,
   account-wide export/permanent-deletion orchestration, an approved retention
   and backup-erasure policy, and a complete account menu.

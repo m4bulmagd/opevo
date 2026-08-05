@@ -1,6 +1,7 @@
 # Incident Response Runbook
 
-This runbook covers the first-response signals for the Presvo API, worker, and
+This runbook covers the first-response signals for the Presvo API,
+`worker-lifecycle`, `worker-background`, and
 voice agent. The production telemetry interface is OpenTelemetry Protocol
 (OTLP) push export; there is intentionally no public `/metrics` endpoint.
 
@@ -16,6 +17,10 @@ voice agent. The production telemetry interface is OpenTelemetry Protocol
 - Telemetry is optional and fail-open. An exporter or collector failure alone
   must not restart a process, remove an instance from traffic, reject a call,
   or change provider, webhook, or worker behavior.
+- Worker health is separate by service: inspect
+  `presvo:worker:call-lifecycle:health` for `worker-lifecycle` and
+  `presvo:worker:background:health` for `worker-background`. The lifecycle
+  queue is `arq:queue`; the background queue is `arq:queue:background`.
 
 ## Beta alert thresholds
 
@@ -26,6 +31,7 @@ voice agent. The production telemetry interface is OpenTelemetry Protocol
 | Outbox terminal failure | Any `presvo.outbox.terminal_failures` increment | Inspect the fixed topic and normalized error class; confirm the durable row is `failed` and determine whether a safe replay is supported. |
 | Calls beyond lifecycle deadlines | More than 5 stale calls | Break down `presvo.calls.stale` by state and compare with reconciliation outcomes. |
 | Queue oldest-job age | Durable outbox oldest-unfinished age exceeds 2 minutes | Inspect pending versus processing depth, worker availability, and PostgreSQL locking. This alert is based on the durable outbox age, not ARQ start delay. |
+| Worker queue depth or oldest due | A class-specific depth or oldest-due signal is unexpectedly nonzero | Check the matching worker health key and `presvo.worker.queue.depth{queue_class}` plus `presvo.worker.queue.oldest_due.age{queue_class}` before changing capacity. |
 | Provider errors | Error rate exceeds 10% for 5 minutes | Break down by fixed provider and operation; compare timeout, rate-limit, unavailable, authentication, validation, conflict, and unknown classes. |
 | Recording failures | `livekit` recording-operation errors exceed 5% of matching recording operations for 10 minutes | Break down `presvo.provider.errors` and `presvo.provider.request.duration` by the fixed LiveKit recording operations; check egress, object-storage bucket availability, credentials, lifecycle policy, and recent configuration changes. |
 | Backup freshness | No successful backup within 24 hours | Confirm the backup scheduler and destination, restore the backup pipeline, and perform a restore verification after recovery. |
@@ -40,6 +46,10 @@ voice agent. The production telemetry interface is OpenTelemetry Protocol
 - `presvo.outbox.events` and `presvo.outbox.oldest_unfinished.age` come from a
   once-per-minute durable repository snapshot. `presvo.worker.queue.delay` is a
   separate, unlabeled ARQ execution-start signal.
+- `presvo.worker.queue.depth{queue_class}` and
+  `presvo.worker.queue.oldest_due.age{queue_class}` are separate bounded queue
+  snapshots for `call_lifecycle` and `background`. They are diagnostic metrics,
+  not a production SLO or an alerting-certification claim.
 - `presvo.calls.current`, `presvo.calls.stale`, and
   `presvo.call_reconciliation.outcomes` use the existing call lifecycle policy.
 - `presvo.provider.request.duration` and `presvo.provider.errors` count one
@@ -86,13 +96,17 @@ recording owner.
    traffic is affected.
 2. Check `/healthz` and `/readyz` separately. Use only the fixed dependency
    outcome; the endpoint intentionally does not expose hosts, ports, or errors.
-3. Compare the alert with deployment, secret rotation, dependency maintenance,
+3. For queue symptoms, check each worker health key and both class-specific
+   depth/oldest-due metrics. Do not treat Redis contents as authoritative:
+   PostgreSQL outbox/call state determines whether reconciliation must recover
+   an orphaned wakeup or lifecycle attempt after service restoration.
+4. Compare the alert with deployment, secret rotation, dependency maintenance,
    and provider-status timelines.
-4. Use fixed metric dimensions and trace correlation. Retrieve customer data
+5. Use fixed metric dimensions and trace correlation. Retrieve customer data
    only through authorized product/admin paths, never by adding it to telemetry.
-5. Mitigate the narrow failure: remove an unready instance, pause a failing
+6. Mitigate the narrow failure: remove an unready instance, pause a failing
    provider-dependent workflow, or roll back the responsible deployment.
-6. Verify recovery for at least one complete alert window and record the
+7. Verify recovery for at least one complete alert window and record the
    timeline, scope, mitigation, and follow-up owner.
 
 ## Safe diagnostic boundary

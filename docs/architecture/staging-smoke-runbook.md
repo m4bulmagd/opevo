@@ -8,7 +8,8 @@ deployment.
 Use this to verify:
 
 - API boot with real Postgres and Redis
-- worker boot with real Postgres, Redis, and storage credentials
+- `worker-lifecycle` and `worker-background` boot with real Postgres, Redis,
+  and storage credentials
 - agent boot with real LiveKit credentials
 - Clerk webhook delivery
 - Stripe subscription activation and invoice reset handling
@@ -121,14 +122,17 @@ After the core services are healthy, start the provider-backed voice worker:
 
 ```bash
 docker compose -f compose.dev.yaml --profile voice up -d --build agent
-docker compose -f compose.dev.yaml --profile voice logs -f api worker agent
+docker compose -f compose.dev.yaml --profile voice logs -f api worker-lifecycle worker-background agent
 ```
 
 Expected signals:
 
-- `migrate` exits successfully before the API and worker start
+- `migrate` exits successfully before the API and both workers start
 - `api` starts `uvicorn` on port `8000`
-- `worker` starts `arq` without import or Redis connection failures
+- `worker-lifecycle` and `worker-background` start `arq` without import or
+  Redis connection failures; their health keys are
+  `presvo:worker:call-lifecycle:health` and
+  `presvo:worker:background:health`
 - `agent` registers with LiveKit without credential or import failures
 
 ## Basic Boot Verification
@@ -319,7 +323,7 @@ Current caveat:
 Watch logs:
 
 ```bash
-docker compose -f compose.dev.yaml --profile voice logs -f api worker agent
+docker compose -f compose.dev.yaml --profile voice logs -f api worker-lifecycle worker-background agent
 ```
 
 Expected API log signals:
@@ -356,8 +360,11 @@ Expected:
 
 Expected worker log signals:
 
-- `call_finalization_job` runs after the agent receives `202 Accepted` from `/api/agent/calls/{call_id}/complete`
+- `worker-lifecycle` runs `call_finalization_job` after the agent receives `202 Accepted` from `/api/agent/calls/{call_id}/complete`
 - no duplicate finalization occurs if the same completion payload is retried
+- `worker-background` processes its separate queue without delaying the
+  lifecycle check; inspect `presvo.worker.queue.depth{queue_class}` and
+  `presvo.worker.queue.oldest_due.age{queue_class}` as bounded diagnostics.
 
 Optional storage verification:
 
@@ -422,7 +429,7 @@ Configure one test user with:
 Then place one real inbound call for that user and watch:
 
 ```bash
-docker compose -f compose.dev.yaml --profile voice logs -f api worker agent
+docker compose -f compose.dev.yaml --profile voice logs -f api worker-lifecycle worker-background agent
 ```
 
 Expected evidence:
@@ -430,7 +437,7 @@ Expected evidence:
 - API logs still show `livekit dispatch created`
 - agent joins the room without trying to construct external STT, TTS, Silero VAD, or the LiveKit turn detector for that call
 - transcript rows are still persisted in `call_messages`
-- worker still completes `call_finalization_job`
+- `worker-lifecycle` still completes `call_finalization_job`
 - `calls.summary_text`, `usage_ledgers`, and `notifications` continue to populate through the existing backend flow
 
 Recommended comparison:
@@ -444,7 +451,8 @@ Recommended comparison:
 The staging smoke is successful when all of these are true:
 
 - API stays healthy during provider callbacks
-- worker stays healthy and drains queued call finalization jobs
+- `worker-lifecycle` stays healthy and drains queued call-finalization jobs;
+  `worker-background` stays healthy on its separate queue
 - agent starts and handles a real LiveKit dispatch
 - Clerk creates a local `users` row
 - Stripe activation creates subscription, number, and minutes ledger entries

@@ -5,6 +5,37 @@ Canonical release order: **backup verification → migration job → worker and 
 Do not reorder or parallelize these gates. A release is complete only after the
 last gate passes and its value-free evidence has been recorded.
 
+## Worker-isolation coexistence order
+
+This ordered transition applies when moving from the legacy generic worker to
+the two explicit services. It is a compatibility sequence within the worker and
+agent gate, not authorization to run a production deployment.
+
+1. Start `worker-background` from the new API image.
+2. Start `worker-lifecycle` while the generic worker still consumes the default
+   queue.
+3. Roll out the new API so new wakeups route explicitly.
+4. Verify both health keys, depth/oldest-due metrics, and both reconciliation
+   jobs.
+5. Wait for old API replicas to disappear and the legacy/default backlog to drain.
+6. Drain and remove the generic worker.
+
+The services and their checks are fixed: `worker-lifecycle` consumes
+`arq:queue`, reports `presvo:worker:call-lifecycle:health`, and defaults to 10
+slots; `worker-background` consumes `arq:queue:background`, reports
+`presvo:worker:background:health`, and defaults to 4 slots. Inspect
+`presvo.worker.queue.depth{queue_class}` and
+`presvo.worker.queue.oldest_due.age{queue_class}` for each class. PostgreSQL
+outbox/call state is authoritative; Redis is execution and wakeup only.
+
+During this bounded overlap, a legacy unknown-function result is a migration
+signal: stop the transition, preserve the normalized function and attempt
+evidence, restore compatible routing, and let durable reconciliation recover
+the work. An orphaned outbox wakeup recovers on outbox reconciliation and an
+orphaned lifecycle attempt recovers on call reconciliation after service
+restoration. Both are reconciliation-schedule delays, not a zero-delay
+guarantee.
+
 ## Scope and owners
 
 Use this runbook for staging and production releases of the Presvo application.
@@ -226,11 +257,14 @@ Required evidence: migration job ID, exact API digest, start/end UTC times,
 exit status, expected/observed Alembic head, migration classification, and a
 redacted log reference.
 
-## Gate 3 — worker and agent
+## Gate 3 — workers and agent
 
 Owners: `<application owner>` and `<voice owner>`
 
-Deploy the post-call worker from `$API_IMAGE` first. For the voice agent, add
+Deploy `worker-background`, then `worker-lifecycle`, from `$API_IMAGE` first.
+Keep the legacy generic worker consuming the default queue until the explicit
+API routing and drain checks in [Worker-isolation coexistence order](#worker-isolation-coexistence-order)
+are complete. For the voice agent, add
 the new `$AGENT_IMAGE` revision alongside the old revision and prove it is
 registered before draining the old workers. Use one changed service at a time.
 Keep the existing API version serving traffic during this gate only because the
@@ -240,8 +274,10 @@ contract evidence and any changed dispatch-metadata evidence. Stop if the
 evidence references different image digests or an older API contract.
 
 ```bash
-<deployctl> service deploy presvo-worker --image "$API_IMAGE" --release "$RELEASE_ID" --wait
-<deployctl> service status presvo-worker --release "$RELEASE_ID"
+<deployctl> service deploy worker-background --image "$API_IMAGE" --release "$RELEASE_ID" --wait
+<deployctl> service deploy worker-lifecycle --image "$API_IMAGE" --release "$RELEASE_ID" --wait
+<deployctl> service status worker-background --release "$RELEASE_ID"
+<deployctl> service status worker-lifecycle --release "$RELEASE_ID"
 
 <deployctl> service deploy-revision presvo-agent --image "$AGENT_IMAGE" --release "$RELEASE_ID" --retain-previous
 <voicectl> agent wait-available --release "$RELEASE_ID" --image "$AGENT_IMAGE"
@@ -250,14 +286,14 @@ evidence references different image digests or an older API contract.
 <deployctl> service remove-revision presvo-agent --revision <previous-agent-revision> --wait
 ```
 
-Confirm the worker starts, can reach PostgreSQL and Redis over their protected
-endpoints, and does not increase oldest-unfinished outbox age. Confirm the new
+Confirm both workers start, can reach PostgreSQL and Redis over their protected
+endpoints, and do not increase oldest-unfinished outbox age. Confirm the new
 agent process health endpoint passes and LiveKit shows the expected agent name
 as available. Then make the previous revision **stop accepting new dispatches**
 and wait until its **active job count reaches zero** before terminating it. Do
 not place a real customer call at this gate.
 
-For a Stripe-mode worker, startup must fail closed without
+For a Stripe-mode worker service, startup must fail closed without
 `STRIPE_SECRET_KEY`. Confirm the value is supplied by secret reference without
 printing it. Observe the account-deactivation operation, oldest-incomplete,
 reconciliation-result, attention, and completion-duration metrics after worker
@@ -272,14 +308,14 @@ provider-specific deployment must complete the pre-drain and active-zero gate
 before asking the orchestrator to stop the old task. Never treat termination
 grace alone as the drain mechanism.
 
-Stop if either service crash-loops, uses an unapproved digest, cannot reach its
+Stop if either worker service or the agent crash-loops, uses an unapproved digest, cannot reach its
 dependencies, increases terminal job failures, registers an unexpected agent,
 cannot identify old versus new worker revisions, cannot stop new dispatches,
 does not drain active jobs before the deadline, or causes provider errors. Keep
 the old agent revision running and abort the rollout if safe drain controls are
 unavailable; do not terminate a worker with an active call.
 
-Required evidence: worker/agent deployment IDs, desired/healthy replica counts,
+Required evidence: both worker/agent deployment IDs, desired/healthy replica counts,
 digests, queue-age snapshot, LiveKit registration result, error-rate snapshot,
 owners, and UTC times.
 

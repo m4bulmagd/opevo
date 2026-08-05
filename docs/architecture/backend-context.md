@@ -6,6 +6,36 @@ evidence. It is not the canonical current contract; use
 [`integration-endpoints.md`](integration-endpoints.md), and the focused API
 documents linked below for current behavior.
 
+## Current worker isolation operating contract
+
+The two API-image worker services are the current operational contract. They
+are separate scaling and failure domains; they are not aliases for a generic
+worker.
+
+| Service | Queue | Jobs | Health key | Default slots |
+| --- | --- | --- | --- | ---: |
+| `worker-lifecycle` | `arq:queue` | call finalization; call reconciliation | `presvo:worker:call-lifecycle:health` | 10 |
+| `worker-background` | `arq:queue:background` | outbox delivery/reconciliation; verification expiry | `presvo:worker:background:health` | 4 |
+
+PostgreSQL outbox/call state is authoritative. Redis is the execution and
+wakeup mechanism, not a source of truth: a missed wakeup is recovered from the
+durable record by reconciliation after the affected service is restored.
+Call reconciliation owns orphaned lifecycle attempts; outbox reconciliation
+owns orphaned outbox wakeups. Their direct wakeups and scheduled cron runs use
+zero result retention because durable state, not an ARQ result, records the
+outcome. Recovery follows the respective reconciliation schedule and is not a
+zero-delay guarantee.
+
+Each worker emits its own health key and snapshots
+`presvo.worker.queue.depth{queue_class}` and
+`presvo.worker.queue.oldest_due.age{queue_class}`. The implemented evidence is
+controlled ten-call local/CI evidence: four background slots are deliberately
+blocked while ten lifecycle probes start. It establishes local queue isolation
+only; it does not establish cloud scheduling, provider or database saturation,
+production SLOs, alert routing, a recovery drill, or production certification.
+Issue 16A load, monitoring, and recovery gates remain open, and realtime
+remains deferred.
+
 ## Recorded implementation state
 
 - Self-serve France MVP implementation is now in place locally: the launch contract is France-only, `starter`-only, `stt_llm_tts`-only, and onboarding-first.
@@ -115,7 +145,8 @@ Not yet fully verified in staging:
 - The updated self-serve path where the first fresh `invoice.paid` activates the subscription, allocates minutes, and enqueues provisioning for a brand-new customer.
 - A fresh later `invoice.paid` event after the persisted subscription exists. Re-sending the same Stripe event id is deduplicated by `webhook_events`, so it does not create a second reset row.
 - Real Telnyx purchase and `app-active` / `app-disabled` switching with `TELNYX_ORDERING_ENABLED=true` for the self-serve France flow.
-- The new queue-backed call finalization flow with the dedicated `worker` service in Compose.
+- The split queue-backed flow with `worker-lifecycle` and `worker-background`
+  during a real forwarded call.
 - LiveKit room composite egress writing one mixed recording directly into the configured bucket.
 - Fresh signed recording access from `GET /api/calls/{call_id}` after a real egress-created recording exists.
 - End-to-end self-serve onboarding state transitions in the dashboard: `subscription_active`, `provisioning_number`, `setup_required`, `ready_to_enable`, and `live`.
@@ -136,7 +167,8 @@ Ready for manual execution once these external credentials and endpoints are ava
 - Fresh Stripe `invoice.paid` event for the persisted subscription to verify `invoice_paid_reset` in `usage_ledgers`.
 - Real Telnyx purchase and active/disabled switching once you deliberately enable ordering.
 - Real LiveKit webhook verification and agent dispatch against the purchased number `+33******99`.
-- Queue-backed finalization with the dedicated `worker` service during a real forwarded call.
+- Queue-backed finalization with `worker-lifecycle` and background reconciliation
+  with `worker-background` during a real forwarded call.
 - One real forwarded call that confirms `recording_object_key` and `recording_egress_id` are persisted and that the bucket contains the mixed audio file.
 - End-to-end forwarded phone call with transcript, summary, and minute deduction for the Stripe-backed user.
 - Hosted Stripe Checkout and Billing Portal session creation with the configured success/cancel URLs.

@@ -26,10 +26,10 @@ before any infrastructure plan or work starts.
 
 The target deployment must preserve these boundaries regardless of provider:
 
-- Publish API, worker, voice-agent, and web images once, address them by
+- Publish API, `worker-lifecycle`, `worker-background`, voice-agent, and web images once, address them by
   immutable `sha256` digest, and promote the same digests between environments.
-- Run the API, post-call worker, voice agent, and web process as separate
-  services. The worker and agent are long-running processes, not request-bound
+- Run the API, both worker services, voice agent, and web process as separate
+  services. The workers and agent are long-running processes, not request-bound
   functions.
 - Preserve N/N-1 contracts across the ordered rollout: the new worker's
   dispatch metadata must be consumable by the previous agent, the new agent
@@ -56,6 +56,32 @@ The target deployment must preserve these boundaries regardless of provider:
 - Treat production Compose as a portable application contract and staging
   smoke tool, not as the production database, Redis, object-storage, or secret
   platform.
+
+### Worker isolation operating contract
+
+| Service | Queue | Jobs | Health key | Default slots |
+| --- | --- | --- | --- | ---: |
+| `worker-lifecycle` | `arq:queue` | call finalization; call reconciliation | `presvo:worker:call-lifecycle:health` | 10 |
+| `worker-background` | `arq:queue:background` | outbox delivery/reconciliation; verification expiry | `presvo:worker:background:health` | 4 |
+
+PostgreSQL outbox/call state is authoritative. Redis supplies execution and
+wakeup only, so a Redis or worker interruption is repaired from durable state:
+outbox reconciliation finds orphaned wakeups and call reconciliation finds
+orphaned lifecycle attempts after service restoration. This is schedule-bound
+recovery, not a zero-delay guarantee. Direct and cron reconciliation retain no
+ARQ result; their durable PostgreSQL transition is the result of record.
+
+For the isolation migration, coexistence is deliberately ordered: start
+`worker-background` from the new API image, then start `worker-lifecycle` while
+the old generic worker still consumes the default queue; roll out the new API
+so all new wakeups route explicitly; verify both health keys, both queue-depth
+and oldest-due metrics, and both reconciliation jobs; wait for old API replicas
+to disappear and the legacy/default backlog to drain; then drain and remove the
+generic worker. An unknown-function error from the generic worker during this
+bounded overlap is a migration signal, not evidence of durable loss: stop the
+transition, retain only the normalized function/attempt signal, and reconcile
+from PostgreSQL after compatible routing is restored. It does not justify a
+zero-delay recovery claim.
 
 ### Voice-agent rollout boundary
 

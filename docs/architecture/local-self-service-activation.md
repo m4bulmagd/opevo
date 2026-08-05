@@ -33,7 +33,7 @@ and model providers.
 Reloads between milestones read the canonical workflow snapshot from
 PostgreSQL. The proof intentionally has no database-reset endpoint. The
 provider-free browser suite explicitly selects a fixed local identity, so it
-is one serial test with one worker.
+is one serial test with both explicit workers.
 
 ## Account lifecycle and reactivation
 
@@ -45,8 +45,8 @@ active -> deactivating -> inactive -> active
 
 Exact `DEACTIVATE` confirmation commits `deactivating` before provider work.
 New calls and configuration, provisioning, verification, routing, and go-live
-mutations are blocked immediately. The local worker disables the fake number,
-cancels fake billing without automatic proration or refund, waits for an
+mutations are blocked immediately. The local `worker-background` service
+disables the fake number, cancels fake billing without automatic proration or refund, waits for an
 already-connected call to finish, releases the fake number, resets
 number-specific activation state, and only then commits `inactive`.
 
@@ -89,7 +89,7 @@ command, and the token is development-only:
 ```bash
 AUTH_MODE=local \
 LOCAL_AUTH_TOKEN=replace-with-a-development-only-token \
-docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker web
+docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
 
 For that explicit local-auth command, the services use these development-only
@@ -98,7 +98,7 @@ values:
 | Service | Explicit local values | Deliberately absent |
 |---|---|---|
 | API | `AUTH_MODE=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `CARRIER_LOOKUP_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Clerk credentials are not used for this explicit test mode |
-| Worker | `BILLING_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Local token and carrier lookup |
+| `worker-lifecycle` and `worker-background` | `BILLING_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Local token and carrier lookup |
 | Web server | `AUTH_MODE=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `TELEPHONY_MODE=fake` | Carrier credentials and public local token |
 
 The local token is never a `NEXT_PUBLIC_*` value or a Docker build argument.
@@ -131,7 +131,7 @@ the standard interactive stack. Fake providers remain separate from identity.
 Start the standard Clerk-authenticated application services:
 
 ```bash
-docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker web
+docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
 
 `WEB_PORT` changes the published web port, application URL, CORS origins, and
@@ -154,13 +154,14 @@ The runner:
 
 - uses Compose project `presvo-e2e`;
 - binds web/API/PostgreSQL/Redis/MinIO to alternate loopback ports;
-- builds migrate, API, worker, and web images;
+- builds migrate, API, `worker-lifecycle`, `worker-background`, and web images;
 - waits for datastore and application health plus both one-shot exits;
 - starts no LiveKit agent;
 - activates and assigns a first fake number;
 - starts an owner-scoped connected call, requests deactivation, and proves the
   account is immediately non-serving while progress remains `draining_call`;
-- restarts only API and worker while retaining PostgreSQL, Redis, MinIO, web,
+- restarts only API, `worker-lifecycle`, and `worker-background` while retaining
+  PostgreSQL, Redis, MinIO, web,
   named volumes, and a private `0600` state file;
 - finishes the same call, proves cleanup reaches `inactive`, and proves the
   historical call remains;
@@ -170,7 +171,7 @@ The runner:
   exit trap and removes the private temporary state directory.
 
 The browser assertions also cover profile persistence across reloads, separate
-plan and provisioning approvals, asynchronous worker provisioning, all three
+plan and provisioning approvals, asynchronous background-worker provisioning, all three
 conditional-forwarding conditions, verification-window persistence, local
 simulation, explicit go-live, and the active dashboard handoff.
 
@@ -183,15 +184,16 @@ fail-fast Compose interpolation, and application configuration rejects local or
 fake modes in production.
 
 Production requires `BILLING_MODE=stripe`. `STRIPE_SECRET_KEY` is required by
-the API and by any Stripe-mode worker.
+the API and by both Stripe-mode worker services.
 `STRIPE_BILLING_PORTAL_CONFIGURATION_ID` is a required production API setting
 and is sent when creating Portal sessions. Operators must verify that the
 referenced Stripe configuration allows cancellation only at period end and has
 proration disabled. Local fake behavior and repository tests do not certify
 that external Stripe artifact.
 
-A real call additionally requires a deployed API/web/worker/agent topology,
-LiveKit SIP and agent dispatch, private object storage, model and speech
+A real call additionally requires a deployed
+API/web/`worker-lifecycle`/`worker-background`/agent topology, LiveKit SIP and
+agent dispatch, private object storage, model and speech
 providers, webhook delivery, DNS/TLS, and operational monitoring. Use the
 [staging smoke runbook](staging-smoke-runbook.md); do not reinterpret the local
 browser pass as provider certification.
@@ -244,6 +246,7 @@ verified; it is not real-provider or production certification.
 The `e2e` CI job runs only after API, agent, and web verification. It installs
 the locked web dependencies and Chromium, then calls the same disposable
 runner. The runner completes activation, deactivation with active-call drainage,
-an API/worker restart, historical-read proof, and reactivation before cleanup.
+an API/`worker-lifecycle`/`worker-background` restart, historical-read proof,
+and reactivation before cleanup.
 It publishes no image, deploys no service, contacts no product provider, and is
 included in the aggregate required-status job.
