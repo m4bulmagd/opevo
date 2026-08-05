@@ -252,6 +252,29 @@ async def test_aclose_propagates_external_cancellation(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
+async def test_aclose_propagates_unexpected_observer_task_failure(monkeypatch) -> None:
+    """Shutdown must surface terminal failures from the owned observer task."""
+    redis = _Redis(depths=[1], ranges=[[(b"ignored", 10_000.0)]])
+    telemetry = _Telemetry()
+    terminal_error = RuntimeError("observer sleep failed")
+
+    async def failing_sleep(_seconds: float) -> None:
+        raise terminal_error
+
+    monkeypatch.setattr("app.workers.queue_observer.asyncio.sleep", failing_sleep)
+    observer = _observer(redis, telemetry)
+    observer.start()
+    await telemetry.recorded.wait()
+
+    with pytest.raises(RuntimeError) as captured:
+        await observer.aclose()
+    assert captured.value is terminal_error
+    await observer.aclose()
+    assert redis.close_calls == 0
+    assert redis.aclose_calls == 0
+
+
+@pytest.mark.anyio
 async def test_runner_propagates_cancellation_from_sleep(monkeypatch) -> None:
     """Cancellation is control flow and must not become a Redis warning."""
     redis = _Redis(depths=[1], ranges=[[(b"ignored", 10_000.0)]])

@@ -65,7 +65,12 @@ class QueueObserver:
         if task is None:
             return
         task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        result = (await asyncio.gather(task, return_exceptions=True))[0]
+        if isinstance(result, BaseException) and not isinstance(
+            result,
+            asyncio.CancelledError,
+        ):
+            raise result
 
     async def _run(self) -> None:
         while True:
