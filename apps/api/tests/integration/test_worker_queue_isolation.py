@@ -3,6 +3,7 @@ import ipaddress
 import math
 import os
 import time
+from collections.abc import Awaitable
 from dataclasses import replace
 from urllib.parse import urlsplit
 
@@ -11,6 +12,7 @@ from arq.connections import ArqRedis, RedisSettings, create_pool
 from arq.jobs import Job
 from arq.worker import Worker, func
 
+from app.core.config import Settings
 from app.workers.arq_worker import (
     BackgroundWorkerSettings,
     CallLifecycleWorkerSettings,
@@ -52,15 +54,9 @@ async def _create_test_pool(
     )
 
 
-async def _enqueue(
-    pool: ArqRedis,
-    function_name: str,
-    sequence: int,
-    *,
-    queue_name: str,
-) -> Job:
+async def _require_enqueued(enqueue: Awaitable[Job | None]) -> Job:
     job = await asyncio.wait_for(
-        pool.enqueue_job(function_name, sequence, _queue_name=queue_name),
+        enqueue,
         timeout=OPERATION_TIMEOUT_SECONDS,
     )
     assert job is not None
@@ -70,6 +66,7 @@ async def _enqueue(
 async def _cleanup(
     *,
     release_background: asyncio.Event,
+    release_lifecycle: asyncio.Event,
     worker_tasks: list[asyncio.Task[None]],
     workers: list[Worker],
     pools: list[ArqRedis],
@@ -79,6 +76,7 @@ async def _cleanup(
     for worker in workers:
         worker.allow_pick_jobs = False
     release_background.set()
+    release_lifecycle.set()
 
     running_jobs = [
         task
@@ -171,10 +169,15 @@ async def test_lifecycle_queue_starts_ten_jobs_while_background_is_saturated() -
     assert CallLifecycleWorkerSettings.max_jobs == 10
     assert BackgroundWorkerSettings.queue_name == "arq:queue:background"
     assert BackgroundWorkerSettings.max_jobs == 4
+    assert Settings.model_fields["worker_lifecycle_max_jobs"].default == 10
+    assert Settings.model_fields["worker_background_max_jobs"].default == 4
 
     background_started = 0
     all_background_started = asyncio.Event()
     release_background = asyncio.Event()
+    lifecycle_started = 0
+    all_lifecycle_started = asyncio.Event()
+    release_lifecycle = asyncio.Event()
     lifecycle_started_at: dict[int, float] = {}
 
     async def background_probe(_ctx: dict[str, object], sequence: int) -> int:
@@ -186,7 +189,12 @@ async def test_lifecycle_queue_starts_ten_jobs_while_background_is_saturated() -
         return sequence
 
     async def lifecycle_probe(_ctx: dict[str, object], sequence: int) -> int:
+        nonlocal lifecycle_started
         lifecycle_started_at[sequence] = time.monotonic()
+        lifecycle_started += 1
+        if lifecycle_started == 10:
+            all_lifecycle_started.set()
+        await release_lifecycle.wait()
         return sequence
 
     pools: list[ArqRedis] = []
@@ -198,7 +206,7 @@ async def test_lifecycle_queue_starts_ten_jobs_while_background_is_saturated() -
     try:
         control_pool = await _create_test_pool(
             redis_settings,
-            default_queue_name="arq:queue",
+            default_queue_name="arq:queue:unrouted-test",
         )
         pools.append(control_pool)
         await asyncio.wait_for(
@@ -220,16 +228,16 @@ async def test_lifecycle_queue_starts_ten_jobs_while_background_is_saturated() -
         background_worker = Worker(
             functions=[func(background_probe, name="background_probe")],
             redis_pool=background_pool,
-            queue_name="arq:queue:background",
-            max_jobs=4,
+            queue_name=BackgroundWorkerSettings.queue_name,
+            max_jobs=BackgroundWorkerSettings.max_jobs,
             handle_signals=False,
             retry_jobs=False,
         )
         lifecycle_worker = Worker(
             functions=[func(lifecycle_probe, name="lifecycle_probe")],
             redis_pool=lifecycle_pool,
-            queue_name="arq:queue",
-            max_jobs=10,
+            queue_name=CallLifecycleWorkerSettings.queue_name,
+            max_jobs=CallLifecycleWorkerSettings.max_jobs,
             handle_signals=False,
             retry_jobs=False,
         )
@@ -248,11 +256,12 @@ async def test_lifecycle_queue_starts_ten_jobs_while_background_is_saturated() -
         )
 
         background_jobs = [
-            await _enqueue(
-                control_pool,
-                "background_probe",
-                sequence,
-                queue_name="arq:queue:background",
+            await _require_enqueued(
+                control_pool.enqueue_job(
+                    "background_probe",
+                    sequence,
+                    _queue_name="arq:queue:background",
+                )
             )
             for sequence in range(4)
         ]
@@ -267,14 +276,25 @@ async def test_lifecycle_queue_starts_ten_jobs_while_background_is_saturated() -
         for sequence in range(10):
             enqueued_at[sequence] = time.monotonic()
             lifecycle_jobs.append(
-                await _enqueue(
-                    control_pool,
-                    "lifecycle_probe",
-                    sequence,
-                    queue_name="arq:queue",
+                await _require_enqueued(
+                    control_pool.enqueue_job(
+                        "lifecycle_probe",
+                        sequence,
+                        _queue_name="arq:queue",
+                    )
                 )
             )
 
+        await asyncio.wait_for(
+            all_lifecycle_started.wait(),
+            timeout=OPERATION_TIMEOUT_SECONDS,
+        )
+        assert lifecycle_started == 10
+        assert background_started == 4
+        assert not release_background.is_set()
+        assert not release_lifecycle.is_set()
+
+        release_lifecycle.set()
         lifecycle_results = await asyncio.wait_for(
             asyncio.gather(
                 *(
@@ -308,6 +328,7 @@ async def test_lifecycle_queue_starts_ten_jobs_while_background_is_saturated() -
         cleanup_task = asyncio.create_task(
             _cleanup(
                 release_background=release_background,
+                release_lifecycle=release_lifecycle,
                 worker_tasks=worker_tasks,
                 workers=workers,
                 pools=pools,
