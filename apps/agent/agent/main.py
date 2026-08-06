@@ -322,7 +322,7 @@ async def entrypoint(
             if session_runtime is not None and customer_metadata is not None:
                 await session_runtime.finalize(
                     customer_metadata,
-                    duration_seconds=max(1, int(time.monotonic() - started_at)),
+                    duration_seconds=max(1, int(monotonic() - started_at)),
                 )
         finally:
             try:

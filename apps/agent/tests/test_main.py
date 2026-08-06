@@ -1376,6 +1376,49 @@ async def test_entrypoint_injects_job_shutdown_into_session_runtime(
     ]
 
 
+@pytest.mark.anyio
+async def test_entrypoint_uses_injected_clock_for_minimum_shutdown_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = FakeJobContext(make_metadata())
+    session = FakeEntrypointSession()
+    clock_values = iter([100.0, 100.4])
+    captured_durations: list[int] = []
+
+    class CapturingRuntime:
+        call_limit_expired_on_start = False
+        call_limit_task = None
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            return None
+
+        def create_handler_task(self, _factory) -> bool:
+            return True
+
+        def enforce_call_limit(self, _metadata, _disconnect) -> None:
+            return None
+
+        async def finalize(self, _metadata, *, duration_seconds: int) -> None:
+            captured_durations.append(duration_seconds)
+
+    async def shutdown_observability() -> None:
+        return None
+
+    monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
+
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+        session_runtime_factory=CapturingRuntime,
+        monotonic=lambda: next(clock_values),
+    )
+    await context.shutdown_callbacks[0]()
+
+    assert captured_durations == [1]
+    with pytest.raises(StopIteration):
+        next(clock_values)
+
+
 def test_silero_prewarm_failure_does_not_render_exception_message(
     monkeypatch,
     caplog,
