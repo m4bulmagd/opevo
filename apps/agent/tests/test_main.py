@@ -11,6 +11,8 @@ from livekit.agents import JobExecutorType
 from presvo_contracts import ContractError, CustomerCallDispatch, create_contract
 
 import agent.main as agent_main
+from agent.composition import AgentProcessRuntime
+from agent.config import AgentSettings
 from agent.main import build_worker_options
 from agent.main import entrypoint
 from agent.main import _safe_task
@@ -21,6 +23,14 @@ from agent.main import _register_standard_session_handlers
 from agent.main import _register_sts_session_handlers
 from agent.main import prewarm_assets
 from pathlib import Path
+
+
+TEST_SETTINGS = AgentSettings(
+    gemini_api_key="gemini-test-key",
+    speechmatics_api_key="speechmatics-test-key",
+    livekit_silero_vad_enabled=False,
+    livekit_turn_detector_enabled=False,
+)
 
 
 def make_metadata(**overrides) -> CustomerCallDispatch:
@@ -46,30 +56,86 @@ def make_metadata(**overrides) -> CustomerCallDispatch:
 
 
 def test_build_worker_options_sets_prewarm_hook() -> None:
-    options = build_worker_options()
+    options = build_worker_options(TEST_SETTINGS)
 
     assert options.prewarm_fnc is not None
-    assert options.prewarm_fnc.__name__ == "prewarm_assets"
+    assert options.prewarm_fnc.__name__ == "prewarm_configured_assets"
     assert options.job_executor_type is JobExecutorType.PROCESS
     assert options.drain_timeout == 3900
 
 
 def test_build_worker_options_registers_job_request_handler() -> None:
-    options = build_worker_options()
+    options = build_worker_options(TEST_SETTINGS)
 
     assert options.request_fnc is agent_main.handle_job_request
 
 
-def test_build_worker_options_registers_inference_runners(monkeypatch) -> None:
-    called = []
+def test_build_worker_options_passes_exact_settings_to_inference_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: list[AgentSettings] = []
 
     monkeypatch.setattr(
-        "agent.main._register_inference_runners", lambda: called.append(True)
+        "agent.main._register_inference_runners", lambda settings: called.append(settings)
     )
 
-    build_worker_options()
+    build_worker_options(TEST_SETTINGS)
 
-    assert called == [True]
+    assert called == [TEST_SETTINGS]
+
+
+def test_build_worker_options_prewarm_closure_uses_exact_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, AgentSettings]] = []
+    proc = object()
+    monkeypatch.setattr(
+        agent_main,
+        "prewarm_assets",
+        lambda resolved_proc, *, settings: calls.append((resolved_proc, settings)),
+    )
+
+    options = build_worker_options(TEST_SETTINGS)
+    assert options.prewarm_fnc is not None
+    options.prewarm_fnc(proc)
+
+    assert calls == [(proc, TEST_SETTINGS)]
+
+
+def test_build_worker_options_loads_default_settings_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_reads = 0
+    received: list[AgentSettings] = []
+
+    def load_settings() -> AgentSettings:
+        nonlocal settings_reads
+        settings_reads += 1
+        return TEST_SETTINGS
+
+    monkeypatch.setattr(agent_main, "get_settings", load_settings)
+    monkeypatch.setattr(
+        agent_main,
+        "validate_agent_runtime",
+        lambda settings: received.append(settings),
+    )
+    monkeypatch.setattr(
+        agent_main,
+        "_register_inference_runners",
+        lambda settings: received.append(settings),
+    )
+    monkeypatch.setattr(
+        agent_main,
+        "prewarm_assets",
+        lambda _proc, *, settings: received.append(settings),
+    )
+
+    options = build_worker_options()
+    assert options.prewarm_fnc is not None
+    options.prewarm_fnc(object())
+
+    assert settings_reads == 1
+    assert received == [TEST_SETTINGS, TEST_SETTINGS, TEST_SETTINGS]
 
 
 def test_agent_env_example_documents_debug_stream_flag() -> None:
@@ -356,7 +422,7 @@ def test_dispatch_metadata_forbids_extra_fields() -> None:
 class FakeJobContext:
     def __init__(self, metadata: CustomerCallDispatch) -> None:
         self.job = SimpleNamespace(metadata=metadata.model_dump_json())
-        self.proc = SimpleNamespace(userdata={})
+        self.proc = SimpleNamespace(userdata=AgentProcessRuntime(TEST_SETTINGS))
         self.inference_executor = object()
         self.room = object()
         self.events: list[object] = []
@@ -405,6 +471,32 @@ class FakeEntrypointSession(FakeSession):
     def shutdown(self, **kwargs) -> None:
         self.shutdown_calls.append(kwargs)
         self.events.append(("shutdown", kwargs))
+
+
+@pytest.mark.anyio
+async def test_entrypoint_passes_process_settings_and_prewarmed_vad_to_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    settings = TEST_SETTINGS.model_copy(
+        update={"agent_min_endpointing_delay": 0.75}
+    )
+    vad = object()
+    context = FakeJobContext(metadata)
+    context.proc.userdata = AgentProcessRuntime(settings=settings, silero_vad=vad)
+    session = FakeEntrypointSession()
+    captured: dict[str, object] = {}
+
+    def capture_pipeline(_metadata: dict[str, object], **kwargs: object):
+        captured.update(kwargs)
+        return object(), session
+
+    monkeypatch.setattr(agent_main, "build_agent_runtime", capture_pipeline)
+
+    await entrypoint(context)
+
+    assert captured["settings"] is settings
+    assert captured["vad"] is vad
 
 
 @pytest.mark.anyio
@@ -793,16 +885,24 @@ def test_silero_prewarm_failure_does_not_render_exception_message(
     monkeypatch.setattr(plugins, "silero", fake_silero, raising=False)
     monkeypatch.setitem(sys.modules, "livekit.plugins.silero", fake_silero)
     monkeypatch.setattr(
-        "agent.main.get_settings",
-        lambda: SimpleNamespace(
-            livekit_silero_vad_enabled=True,
-            livekit_turn_detector_enabled=False,
-        ),
+        agent_main,
+        "_initialize_observability_safely",
+        lambda: None,
     )
 
+    proc = SimpleNamespace(userdata={})
+    settings = TEST_SETTINGS.model_copy(
+        update={"livekit_silero_vad_enabled": True}
+    )
     with caplog.at_level(logging.ERROR):
-        prewarm_assets(SimpleNamespace(userdata={}))
+        prewarm_assets(
+            proc,
+            settings=settings,
+        )
 
+    assert isinstance(proc.userdata, AgentProcessRuntime)
+    assert proc.userdata.settings is settings
+    assert proc.userdata.silero_vad is None
     assert "SILERO_AUTHORIZATION_SENTINEL" not in caplog.text
     assert "event=silero_prewarm_failed" in caplog.text
     assert "operation=load_silero_vad" in caplog.text
@@ -839,19 +939,12 @@ def test_observability_initialization_failure_does_not_prevent_prewarm(
         raising=False,
     )
     monkeypatch.setattr(
-        "agent.main.get_settings",
-        lambda: SimpleNamespace(
-            livekit_silero_vad_enabled=False,
-            livekit_turn_detector_enabled=False,
-        ),
-    )
-    monkeypatch.setattr(
         "agent.main._resolve_speechmatics_turn_detection_mode",
-        lambda _plugin: adaptive_mode,
+        lambda _settings, _plugin: adaptive_mode,
     )
 
     with caplog.at_level(logging.ERROR):
-        prewarm_assets(SimpleNamespace(userdata={}))
+        prewarm_assets(SimpleNamespace(userdata={}), settings=TEST_SETTINGS)
 
     assert "OTEL_EXPORTER_CREDENTIAL_SENTINEL" not in caplog.text
     assert "event=agent_observability_initialization_failed" in caplog.text
@@ -879,19 +972,12 @@ def test_speechmatics_prewarm_failure_does_not_render_exception_message(
     monkeypatch.setitem(sys.modules, "livekit.plugins.speechmatics", fake_speechmatics)
     monkeypatch.setitem(sys.modules, "speechmatics.voice._smart_turn", fake_smart_turn)
     monkeypatch.setattr(
-        "agent.main.get_settings",
-        lambda: SimpleNamespace(
-            livekit_silero_vad_enabled=False,
-            livekit_turn_detector_enabled=False,
-        ),
-    )
-    monkeypatch.setattr(
         "agent.main._resolve_speechmatics_turn_detection_mode",
-        lambda _plugin: smart_turn_mode,
+        lambda _settings, _plugin: smart_turn_mode,
     )
 
     with caplog.at_level(logging.ERROR):
-        prewarm_assets(SimpleNamespace(userdata={}))
+        prewarm_assets(SimpleNamespace(userdata={}), settings=TEST_SETTINGS)
 
     assert "SPEECHMATICS_TOKEN_SENTINEL" not in caplog.text
     assert "event=speechmatics_prewarm_failed" in caplog.text

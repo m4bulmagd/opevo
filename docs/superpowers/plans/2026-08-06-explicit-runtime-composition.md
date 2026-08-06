@@ -1648,6 +1648,8 @@ git commit -m "refactor(api): complete worker composition cutover"
 - Create: `apps/agent/tests/test_composition.py`
 - Modify: `apps/agent/agent/main.py`
 - Modify: `apps/agent/agent/pipeline_factory.py`
+- Modify: `apps/agent/agent/verification_runtime.py`
+- Modify: `apps/agent/tests/test_dispatch_compatibility.py`
 - Modify: `apps/agent/tests/test_pipeline_factory.py`
 - Modify: `apps/agent/tests/test_main.py`
 - Modify: `apps/agent/tests/test_runtime_validation.py`
@@ -1658,6 +1660,16 @@ git commit -m "refactor(api): complete worker composition cutover"
 - Produces: `require_agent_process_runtime(proc) -> AgentProcessRuntime`.
 - Changes: every pipeline builder requires `settings: AgentSettings`.
 - Changes: `build_worker_options(settings: AgentSettings | None = None) -> WorkerOptions` reads defaults once.
+- Changes: `run_forwarding_verification(..., settings: AgentSettings, ...)` passes
+  that exact settings object to its verification-session factory.
+
+**Owner clarification 6A-C3A:** Task 9 includes the minimal settings-only
+verification consumer plumbing required by the locked
+`build_verification_session(..., settings=...)` interface. The entrypoint reads
+the typed `AgentProcessRuntime`, passes `runtime.settings` into
+`run_forwarding_verification`, and that function passes the same object into
+its session factory. API-client, event-publisher, Redis transport, close-order,
+and shutdown-lifecycle changes remain deferred to Task 10.
 
 - [ ] **Step 1: Write explicit-settings pipeline RED tests**
 

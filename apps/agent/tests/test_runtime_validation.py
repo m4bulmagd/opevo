@@ -105,19 +105,26 @@ def test_build_worker_options_validates_before_initializing_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
-    monkeypatch.setattr("agent.main.get_settings", lambda: agent_settings)
+    monkeypatch.setattr(
+        "agent.main.get_settings",
+        lambda: pytest.fail("explicit settings unexpectedly reloaded"),
+    )
     monkeypatch.setattr(
         "agent.main.validate_agent_runtime",
-        lambda settings: events.append("validate"),
+        lambda settings: events.append(
+            "validate_exact" if settings is agent_settings else "validate_other"
+        ),
     )
     monkeypatch.setattr(
         "agent.main._register_inference_runners",
-        lambda: events.append("initialize"),
+        lambda settings: events.append(
+            "initialize_exact" if settings is agent_settings else "initialize_other"
+        ),
     )
 
-    build_worker_options()
+    build_worker_options(agent_settings)
 
-    assert events == ["validate", "initialize"]
+    assert events == ["validate_exact", "initialize_exact"]
 
 
 def test_build_worker_options_rejects_invalid_production_before_initialization(
@@ -126,10 +133,9 @@ def test_build_worker_options_rejects_invalid_production_before_initialization(
 ) -> None:
     invalid_settings = agent_settings.model_copy(update={"livekit_api_secret": ""})
     events: list[str] = []
-    monkeypatch.setattr("agent.main.get_settings", lambda: invalid_settings)
     monkeypatch.setattr(
         "agent.main._register_inference_runners",
-        lambda: events.append("initialize"),
+        lambda _settings: events.append("initialize"),
     )
     monkeypatch.setattr(
         "agent.main.WorkerOptions",
@@ -137,6 +143,6 @@ def test_build_worker_options_rejects_invalid_production_before_initialization(
     )
 
     with pytest.raises(RuntimeError, match="LIVEKIT_API_SECRET"):
-        build_worker_options()
+        build_worker_options(invalid_settings)
 
     assert events == []

@@ -9,6 +9,7 @@ from livekit.agents import Agent, AutoSubscribe, JobContext, room_io
 from presvo_contracts import ForwardingVerificationDispatch
 
 from agent.api_client import AgentApiClient
+from agent.config import AgentSettings
 from agent.pipeline_factory import build_verification_session
 
 
@@ -82,7 +83,8 @@ async def run_forwarding_verification(
     context: JobContext,
     metadata: ForwardingVerificationDispatch,
     *,
-    session_factory: Callable[[str], Any] = build_verification_session,
+    settings: AgentSettings,
+    session_factory: Callable[..., Any] = build_verification_session,
     agent_factory: Callable[[], Any] = _build_verification_agent,
     api_client: AgentApiClient | None = None,
     api_client_factory: Callable[[], AgentApiClient] = AgentApiClient,
@@ -94,7 +96,7 @@ async def run_forwarding_verification(
         await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
         sip_participant = await context.wait_for_participant(kind=SIP_PARTICIPANT_KIND)
 
-        session = session_factory(metadata.tts_provider)
+        session = session_factory(metadata.tts_provider, settings=settings)
         agent = agent_factory()
         if resolved_api_client is None:
             resolved_api_client = api_client_factory()

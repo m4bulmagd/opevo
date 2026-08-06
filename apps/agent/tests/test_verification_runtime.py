@@ -17,9 +17,16 @@ from presvo_contracts import (
 )
 
 import agent.main as agent_main
+from agent.composition import AgentProcessRuntime
+from agent.config import AgentSettings
 
 
 VERIFICATION_MESSAGE = "Forwarding test successful. Return to Presvo to go live."
+VERIFICATION_SETTINGS = AgentSettings(
+    speechmatics_api_key="speechmatics-test-key",
+    livekit_silero_vad_enabled=False,
+    livekit_turn_detector_enabled=False,
+)
 
 
 def verification_metadata(**overrides: object) -> dict[str, object]:
@@ -286,6 +293,9 @@ class FakeVerificationContext:
         self.events: list[object] = []
         self.room = object()
         self.job = SimpleNamespace(metadata=json.dumps(metadata or {}))
+        self.proc = SimpleNamespace(
+            userdata=AgentProcessRuntime(settings=VERIFICATION_SETTINGS)
+        )
         self.shutdown_callbacks: list[object] = []
 
     async def connect(self, **kwargs: object) -> None:
@@ -363,7 +373,8 @@ async def test_verification_runtime_awaits_public_session_close_before_api_close
     await runtime.run_forwarding_verification(
         context,
         metadata,
-        session_factory=lambda _provider: session,
+        settings=VERIFICATION_SETTINGS,
+        session_factory=lambda _provider, *, settings: session,
         agent_factory=object,
         api_client_factory=lambda: api_client,
     )
@@ -388,12 +399,16 @@ async def test_verification_runtime_plays_exact_message_then_completes_and_clean
     api_client = FakeVerificationApiClient(events)
     agent = object()
 
+    def build_session(provider: str, *, settings: AgentSettings):
+        assert settings is VERIFICATION_SETTINGS
+        events.append(("build_session", provider))
+        return session
+
     await runtime.run_forwarding_verification(
         context,
         metadata,
-        session_factory=lambda provider: (
-            events.append(("build_session", provider)) or session
-        ),
+        settings=VERIFICATION_SETTINGS,
+        session_factory=build_session,
         agent_factory=lambda: events.append("build_agent") or agent,
         api_client_factory=lambda: events.append("build_api") or api_client,
     )
@@ -460,7 +475,8 @@ async def test_verification_runtime_cleans_up_on_speech_or_completion_failure(
         await runtime.run_forwarding_verification(
             context,
             metadata,
-            session_factory=lambda _provider: session,
+            settings=VERIFICATION_SETTINGS,
+            session_factory=lambda _provider, *, settings: session,
             agent_factory=object,
             api_client_factory=lambda: api_client,
         )
@@ -486,7 +502,8 @@ async def test_verification_runtime_preserves_cancellation_and_cleans_up() -> No
         await runtime.run_forwarding_verification(
             context,
             metadata,
-            session_factory=lambda _provider: session,
+            settings=VERIFICATION_SETTINGS,
+            session_factory=lambda _provider, *, settings: session,
             agent_factory=object,
             api_client_factory=lambda: api_client,
         )
@@ -513,7 +530,8 @@ async def test_verification_runtime_start_failure_still_drains_and_closes() -> N
         await runtime.run_forwarding_verification(
             context,
             metadata,
-            session_factory=lambda _provider: session,
+            settings=VERIFICATION_SETTINGS,
+            session_factory=lambda _provider, *, settings: session,
             agent_factory=object,
             api_client_factory=lambda: api_client,
         )
@@ -547,7 +565,8 @@ async def test_verification_runtime_cleanup_errors_do_not_mask_primary_failure(
         await runtime.run_forwarding_verification(
             context,
             metadata,
-            session_factory=lambda _provider: session,
+            settings=VERIFICATION_SETTINGS,
+            session_factory=lambda _provider, *, settings: session,
             agent_factory=object,
             api_client_factory=lambda: api_client,
         )
@@ -575,7 +594,8 @@ async def test_verification_runtime_preserves_cleanup_cancellation_after_all_cle
         await runtime.run_forwarding_verification(
             context,
             metadata,
-            session_factory=lambda _provider: session,
+            settings=VERIFICATION_SETTINGS,
+            session_factory=lambda _provider, *, settings: session,
             agent_factory=object,
             api_client_factory=lambda: api_client,
         )
@@ -595,7 +615,8 @@ async def test_verification_runtime_does_not_close_injected_api_client() -> None
     await runtime.run_forwarding_verification(
         context,
         metadata,
-        session_factory=lambda _provider: session,
+        settings=VERIFICATION_SETTINGS,
+        session_factory=lambda _provider, *, settings: session,
         agent_factory=object,
         api_client=api_client,
         api_client_factory=lambda: pytest.fail("injected client unexpectedly replaced"),
@@ -613,8 +634,13 @@ async def test_entrypoint_branches_to_verification_before_normal_call_runtime(
     context = FakeVerificationContext(payload)
     calls: list[object] = []
 
-    async def capture_verification(resolved_context, resolved_metadata) -> None:
-        calls.append((resolved_context, resolved_metadata))
+    async def capture_verification(
+        resolved_context,
+        resolved_metadata,
+        *,
+        settings,
+    ) -> None:
+        calls.append((resolved_context, resolved_metadata, settings))
 
     def forbidden(*_args: object, **_kwargs: object) -> None:
         pytest.fail("verification entered the normal customer-call path")
@@ -641,5 +667,5 @@ async def test_entrypoint_branches_to_verification_before_normal_call_runtime(
     await agent_main.entrypoint(context)
 
     assert parse_calls == 1
-    assert calls == [(context, metadata)]
+    assert calls == [(context, metadata, VERIFICATION_SETTINGS)]
     assert len(context.shutdown_callbacks) == 1

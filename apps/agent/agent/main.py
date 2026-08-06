@@ -21,7 +21,8 @@ from presvo_contracts import (
 )
 
 from agent.api_client import AgentApiClient
-from agent.config import get_settings
+from agent.composition import AgentProcessRuntime, require_agent_process_runtime
+from agent.config import AgentSettings, get_settings
 from agent.event_publisher import EventPublisher
 from agent.observability import (
     agent_lifecycle_span,
@@ -71,8 +72,8 @@ async def _safe_task(coro) -> None:
         )
 
 
-def _register_inference_runners() -> None:
-    if get_settings().livekit_turn_detector_enabled:
+def _register_inference_runners(settings: AgentSettings) -> None:
+    if settings.livekit_turn_detector_enabled:
         importlib.import_module("livekit.plugins.turn_detector.multilingual")
 
 
@@ -260,9 +261,14 @@ async def handle_job_request(request: JobRequest) -> None:
 async def entrypoint(context: JobContext) -> None:
     _initialize_observability_safely()
     context.add_shutdown_callback(shutdown_observability)
+    process_runtime = require_agent_process_runtime(context.proc)
     metadata = parse_dispatch(context.job.metadata or "{}")
     if isinstance(metadata, ForwardingVerificationDispatch):
-        await run_forwarding_verification(context, metadata)
+        await run_forwarding_verification(
+            context,
+            metadata,
+            settings=process_runtime.settings,
+        )
         return
     metadata_dict = dump_contract(metadata)
     started_at = time.monotonic()
@@ -280,10 +286,10 @@ async def entrypoint(context: JobContext) -> None:
                 kind=SIP_PARTICIPANT_KIND
             )
 
-        prewarmed = getattr(context.proc, "userdata", {}) or {}
         agent, session = build_agent_runtime(
             metadata_dict,
-            vad=prewarmed.get("silero_vad"),
+            settings=process_runtime.settings,
+            vad=process_runtime.silero_vad,
             inference_executor=context.inference_executor,
         )
         runtime = SessionRuntime(
@@ -338,19 +344,15 @@ async def entrypoint(context: JobContext) -> None:
         session.input.set_audio_enabled(True)
 
 
-def prewarm_assets(proc) -> None:
+def prewarm_assets(proc, *, settings: AgentSettings) -> None:
     _initialize_observability_safely()
-    settings = get_settings()
-    userdata = getattr(proc, "userdata", None)
-    if userdata is None:
-        userdata = {}
-        proc.userdata = userdata
+    silero_vad = None
 
     if settings.livekit_silero_vad_enabled:
         try:
             from livekit.plugins import silero
 
-            userdata["silero_vad"] = silero.VAD.load()
+            silero_vad = silero.VAD.load()
         except ModuleNotFoundError:
             logger.info("silero prewarm skipped: optional package unavailable")
         except Exception as exc:
@@ -369,35 +371,43 @@ def prewarm_assets(proc) -> None:
         from speechmatics.voice._smart_turn import SmartTurnDetector
     except ModuleNotFoundError:
         logger.info("speechmatics prewarm skipped: optional packages unavailable")
-        return
+    else:
+        try:
+            if (
+                _resolve_speechmatics_turn_detection_mode(settings, speechmatics)
+                == speechmatics.TurnDetectionMode.SMART_TURN
+            ):
+                SmartTurnDetector().setup()
+        except Exception as exc:
+            report_safe_exception(
+                logger,
+                event="speechmatics_prewarm_failed",
+                operation="setup_smart_turn_detector",
+                error=exc,
+            )
 
-    try:
-        if (
-            _resolve_speechmatics_turn_detection_mode(speechmatics)
-            == speechmatics.TurnDetectionMode.SMART_TURN
-        ):
-            SmartTurnDetector().setup()
-    except Exception as exc:
-        report_safe_exception(
-            logger,
-            event="speechmatics_prewarm_failed",
-            operation="setup_smart_turn_detector",
-            error=exc,
-        )
+    proc.userdata = AgentProcessRuntime(
+        settings=settings,
+        silero_vad=silero_vad,
+    )
 
 
-def build_worker_options() -> WorkerOptions:
-    settings = get_settings()
-    validate_agent_runtime(settings)
-    _register_inference_runners()
+def build_worker_options(settings: AgentSettings | None = None) -> WorkerOptions:
+    configured = settings or get_settings()
+    validate_agent_runtime(configured)
+    _register_inference_runners(configured)
+
+    def prewarm_configured_assets(proc) -> None:
+        prewarm_assets(proc, settings=configured)
+
     return WorkerOptions(
         entrypoint_fnc=entrypoint,
         request_fnc=handle_job_request,
-        prewarm_fnc=prewarm_assets,
-        agent_name=settings.livekit_agent_name,
-        ws_url=settings.livekit_url,
-        api_key=settings.livekit_api_key,
-        api_secret=settings.livekit_api_secret,
+        prewarm_fnc=prewarm_configured_assets,
+        agent_name=configured.livekit_agent_name,
+        ws_url=configured.livekit_url,
+        api_key=configured.livekit_api_key,
+        api_secret=configured.livekit_api_secret,
         drain_timeout=WORKER_DRAIN_TIMEOUT_SECONDS,
     )
 

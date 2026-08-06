@@ -1,9 +1,7 @@
 from importlib.metadata import version
-from types import SimpleNamespace
-
 import pytest
 
-from agent.config import get_settings
+from agent.config import AgentSettings
 from agent import pipeline_factory
 from agent.pipeline_factory import build_agent_runtime
 from agent.pipeline_factory import build_pipeline_config
@@ -82,6 +80,18 @@ class FakeSession:
         self.kwargs = kwargs
 
 
+def make_settings(**overrides: object) -> AgentSettings:
+    settings = AgentSettings(
+        gemini_api_key="gemini-test-key",
+        speechmatics_api_key="speechmatics-test-key",
+        elevenlabs_api_key="elevenlabs-test-key",
+        elevenlabs_voice_id="voice-id",
+        livekit_silero_vad_enabled=True,
+        livekit_turn_detector_enabled=True,
+    )
+    return settings.model_copy(update=overrides)
+
+
 @pytest.mark.parametrize(
     ("tts_provider", "plugin", "credential_name"),
     [
@@ -95,12 +105,7 @@ def test_verification_session_builds_only_the_selected_tts(
     plugin: object,
     credential_name: str,
 ) -> None:
-    settings = SimpleNamespace(
-        speechmatics_api_key="speechmatics-test-key",
-        elevenlabs_api_key="elevenlabs-test-key",
-        elevenlabs_voice_id="voice-id",
-    )
-    monkeypatch.setattr(pipeline_factory, "get_settings", lambda: settings)
+    settings = make_settings()
     forbidden = [
         "_default_plugin_modules",
         "_build_stt",
@@ -123,6 +128,7 @@ def test_verification_session_builds_only_the_selected_tts(
 
     session = pipeline_factory.build_verification_session(
         tts_provider,
+        settings=settings,
         plugin_modules={tts_provider: plugin},
         session_cls=FakeSession,
     )
@@ -150,18 +156,11 @@ def test_verification_session_imports_only_the_selected_plugin(
         "import_module",
         lambda module_name: imported.append(module_name) or plugin,
     )
-    monkeypatch.setattr(
-        pipeline_factory,
-        "get_settings",
-        lambda: SimpleNamespace(
-            speechmatics_api_key="speechmatics-test-key",
-            elevenlabs_api_key="elevenlabs-test-key",
-            elevenlabs_voice_id="voice-id",
-        ),
-    )
+    settings = make_settings()
 
     pipeline_factory.build_verification_session(
         tts_provider,
+        settings=settings,
         session_cls=FakeSession,
     )
 
@@ -173,35 +172,26 @@ def test_verification_session_imports_only_the_selected_plugin(
     [
         (
             "speechmatics",
-            SimpleNamespace(
-                speechmatics_api_key="",
-                elevenlabs_api_key="elevenlabs-test-key",
-                elevenlabs_voice_id="voice-id",
-            ),
+            make_settings(speechmatics_api_key=""),
         ),
         (
             "elevenlabs",
-            SimpleNamespace(
-                speechmatics_api_key="speechmatics-test-key",
-                elevenlabs_api_key="",
-                elevenlabs_voice_id="voice-id",
-            ),
+            make_settings(elevenlabs_api_key=""),
         ),
     ],
 )
 def test_verification_session_rejects_missing_credentials_safely(
     monkeypatch: pytest.MonkeyPatch,
     tts_provider: str,
-    settings: SimpleNamespace,
+    settings: AgentSettings,
 ) -> None:
-    monkeypatch.setattr(pipeline_factory, "get_settings", lambda: settings)
-
     with pytest.raises(
         pipeline_factory.VerificationSessionConfigurationError,
         match="verification TTS configuration is unavailable",
     ) as caught:
         pipeline_factory.build_verification_session(
             tts_provider,
+            settings=settings,
             plugin_modules={
                 "speechmatics": FakeSpeechmaticsPlugin,
                 "elevenlabs": FakeElevenLabsPlugin,
@@ -213,24 +203,14 @@ def test_verification_session_rejects_missing_credentials_safely(
 
 
 def test_verification_session_rejects_missing_selected_plugin_safely(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        pipeline_factory,
-        "get_settings",
-        lambda: SimpleNamespace(
-            speechmatics_api_key="speechmatics-test-key",
-            elevenlabs_api_key="elevenlabs-test-key",
-            elevenlabs_voice_id="voice-id",
-        ),
-    )
-
     with pytest.raises(
         pipeline_factory.VerificationSessionConfigurationError,
         match="verification TTS configuration is unavailable",
     ):
         pipeline_factory.build_verification_session(
             "speechmatics",
+            settings=make_settings(),
             plugin_modules={},
             session_cls=FakeSession,
         )
@@ -244,20 +224,14 @@ def test_verification_session_rejects_missing_selected_plugin_safely(
     ],
 )
 def test_default_plugin_modules_loads_elevenlabs_for_each_speech_role(
-    monkeypatch: pytest.MonkeyPatch,
     stt_provider: str,
     tts_provider: str,
 ) -> None:
-    monkeypatch.setattr(
-        pipeline_factory,
-        "get_settings",
-        lambda: SimpleNamespace(
+    modules = pipeline_factory._default_plugin_modules(
+        make_settings(
             livekit_silero_vad_enabled=False,
             livekit_turn_detector_enabled=False,
         ),
-    )
-
-    modules = pipeline_factory._default_plugin_modules(
         {
             "stt_provider": stt_provider,
             "llm_provider": "unsupported-for-this-focused-test",
@@ -269,18 +243,12 @@ def test_default_plugin_modules_loads_elevenlabs_for_each_speech_role(
 
 
 def test_deepgram_advertised_stt_path_has_pinned_plugin_and_loader(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        pipeline_factory,
-        "get_settings",
-        lambda: SimpleNamespace(
+    modules = pipeline_factory._default_plugin_modules(
+        make_settings(
             livekit_silero_vad_enabled=False,
             livekit_turn_detector_enabled=False,
         ),
-    )
-
-    modules = pipeline_factory._default_plugin_modules(
         {
             "stt_provider": "deepgram",
             "llm_provider": "unsupported-for-this-focused-test",
@@ -326,6 +294,7 @@ def test_pipeline_factory_rejects_removed_openai_provider() -> None:
                 "llm_provider": "openai",
                 "tts_provider": "speechmatics",
             },
+            settings=make_settings(),
             plugin_modules={
                 "speechmatics": FakeSpeechmaticsPlugin,
                 "silero": FakeSileroPlugin,
@@ -352,6 +321,7 @@ def test_pipeline_factory_builds_agent_runtime_with_live_providers() -> None:
             "llm_provider": "gemini",
             "tts_provider": "speechmatics",
         },
+        settings=make_settings(),
         plugin_modules={
             "deepgram": FakeDeepgramPlugin,
             "google": FakeGooglePlugin,
@@ -387,6 +357,7 @@ def test_pipeline_factory_does_not_print_prompt_content(capsys) -> None:
             "llm_provider": "gemini",
             "tts_provider": "speechmatics",
         },
+        settings=make_settings(),
         plugin_modules={
             "google": FakeGooglePlugin,
             "speechmatics": FakeSpeechmaticsPlugin,
@@ -414,6 +385,7 @@ def test_pipeline_factory_binds_turn_detector_executor_when_provided() -> None:
             "llm_provider": "gemini",
             "tts_provider": "speechmatics",
         },
+        settings=make_settings(),
         plugin_modules={
             "google": FakeGooglePlugin,
             "speechmatics": FakeSpeechmaticsPlugin,
@@ -440,6 +412,7 @@ def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> No
             "llm_provider": "gemini",
             "tts_provider": "speechmatics",
         },
+        settings=make_settings(),
         plugin_modules={
             "google": FakeGooglePlugin,
             "speechmatics": FakeSpeechmaticsPlugin,
@@ -452,9 +425,10 @@ def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> No
     assert isinstance(agent, InstrumentedAgent)
 
 
-def test_pipeline_factory_builds_sts_runtime_with_gemini_realtime(monkeypatch) -> None:
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    get_settings.cache_clear()
+def test_pipeline_factory_builds_sts_runtime_from_explicit_settings_when_environment_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "conflicting-environment-key")
 
     agent, session = build_agent_runtime(
         {
@@ -465,6 +439,7 @@ def test_pipeline_factory_builds_sts_runtime_with_gemini_realtime(monkeypatch) -
             "pipeline_mode": "sts",
             "sts_provider": "gemini",
         },
+        settings=make_settings(gemini_api_key="test-key"),
         plugin_modules={"google": FakeGoogleRealtimePlugin},
         agent_cls=FakeAgent,
         session_cls=FakeSession,
@@ -478,10 +453,7 @@ def test_pipeline_factory_builds_sts_runtime_with_gemini_realtime(monkeypatch) -
     assert "turn_detection" not in session.kwargs
 
 
-def test_pipeline_factory_rejects_sts_without_google_credentials(monkeypatch) -> None:
-    monkeypatch.setenv("GEMINI_API_KEY", "")
-    get_settings.cache_clear()
-
+def test_pipeline_factory_rejects_sts_without_google_credentials() -> None:
     with pytest.raises(ValueError, match="Gemini credentials"):
         build_agent_runtime(
             {
@@ -490,16 +462,14 @@ def test_pipeline_factory_rejects_sts_without_google_credentials(monkeypatch) ->
                 "pipeline_mode": "sts",
                 "sts_provider": "gemini",
             },
+            settings=make_settings(gemini_api_key=""),
             plugin_modules={"google": FakeGoogleRealtimePlugin},
             agent_cls=FakeAgent,
             session_cls=FakeSession,
         )
 
 
-def test_pipeline_factory_rejects_unsupported_sts_provider(monkeypatch) -> None:
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    get_settings.cache_clear()
-
+def test_pipeline_factory_rejects_unsupported_sts_provider() -> None:
     with pytest.raises(ValueError, match="Unsupported STS provider"):
         build_agent_runtime(
             {
@@ -508,6 +478,7 @@ def test_pipeline_factory_rejects_unsupported_sts_provider(monkeypatch) -> None:
                 "pipeline_mode": "sts",
                 "sts_provider": "other",
             },
+            settings=make_settings(gemini_api_key="test-key"),
             plugin_modules={"google": FakeGoogleRealtimePlugin},
             agent_cls=FakeAgent,
             session_cls=FakeSession,

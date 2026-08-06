@@ -9,9 +9,17 @@ import pytest
 from presvo_contracts import ContractError, VersionedContract, dump_contract
 
 import agent.main as agent_main
+from agent.composition import AgentProcessRuntime
+from agent.config import AgentSettings
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "libs/shared/tests/fixtures/v1"
+TEST_SETTINGS = AgentSettings(
+    speechmatics_api_key="speechmatics-test-key",
+    gemini_api_key="gemini-test-key",
+    livekit_silero_vad_enabled=False,
+    livekit_turn_detector_enabled=False,
+)
 
 
 def _fixture(name: str) -> dict[str, object]:
@@ -51,7 +59,9 @@ class FakeJobContext:
     def __init__(self, metadata: str) -> None:
         self.job = SimpleNamespace(metadata=metadata)
         self.shutdown_callbacks: list[object] = []
-        self.proc = SimpleNamespace(userdata={})
+        self.proc = SimpleNamespace(
+            userdata=AgentProcessRuntime(settings=TEST_SETTINGS)
+        )
         self.inference_executor = object()
         self.room = object()
         self.events: list[object] = []
@@ -208,8 +218,14 @@ async def test_entrypoint_parses_exact_shared_dispatch_artifacts(
     parsed_payloads: list[dict[str, object]] = []
     session = FakeSession()
 
-    async def capture_verification(resolved_context: object, metadata: object) -> None:
+    async def capture_verification(
+        resolved_context: object,
+        metadata: object,
+        *,
+        settings: AgentSettings,
+    ) -> None:
         assert resolved_context is context
+        assert settings is TEST_SETTINGS
         parsed_payloads.append(dump_contract(cast(VersionedContract, metadata)))
 
     def capture_customer(
