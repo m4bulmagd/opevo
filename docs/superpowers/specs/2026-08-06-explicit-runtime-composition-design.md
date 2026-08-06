@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-06
 
-**Status:** Design sections approved; written-spec review pending
+**Status:** Owner-approved written contract
 
 ## Context
 
