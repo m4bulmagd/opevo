@@ -96,7 +96,12 @@ class SecretBearingFailingApiClient:
 
 
 class CloseFailingApiClient(FakeApiClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_calls = 0
+
     async def aclose(self) -> None:
+        self.close_calls += 1
         raise RuntimeError("CLOSE_EXCEPTION_SENTINEL")
 
 
@@ -372,6 +377,8 @@ async def test_completion_acknowledgement_failure_logs_no_identifiers(
             publisher,
             api_client=AgentApiClient(
                 base_url="http://api.test/PATH_SENTINEL",
+                timeout=10.0,
+                max_retries=3,
                 http_client=http_client,
             ),
         )
@@ -421,6 +428,8 @@ async def test_transcript_acknowledgement_failure_keeps_recovery_and_requests_sh
             FakeEventPublisher(),
             api_client=AgentApiClient(
                 base_url="http://api.test/PATH_SENTINEL",
+                timeout=10.0,
+                max_retries=3,
                 http_client=http_client,
             ),
             fatal_shutdown=shutdown_reasons.append,
@@ -455,12 +464,13 @@ async def test_transcript_acknowledgement_failure_keeps_recovery_and_requests_sh
 
 
 @pytest.mark.anyio
-async def test_api_client_close_failure_does_not_break_finalize_or_leak_error(
+async def test_finalize_never_closes_borrowed_api_client(
     caplog,
 ) -> None:
+    api_client = CloseFailingApiClient()
     runtime = SessionRuntime(
         FakeEventPublisher(),
-        api_client=CloseFailingApiClient(),
+        api_client=api_client,
     )
     metadata = make_metadata(dispatch_token="CLOSE_TOKEN_SENTINEL")
 
@@ -468,6 +478,7 @@ async def test_api_client_close_failure_does_not_break_finalize_or_leak_error(
         await runtime.finalize(metadata, duration_seconds=60)
 
     assert runtime.pending_transcript == ()
+    assert api_client.close_calls == 0
     assert "CLOSE_EXCEPTION_SENTINEL" not in caplog.text
     assert "CLOSE_TOKEN_SENTINEL" not in caplog.text
 

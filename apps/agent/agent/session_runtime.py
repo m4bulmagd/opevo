@@ -557,8 +557,6 @@ class SessionRuntime:
                     ),
                 )
 
-            await self._close_api_client()
-
             if completion_acknowledged:
                 recovery_sequences = {item.sequence_number for item in recovery_items}
                 self._pending = deque(
@@ -626,20 +624,6 @@ class SessionRuntime:
             return False
 
         return True
-
-    async def _close_api_client(self) -> None:
-        if self.api_client is None:
-            return
-        close = getattr(self.api_client, "aclose", None)
-        if close is None:
-            return
-        try:
-            await close()
-        except Exception as exc:
-            logger.error(
-                "failed to close agent API client error_type=%s",
-                type(exc).__name__,
-            )
 
     async def _publish_agent_session_ended(
         self,

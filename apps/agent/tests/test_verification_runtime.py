@@ -17,7 +17,7 @@ from presvo_contracts import (
 )
 
 import agent.main as agent_main
-from agent.composition import AgentProcessRuntime
+from agent.composition import build_agent_process_runtime
 from agent.config import AgentSettings
 
 
@@ -293,8 +293,14 @@ class FakeVerificationContext:
         self.events: list[object] = []
         self.room = object()
         self.job = SimpleNamespace(metadata=json.dumps(metadata or {}))
+        api_client = FakeVerificationApiClient(self.events)
+        publisher = FakeVerificationPublisher(self.events)
         self.proc = SimpleNamespace(
-            userdata=AgentProcessRuntime(settings=VERIFICATION_SETTINGS)
+            userdata=build_agent_process_runtime(
+                VERIFICATION_SETTINGS,
+                api_client_factory=lambda _settings: api_client,
+                event_publisher_factory=lambda _settings: publisher,
+            )
         )
         self.shutdown_callbacks: list[object] = []
 
@@ -307,6 +313,17 @@ class FakeVerificationContext:
 
     def add_shutdown_callback(self, callback: object) -> None:
         self.shutdown_callbacks.append(callback)
+
+
+class FakeVerificationPublisher:
+    def __init__(self, events: list[object]) -> None:
+        self.events = events
+
+    async def publish(self, _event: object) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        self.events.append("close_publisher")
 
 
 class FakeVerificationApiClient:
@@ -360,7 +377,7 @@ def _runtime_module():
 
 
 @pytest.mark.anyio
-async def test_verification_runtime_awaits_public_session_close_before_api_close() -> (
+async def test_verification_runtime_awaits_public_session_close_without_closing_api() -> (
     None
 ):
     runtime = _runtime_module()
@@ -376,15 +393,15 @@ async def test_verification_runtime_awaits_public_session_close_before_api_close
         settings=VERIFICATION_SETTINGS,
         session_factory=lambda _provider, *, settings: session,
         agent_factory=object,
-        api_client_factory=lambda: api_client,
+        api_client=api_client,
     )
 
     assert session.public_close_complete is True
-    assert events[-3:] == [
+    assert events[-2:] == [
         "session_aclose_started",
         "session_aclose_finished",
-        "close_api",
     ]
+    assert "close_api" not in events
 
 
 @pytest.mark.anyio
@@ -410,7 +427,7 @@ async def test_verification_runtime_plays_exact_message_then_completes_and_clean
         settings=VERIFICATION_SETTINGS,
         session_factory=build_session,
         agent_factory=lambda: events.append("build_agent") or agent,
-        api_client_factory=lambda: events.append("build_api") or api_client,
+        api_client=api_client,
     )
 
     assert events == [
@@ -418,7 +435,6 @@ async def test_verification_runtime_plays_exact_message_then_completes_and_clean
         ("wait_for_participant", {"kind": agent_main.SIP_PARTICIPANT_KIND}),
         ("build_session", "speechmatics"),
         "build_agent",
-        "build_api",
         ("audio", False),
         "start",
         (
@@ -433,8 +449,8 @@ async def test_verification_runtime_plays_exact_message_then_completes_and_clean
             metadata.completion_token,
         ),
         ("shutdown", {"drain": True}),
-        "close_api",
     ]
+    assert "close_api" not in events
     assert session.audio_states == [False]
     assert session.start_kwargs["agent"] is agent
     assert session.start_kwargs["room"] is context.room
@@ -478,11 +494,11 @@ async def test_verification_runtime_cleans_up_on_speech_or_completion_failure(
             settings=VERIFICATION_SETTINGS,
             session_factory=lambda _provider, *, settings: session,
             agent_factory=object,
-            api_client_factory=lambda: api_client,
+            api_client=api_client,
         )
 
     assert ("shutdown", {"drain": True}) in events
-    assert events[-1] == "close_api"
+    assert "close_api" not in events
     if speech_error is not None:
         assert not any(
             event[0] == "complete" for event in events if isinstance(event, tuple)
@@ -505,13 +521,14 @@ async def test_verification_runtime_preserves_cancellation_and_cleans_up() -> No
             settings=VERIFICATION_SETTINGS,
             session_factory=lambda _provider, *, settings: session,
             agent_factory=object,
-            api_client_factory=lambda: api_client,
+            api_client=api_client,
         )
 
     assert not any(
         event[0] == "complete" for event in events if isinstance(event, tuple)
     )
-    assert events[-2:] == [("shutdown", {"drain": True}), "close_api"]
+    assert events[-1] == ("shutdown", {"drain": True})
+    assert "close_api" not in events
 
 
 @pytest.mark.anyio
@@ -533,10 +550,11 @@ async def test_verification_runtime_start_failure_still_drains_and_closes() -> N
             settings=VERIFICATION_SETTINGS,
             session_factory=lambda _provider, *, settings: session,
             agent_factory=object,
-            api_client_factory=lambda: api_client,
+            api_client=api_client,
         )
 
-    assert events[-2:] == [("shutdown", {"drain": True}), "close_api"]
+    assert events[-1] == ("shutdown", {"drain": True})
+    assert "close_api" not in events
 
 
 @pytest.mark.anyio
@@ -568,12 +586,13 @@ async def test_verification_runtime_cleanup_errors_do_not_mask_primary_failure(
             settings=VERIFICATION_SETTINGS,
             session_factory=lambda _provider, *, settings: session,
             agent_factory=object,
-            api_client_factory=lambda: api_client,
+            api_client=api_client,
         )
 
     if isinstance(primary_error, RuntimeError):
         assert str(caught.value) == "speech primary failure"
-    assert events[-2:] == [("shutdown", {"drain": True}), "close_api"]
+    assert events[-1] == ("shutdown", {"drain": True})
+    assert "close_api" not in events
 
 
 @pytest.mark.anyio
@@ -597,10 +616,11 @@ async def test_verification_runtime_preserves_cleanup_cancellation_after_all_cle
             settings=VERIFICATION_SETTINGS,
             session_factory=lambda _provider, *, settings: session,
             agent_factory=object,
-            api_client_factory=lambda: api_client,
+            api_client=api_client,
         )
 
-    assert events[-2:] == [("shutdown", {"drain": True}), "close_api"]
+    assert events[-1] == ("shutdown", {"drain": True})
+    assert "close_api" not in events
 
 
 @pytest.mark.anyio
@@ -619,7 +639,6 @@ async def test_verification_runtime_does_not_close_injected_api_client() -> None
         session_factory=lambda _provider, *, settings: session,
         agent_factory=object,
         api_client=api_client,
-        api_client_factory=lambda: pytest.fail("injected client unexpectedly replaced"),
     )
 
     assert "close_api" not in events
@@ -639,8 +658,9 @@ async def test_entrypoint_branches_to_verification_before_normal_call_runtime(
         resolved_metadata,
         *,
         settings,
+        api_client,
     ) -> None:
-        calls.append((resolved_context, resolved_metadata, settings))
+        calls.append((resolved_context, resolved_metadata, settings, api_client))
 
     def forbidden(*_args: object, **_kwargs: object) -> None:
         pytest.fail("verification entered the normal customer-call path")
@@ -654,10 +674,14 @@ async def test_entrypoint_branches_to_verification_before_normal_call_runtime(
 
     monkeypatch.setattr(agent_main, "run_forwarding_verification", capture_verification)
     monkeypatch.setattr(agent_main, "parse_dispatch", capture_parse)
+
+    async def shutdown_observability() -> None:
+        return None
+
+    monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
     for name in [
         "build_agent_runtime",
         "SessionRuntime",
-        "EventPublisher",
         "agent_lifecycle_span",
         "agent_provider_span",
         "_send_initial_greeting",
@@ -667,5 +691,16 @@ async def test_entrypoint_branches_to_verification_before_normal_call_runtime(
     await agent_main.entrypoint(context)
 
     assert parse_calls == 1
-    assert calls == [(context, metadata, VERIFICATION_SETTINGS)]
+    assert calls == [
+        (
+            context,
+            metadata,
+            VERIFICATION_SETTINGS,
+            context.proc.userdata.api_client,
+        )
+    ]
     assert len(context.shutdown_callbacks) == 1
+
+    await context.shutdown_callbacks[0]()
+
+    assert context.events[-2:] == ["close_publisher", "close_api"]

@@ -11,7 +11,7 @@ from livekit.agents import JobExecutorType
 from presvo_contracts import ContractError, CustomerCallDispatch, create_contract
 
 import agent.main as agent_main
-from agent.composition import AgentProcessRuntime
+from agent.composition import AgentProcessRuntime, build_agent_process_runtime
 from agent.config import AgentSettings
 from agent.main import build_worker_options
 from agent.main import entrypoint
@@ -31,6 +31,57 @@ TEST_SETTINGS = AgentSettings(
     livekit_silero_vad_enabled=False,
     livekit_turn_detector_enabled=False,
 )
+
+
+class FakeProcessApiClient:
+    def __init__(self, events: list[object] | None = None) -> None:
+        self.events = events
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        if self.events is not None:
+            self.events.append("api_client.close")
+
+    async def complete_call(self, *_args: object, **_kwargs: object) -> object:
+        return object()
+
+    async def complete_verification(
+        self, *_args: object, **_kwargs: object
+    ) -> object:
+        return object()
+
+
+class FakeProcessPublisher:
+    def __init__(self, events: list[object] | None = None) -> None:
+        self.events = events
+        self.close_calls = 0
+
+    async def publish(self, _event: object) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        if self.events is not None:
+            self.events.append("publisher.close")
+
+
+def make_process_runtime(
+    settings: AgentSettings = TEST_SETTINGS,
+    *,
+    silero_vad: object | None = None,
+    events: list[object] | None = None,
+    api_client: object | None = None,
+    publisher: object | None = None,
+) -> AgentProcessRuntime:
+    resolved_api_client = api_client or FakeProcessApiClient(events)
+    resolved_publisher = publisher or FakeProcessPublisher(events)
+    return build_agent_process_runtime(
+        settings,
+        api_client_factory=lambda _settings: resolved_api_client,
+        event_publisher_factory=lambda _settings: resolved_publisher,
+        silero_vad=silero_vad,
+    )
 
 
 def make_metadata(**overrides) -> CustomerCallDispatch:
@@ -422,7 +473,7 @@ def test_dispatch_metadata_forbids_extra_fields() -> None:
 class FakeJobContext:
     def __init__(self, metadata: CustomerCallDispatch) -> None:
         self.job = SimpleNamespace(metadata=metadata.model_dump_json())
-        self.proc = SimpleNamespace(userdata=AgentProcessRuntime(TEST_SETTINGS))
+        self.proc = SimpleNamespace(userdata=make_process_runtime())
         self.inference_executor = object()
         self.room = object()
         self.events: list[object] = []
@@ -483,7 +534,7 @@ async def test_entrypoint_passes_process_settings_and_prewarmed_vad_to_pipeline(
     )
     vad = object()
     context = FakeJobContext(metadata)
-    context.proc.userdata = AgentProcessRuntime(settings=settings, silero_vad=vad)
+    context.proc.userdata = make_process_runtime(settings, silero_vad=vad)
     session = FakeEntrypointSession()
     captured: dict[str, object] = {}
 
@@ -547,7 +598,7 @@ async def test_entrypoint_connects_then_waits_only_for_sip_participant(
     await entrypoint(context)
 
     assert context.events == ["connect", ("wait_for_participant", 3)]
-    assert initialize_calls == [True]
+    assert initialize_calls == []
     assert session.started is True
     assert session.start_kwargs["record"] == {
         "audio": False,
@@ -665,11 +716,82 @@ async def test_entrypoint_registers_bounded_observability_shutdown(
     )
 
     await entrypoint(context)
-    assert len(context.shutdown_callbacks) == 2
-    assert context.shutdown_callbacks[0] is capture_shutdown
+    assert len(context.shutdown_callbacks) == 1
     await context.shutdown_callbacks[0]()
 
     assert shutdown_calls == [True]
+
+
+@pytest.mark.anyio
+async def test_entrypoint_uses_one_shutdown_callback_with_strict_cleanup_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    events: list[object] = []
+    api_client = FakeProcessApiClient(events)
+    publisher = FakeProcessPublisher(events)
+    context = FakeJobContext(metadata)
+    context.proc.userdata = make_process_runtime(
+        events=events,
+        api_client=api_client,
+        publisher=publisher,
+    )
+    session = FakeEntrypointSession()
+    captured: dict[str, object] = {}
+
+    class OrderedSessionRuntime:
+        call_limit_expired_on_start = False
+        call_limit_task = None
+
+        def __init__(self, resolved_publisher, *, api_client, **_kwargs) -> None:
+            captured["publisher"] = resolved_publisher
+            captured["api_client"] = api_client
+
+        def create_handler_task(self, _factory) -> bool:
+            return True
+
+        def enforce_call_limit(self, _metadata, _disconnect) -> None:
+            return None
+
+        async def finalize(self, *_args, **_kwargs) -> None:
+            events.append("session.finalize")
+
+    async def capture_observability_shutdown() -> None:
+        events.append("observability.close")
+
+    monkeypatch.setattr(
+        agent_main,
+        "build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+    monkeypatch.setattr(agent_main, "SessionRuntime", OrderedSessionRuntime)
+    monkeypatch.setattr(
+        agent_main,
+        "shutdown_observability",
+        capture_observability_shutdown,
+    )
+
+    await entrypoint(context)
+
+    assert len(context.shutdown_callbacks) == 1
+    assert captured == {
+        "publisher": publisher,
+        "api_client": api_client,
+    }
+
+    await context.shutdown_callbacks[0]()
+    await context.shutdown_callbacks[0]()
+
+    assert events == [
+        "session.finalize",
+        "publisher.close",
+        "api_client.close",
+        "observability.close",
+        "session.finalize",
+        "observability.close",
+    ]
+    assert publisher.close_calls == 1
+    assert api_client.close_calls == 1
 
 
 @pytest.mark.anyio
@@ -678,6 +800,7 @@ async def test_entrypoint_registers_observability_shutdown_before_metadata_parsi
 ) -> None:
     metadata = make_metadata()
     context = FakeJobContext(metadata)
+    process_runtime = context.proc.userdata
     context.job.metadata = "{"
     shutdown_calls: list[bool] = []
 
@@ -696,9 +819,108 @@ async def test_entrypoint_registers_observability_shutdown_before_metadata_parsi
 
     assert error.value.code == "malformed_json"
 
-    assert context.shutdown_callbacks == [capture_shutdown]
+    assert len(context.shutdown_callbacks) == 1
     await context.shutdown_callbacks[0]()
     assert shutdown_calls == [True]
+    assert process_runtime.event_publisher.close_calls == 1
+    assert process_runtime.api_client.close_calls == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("failure", "expected_error"),
+    [
+        (RuntimeError("provider connect failed"), RuntimeError),
+        (asyncio.CancelledError(), asyncio.CancelledError),
+    ],
+)
+async def test_entrypoint_shutdown_closes_process_runtime_after_connect_termination(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+    expected_error: type[BaseException],
+) -> None:
+    context = FakeJobContext(make_metadata())
+    process_runtime = context.proc.userdata
+    shutdown_calls: list[bool] = []
+
+    async def fail_connect(**_kwargs: object) -> None:
+        raise failure
+
+    async def capture_shutdown() -> None:
+        shutdown_calls.append(True)
+
+    context.connect = fail_connect
+    monkeypatch.setattr(agent_main, "shutdown_observability", capture_shutdown)
+
+    with pytest.raises(expected_error):
+        await entrypoint(context)
+
+    assert len(context.shutdown_callbacks) == 1
+    await context.shutdown_callbacks[0]()
+
+    assert process_runtime.event_publisher.close_calls == 1
+    assert process_runtime.api_client.close_calls == 1
+    assert shutdown_calls == [True]
+
+
+@pytest.mark.anyio
+async def test_entrypoint_shutdown_closes_process_runtime_after_pipeline_setup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = FakeJobContext(make_metadata())
+    process_runtime = context.proc.userdata
+
+    def fail_pipeline(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("provider setup failed")
+
+    async def shutdown_observability() -> None:
+        return None
+
+    monkeypatch.setattr(agent_main, "build_agent_runtime", fail_pipeline)
+    monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
+
+    with pytest.raises(RuntimeError, match="provider setup failed"):
+        await entrypoint(context)
+
+    assert len(context.shutdown_callbacks) == 1
+    await context.shutdown_callbacks[0]()
+
+    assert process_runtime.event_publisher.close_calls == 1
+    assert process_runtime.api_client.close_calls == 1
+
+
+@pytest.mark.anyio
+async def test_entrypoint_shutdown_finalizes_and_closes_after_session_start_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    context = FakeJobContext(metadata)
+    process_runtime = context.proc.userdata
+    session = FakeEntrypointSession()
+
+    async def fail_start(**_kwargs: object) -> None:
+        raise RuntimeError("session start failed")
+
+    session.start = fail_start
+    monkeypatch.setattr(
+        agent_main,
+        "build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+
+    async def shutdown_observability() -> None:
+        return None
+
+    monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
+
+    with pytest.raises(RuntimeError, match="session start failed"):
+        await entrypoint(context)
+
+    assert len(context.shutdown_callbacks) == 1
+    await context.shutdown_callbacks[0]()
+
+    assert process_runtime.event_publisher.close_calls == 1
+    assert process_runtime.api_client.close_calls == 1
 
 
 @pytest.mark.anyio
@@ -916,7 +1138,10 @@ def test_observability_initialization_failure_does_not_prevent_prewarm(
 ) -> None:
     from livekit import plugins
 
+    proc = SimpleNamespace(userdata=object())
+
     def fail_initialization() -> None:
+        assert isinstance(proc.userdata, AgentProcessRuntime)
         raise RuntimeError("OTEL_EXPORTER_CREDENTIAL_SENTINEL")
 
     adaptive_mode = object()
@@ -944,7 +1169,7 @@ def test_observability_initialization_failure_does_not_prevent_prewarm(
     )
 
     with caplog.at_level(logging.ERROR):
-        prewarm_assets(SimpleNamespace(userdata={}), settings=TEST_SETTINGS)
+        prewarm_assets(proc, settings=TEST_SETTINGS)
 
     assert "OTEL_EXPORTER_CREDENTIAL_SENTINEL" not in caplog.text
     assert "event=agent_observability_initialization_failed" in caplog.text

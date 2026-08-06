@@ -1,5 +1,6 @@
 import json
 import logging
+import inspect
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -21,7 +22,7 @@ from presvo_contracts import (
 
 import agent.api_client as api_client_module
 from agent.api_client import (
-    AgentApiClient,
+    AgentApiClient as RuntimeAgentApiClient,
     CallCompletionAcknowledgementError,
     CallCompletionRetryableError,
     TranscriptAppendPermanentError,
@@ -36,6 +37,23 @@ from agent.api_client import (
 FIXTURES = Path(__file__).parents[3] / "libs/shared/tests/fixtures/v1"
 FIXTURE_CALL_ID = UUID("11111111-1111-4111-8111-111111111111")
 RETRYABLE_HTTP_STATUSES = (408, 425, 429, *range(500, 600))
+TEST_TIMEOUT = 10.0
+TEST_MAX_RETRIES = 3
+
+
+def AgentApiClient(
+    *,
+    base_url: str,
+    http_client: httpx.AsyncClient | None = None,
+    timeout: float = TEST_TIMEOUT,
+    max_retries: int = TEST_MAX_RETRIES,
+) -> RuntimeAgentApiClient:
+    return RuntimeAgentApiClient(
+        base_url=base_url,
+        timeout=timeout,
+        max_retries=max_retries,
+        http_client=http_client,
+    )
 
 
 def _fixture(name: str) -> dict:
@@ -50,6 +68,39 @@ def _segment(sequence_number: int = 1) -> TranscriptSegment:
 
 def _call_request() -> CallCompletionRequest:
     return create_contract(CallCompletionRequest, duration_seconds=1, transcript=())
+
+
+def test_client_constructor_requires_complete_transport_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        api_client_module,
+        "get_settings",
+        lambda: pytest.fail("explicit API client constructor consulted settings"),
+        raising=False,
+    )
+
+    client = RuntimeAgentApiClient(
+        base_url="http://api.explicit.test/root/",
+        timeout=4.5,
+        max_retries=7,
+    )
+
+    assert client.base_url == "http://api.explicit.test/root"
+    assert client.timeout == 4.5
+    assert client.max_retries == 7
+    assert client.http_client is None
+    parameters = inspect.signature(RuntimeAgentApiClient).parameters
+    assert list(parameters) == [
+        "base_url",
+        "timeout",
+        "max_retries",
+        "http_client",
+    ]
+    assert parameters["base_url"].default is inspect.Parameter.empty
+    assert parameters["timeout"].default is inspect.Parameter.empty
+    assert parameters["max_retries"].default is inspect.Parameter.empty
+    assert parameters["http_client"].default is None
 
 
 @pytest.mark.anyio

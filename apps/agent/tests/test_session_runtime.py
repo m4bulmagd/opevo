@@ -5,6 +5,8 @@ import pytest
 from uuid import uuid4
 
 from agent.api_client import TranscriptAppendRetryableError
+from agent.composition import build_agent_process_runtime
+from agent.config import AgentSettings
 from agent.event_publisher import EventPublisher
 from presvo_contracts import (
     CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS,
@@ -529,10 +531,54 @@ async def test_failed_completion_ack_retains_recovery_and_second_finalize_retrie
 
     assert runtime.pending_transcript == ()
     assert api_client.completion_attempts == 2
-    assert api_client.close_attempts == 2
+    assert api_client.close_attempts == 0
     assert (
         len([event for event in publisher.events if event["type"] == "agent_session_ended"]) == 1
     )
+
+
+@pytest.mark.anyio
+async def test_process_runtime_closes_transports_once_after_session_finalize() -> None:
+    class ClosingApiClient(FakeApiClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    class FailingClosingPublisher(FakeEventPublisher):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        async def publish(self, _event: object) -> None:
+            raise RuntimeError("Redis unavailable")
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    settings = AgentSettings()
+    api_client = ClosingApiClient()
+    publisher = FailingClosingPublisher()
+    session_runtime = SessionRuntime(publisher, api_client=api_client)
+    process_runtime = build_agent_process_runtime(
+        settings,
+        api_client_factory=lambda _settings: api_client,
+        event_publisher_factory=lambda _settings: publisher,
+    )
+    metadata = make_metadata()
+
+    await session_runtime.finalize(metadata, duration_seconds=5)
+
+    assert api_client.close_calls == 0
+    assert publisher.close_calls == 0
+
+    await process_runtime.aclose()
+    await process_runtime.aclose()
+
+    assert api_client.close_calls == 1
+    assert publisher.close_calls == 1
 
 
 @pytest.mark.anyio

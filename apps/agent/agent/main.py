@@ -20,10 +20,13 @@ from presvo_contracts import (
     parse_dispatch,
 )
 
-from agent.api_client import AgentApiClient
-from agent.composition import AgentProcessRuntime, require_agent_process_runtime
+from agent.composition import (
+    build_agent_api_client,
+    build_agent_process_runtime,
+    build_event_publisher,
+    require_agent_process_runtime,
+)
 from agent.config import AgentSettings, get_settings
-from agent.event_publisher import EventPublisher
 from agent.observability import (
     agent_lifecycle_span,
     agent_provider_span,
@@ -259,19 +262,36 @@ async def handle_job_request(request: JobRequest) -> None:
 
 
 async def entrypoint(context: JobContext) -> None:
-    _initialize_observability_safely()
-    context.add_shutdown_callback(shutdown_observability)
     process_runtime = require_agent_process_runtime(context.proc)
+    session_runtime: SessionRuntime | None = None
+    customer_metadata: CustomerCallDispatch | None = None
+    started_at = time.monotonic()
+
+    async def shutdown_job(*_args: object) -> None:
+        try:
+            if session_runtime is not None and customer_metadata is not None:
+                await session_runtime.finalize(
+                    customer_metadata,
+                    duration_seconds=max(1, int(time.monotonic() - started_at)),
+                )
+        finally:
+            try:
+                await process_runtime.aclose()
+            finally:
+                await shutdown_observability()
+
+    context.add_shutdown_callback(shutdown_job)
     metadata = parse_dispatch(context.job.metadata or "{}")
     if isinstance(metadata, ForwardingVerificationDispatch):
         await run_forwarding_verification(
             context,
             metadata,
             settings=process_runtime.settings,
+            api_client=process_runtime.api_client,
         )
         return
+    customer_metadata = metadata
     metadata_dict = dump_contract(metadata)
-    started_at = time.monotonic()
     with agent_lifecycle_span(
         call_id=str(metadata.call_id),
         pipeline_mode=metadata.pipeline_mode,
@@ -292,9 +312,9 @@ async def entrypoint(context: JobContext) -> None:
             vad=process_runtime.silero_vad,
             inference_executor=context.inference_executor,
         )
-        runtime = SessionRuntime(
-            EventPublisher(),
-            api_client=AgentApiClient(),
+        session_runtime = SessionRuntime(
+            process_runtime.event_publisher,
+            api_client=process_runtime.api_client,
             fatal_shutdown=context.shutdown,
             call_limit_started_at=started_at,
             warning_callback=lambda message: _play_call_limit_message(
@@ -303,13 +323,7 @@ async def entrypoint(context: JobContext) -> None:
                 message,
             ),
         )
-        _register_session_handlers(session, runtime, metadata)
-        context.add_shutdown_callback(
-            lambda *_: runtime.finalize(
-                metadata,
-                duration_seconds=max(1, int(time.monotonic() - started_at)),
-            )
-        )
+        _register_session_handlers(session, session_runtime, metadata)
         session.input.set_audio_enabled(False)
         with agent_provider_span(
             provider="livekit",
@@ -332,20 +346,30 @@ async def entrypoint(context: JobContext) -> None:
                     "logs": False,
                 },
             )
-        runtime.enforce_call_limit(
+        session_runtime.enforce_call_limit(
             metadata,
             lambda: _disconnect_at_call_limit(session, metadata),
         )
-        if runtime.call_limit_expired_on_start:
-            if runtime.call_limit_task is not None:
-                await runtime.call_limit_task
+        if session_runtime.call_limit_expired_on_start:
+            if session_runtime.call_limit_task is not None:
+                await session_runtime.call_limit_task
             return
         await _send_initial_greeting(session, metadata)
         session.input.set_audio_enabled(True)
 
 
-def prewarm_assets(proc, *, settings: AgentSettings) -> None:
-    _initialize_observability_safely()
+def prewarm_assets(
+    proc,
+    *,
+    settings: AgentSettings,
+    api_client_factory=build_agent_api_client,
+    event_publisher_factory=build_event_publisher,
+) -> None:
+    runtime = build_agent_process_runtime(
+        settings,
+        api_client_factory=api_client_factory,
+        event_publisher_factory=event_publisher_factory,
+    )
     silero_vad = None
 
     if settings.livekit_silero_vad_enabled:
@@ -386,10 +410,9 @@ def prewarm_assets(proc, *, settings: AgentSettings) -> None:
                 error=exc,
             )
 
-    proc.userdata = AgentProcessRuntime(
-        settings=settings,
-        silero_vad=silero_vad,
-    )
+    runtime.silero_vad = silero_vad
+    proc.userdata = runtime
+    _initialize_observability_safely()
 
 
 def build_worker_options(settings: AgentSettings | None = None) -> WorkerOptions:

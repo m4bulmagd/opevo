@@ -6,7 +6,8 @@ from uuid import UUID
 
 import pytest
 
-from agent.config import get_settings
+from agent.composition import build_event_publisher
+from agent.config import AgentSettings
 from agent.event_publisher import EventPublisher, RedisEventBus
 from agent.session_runtime import SessionRuntime
 from presvo_contracts import (
@@ -54,9 +55,7 @@ def _metadata() -> CustomerCallDispatch:
 
 
 @pytest.mark.anyio
-async def test_redis_event_bus_lazily_uses_configured_client(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_event_publisher_factory_uses_explicit_configured_client() -> None:
     redis = _Redis()
     created: list[tuple[str, bool]] = []
 
@@ -64,11 +63,7 @@ async def test_redis_event_bus_lazily_uses_configured_client(
         created.append((url, decode_responses))
         return redis
 
-    monkeypatch.setenv("REDIS_URL", "redis://redis.test:6380/7")
-    get_settings.cache_clear()
-    from redis.asyncio import Redis
-
-    monkeypatch.setattr(Redis, "from_url", from_url)
+    settings = AgentSettings(redis_url="redis://redis.test:6380/7")
     event = create_contract(
         TranscriptObservedEvent,
         type="transcript_observed",
@@ -79,10 +74,8 @@ async def test_redis_event_bus_lazily_uses_configured_client(
         text="Configured client event.",
     )
 
-    try:
-        await RedisEventBus().publish(event)
-    finally:
-        get_settings.cache_clear()
+    publisher = build_event_publisher(settings, redis_factory=from_url)
+    await publisher.publish(event)
 
     assert created == [("redis://redis.test:6380/7", True)]
     assert redis.published == [
@@ -99,7 +92,7 @@ async def test_redis_event_bus_lazily_uses_configured_client(
 @pytest.mark.anyio
 async def test_agent_realtime_producers_match_golden_contracts() -> None:
     redis = _Redis()
-    publisher = EventPublisher(event_bus=RedisEventBus(redis_client=redis))
+    publisher = EventPublisher(RedisEventBus(redis, owns_client=False))
     runtime = SessionRuntime(publisher)
     metadata = _metadata()
 

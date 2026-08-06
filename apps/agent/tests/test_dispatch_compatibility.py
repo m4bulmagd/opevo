@@ -9,7 +9,7 @@ import pytest
 from presvo_contracts import ContractError, VersionedContract, dump_contract
 
 import agent.main as agent_main
-from agent.composition import AgentProcessRuntime
+from agent.composition import build_agent_process_runtime
 from agent.config import AgentSettings
 
 
@@ -60,7 +60,7 @@ class FakeJobContext:
         self.job = SimpleNamespace(metadata=metadata)
         self.shutdown_callbacks: list[object] = []
         self.proc = SimpleNamespace(
-            userdata=AgentProcessRuntime(settings=TEST_SETTINGS)
+            userdata=build_agent_process_runtime(TEST_SETTINGS)
         )
         self.inference_executor = object()
         self.room = object()
@@ -223,9 +223,11 @@ async def test_entrypoint_parses_exact_shared_dispatch_artifacts(
         metadata: object,
         *,
         settings: AgentSettings,
+        api_client: object,
     ) -> None:
         assert resolved_context is context
         assert settings is TEST_SETTINGS
+        assert api_client is context.proc.userdata.api_client
         parsed_payloads.append(dump_contract(cast(VersionedContract, metadata)))
 
     def capture_customer(
@@ -239,8 +241,6 @@ async def test_entrypoint_parses_exact_shared_dispatch_artifacts(
     monkeypatch.setattr(agent_main, "run_forwarding_verification", capture_verification)
     monkeypatch.setattr(agent_main, "build_agent_runtime", capture_customer)
     monkeypatch.setattr(agent_main, "SessionRuntime", FakeRuntime)
-    monkeypatch.setattr(agent_main, "EventPublisher", lambda: object())
-    monkeypatch.setattr(agent_main, "AgentApiClient", lambda: object())
     monkeypatch.setattr(agent_main, "agent_lifecycle_span", lambda **_kwargs: nullcontext())
     monkeypatch.setattr(agent_main, "agent_provider_span", lambda **_kwargs: nullcontext())
 

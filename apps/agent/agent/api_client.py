@@ -17,7 +17,6 @@ from presvo_contracts import (
     parse_contract,
 )
 
-from agent.config import get_settings
 from agent.safe_logging import install_safe_http_client_logging, report_contract_failure
 
 
@@ -83,20 +82,17 @@ class AgentApiClient:
     def __init__(
         self,
         *,
-        base_url: str | None = None,
+        base_url: str,
+        timeout: float,
+        max_retries: int,
         http_client: httpx.AsyncClient | None = None,
-        timeout: float | None = None,
-        max_retries: int | None = None,
     ) -> None:
         install_safe_http_client_logging()
-        settings = get_settings()
-        self.base_url = (base_url or settings.api_base_url).rstrip("/")
+        self.base_url = base_url.rstrip("/")
         self.http_client = http_client
         self._owns_http_client = http_client is None
-        self.timeout = timeout if timeout is not None else settings.api_timeout_seconds
-        self.max_retries = (
-            max_retries if max_retries is not None else settings.api_max_retries
-        )
+        self.timeout = timeout
+        self.max_retries = max_retries
 
     async def append_transcript(
         self,

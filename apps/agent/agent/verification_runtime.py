@@ -48,9 +48,6 @@ async def _close_session(session: Any) -> None:
 
 async def _cleanup_runtime(
     session: Any | None,
-    api_client: AgentApiClient | None,
-    *,
-    close_api_client: bool,
 ) -> None:
     cleanup_failed = False
     cancellation: asyncio.CancelledError | None = None
@@ -59,15 +56,6 @@ async def _cleanup_runtime(
             await _close_session(session)
     except asyncio.CancelledError as exc:
         cancellation = exc
-    except BaseException:
-        cleanup_failed = True
-
-    try:
-        if close_api_client and api_client is not None:
-            await api_client.aclose()
-    except asyncio.CancelledError as exc:
-        if cancellation is None:
-            cancellation = exc
     except BaseException:
         cleanup_failed = True
 
@@ -86,20 +74,15 @@ async def run_forwarding_verification(
     settings: AgentSettings,
     session_factory: Callable[..., Any] = build_verification_session,
     agent_factory: Callable[[], Any] = _build_verification_agent,
-    api_client: AgentApiClient | None = None,
-    api_client_factory: Callable[[], AgentApiClient] = AgentApiClient,
+    api_client: AgentApiClient,
 ) -> None:
     session = None
-    resolved_api_client = api_client
-    owns_api_client = api_client is None
     try:
         await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
         sip_participant = await context.wait_for_participant(kind=SIP_PARTICIPANT_KIND)
 
         session = session_factory(metadata.tts_provider, settings=settings)
         agent = agent_factory()
-        if resolved_api_client is None:
-            resolved_api_client = api_client_factory()
 
         session.input.set_audio_enabled(False)
         await session.start(
@@ -118,18 +101,14 @@ async def run_forwarding_verification(
             allow_interruptions=False,
         )
         await _await_if_needed(speech)
-        await resolved_api_client.complete_verification(
+        await api_client.complete_verification(
             metadata.verification_session_id,
             metadata.completion_token,
         )
     finally:
         primary_error_active = sys.exc_info()[0] is not None
         try:
-            await _cleanup_runtime(
-                session,
-                resolved_api_client,
-                close_api_client=owns_api_client,
-            )
+            await _cleanup_runtime(session)
         except BaseException:
             if not primary_error_active:
                 raise
