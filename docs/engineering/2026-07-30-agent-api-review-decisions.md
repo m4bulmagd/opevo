@@ -480,13 +480,14 @@ Long-lived resources have one owner, partial-startup cleanup is deterministic,
 and request/job/session code receives its dependencies without cached resource
 factories, deep global patching, or application dependency dictionaries.
 
-The reviewed implementation range is `c561877..HEAD`: implementation commits
-start at `0aa4086` and end with the Task 11 completion commit named
-`refactor: complete explicit runtime composition`. Final verification passed
-3,042 API tests with no skips (91.92% line and 80.32% branch coverage), 695
-agent tests with four credential-gated evaluation skips (89.22% line and
-73.62% branch coverage), and 79 cross-runtime integration/import tests. The
-API architecture guard passed seven checks and the agent guard passed three.
+The reviewed implementation code range is
+`c561877..c4512d6060d8f2e0930094e68e3daedb53763eed`. The following docs-only
+ledger commit records this evidence and is intentionally outside that immutable
+code range. Final verification passed 3,046 API tests with no skips (91.92%
+line and 80.32% branch coverage), 697 agent tests with four credential-gated
+evaluation skips (89.25% line and 73.62% branch coverage), and 83 cross-runtime
+integration/import tests. The API architecture guard passed eleven checks and
+the agent guard passed four.
 Ruff and mypy passed for both applications, both frozen dependency-lock checks
 passed, and the legacy-factory, settings-boundary, worker-context, and cache
 reference scans were empty.
@@ -1549,12 +1550,10 @@ skips. If shared-PostgreSQL client fixtures become a required gate, the
 recommended separate change is explicit per-test schema/database isolation,
 not ad hoc row deletion.
 
-No deployment, remote push, merge, or realtime activation occurred. Issue 4A +
-4B is implemented with controlled ten-call local/CI evidence; Issue 5A is
-implemented, and Issues 6A and 8A remain the agreed next order. Issues 1A and
-14A remain deferred until realtime work resumes. Issue 16A remains open for
-representative load, monitoring, alert routing, and recovery-drill evidence; it
-is not implemented by the bounded worker-isolation proof. Accepted risks 11C,
+Issues 1A and 14A remain deferred until realtime work resumes. Issue 16A
+remains open for representative load, monitoring, alert routing, and
+recovery-drill evidence; it is not implemented by the bounded worker-isolation
+proof. Accepted risks 11C,
 12C, and 18A are unchanged.
 
 ## Implementation Authorization Boundary
