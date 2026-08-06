@@ -525,3 +525,118 @@ worker gates all pass.
   path changed.
 
 No open Fix Round 3 concern.
+
+## Fix round 4/5
+
+### Finding addressed
+
+The parent-task cancellation-count delta from Fix Round 3 proved that an outer
+cancellation had been accepted, but it could not prove that the
+`CancelledError` caught from `shield(cleanup_task)` was that outer
+cancellation. In the inverse ordering, cleanup cancellation completed the
+shield and scheduled the parent first; `task.cancel("outer-late")` was then
+accepted before the parent resumed. The caught exception still came from the
+result-bearing cleanup shield, so it had empty arguments and replaced the real
+outer cancellation identity and message.
+
+The parent no longer awaits the cleanup task through a result-bearing shield.
+It creates an independent completion-only future and registers one cleanup-task
+done callback that resolves that future successfully regardless of cleanup
+outcome. The parent shields only this completion signal. A `CancelledError`
+caught from that wait can therefore originate only from parent cancellation.
+After the signal resolves, `cleanup_task.result()` separately retrieves the
+actual cleanup cancellation or ordinary error.
+
+### RED, GREEN, and mutation evidence
+
+The deterministic inverse-order test uses public event-loop callbacks to let
+cleanup cancellation complete the old shield and schedule the parent, then
+accepts `task.cancel("outer-late")` before that parent resumes. Before the fix,
+the selected cancellation was distinct from the cleanup exception but had empty
+arguments instead of `("outer-late",)`. After the completion-only signal change,
+the scope and awaiting caller observe the same outer exception with its message,
+both resources complete in reverse order, and formatted diagnostics contain
+neither the body nor cleanup sentinel.
+
+The prior release-then-cancel ordering continues to preserve
+`("outer-origin",)`. Cleanup-only cancellation still returns the exact closer
+exception, repeated cancellation retains the first caught outer exception, and
+body cancellation keeps final precedence.
+
+A deliberate mutation switched the wait back from
+`shield(cleanup_completed)` to `shield(cleanup_task)`. The inverse-order test
+again observed empty outer arguments and failed (`1 failed`). The completion
+signal wait was restored before the verification gates.
+
+### Verification
+
+The complete owned-resource matrix passed `11 passed in 0.76s`. Supplying the
+entire eleven-test file to pytest 100 times with duplicate collection enabled
+then ran each race ordering and every precedence/control case 100 times:
+`1100 passed in 61.70s`. No task-exception, callback, or orphan diagnostic was
+emitted.
+
+Focused provider/service gate:
+
+```text
+uv run --frozen --no-sync python -m pytest -q \
+  tests/providers tests/billing/test_stripe_webhooks.py \
+  tests/services/test_livekit_recording_service.py \
+  tests/services/test_summary_service.py \
+  tests/services/test_safe_service_exceptions.py
+# 536 passed in 38.98s
+```
+
+Focused worker/lifecycle/composition gate:
+
+```text
+uv run --frozen --no-sync python -m pytest -q \
+  tests/workers/test_owned_resources.py \
+  tests/workers/test_livekit_dispatch_outbox.py \
+  tests/workers/test_forwarding_verification_dispatch_outbox.py \
+  tests/workers/test_post_call_outbox_handlers.py \
+  tests/workers/test_recording_reconciliation.py \
+  tests/composition/test_api_composition.py \
+  tests/integration/test_outbox_delivery.py
+# 192 passed, 52 skipped in 21.69s
+```
+
+Static gates:
+
+```text
+uv run --frozen --no-sync ruff check app tests
+# All checks passed!
+
+uv run --frozen --no-sync mypy app
+# Success: no issues found in 189 source files
+```
+
+A full API coverage rerun remains intentionally unnecessary for this
+proportional fix round. Fix Round 2 completed the stable-tree gate with
+`2822 passed, 133 skipped` and `87.97%` branch coverage. This round replaces
+only the owned-resource cleanup wait carrier; the complete helper matrix, both
+race orderings at 100 repetitions each, and the full affected provider and
+worker gates pass.
+
+### Fix-round self-review
+
+- The completion future never carries cleanup success, failure, or
+  cancellation; its only state transition is one successful result from the
+  retained cleanup task's done callback. It is shielded from every parent
+  cancellation request.
+- The parent cannot exit before the completion signal resolves and immediately
+  retrieves `cleanup_task.result()` afterward. Cleanup remains fully joined,
+  every resource is attempted in reverse order, and no task is orphaned.
+- Every `CancelledError` caught while waiting for the success-only signal is an
+  actual parent cancellation. The first caught outer instance is retained;
+  cleanup cancellation is inspected separately and cannot replace it.
+- Body cancellation still has precedence over outer cancellation, which still
+  has precedence over cleanup cancellation. Exact identities, arguments, and
+  safe traceback suppression remain covered.
+- The implementation uses only public asyncio futures, task callbacks, shield,
+  and task result APIs; no private task state or timing inference remains.
+- No Gemini behavior, Task 6–8 worker-runtime composition, dependency, lockfile,
+  migration, schema, frontend, generated contract, or protected CI/deployment
+  path changed.
+
+No open Fix Round 4 concern.

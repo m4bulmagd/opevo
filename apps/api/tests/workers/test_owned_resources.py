@@ -322,3 +322,55 @@ async def test_same_turn_outer_cancellation_precedes_cleanup_cancellation() -> N
     formatted = "".join(traceback.format_exception(caught.value))
     assert "BODY_PRIVATE_SENTINEL" not in formatted
     assert "CLEANUP_CANCEL_PRIVATE_SENTINEL" not in formatted
+
+
+@pytest.mark.anyio
+async def test_late_outer_cancellation_precedes_scheduled_cleanup_cancellation() -> None:
+    order: list[str] = []
+    cleanup_cancellation = asyncio.CancelledError(
+        "CLEANUP_LATE_PRIVATE_SENTINEL"
+    )
+    cancellation_seen_by_scope: asyncio.CancelledError | None = None
+    cancel_accepted: list[bool] = []
+    task: asyncio.Task[None] | None = None
+
+    def cancel_outer() -> None:
+        assert task is not None
+        cancel_accepted.append(task.cancel("outer-late"))
+
+    class CancelledResource:
+        async def aclose(self) -> None:
+            order.append("cancelled:start")
+            loop = asyncio.get_running_loop()
+            loop.call_soon(loop.call_soon, cancel_outer)
+            order.append("cancelled:end")
+            raise cleanup_cancellation
+
+    async def run_scope() -> None:
+        nonlocal cancellation_seen_by_scope
+        try:
+            async with operation_owned_resources(operation="test_late_outer") as own:
+                own(_Resource("first", order))
+                own(CancelledResource())
+                raise ValueError("BODY_LATE_PRIVATE_SENTINEL")
+        except asyncio.CancelledError as error:
+            cancellation_seen_by_scope = error
+            raise
+
+    task = asyncio.create_task(run_scope())
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+
+    assert cancel_accepted == [True]
+    assert caught.value is cancellation_seen_by_scope
+    assert caught.value is not cleanup_cancellation
+    assert caught.value.args == ("outer-late",)
+    assert order == [
+        "cancelled:start",
+        "cancelled:end",
+        "first:start",
+        "first:end",
+    ]
+    formatted = "".join(traceback.format_exception(caught.value))
+    assert "BODY_LATE_PRIVATE_SENTINEL" not in formatted
+    assert "CLEANUP_LATE_PRIVATE_SENTINEL" not in formatted
