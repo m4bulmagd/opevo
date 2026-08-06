@@ -15,6 +15,7 @@ from app.core.config import Settings
 from app.core.runtime_validation import (
     validate_api_runtime,
     validate_background_worker_runtime,
+    validate_call_lifecycle_worker_runtime,
 )
 
 
@@ -86,6 +87,42 @@ WORKER_CAPACITY = {
     "WORKER_LIFECYCLE_MAX_JOBS": "10",
     "WORKER_BACKGROUND_MAX_JOBS": "4",
 }
+API_ONLY_WORKER_SENSITIVE_SETTINGS = frozenset(
+    {
+        "LOCAL_AUTH_TOKEN",
+        "CLERK_ISSUER",
+        "CLERK_AUDIENCE",
+        "CLERK_AUTHORIZED_PARTIES",
+        "CLERK_JWT_KEY",
+        "CLERK_JWKS_URL",
+        "CLERK_WEBHOOK_SECRET",
+        "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_PRICE_STARTER",
+        "STRIPE_CHECKOUT_SUCCESS_URL",
+        "STRIPE_CHECKOUT_CANCEL_URL",
+        "STRIPE_BILLING_PORTAL_RETURN_URL",
+        "STRIPE_BILLING_PORTAL_CONFIGURATION_ID",
+        "FIREBASE_CREDENTIALS_JSON",
+    }
+)
+FAKE_WORKER_PROVIDER_SENSITIVE_SETTINGS = frozenset(
+    {
+        "STRIPE_SECRET_KEY",
+        "TELNYX_API_KEY",
+        "TELNYX_ACTIVE_CONNECTION_ID",
+        "TELNYX_DISABLED_CONNECTION_ID",
+    }
+)
+BACKGROUND_ONLY_SENSITIVE_SETTINGS = frozenset(
+    {
+        "AGENT_DISPATCH_JWT_SECRET",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "GEMINI_API_KEY",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+    }
+)
 
 
 def render_compose(
@@ -765,11 +802,10 @@ def test_compose_runs_isolated_workers_with_explicit_process_policy(
     assert lifecycle.get("image") == background.get("image")
     assert lifecycle.get("build") == services["api"].get("build")
     assert lifecycle.get("image") == services["api"].get("image")
-    assert lifecycle["environment"] == background["environment"]
-    assert {
-        setting: lifecycle["environment"][setting]
-        for setting in WORKER_CAPACITY
-    } == WORKER_CAPACITY
+    for worker in (lifecycle, background):
+        assert {
+            setting: worker["environment"][setting] for setting in WORKER_CAPACITY
+        } == WORKER_CAPACITY
     assert lifecycle["command"] == [
         "/app/.venv/bin/arq",
         "app.workers.arq_worker.CallLifecycleWorkerSettings",
@@ -871,8 +907,14 @@ def test_local_compose_defaults_interactive_services_to_clerk() -> None:
     assert api_environment.get("REALTIME_ENABLED", "false") == "false"
     for worker in WORKER_SERVICES:
         worker_environment = resolved_service_environment(document, worker)
-        for setting in ("AUTH_MODE", "LOCAL_AUTH_TOKEN", "CLERK_AUTHORIZED_PARTIES"):
-            assert setting not in worker_environment
+        assert {
+            setting: worker_environment[setting]
+            for setting in ("AUTH_MODE", "LOCAL_AUTH_TOKEN", "CLERK_AUTHORIZED_PARTIES")
+        } == {
+            "AUTH_MODE": "clerk",
+            "LOCAL_AUTH_TOKEN": "",
+            "CLERK_AUTHORIZED_PARTIES": "",
+        }
 
 
 def test_local_compose_custom_web_port_updates_every_default_local_origin() -> None:
@@ -1223,6 +1265,166 @@ def test_development_services_share_api_configuration_without_provider_placehold
     assert services["web"]["environment"]["API_BASE_URL"] == "http://api:8000"
 
 
+def test_development_workers_filter_resolved_api_env_by_process_ownership(
+    tmp_path: Path,
+) -> None:
+    compose_file = tmp_path / "compose.dev.yaml"
+    api_env_file = tmp_path / "apps" / "api" / ".env"
+    api_env_file.parent.mkdir(parents=True)
+    compose_file.write_text(
+        (REPO_ROOT / "compose.dev.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    background_provider_values = {
+        "AGENT_DISPATCH_JWT_SECRET": (
+            "sentinel-background-dispatch-secret-at-least-32-bytes"
+        ),
+        "LIVEKIT_URL": "wss://sentinel-background-livekit.example.invalid",
+        "LIVEKIT_API_KEY": "sentinel-background-livekit-key",
+        "LIVEKIT_API_SECRET": "sentinel-background-livekit-secret",
+        "LIVEKIT_AGENT_NAME": "sentinel-background-agent",
+        "SUMMARY_PROVIDER": "gemini",
+        "SUMMARY_MODEL": "sentinel-background-summary-model",
+        "GEMINI_API_KEY": "sentinel-background-gemini-key",
+    }
+    synthetic_storage_values = {
+        "STORAGE_BUCKET_NAME": "sentinel-env-bucket",
+        "S3_ENDPOINT_URL": "https://sentinel-storage.example.invalid",
+        "S3_ACCESS_KEY": "sentinel-env-storage-key",
+        "S3_SECRET_KEY": "sentinel-env-storage-secret",
+        "S3_REGION": "sentinel-env-region",
+    }
+    blocked_values = {
+        setting: f"sentinel-blocked-{setting.lower()}"
+        for setting in (
+            API_ONLY_WORKER_SENSITIVE_SETTINGS
+            | FAKE_WORKER_PROVIDER_SENSITIVE_SETTINGS
+        )
+    }
+    synthetic_values = (
+        blocked_values
+        | background_provider_values
+        | synthetic_storage_values
+        | {
+            "AUTH_MODE": "local",
+            "BILLING_MODE": "stripe",
+            "CARRIER_LOOKUP_MODE": "telnyx",
+            "TELEPHONY_MODE": "telnyx",
+            "TELNYX_ORDERING_ENABLED": "true",
+            "DATABASE_URL": "postgresql+asyncpg://sentinel-db/ai_call",
+            "REDIS_URL": "redis://sentinel-redis:6379/0",
+        }
+    )
+    api_env_file.write_text(
+        "".join(f"{key}={value}\n" for key, value in synthetic_values.items()),
+        encoding="utf-8",
+    )
+
+    example_keys = {
+        match.group(1)
+        for line in (REPO_ROOT / "apps" / "api" / ".env.example")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if (match := re.fullmatch(r"(?:# )?([A-Z][A-Z0-9_]*)=.*", line))
+    }
+    assert (
+        API_ONLY_WORKER_SENSITIVE_SETTINGS
+        | FAKE_WORKER_PROVIDER_SENSITIVE_SETTINGS
+        | BACKGROUND_ONLY_SENSITIVE_SETTINGS
+    ) <= example_keys
+    sensitive_example_keys = {
+        setting
+        for setting in example_keys
+        if any(
+            marker in setting
+            for marker in (
+                "_SECRET",
+                "_KEY",
+                "_TOKEN",
+                "_CREDENTIALS",
+                "_CONNECTION_ID",
+                "_PASSWORD",
+            )
+        )
+    }
+    assert sensitive_example_keys <= (
+        API_ONLY_WORKER_SENSITIVE_SETTINGS
+        | FAKE_WORKER_PROVIDER_SENSITIVE_SETTINGS
+        | BACKGROUND_ONLY_SENSITIVE_SETTINGS
+    )
+
+    document = render_compose(
+        compose_file,
+        LOCAL_COMPOSE_AUTH_DEFAULTS,
+        working_directory=tmp_path,
+    )
+    lifecycle_environment = resolved_service_environment(
+        document, "worker-lifecycle"
+    )
+    background_environment = resolved_service_environment(
+        document, "worker-background"
+    )
+
+    for worker_environment in (lifecycle_environment, background_environment):
+        for setting in (
+            API_ONLY_WORKER_SENSITIVE_SETTINGS
+            | FAKE_WORKER_PROVIDER_SENSITIVE_SETTINGS
+        ):
+            assert worker_environment.get(setting) in (None, "")
+        assert worker_environment["AUTH_MODE"] == "clerk"
+        assert worker_environment["BILLING_MODE"] == "fake"
+        assert worker_environment["CARRIER_LOOKUP_MODE"] == "fake"
+        assert worker_environment["TELEPHONY_MODE"] == "fake"
+        assert worker_environment["TELNYX_ORDERING_ENABLED"] == "false"
+        assert worker_environment["DATABASE_URL"] == (
+            "postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call"
+        )
+        assert worker_environment["REDIS_URL"] == "redis://redis:6379/0"
+
+    for setting, expected in background_provider_values.items():
+        assert background_environment[setting] == expected
+    for setting in BACKGROUND_ONLY_SENSITIVE_SETTINGS:
+        assert lifecycle_environment.get(setting) in (None, "")
+
+    expected_storage = {
+        "STORAGE_BUCKET_NAME": "recordings",
+        "S3_ENDPOINT_URL": "http://minio:9000",
+        "S3_ACCESS_KEY": "minioadmin",
+        "S3_SECRET_KEY": "minioadmin",
+        "S3_REGION": "us-east-1",
+    }
+    assert {
+        setting: background_environment[setting] for setting in expected_storage
+    } == expected_storage
+
+    def settings_from_environment(environment: dict[str, str]) -> Settings:
+        return Settings(
+            _env_file=None,
+            **{
+                field_name: environment[environment_name]
+                for field_name in Settings.model_fields
+                if (environment_name := field_name.upper()) in environment
+            },
+        )
+
+    validate_call_lifecycle_worker_runtime(
+        settings_from_environment(lifecycle_environment)
+    )
+    background_settings = settings_from_environment(background_environment)
+    validate_background_worker_runtime(background_settings)
+
+    with pytest.raises(RuntimeError) as error:
+        validate_background_worker_runtime(
+            background_settings.model_copy(update={"livekit_api_secret": ""})
+        )
+    assert str(error.value) == (
+        "Missing or invalid required runtime settings: LIVEKIT_API_SECRET"
+    )
+    diagnostic = str(error.value)
+    assert all(value not in diagnostic for value in synthetic_values.values())
+
+
 @pytest.mark.parametrize(
     ("field_name", "environment_name"),
     [
@@ -1285,14 +1487,11 @@ def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
         worker_environment = resolved_service_environment(document, worker)
         assert worker_environment["TELEPHONY_MODE"] == "fake"
         assert worker_environment["ACTIVATION_FLOW_ENABLED"] == "true"
-        for forbidden_setting in (
-            "AUTH_MODE",
-            "CARRIER_LOOKUP_MODE",
-            "LOCAL_AUTH_TOKEN",
-        ):
-            assert forbidden_setting not in worker_environment
+        assert worker_environment["AUTH_MODE"] == "clerk"
+        assert worker_environment["CARRIER_LOOKUP_MODE"] == "fake"
+        assert worker_environment["LOCAL_AUTH_TOKEN"] == ""
         for setting in CLERK_SESSION_VERIFIER_SETTINGS:
-            assert setting not in worker_environment
+            assert worker_environment.get(setting) in (None, "")
         assert worker_environment["BILLING_MODE"] == "fake"
     assert web_environment["AUTH_MODE"] == "clerk"
     assert web_environment["BILLING_MODE"] == "fake"

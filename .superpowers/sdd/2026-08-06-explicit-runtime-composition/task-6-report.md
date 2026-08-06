@@ -438,3 +438,117 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
 - The readiness tests inspect normalized Compose structure without reading the
   developer's real API env file.
 - No open concern remains for owner decision 6A-C1A.
+
+## Fix Round 3/5 — least-privilege development workers
+
+### Finding addressed
+
+- Preserved the owner-approved optional `apps/api/.env` reference on the API
+  and both local workers.
+- Added explicit worker environment masks for API-only identity, webhook, and
+  payment settings. The masks override env-file values without adding any
+  provider credential to the checked-in file.
+- Kept Settings parsing valid by using safe literals for enum and boolean
+  settings: Clerk auth, fake billing/carrier/telephony, and disabled Telnyx
+  ordering. Optional string secrets use empty masks.
+- Removed dispatch JWT, LiveKit key/secret, Gemini key, and S3 credentials from
+  the lifecycle worker. The background worker alone receives the dispatch,
+  LiveKit, summary, and Gemini values that its strict runtime owns.
+- Preserved explicit local database, Redis, capacity, and MinIO background
+  values. The local fake billing and telephony modes receive no Stripe or
+  Telnyx secret values.
+- Updated `CONTRIBUTING.md` to describe the shared source and process-specific
+  masking together.
+
+### RED evidence
+
+The source-only no-resolution assertions were retained. A new resolved-render
+test copies the checked-in Compose file to a temporary directory and writes a
+temporary synthetic `apps/api/.env` containing distinct sentinel values.
+
+The first test execution found that the schema parser omitted commented local
+auth examples; the parser was corrected without changing production files. The
+next run reached the intended production RED:
+
+```text
+1 failed in 0.64s
+```
+
+Both workers received the synthetic API env unchanged; the first observable
+leak was `STRIPE_WEBHOOK_SECRET`. The same rendered environment also retained
+local auth, Stripe/Telnyx, dispatch, LiveKit, Gemini, and storage sentinels in
+processes that did not own them.
+
+### Implementation and readiness coverage
+
+- `x-worker-environment` contains shared explicit runtime values, parse-safe
+  local modes, and the API/Stripe/Telnyx secret masks.
+- `x-lifecycle-background-secret-mask` removes background-only credentials.
+- `x-background-storage-environment` preserves the existing local MinIO
+  overrides.
+- Two named merged environment declarations keep each worker service readable;
+  the existing service anchor still owns build, env-file, dependency, volume,
+  and restart policy.
+- Sensitive-key sets are checked against the committed `.env.example` schema,
+  including its commented local-auth settings. No real `.env` is read.
+- The synthetic resolved render proves blocked values do not reach either
+  worker, background-owned values reach only the background worker, lifecycle
+  background secrets are empty, and Compose overrides beat env-file database,
+  Redis, mode, and storage values.
+- Both rendered environments construct `Settings`; lifecycle and background
+  validators pass. An induced missing LiveKit secret reports only
+  `LIVEKIT_API_SECRET`, and the diagnostic contains no synthetic value.
+
+### Verification
+
+Synthetic resolved-render tracer:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_deployment_readiness.py::test_development_workers_filter_resolved_api_env_by_process_ownership
+# 1 passed in 0.49s
+```
+
+Focused deployment and worker-composition gate, run outside the restricted
+sandbox for the existing subprocess lifespan check:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_deployment_readiness.py \
+  tests/composition/test_worker_composition.py
+# 190 passed in 14.44s
+```
+
+Source-only Compose schema check:
+
+```text
+docker compose --env-file /dev/null -f compose.dev.yaml \
+  config --quiet --no-env-resolution
+# exit 0
+```
+
+Static gates:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check app tests
+# All checks passed!
+
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
+# Success: no issues found in 190 source files
+```
+
+### Fix-round self-review and concerns
+
+- Shared env-file ownership from 6A-C1A remains intact.
+- No runtime validator, composition, queue, cron, timeout, concurrency, health,
+  or shutdown code changed.
+- The checked-in Compose file contains no new provider dummy credentials; its
+  existing local MinIO values were moved unchanged into the background scope.
+- Only `.env.example` was read. All resolved secret-scope verification used a
+  temporary synthetic file, and failure diagnostics were value-safe.
+- The final two-axis review added a fail-closed check: any new example key with
+  a conventional secret, key, token, credential, connection-ID, or password
+  name must be assigned to an explicit worker ownership class. Its general
+  full-suite observation was not applied because this fix round explicitly
+  requested focused checks and stated that no full suite was needed.
+- No open concern remains for this least-privilege finding.

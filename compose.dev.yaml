@@ -2,6 +2,58 @@ x-api-env-files: &api-env-files
   - path: ./apps/api/.env
     required: false
 
+x-worker-environment: &worker-environment
+  APP_ENV: development
+  DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call
+  REDIS_URL: redis://redis:6379/0
+  AUTH_MODE: clerk
+  LOCAL_AUTH_TOKEN: ""
+  BILLING_MODE: fake
+  CARRIER_LOOKUP_MODE: fake
+  TELEPHONY_MODE: fake
+  TELNYX_ORDERING_ENABLED: "false"
+  ACTIVATION_FLOW_ENABLED: "true"
+  WORKER_LIFECYCLE_MAX_JOBS: ${WORKER_LIFECYCLE_MAX_JOBS:-10}
+  WORKER_BACKGROUND_MAX_JOBS: ${WORKER_BACKGROUND_MAX_JOBS:-4}
+  CLERK_ISSUER: ""
+  CLERK_AUDIENCE: ""
+  CLERK_AUTHORIZED_PARTIES: ""
+  CLERK_JWT_KEY: ""
+  CLERK_JWKS_URL: ""
+  CLERK_WEBHOOK_SECRET: ""
+  STRIPE_SECRET_KEY: ""
+  STRIPE_WEBHOOK_SECRET: ""
+  STRIPE_PRICE_STARTER: ""
+  STRIPE_CHECKOUT_SUCCESS_URL: ""
+  STRIPE_CHECKOUT_CANCEL_URL: ""
+  STRIPE_BILLING_PORTAL_RETURN_URL: ""
+  STRIPE_BILLING_PORTAL_CONFIGURATION_ID: ""
+  TELNYX_API_KEY: ""
+  TELNYX_ACTIVE_CONNECTION_ID: ""
+  TELNYX_DISABLED_CONNECTION_ID: ""
+  FIREBASE_CREDENTIALS_JSON: ""
+
+x-lifecycle-background-secret-mask: &lifecycle-background-secret-mask
+  AGENT_DISPATCH_JWT_SECRET: ""
+  LIVEKIT_API_KEY: ""
+  LIVEKIT_API_SECRET: ""
+  GEMINI_API_KEY: ""
+  S3_ACCESS_KEY: ""
+  S3_SECRET_KEY: ""
+
+x-background-storage-environment: &background-storage-environment
+  STORAGE_BUCKET_NAME: recordings
+  S3_ENDPOINT_URL: http://minio:9000
+  S3_ACCESS_KEY: minioadmin
+  S3_SECRET_KEY: minioadmin
+  S3_REGION: us-east-1
+
+x-lifecycle-worker-environment: &lifecycle-worker-environment
+  <<: [*worker-environment, *lifecycle-background-secret-mask]
+
+x-background-worker-environment: &background-worker-environment
+  <<: [*worker-environment, *background-storage-environment]
+
 x-worker-service: &worker-service
   build:
     context: .
@@ -15,20 +67,6 @@ x-worker-service: &worker-service
       condition: service_healthy
     minio-init:
       condition: service_completed_successfully
-  environment:
-    APP_ENV: development
-    DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call
-    REDIS_URL: redis://redis:6379/0
-    BILLING_MODE: fake
-    TELEPHONY_MODE: fake
-    ACTIVATION_FLOW_ENABLED: "true"
-    STORAGE_BUCKET_NAME: recordings
-    S3_ENDPOINT_URL: http://minio:9000
-    S3_ACCESS_KEY: minioadmin
-    S3_SECRET_KEY: minioadmin
-    S3_REGION: us-east-1
-    WORKER_LIFECYCLE_MAX_JOBS: ${WORKER_LIFECYCLE_MAX_JOBS:-10}
-    WORKER_BACKGROUND_MAX_JOBS: ${WORKER_BACKGROUND_MAX_JOBS:-4}
   volumes:
     - ./apps/api/app:/app/app
   restart: unless-stopped
@@ -161,6 +199,7 @@ services:
 
   worker-lifecycle:
     <<: *worker-service
+    environment: *lifecycle-worker-environment
     command: ["/app/.venv/bin/arq", "app.workers.arq_worker.CallLifecycleWorkerSettings"]
     healthcheck:
       test: ["CMD", "/app/.venv/bin/arq", "--check", "app.workers.arq_worker.CallLifecycleWorkerSettings"]
@@ -171,6 +210,7 @@ services:
 
   worker-background:
     <<: *worker-service
+    environment: *background-worker-environment
     command: ["/app/.venv/bin/arq", "app.workers.arq_worker.BackgroundWorkerSettings"]
     healthcheck:
       test: ["CMD", "/app/.venv/bin/arq", "--check", "app.workers.arq_worker.BackgroundWorkerSettings"]

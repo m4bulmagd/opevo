@@ -45,7 +45,10 @@ The core `worker-background` service also needs the API-side dispatch secret,
 LiveKit credentials and agent name, and the selected summary provider's model and
 credentials in `apps/api/.env`. The API and both workers read that same optional
 file, while each service's explicit Compose environment values still take
-precedence. The background worker validates its complete runtime configuration at
+precedence. Compose masks API-only identity, webhook, and payment settings from
+both workers, and masks background-provider credentials from `worker-lifecycle`;
+the fake local billing and telephony modes likewise exclude Stripe and Telnyx
+secrets. The background worker validates its complete runtime configuration at
 startup and fails fast with the missing setting names instead of starting with a
 partly configured provider stack.
 
