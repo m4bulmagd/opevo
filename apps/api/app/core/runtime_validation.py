@@ -40,6 +40,7 @@ BACKGROUND_WORKER_REQUIRED_SETTINGS = (
     "livekit_url",
     "livekit_api_key",
     "livekit_api_secret",
+    "livekit_agent_name",
     "storage_bucket_name",
     "s3_endpoint_url",
     "s3_access_key",

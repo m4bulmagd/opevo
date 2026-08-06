@@ -59,9 +59,9 @@ async def _dispose_engine(engine: AsyncEngine) -> None:
     await engine.dispose()
 
 
-async def _wait_for_cleanup(cleanup: RuntimeCleanup) -> BaseException | None:
+async def _wait_for_cleanup(stack: AsyncExitStack) -> BaseException | None:
     cleanup_completed = asyncio.get_running_loop().create_future()
-    cleanup_task = asyncio.create_task(cleanup.aclose())
+    cleanup_task = asyncio.create_task(stack.aclose())
 
     def mark_cleanup_complete(_task: asyncio.Task[None]) -> None:
         cleanup_completed.set_result(None)
@@ -84,10 +84,10 @@ async def _wait_for_cleanup(cleanup: RuntimeCleanup) -> BaseException | None:
 
 
 async def _unwind_partial_runtime(
-    cleanup: RuntimeCleanup,
+    stack: AsyncExitStack,
     construction_error: BaseException,
 ) -> None:
-    cleanup_failure = await _wait_for_cleanup(cleanup)
+    cleanup_failure = await _wait_for_cleanup(stack)
     construction_cancellation = (
         construction_error
         if isinstance(construction_error, asyncio.CancelledError)
@@ -159,7 +159,7 @@ async def build_call_lifecycle_worker_runtime(
             _cleanup=cleanup,
         )
     except BaseException as construction_error:
-        await _unwind_partial_runtime(cleanup, construction_error)
+        await _unwind_partial_runtime(stack, construction_error)
         raise
 
 
@@ -214,5 +214,5 @@ async def build_background_worker_runtime(
             _cleanup=cleanup,
         )
     except BaseException as construction_error:
-        await _unwind_partial_runtime(cleanup, construction_error)
+        await _unwind_partial_runtime(stack, construction_error)
         raise

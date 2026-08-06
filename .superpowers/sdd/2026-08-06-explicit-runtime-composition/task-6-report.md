@@ -257,3 +257,88 @@ No open Task 6 concern.
 Tasks 7 and 8 still own lifecycle job/use-case extraction and the atomic bound
 outbox/provider migration. Until those tasks, the documented Task 5
 handler-side construction and legacy session/settings bridges remain by design.
+
+## Fix Round 1/5
+
+### Findings addressed
+
+- Added `LIVEKIT_AGENT_NAME` to background-worker fail-fast validation for
+  every runnable non-test environment. Missing (`None`), empty, and
+  whitespace-only values are rejected in development, staging, and production.
+  The exact error contains only the setting key.
+- Added a direct builder regression using forbidden observability, engine,
+  session, handler, and observer factories. An invalid agent name raises before
+  any factory is called.
+- Added worker-composition partial-startup tests for construction-origin
+  cancellation, outer cancellation while an engine close is blocked, and
+  cleanup-origin cancellation. Each test proves all prior resources close once
+  in reverse order, the outer builder does not complete before cleanup, no
+  cleanup task is orphaned, and cancellation is not logged as an ordinary
+  failure.
+- Corrected partial-startup cleanup to run the unpublished `AsyncExitStack`
+  directly in the retained cleanup task. Successful runtimes still use the
+  reviewed `RuntimeCleanup`. Avoiding the extra shield only for unpublished
+  partial runtimes preserves the original cleanup-origin `CancelledError`
+  identity and arguments.
+
+### RED evidence
+
+The new tests were written before either production fix. The initial focused
+composition run produced:
+
+```text
+11 failed, 50 passed in 3.88s
+```
+
+Nine failures showed that `None`, empty, and whitespace-only LiveKit agent
+names were accepted across development, staging, and production. The direct
+factory-order test reached the forbidden observability factory. The cleanup
+cancellation test received a new empty `CancelledError` instead of the closer's
+`CancelledError("cleanup-origin")` instance.
+
+Both repaired behaviors received an independent mutation check:
+
+- Removing `livekit_agent_name` from the required-key tuple produced
+  `10 failed, 51 deselected`; all nine key matrix cases and the
+  validation-before-factories test failed.
+- Reintroducing `RuntimeCleanup(stack).aclose()` inside partial cleanup produced
+  `1 failed, 60 deselected`; cleanup-origin cancellation identity was lost.
+
+Both mutations were restored with `apply_patch` before final verification.
+
+### Verification
+
+Focused worker composition and deployment-validation gate, run outside the
+restricted sandbox:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/composition/test_worker_composition.py \
+  tests/test_deployment_readiness.py
+```
+
+Result: `181 passed in 13.45s`.
+
+Focused static gates:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check \
+  app/composition/workers.py app/core/runtime_validation.py \
+  tests/composition/test_worker_composition.py \
+  tests/test_deployment_readiness.py
+# All checks passed!
+
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy \
+  app/composition/workers.py app/core/runtime_validation.py
+# Success: no issues found in 2 source files
+```
+
+### Fix-round self-review and open conflict
+
+- Only the worker validator, unpublished partial-cleanup path, direct
+  composition tests, and this report changed.
+- Production-development validation remains strict; no requirement was
+  weakened.
+- `compose.dev.yaml` and `CONTRIBUTING.md` were not modified.
+- The reviewer-noted Compose/development-policy conflict remains explicitly
+  open pending owner direction and is not resolved or masked by this fix.

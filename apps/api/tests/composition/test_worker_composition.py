@@ -3,6 +3,7 @@ from contextlib import AsyncExitStack
 from dataclasses import fields
 from datetime import UTC, datetime
 import logging
+import traceback
 from typing import Any
 
 import pytest
@@ -283,6 +284,37 @@ def test_background_validation_requires_dispatch_livekit_storage_and_summary(
 
     with pytest.raises(RuntimeError, match=setting_name):
         validate_background_worker_runtime(settings)
+
+
+@pytest.mark.parametrize("app_env", ["development", "staging", "production"])
+@pytest.mark.parametrize("invalid_name", [None, "", " \t"])
+def test_runnable_background_requires_a_named_livekit_agent_safely(
+    app_env: str,
+    invalid_name: str | None,
+) -> None:
+    production_modes: dict[str, Any] = {}
+    if app_env == "production":
+        production_modes = {
+            "billing_mode": "stripe",
+            "stripe_secret_key": "stripe-secret",
+            "telephony_mode": "telnyx",
+            "telnyx_api_key": "telnyx-key",
+            "telnyx_active_connection_id": "active-connection",
+            "telnyx_disabled_connection_id": "disabled-connection",
+            "telnyx_ordering_enabled": True,
+        }
+    settings = _background_settings(
+        app_env=app_env,
+        **production_modes,
+    ).model_copy(update={"livekit_agent_name": invalid_name})
+
+    with pytest.raises(RuntimeError) as caught:
+        validate_background_worker_runtime(settings)
+
+    assert str(caught.value) == (
+        "Missing or invalid required runtime settings: LIVEKIT_AGENT_NAME"
+    )
+    assert repr(invalid_name) not in str(caught.value)
 
 
 def test_background_test_mode_skips_external_provider_configuration() -> None:
@@ -607,9 +639,9 @@ async def test_validation_failure_precedes_every_background_factory() -> None:
 
         return factory
 
-    with pytest.raises(RuntimeError, match="LIVEKIT_API_KEY"):
+    with pytest.raises(RuntimeError, match="LIVEKIT_AGENT_NAME"):
         await build_background_worker_runtime(
-            _background_settings(livekit_api_key=""),
+            _background_settings(livekit_agent_name=" "),
             arq_redis=_BorrowedRedis(),
             engine_factory=forbidden("engine"),
             session_factory_factory=forbidden("session_factory"),
@@ -670,3 +702,119 @@ async def test_partial_construction_preserves_primary_error_when_cleanup_fails_s
     assert caught.value is construction_error
     assert "event=worker_runtime_partial_cleanup_failed" in caplog.text
     assert "PRIVATE_CLEANUP_VALUE" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_partial_startup_construction_cancellation_closes_prior_resources(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[str] = []
+    cancellation = asyncio.CancelledError("construction-cancelled")
+    dependencies, telemetry, engine, _observer, _handlers = _builder_dependencies(
+        events
+    )
+    dependencies["outbox_handlers_factory"] = lambda: (_ for _ in ()).throw(
+        cancellation
+    )
+
+    with caplog.at_level(logging.WARNING), pytest.raises(
+        asyncio.CancelledError
+    ) as caught:
+        await build_background_worker_runtime(
+            _test_settings(),
+            arq_redis=_BorrowedRedis(),
+            **dependencies,
+        )
+
+    assert caught.value is cancellation
+    assert events[-4:] == [
+        "engine.close:start",
+        "engine.close:end",
+        "telemetry.close:start",
+        "telemetry.close:end",
+    ]
+    assert engine.close_calls == telemetry.close_calls == 1
+    assert "worker_runtime_partial_cleanup_failed" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_outer_cancellation_waits_for_blocked_partial_startup_cleanup(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[str] = []
+    close_started = asyncio.Event()
+    close_release = asyncio.Event()
+    construction_error = RuntimeError("PRIVATE_CONSTRUCTION_VALUE")
+    dependencies, telemetry, engine, _observer, _handlers = _builder_dependencies(
+        events
+    )
+    engine.close_started = close_started
+    engine.close_release = close_release
+    dependencies["outbox_handlers_factory"] = lambda: (_ for _ in ()).throw(
+        construction_error
+    )
+
+    task = asyncio.create_task(
+        build_background_worker_runtime(
+            _test_settings(),
+            arq_redis=_BorrowedRedis(),
+            **dependencies,
+        )
+    )
+    await close_started.wait()
+    with caplog.at_level(logging.WARNING):
+        assert task.cancel("outer-startup-cancelled") is True
+        await asyncio.sleep(0)
+        assert not task.done()
+        close_release.set()
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await task
+
+    assert caught.value.args == ("outer-startup-cancelled",)
+    assert events[-4:] == [
+        "engine.close:start",
+        "engine.close:end",
+        "telemetry.close:start",
+        "telemetry.close:end",
+    ]
+    assert task.done()
+    assert engine.close_calls == telemetry.close_calls == 1
+    assert "PRIVATE_CONSTRUCTION_VALUE" not in caplog.text
+    assert "worker_runtime_partial_cleanup_failed" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_partial_cleanup_cancellation_precedes_construction_error_by_identity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[str] = []
+    construction_error = RuntimeError("PRIVATE_CONSTRUCTION_VALUE")
+    cleanup_cancellation = asyncio.CancelledError("cleanup-origin")
+    dependencies, telemetry, engine, _observer, _handlers = _builder_dependencies(
+        events
+    )
+    engine.close_error = cleanup_cancellation
+    dependencies["outbox_handlers_factory"] = lambda: (_ for _ in ()).throw(
+        construction_error
+    )
+
+    with caplog.at_level(logging.WARNING), pytest.raises(
+        asyncio.CancelledError
+    ) as caught:
+        await build_background_worker_runtime(
+            _test_settings(),
+            arq_redis=_BorrowedRedis(),
+            **dependencies,
+        )
+
+    assert caught.value is cleanup_cancellation
+    assert events[-4:] == [
+        "engine.close:start",
+        "engine.close:end",
+        "telemetry.close:start",
+        "telemetry.close:end",
+    ]
+    assert engine.close_calls == telemetry.close_calls == 1
+    assert "worker_runtime_partial_cleanup_failed" not in caplog.text
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert "PRIVATE_CONSTRUCTION_VALUE" not in rendered
