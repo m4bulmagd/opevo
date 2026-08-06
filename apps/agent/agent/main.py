@@ -79,6 +79,7 @@ async def _safe_task(coro) -> None:
 async def _join_ordered_shutdown(
     shutdown_task: asyncio.Task[None],
     shutdown_complete: asyncio.Future[None],
+    shutdown_failure_reported: asyncio.Event,
 ) -> None:
     outer_cancellation: asyncio.CancelledError | None = None
     while not shutdown_complete.done():
@@ -95,6 +96,14 @@ async def _join_ordered_shutdown(
         shutdown_failure = error
 
     if outer_cancellation is not None:
+        if shutdown_failure is not None and not shutdown_failure_reported.is_set():
+            shutdown_failure_reported.set()
+            report_safe_exception(
+                logger,
+                event="agent_ordered_shutdown_failed",
+                operation="run_agent_ordered_shutdown",
+                error=shutdown_failure,
+            )
         outer_cancellation.__traceback__ = None
         raise outer_cancellation from None
     if shutdown_failure is not None:
@@ -293,6 +302,7 @@ async def entrypoint(context: JobContext) -> None:
     customer_metadata: CustomerCallDispatch | None = None
     started_at = time.monotonic()
     entrypoint_use_complete = asyncio.Event()
+    shutdown_failure_reported = asyncio.Event()
     shutdown_task: asyncio.Task[None] | None = None
     shutdown_complete: asyncio.Future[None] | None = None
 
@@ -326,7 +336,11 @@ async def entrypoint(context: JobContext) -> None:
             shutdown_task.add_done_callback(mark_shutdown_complete)
 
         assert shutdown_complete is not None
-        await _join_ordered_shutdown(shutdown_task, shutdown_complete)
+        await _join_ordered_shutdown(
+            shutdown_task,
+            shutdown_complete,
+            shutdown_failure_reported,
+        )
 
     context.add_shutdown_callback(shutdown_job)
     try:

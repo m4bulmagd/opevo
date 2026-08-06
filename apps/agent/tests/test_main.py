@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import json
 import logging
 import sys
@@ -866,6 +867,161 @@ async def test_shutdown_callback_cancellation_joins_the_full_ordered_cleanup(
     ]
     assert publisher.close_calls == 1
     assert api_client.close_calls == 1
+
+
+@pytest.mark.anyio
+async def test_cancelled_shutdown_waiter_safely_reports_retained_failure_once(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    metadata = make_metadata()
+    events: list[object] = []
+    publisher_close_started = asyncio.Event()
+    release_publisher_close = asyncio.Event()
+    cancellation_injected = asyncio.Event()
+    failure = RuntimeError("ORDERED_SHUTDOWN_SECRET_SENTINEL")
+    cancellation = asyncio.CancelledError("livekit waiter cancelled")
+
+    class BlockingPublisher(FakeProcessPublisher):
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            events.append("publisher.close.started")
+            publisher_close_started.set()
+            await release_publisher_close.wait()
+            events.append("publisher.close.finished")
+
+    async def fail_observability_shutdown() -> None:
+        events.append("observability.close")
+        raise failure
+
+    api_client = FakeProcessApiClient(events)
+    publisher = BlockingPublisher(events)
+    context = FakeJobContext(metadata)
+    context.proc.userdata = make_process_runtime(
+        api_client=api_client,
+        publisher=publisher,
+    )
+    session = FakeEntrypointSession()
+    monkeypatch.setattr(
+        agent_main,
+        "build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+    monkeypatch.setattr(
+        agent_main,
+        "shutdown_observability",
+        fail_observability_shutdown,
+    )
+
+    await entrypoint(context)
+
+    original_shield = asyncio.shield
+    shield_calls = 0
+
+    def inject_waiter_cancellation_once(awaitable):
+        nonlocal shield_calls
+        shield_calls += 1
+        if shield_calls != 1:
+            return original_shield(awaitable)
+
+        async def raise_cancellation() -> None:
+            cancellation_injected.set()
+            raise cancellation
+
+        return raise_cancellation()
+
+    monkeypatch.setattr(agent_main.asyncio, "shield", inject_waiter_cancellation_once)
+    loop = asyncio.get_running_loop()
+    previous_exception_handler = loop.get_exception_handler()
+    unexpected_loop_errors: list[dict[str, object]] = []
+    loop.set_exception_handler(
+        lambda _loop, error_context: unexpected_loop_errors.append(error_context)
+    )
+    callback = context.shutdown_callbacks[0]
+
+    try:
+        with caplog.at_level(logging.ERROR):
+            cancelled_waiter = asyncio.create_task(callback())
+            await cancellation_injected.wait()
+            concurrent_waiter = asyncio.create_task(callback())
+            await publisher_close_started.wait()
+            release_publisher_close.set()
+
+            with pytest.raises(asyncio.CancelledError) as cancellation_info:
+                await cancelled_waiter
+            with pytest.raises(RuntimeError) as concurrent_failure_info:
+                await concurrent_waiter
+            with pytest.raises(RuntimeError) as repeated_failure_info:
+                await callback()
+
+        assert cancellation_info.value is cancellation
+        assert cancellation_info.value.__cause__ is None
+        assert concurrent_failure_info.value is failure
+        assert repeated_failure_info.value is failure
+        assert events == [
+            "publisher.close.started",
+            "publisher.close.finished",
+            "api_client.close",
+            "observability.close",
+        ]
+        shutdown_failure_records = [
+            record
+            for record in caplog.records
+            if "event=agent_ordered_shutdown_failed" in record.getMessage()
+        ]
+        assert len(shutdown_failure_records) == 1
+        assert shutdown_failure_records[0].getMessage() == (
+            "event=agent_ordered_shutdown_failed "
+            "operation=run_agent_ordered_shutdown error_type=RuntimeError"
+        )
+        assert shutdown_failure_records[0].exc_info is None
+        assert "ORDERED_SHUTDOWN_SECRET_SENTINEL" not in caplog.text
+
+        context.shutdown_callbacks.clear()
+        del callback
+        del cancelled_waiter
+        del concurrent_waiter
+        del cancellation_info
+        del concurrent_failure_info
+        del repeated_failure_info
+        gc.collect()
+        await asyncio.sleep(0)
+        assert not any(
+            error_context.get("message") == "Task exception was never retrieved"
+            for error_context in unexpected_loop_errors
+        )
+    finally:
+        loop.set_exception_handler(previous_exception_handler)
+
+
+@pytest.mark.anyio
+async def test_uncancelled_shutdown_waiter_propagates_retained_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("observability close failed")
+    context = FakeJobContext(make_metadata())
+    session = FakeEntrypointSession()
+
+    async def fail_observability_shutdown() -> None:
+        raise failure
+
+    monkeypatch.setattr(
+        agent_main,
+        "build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+    monkeypatch.setattr(
+        agent_main,
+        "shutdown_observability",
+        fail_observability_shutdown,
+    )
+
+    await entrypoint(context)
+
+    with pytest.raises(RuntimeError) as failure_info:
+        await context.shutdown_callbacks[0]()
+
+    assert failure_info.value is failure
 
 
 @pytest.mark.anyio
