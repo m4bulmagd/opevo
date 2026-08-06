@@ -61,6 +61,39 @@ def _forbidden_factory(name: str) -> Callable[..., Any]:
     return forbidden
 
 
+async def _sqlite_api_runtime(settings, database_path):
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.core.database import create_database_engine
+
+    class TrackingAsyncSession(AsyncSession):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.close_calls = 0
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            await super().close()
+
+    engine = create_database_engine(f"sqlite+aiosqlite:///{database_path}")
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("CREATE TABLE session_probe (value TEXT NOT NULL)")
+        )
+    session_factory = async_sessionmaker(
+        engine,
+        class_=TrackingAsyncSession,
+        expire_on_commit=False,
+    )
+    runtime = _api_runtime(
+        settings,
+        engine=engine,
+        session_factory=session_factory,
+    )
+    return runtime, engine, session_factory
+
+
 @pytest.mark.anyio
 async def test_build_api_runtime_owns_resources_and_closes_once_in_reverse_order(
     settings,
@@ -509,3 +542,148 @@ def test_recording_service_dependency_borrows_runtime_storage(settings) -> None:
     service = get_recording_service(request)
 
     assert service.provider is storage_provider
+
+
+@pytest.mark.anyio
+async def test_request_session_rejects_missing_api_runtime() -> None:
+    from fastapi import FastAPI
+    from starlette.requests import Request
+
+    from app.composition.runtime import ApiRuntimeUnavailable
+    from app.core.database import get_session
+
+    request = Request({"type": "http", "app": FastAPI()})
+
+    with pytest.raises(
+        ApiRuntimeUnavailable,
+        match="API runtime is not initialized",
+    ):
+        dependency = get_session(request)
+        await anext(dependency)
+
+
+@pytest.mark.anyio
+async def test_request_session_persists_committed_work_and_closes(
+    settings,
+    tmp_path,
+) -> None:
+    from fastapi import FastAPI
+    from sqlalchemy import text
+    from starlette.requests import Request
+
+    from app.core.database import get_session
+
+    runtime, engine, session_factory = await _sqlite_api_runtime(
+        settings,
+        tmp_path / "committed.db",
+    )
+    app = FastAPI()
+    app.state.runtime = runtime
+    dependency = get_session(Request({"type": "http", "app": app}))
+    try:
+        session = await anext(dependency)
+        await session.execute(
+            text("INSERT INTO session_probe (value) VALUES ('committed')")
+        )
+        await session.commit()
+
+        await dependency.aclose()
+
+        assert session.close_calls == 1
+        async with session_factory() as verification_session:
+            result = await verification_session.execute(
+                text("SELECT value FROM session_probe")
+            )
+            assert result.scalar_one() == "committed"
+    finally:
+        await dependency.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_request_session_rolls_back_and_closes_when_generator_closes(
+    settings,
+    tmp_path,
+) -> None:
+    from fastapi import FastAPI
+    from sqlalchemy import text
+    from starlette.requests import Request
+
+    from app.core.database import get_session
+
+    runtime, engine, session_factory = await _sqlite_api_runtime(
+        settings,
+        tmp_path / "generator-close.db",
+    )
+    app = FastAPI()
+    app.state.runtime = runtime
+    dependency = get_session(Request({"type": "http", "app": app}))
+    try:
+        session = await anext(dependency)
+        await session.execute(
+            text("INSERT INTO session_probe (value) VALUES ('rolled-back')")
+        )
+        assert session.in_transaction() is True
+
+        await dependency.aclose()
+
+        assert session.in_transaction() is False
+        assert session.close_calls == 1
+        async with session_factory() as verification_session:
+            result = await verification_session.execute(
+                text("SELECT COUNT(*) FROM session_probe")
+            )
+            assert result.scalar_one() == 0
+    finally:
+        await dependency.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_request_session_rolls_back_and_closes_on_handler_failure(
+    settings,
+    tmp_path,
+) -> None:
+    from fastapi import FastAPI
+    from sqlalchemy import text
+    from starlette.requests import Request
+
+    from app.core.database import get_session
+
+    runtime, engine, session_factory = await _sqlite_api_runtime(
+        settings,
+        tmp_path / "handler-failure.db",
+    )
+    app = FastAPI()
+    app.state.runtime = runtime
+    dependency = get_session(Request({"type": "http", "app": app}))
+    try:
+        session = await anext(dependency)
+        await session.execute(
+            text("INSERT INTO session_probe (value) VALUES ('rolled-back')")
+        )
+
+        with pytest.raises(RuntimeError, match="handler failed"):
+            await dependency.athrow(RuntimeError("handler failed"))
+
+        assert session.in_transaction() is False
+        assert session.close_calls == 1
+        async with session_factory() as verification_session:
+            result = await verification_session.execute(
+                text("SELECT COUNT(*) FROM session_probe")
+            )
+            assert result.scalar_one() == 0
+    finally:
+        await dependency.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_shared_test_app_uses_its_runtime_session_factory(
+    test_app,
+    client_database_url,
+) -> None:
+    from app.core.database import get_session
+
+    assert test_app.state.runtime.settings.database_url == client_database_url
+    assert get_session not in test_app.dependency_overrides

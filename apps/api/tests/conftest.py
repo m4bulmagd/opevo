@@ -152,31 +152,22 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, clerk_key_material: dict[str, 
         monkeypatch=monkeypatch,
     )
 
-    from app.core.config import get_settings
-    from app.core.database import get_engine, get_session_factory
+    from app.core.config import Settings, get_settings
     from app.core.rate_limit import configure_rate_limiter, limiter
-    from app.core.redis import get_redis_client
 
     previous_limiter_enabled = limiter.enabled
     get_settings.cache_clear()
-    get_engine.cache_clear()
-    get_session_factory.cache_clear()
-    get_redis_client.cache_clear()
-    configure_rate_limiter(get_settings())
+    configure_rate_limiter(Settings())
     yield
     limiter.enabled = previous_limiter_enabled
     get_settings.cache_clear()
-    get_engine.cache_clear()
-    get_session_factory.cache_clear()
-    get_redis_client.cache_clear()
 
 
 @pytest.fixture
 def settings():
-    from app.core.config import get_settings
+    from app.core.config import Settings
 
-    get_settings.cache_clear()
-    return get_settings()
+    return Settings()
 
 
 @pytest_asyncio.fixture
@@ -209,46 +200,37 @@ async def active_user(db_session: AsyncSession):
 
 
 @pytest_asyncio.fixture
-async def test_app(tmp_path: Path):
-    from app.core.config import get_settings
-    from app.core.database import get_session
+async def test_app(tmp_path: Path, settings):
+    from app.core.database import create_database_engine
     from app import main as main_module
 
     original_app = main_module.app
-    app = main_module.create_app(get_settings())
-    engine = None
+    database_url = os.getenv("CLIENT_TEST_DATABASE_URL")
+    if database_url is None:
+        database_path = tmp_path / "test_client.db"
+        database_url = f"sqlite+aiosqlite:///{database_path}"
+    elif database_url.startswith("postgresql://"):
+        database_url = database_url.replace(
+            "postgresql://",
+            "postgresql+asyncpg://",
+            1,
+        )
+
+    setup_engine = create_database_engine(database_url)
+    async with setup_engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    await setup_engine.dispose()
+
+    app = main_module.create_app(
+        settings.model_copy(update={"database_url": database_url})
+    )
     try:
         main_module.app = app
-        database_url = os.getenv("CLIENT_TEST_DATABASE_URL")
-        if database_url is None:
-            database_path = tmp_path / "test_client.db"
-            database_url = f"sqlite+aiosqlite:///{database_path}"
-        elif database_url.startswith("postgresql://"):
-            database_url = database_url.replace(
-                "postgresql://",
-                "postgresql+asyncpg://",
-                1,
-            )
-
-        engine = create_async_engine(database_url, future=True)
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-        session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        app.state.test_database_url = database_url
-
-        async def override_get_session():
-            async with session_factory() as session:
-                yield session
-
-        app.dependency_overrides[get_session] = override_get_session
-
         async with app.router.lifespan_context(app):
             yield app
     finally:
         app.dependency_overrides.clear()
         main_module.app = original_app
-        if engine is not None:
-            await engine.dispose()
 
 
 @pytest_asyncio.fixture
@@ -274,7 +256,7 @@ async def async_client(test_app):
 
 @pytest.fixture
 def client_database_url(test_app) -> str:
-    return test_app.state.test_database_url
+    return test_app.state.runtime.settings.database_url
 
 
 @pytest.fixture
