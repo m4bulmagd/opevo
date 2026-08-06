@@ -1,8 +1,13 @@
+x-api-env-files: &api-env-files
+  - path: ./apps/api/.env
+    required: false
+
 x-worker-service: &worker-service
   build:
     context: .
     dockerfile: apps/api/Dockerfile
     target: development
+  env_file: *api-env-files
   depends_on:
     migrate:
       condition: service_completed_successfully
@@ -114,9 +119,7 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
       target: development
-    env_file:
-      - path: ./apps/api/.env
-        required: false
+    env_file: *api-env-files
     depends_on:
       migrate:
         condition: service_completed_successfully

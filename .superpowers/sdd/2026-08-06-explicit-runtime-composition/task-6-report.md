@@ -342,3 +342,99 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy \
 - `compose.dev.yaml` and `CONTRIBUTING.md` were not modified.
 - The reviewer-noted Compose/development-policy conflict remains explicitly
   open pending owner direction and is not resolved or masked by this fix.
+
+## Fix Round 2/5 — 6A-C1A
+
+### Owner decision implemented
+
+- Added one reusable `x-api-env-files` YAML sequence to `compose.dev.yaml`.
+  The API and the existing shared worker declaration reference the same optional
+  `./apps/api/.env`; worker lifecycle and background services therefore receive
+  the source without duplicating it.
+- Kept every explicit worker environment value unchanged. Compose precedence
+  continues to make those values override values from the shared env file.
+- Did not add provider credentials, placeholder provider values, or dummy
+  provider settings to the checked-in Compose model. No real `.env` file was
+  opened or parsed during implementation or verification.
+- Updated local-development guidance to explain that the core background worker
+  needs API-side dispatch, LiveKit agent, and selected summary-provider
+  configuration and intentionally fails fast when it is incomplete. The voice
+  agent remains excluded unless `--profile voice` is selected.
+
+### RED evidence
+
+The deployment-readiness assertions were changed before the Compose file. The
+focused run produced:
+
+```text
+1 failed, 9 passed in 1.30s
+```
+
+The failure was the intended missing `env_file` key on both checked-in worker
+services. The controlled explicit background-provider validation matrix already
+passed, confirming that strict runtime validation did not need to change.
+
+### Readiness coverage
+
+- The Compose render helper now combines `--env-file os.devnull` with
+  `--no-env-resolution` for source-only inspection. Its fixture proves that this
+  mode reads neither a project `.env` nor a service `env_file`.
+- The checked-in development model proves the API, lifecycle worker, and
+  background worker resolve to the same optional API env-file path.
+- The background worker's explicit Compose environment is checked for the
+  absence of dispatch, LiveKit, agent-name, and selected Gemini summary
+  placeholders.
+- A controlled `_env_file=None` settings matrix proves every complete explicit
+  provider configuration is accepted and each missing required provider value
+  is rejected by name.
+
+### Verification
+
+Targeted RED-to-GREEN rerun:
+
+```text
+10 passed in 0.99s
+```
+
+Focused deployment and worker-composition suite, run outside the restricted
+sandbox because an existing lifespan test launches a subprocess:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_deployment_readiness.py \
+  tests/composition/test_worker_composition.py
+# 189 passed in 14.27s
+```
+
+The same focused suite first reached `188 passed` in the restricted sandbox;
+its only failure was the existing subprocess test timing out at the sandbox's
+60-second boundary. The unsandboxed rerun above passed completely.
+
+Compose syntax/schema validation explicitly bypassed project and service env
+files:
+
+```text
+docker compose --env-file /dev/null -f compose.dev.yaml \
+  config --quiet --no-env-resolution
+# exit 0
+```
+
+Static gates:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check app tests
+# All checks passed!
+
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
+# Success: no issues found in 190 source files
+```
+
+### Fix-round self-review and concerns
+
+- Strict background validation, runtime composition, queues, cron metadata,
+  concurrency, shutdown, and health behavior are unchanged.
+- The Compose anchor is a small shared data declaration; it does not hide worker
+  commands, process policy, or explicit environment overrides.
+- The readiness tests inspect normalized Compose structure without reading the
+  developer's real API env file.
+- No open concern remains for owner decision 6A-C1A.

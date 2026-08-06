@@ -41,9 +41,18 @@ fails closed when its required server configuration is missing; it never
 substitutes an authenticated local identity. Synthetic local authentication must
 be enabled explicitly and is limited to disposable development and E2E workflows.
 
+The core `worker-background` service also needs the API-side dispatch secret,
+LiveKit credentials and agent name, and the selected summary provider's model and
+credentials in `apps/api/.env`. The API and both workers read that same optional
+file, while each service's explicit Compose environment values still take
+precedence. The background worker validates its complete runtime configuration at
+startup and fails fast with the missing setting names instead of starting with a
+partly configured provider stack.
+
 Live phone calls require hosted provider configuration. Copy only the example
 files you need, keep the resulting `.env` files untracked, and start the voice
-profile after configuring LiveKit and the selected model providers:
+agent only after configuring LiveKit and the selected model providers. The agent
+remains excluded from the core stack unless the `voice` profile is selected:
 
 ```bash
 docker compose -f compose.dev.yaml --profile voice up --build

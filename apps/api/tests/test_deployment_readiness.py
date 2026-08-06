@@ -98,12 +98,18 @@ def render_compose(
     command = [
         "docker",
         "compose",
-        "-f",
-        str(compose_file),
-        "config",
-        "--format",
-        "json",
     ]
+    if not resolve_env_files:
+        command.extend(("--env-file", os.devnull))
+    command.extend(
+        [
+            "-f",
+            str(compose_file),
+            "config",
+            "--format",
+            "json",
+        ]
+    )
     if not resolve_env_files:
         command.append("--no-env-resolution")
     result = subprocess.run(
@@ -144,6 +150,7 @@ def load_local_compose_yaml(
 def test_compose_render_can_skip_service_env_file_resolution(tmp_path: Path) -> None:
     compose_file = tmp_path / "compose.yaml"
     service_env_file = tmp_path / "service.env"
+    project_env_file = tmp_path / ".env"
     compose_file.write_text(
         """\
 services:
@@ -153,11 +160,16 @@ services:
       - ./service.env
     environment:
       EXPLICIT_SENTINEL: from-compose-model
+      PROJECT_ENV_SENTINEL: ${PROJECT_ENV_SENTINEL:-project-env-not-loaded}
 """,
         encoding="utf-8",
     )
     service_env_file.write_text(
         "ENV_FILE_SENTINEL=from-service-env-file\n",
+        encoding="utf-8",
+    )
+    project_env_file.write_text(
+        "PROJECT_ENV_SENTINEL=from-project-env-file\n",
         encoding="utf-8",
     )
 
@@ -176,8 +188,10 @@ services:
     isolated_environment = resolved_service_environment(isolated_document, "api")
 
     assert resolved_environment["ENV_FILE_SENTINEL"] == "from-service-env-file"
+    assert resolved_environment["PROJECT_ENV_SENTINEL"] == "from-project-env-file"
     assert "ENV_FILE_SENTINEL" not in isolated_environment
     assert isolated_environment["EXPLICIT_SENTINEL"] == "from-compose-model"
+    assert isolated_environment["PROJECT_ENV_SENTINEL"] == "project-env-not-loaded"
 
 
 def test_postgres_driver_is_available_without_development_dependencies() -> None:
@@ -1157,8 +1171,11 @@ def test_recording_runtime_has_one_reference_only_outbox_contract() -> None:
     assert callable(LiveKitRecordingProvider.list_room_egresses)
 
 
-def test_development_services_load_local_env_files_without_leaking_api_identity_to_worker() -> None:
+def test_development_services_share_api_configuration_without_provider_placeholders() -> None:
     services = load_local_compose_yaml()["services"]
+    api_env_file = [
+        {"path": str(REPO_ROOT / "apps" / "api" / ".env"), "required": False}
+    ]
 
     for service_name, env_path in (
         ("api", REPO_ROOT / "apps" / "api" / ".env"),
@@ -1170,7 +1187,20 @@ def test_development_services_load_local_env_files_without_leaking_api_identity_
         ]
 
     for worker in WORKER_SERVICES:
-        assert "env_file" not in services[worker]
+        assert services[worker]["env_file"] == api_env_file
+
+    background_environment = services["worker-background"]["environment"]
+    for provider_setting in (
+        "AGENT_DISPATCH_JWT_SECRET",
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "LIVEKIT_AGENT_NAME",
+        "SUMMARY_PROVIDER",
+        "SUMMARY_MODEL",
+        "GEMINI_API_KEY",
+    ):
+        assert provider_setting not in background_environment
 
     for provider_key in (
         "LIVEKIT_URL",
@@ -1191,6 +1221,52 @@ def test_development_services_load_local_env_files_without_leaking_api_identity_
     )
     assert services["agent"]["environment"]["API_BASE_URL"] == "http://api:8000"
     assert services["web"]["environment"]["API_BASE_URL"] == "http://api:8000"
+
+
+@pytest.mark.parametrize(
+    ("field_name", "environment_name"),
+    [
+        ("agent_dispatch_jwt_secret", "AGENT_DISPATCH_JWT_SECRET"),
+        ("livekit_url", "LIVEKIT_URL"),
+        ("livekit_api_key", "LIVEKIT_API_KEY"),
+        ("livekit_api_secret", "LIVEKIT_API_SECRET"),
+        ("livekit_agent_name", "LIVEKIT_AGENT_NAME"),
+        ("summary_provider", "SUMMARY_PROVIDER"),
+        ("summary_model", "SUMMARY_MODEL"),
+        ("gemini_api_key", "GEMINI_API_KEY"),
+    ],
+)
+def test_development_background_provider_contract_is_strict_with_explicit_settings(
+    field_name: str,
+    environment_name: str,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="development",
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+        billing_mode="fake",
+        telephony_mode="fake",
+        livekit_url="wss://livekit.example.invalid",
+        livekit_api_key="controlled-livekit-key",
+        livekit_api_secret="controlled-livekit-secret",
+        livekit_agent_name="controlled-agent",
+        storage_bucket_name="recordings",
+        s3_endpoint_url="http://minio:9000",
+        s3_access_key="controlled-storage-key",
+        s3_secret_key="controlled-storage-secret",
+        s3_region="us-east-1",
+        agent_dispatch_jwt_secret="controlled-dispatch-secret-at-least-32-bytes",
+        summary_provider="gemini",
+        summary_model="controlled-summary-model",
+        gemini_api_key="controlled-gemini-key",
+    )
+
+    validate_background_worker_runtime(settings)
+
+    missing_settings = settings.model_copy(update={field_name: ""})
+    with pytest.raises(RuntimeError, match=environment_name):
+        validate_background_worker_runtime(missing_settings)
 
 
 def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
