@@ -17,7 +17,7 @@ from presvo_contracts import (
 )
 
 import agent.main as agent_main
-from agent.composition import build_agent_process_runtime
+from agent.composition import AgentProcessRuntime, build_agent_process_runtime
 from agent.config import AgentSettings
 
 
@@ -704,3 +704,74 @@ async def test_entrypoint_branches_to_verification_before_normal_call_runtime(
     await context.shutdown_callbacks[0]()
 
     assert context.events[-2:] == ["close_publisher", "close_api"]
+
+
+@pytest.mark.anyio
+async def test_shutdown_waits_for_forwarding_verification_transport_use_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = verification_metadata()
+    context = FakeVerificationContext(payload)
+    events = context.events
+    verification_started = asyncio.Event()
+    release_verification = asyncio.Event()
+    callback_started = asyncio.Event()
+    api_client = FakeVerificationApiClient(events)
+    publisher = FakeVerificationPublisher(events)
+
+    class InlineCleanup:
+        async def aclose(self) -> None:
+            await publisher.aclose()
+            await api_client.aclose()
+
+    context.proc.userdata = AgentProcessRuntime(
+        settings=VERIFICATION_SETTINGS,
+        api_client=api_client,
+        event_publisher=publisher,
+        _cleanup=InlineCleanup(),  # type: ignore[arg-type]
+    )
+
+    async def block_verification(
+        resolved_context: object,
+        _metadata: object,
+        *,
+        settings: AgentSettings,
+        api_client: object,
+    ) -> None:
+        assert resolved_context is context
+        assert settings is VERIFICATION_SETTINGS
+        assert api_client is context.proc.userdata.api_client
+        events.append("verification.started")
+        verification_started.set()
+        await release_verification.wait()
+        events.append("verification.cleanup.complete")
+
+    async def shutdown_observability() -> None:
+        events.append("observability.close")
+
+    monkeypatch.setattr(agent_main, "run_forwarding_verification", block_verification)
+    monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
+
+    entrypoint_task = asyncio.create_task(agent_main.entrypoint(context))
+    await verification_started.wait()
+
+    async def invoke_shutdown_callback() -> None:
+        callback_started.set()
+        await context.shutdown_callbacks[0]()
+
+    callback_task = asyncio.create_task(invoke_shutdown_callback())
+    await callback_started.wait()
+
+    assert events == ["verification.started"]
+
+    release_verification.set()
+    await entrypoint_task
+    await callback_task
+
+    assert events == [
+        "verification.started",
+        "verification.cleanup.complete",
+        "close_publisher",
+        "close_api",
+        "observability.close",
+    ]

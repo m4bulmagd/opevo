@@ -1,3 +1,4 @@
+import asyncio
 import time
 import logging
 import importlib
@@ -73,6 +74,31 @@ async def _safe_task(coro) -> None:
             operation="run_background_event_handler",
             error=exc,
         )
+
+
+async def _join_ordered_shutdown(
+    shutdown_task: asyncio.Task[None],
+    shutdown_complete: asyncio.Future[None],
+) -> None:
+    outer_cancellation: asyncio.CancelledError | None = None
+    while not shutdown_complete.done():
+        try:
+            await asyncio.shield(shutdown_complete)
+        except asyncio.CancelledError as error:
+            if outer_cancellation is None:
+                outer_cancellation = error
+
+    shutdown_failure: BaseException | None = None
+    try:
+        shutdown_task.result()
+    except BaseException as error:
+        shutdown_failure = error
+
+    if outer_cancellation is not None:
+        outer_cancellation.__traceback__ = None
+        raise outer_cancellation from None
+    if shutdown_failure is not None:
+        raise shutdown_failure
 
 
 def _register_inference_runners(settings: AgentSettings) -> None:
@@ -266,8 +292,12 @@ async def entrypoint(context: JobContext) -> None:
     session_runtime: SessionRuntime | None = None
     customer_metadata: CustomerCallDispatch | None = None
     started_at = time.monotonic()
+    entrypoint_use_complete = asyncio.Event()
+    shutdown_task: asyncio.Task[None] | None = None
+    shutdown_complete: asyncio.Future[None] | None = None
 
-    async def shutdown_job(*_args: object) -> None:
+    async def run_ordered_shutdown() -> None:
+        await entrypoint_use_complete.wait()
         try:
             if session_runtime is not None and customer_metadata is not None:
                 await session_runtime.finalize(
@@ -280,82 +310,103 @@ async def entrypoint(context: JobContext) -> None:
             finally:
                 await shutdown_observability()
 
-    context.add_shutdown_callback(shutdown_job)
-    metadata = parse_dispatch(context.job.metadata or "{}")
-    if isinstance(metadata, ForwardingVerificationDispatch):
-        await run_forwarding_verification(
-            context,
-            metadata,
-            settings=process_runtime.settings,
-            api_client=process_runtime.api_client,
-        )
-        return
-    customer_metadata = metadata
-    metadata_dict = dump_contract(metadata)
-    with agent_lifecycle_span(
-        call_id=str(metadata.call_id),
-        pipeline_mode=metadata.pipeline_mode,
-    ):
-        with agent_provider_span(
-            provider="livekit",
-            operation="connect",
-            call_id=str(metadata.call_id),
-        ):
-            await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
-            sip_participant = await context.wait_for_participant(
-                kind=SIP_PARTICIPANT_KIND
+    async def shutdown_job(*_args: object) -> None:
+        nonlocal shutdown_complete, shutdown_task
+        if shutdown_task is None:
+            completion = asyncio.get_running_loop().create_future()
+            shutdown_complete = completion
+            shutdown_task = asyncio.create_task(
+                run_ordered_shutdown(),
+                name="agent_ordered_shutdown",
             )
 
-        agent, session = build_agent_runtime(
-            metadata_dict,
-            settings=process_runtime.settings,
-            vad=process_runtime.silero_vad,
-            inference_executor=context.inference_executor,
-        )
-        session_runtime = SessionRuntime(
-            process_runtime.event_publisher,
-            api_client=process_runtime.api_client,
-            fatal_shutdown=context.shutdown,
-            call_limit_started_at=started_at,
-            warning_callback=lambda message: _play_call_limit_message(
-                session,
+            def mark_shutdown_complete(_task: asyncio.Task[None]) -> None:
+                completion.set_result(None)
+
+            shutdown_task.add_done_callback(mark_shutdown_complete)
+
+        assert shutdown_complete is not None
+        await _join_ordered_shutdown(shutdown_task, shutdown_complete)
+
+    context.add_shutdown_callback(shutdown_job)
+    try:
+        metadata = parse_dispatch(context.job.metadata or "{}")
+        if isinstance(metadata, ForwardingVerificationDispatch):
+            await run_forwarding_verification(
+                context,
                 metadata,
-                message,
-            ),
-        )
-        _register_session_handlers(session, session_runtime, metadata)
-        session.input.set_audio_enabled(False)
-        with agent_provider_span(
-            provider="livekit",
-            operation="session_start",
-            call_id=str(metadata.call_id),
-        ):
-            await session.start(
-                agent=agent,
-                room=context.room,
-                room_options=room_io.RoomOptions(
-                    participant_identity=sip_participant.identity,
-                    participant_kinds=[SIP_PARTICIPANT_KIND],
-                    close_on_disconnect=True,
-                    delete_room_on_close=True,
-                ),
-                record={
-                    "audio": False,
-                    "transcript": False,
-                    "traces": False,
-                    "logs": False,
-                },
+                settings=process_runtime.settings,
+                api_client=process_runtime.api_client,
             )
-        session_runtime.enforce_call_limit(
-            metadata,
-            lambda: _disconnect_at_call_limit(session, metadata),
-        )
-        if session_runtime.call_limit_expired_on_start:
-            if session_runtime.call_limit_task is not None:
-                await session_runtime.call_limit_task
             return
-        await _send_initial_greeting(session, metadata)
-        session.input.set_audio_enabled(True)
+        customer_metadata = metadata
+        metadata_dict = dump_contract(metadata)
+        with agent_lifecycle_span(
+            call_id=str(metadata.call_id),
+            pipeline_mode=metadata.pipeline_mode,
+        ):
+            with agent_provider_span(
+                provider="livekit",
+                operation="connect",
+                call_id=str(metadata.call_id),
+            ):
+                await context.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
+                sip_participant = await context.wait_for_participant(
+                    kind=SIP_PARTICIPANT_KIND
+                )
+
+            agent, session = build_agent_runtime(
+                metadata_dict,
+                settings=process_runtime.settings,
+                vad=process_runtime.silero_vad,
+                inference_executor=context.inference_executor,
+            )
+            session_runtime = SessionRuntime(
+                process_runtime.event_publisher,
+                api_client=process_runtime.api_client,
+                fatal_shutdown=context.shutdown,
+                call_limit_started_at=started_at,
+                warning_callback=lambda message: _play_call_limit_message(
+                    session,
+                    metadata,
+                    message,
+                ),
+            )
+            _register_session_handlers(session, session_runtime, metadata)
+            session.input.set_audio_enabled(False)
+            with agent_provider_span(
+                provider="livekit",
+                operation="session_start",
+                call_id=str(metadata.call_id),
+            ):
+                await session.start(
+                    agent=agent,
+                    room=context.room,
+                    room_options=room_io.RoomOptions(
+                        participant_identity=sip_participant.identity,
+                        participant_kinds=[SIP_PARTICIPANT_KIND],
+                        close_on_disconnect=True,
+                        delete_room_on_close=True,
+                    ),
+                    record={
+                        "audio": False,
+                        "transcript": False,
+                        "traces": False,
+                        "logs": False,
+                    },
+                )
+            session_runtime.enforce_call_limit(
+                metadata,
+                lambda: _disconnect_at_call_limit(session, metadata),
+            )
+            if session_runtime.call_limit_expired_on_start:
+                if session_runtime.call_limit_task is not None:
+                    await session_runtime.call_limit_task
+                return
+            await _send_initial_greeting(session, metadata)
+            session.input.set_audio_enabled(True)
+    finally:
+        entrypoint_use_complete.set()
 
 
 def prewarm_assets(

@@ -779,7 +779,10 @@ async def test_entrypoint_uses_one_shutdown_callback_with_strict_cleanup_order(
         "api_client": api_client,
     }
 
-    await context.shutdown_callbacks[0]()
+    await asyncio.gather(
+        context.shutdown_callbacks[0](),
+        context.shutdown_callbacks[0](),
+    )
     await context.shutdown_callbacks[0]()
 
     assert events == [
@@ -787,11 +790,165 @@ async def test_entrypoint_uses_one_shutdown_callback_with_strict_cleanup_order(
         "publisher.close",
         "api_client.close",
         "observability.close",
+    ]
+    assert publisher.close_calls == 1
+    assert api_client.close_calls == 1
+
+
+@pytest.mark.anyio
+async def test_shutdown_callback_cancellation_joins_the_full_ordered_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    events: list[object] = []
+    publisher_close_started = asyncio.Event()
+    release_publisher_close = asyncio.Event()
+
+    class BlockingPublisher(FakeProcessPublisher):
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            events.append("publisher.close.started")
+            publisher_close_started.set()
+            await release_publisher_close.wait()
+            events.append("publisher.close.finished")
+
+    class OrderedSessionRuntime:
+        call_limit_expired_on_start = False
+        call_limit_task = None
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def create_handler_task(self, _factory: object) -> bool:
+            return True
+
+        def enforce_call_limit(self, _metadata: object, _disconnect: object) -> None:
+            return None
+
+        async def finalize(self, *_args: object, **_kwargs: object) -> None:
+            events.append("session.finalize")
+
+    async def shutdown_observability() -> None:
+        events.append("observability.close")
+
+    api_client = FakeProcessApiClient(events)
+    publisher = BlockingPublisher(events)
+    context = FakeJobContext(metadata)
+    context.proc.userdata = make_process_runtime(
+        api_client=api_client,
+        publisher=publisher,
+    )
+    session = FakeEntrypointSession()
+    monkeypatch.setattr(
+        agent_main,
+        "build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+    monkeypatch.setattr(agent_main, "SessionRuntime", OrderedSessionRuntime)
+    monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
+
+    await entrypoint(context)
+
+    callback_task = asyncio.create_task(context.shutdown_callbacks[0]())
+    await publisher_close_started.wait()
+    callback_task.cancel()
+    release_publisher_close.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await callback_task
+
+    assert events == [
         "session.finalize",
+        "publisher.close.started",
+        "publisher.close.finished",
+        "api_client.close",
         "observability.close",
     ]
     assert publisher.close_calls == 1
     assert api_client.close_calls == 1
+
+
+@pytest.mark.anyio
+async def test_shutdown_waits_for_customer_entrypoint_setup_before_state_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = make_metadata()
+    events: list[object] = []
+    connect_started = asyncio.Event()
+    release_connect = asyncio.Event()
+    callback_started = asyncio.Event()
+    api_client = FakeProcessApiClient(events)
+    publisher = FakeProcessPublisher(events)
+
+    class InlineCleanup:
+        async def aclose(self) -> None:
+            await publisher.aclose()
+            await api_client.aclose()
+
+    class OrderedSessionRuntime:
+        call_limit_expired_on_start = False
+        call_limit_task = None
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def create_handler_task(self, _factory: object) -> bool:
+            return True
+
+        def enforce_call_limit(self, _metadata: object, _disconnect: object) -> None:
+            return None
+
+        async def finalize(self, *_args: object, **_kwargs: object) -> None:
+            events.append("session.finalize")
+
+    async def block_connect(**_kwargs: object) -> None:
+        connect_started.set()
+        await release_connect.wait()
+        events.append("connect.complete")
+
+    async def shutdown_observability() -> None:
+        events.append("observability.close")
+
+    context = FakeJobContext(metadata)
+    context.proc.userdata = AgentProcessRuntime(
+        settings=TEST_SETTINGS,
+        api_client=api_client,
+        event_publisher=publisher,
+        _cleanup=InlineCleanup(),  # type: ignore[arg-type]
+    )
+    context.connect = block_connect
+    session = FakeEntrypointSession()
+    monkeypatch.setattr(
+        agent_main,
+        "build_agent_runtime",
+        lambda *_args, **_kwargs: (object(), session),
+    )
+    monkeypatch.setattr(agent_main, "SessionRuntime", OrderedSessionRuntime)
+    monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
+
+    entrypoint_task = asyncio.create_task(entrypoint(context))
+    await connect_started.wait()
+
+    async def invoke_shutdown_callback() -> None:
+        callback_started.set()
+        await context.shutdown_callbacks[0]()
+
+    callback_task = asyncio.create_task(invoke_shutdown_callback())
+    await callback_started.wait()
+
+    assert events == []
+
+    release_connect.set()
+    await entrypoint_task
+    await callback_task
+
+    assert events == [
+        "connect.complete",
+        "session.finalize",
+        "publisher.close",
+        "api_client.close",
+        "observability.close",
+    ]
 
 
 @pytest.mark.anyio
