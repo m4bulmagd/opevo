@@ -1,9 +1,14 @@
 import asyncio
 from contextlib import AsyncExitStack
+from typing import Never
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.pool import AsyncAdaptedQueuePool, StaticPool
 
 from app.composition.lifecycle import RuntimeCleanup
+from app.core import database as database_module
+from app.core.database import create_database_engine, create_session_factory
 
 
 @pytest.mark.anyio
@@ -45,5 +50,57 @@ async def test_runtime_cleanup_continues_after_waiter_cancellation() -> None:
     assert closed.is_set()
 
 
+@pytest.mark.anyio
+async def test_create_database_engine_supports_sqlite_without_reading_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(database_module, "get_settings", _unexpected_settings_access)
+    engine = create_database_engine("sqlite+aiosqlite:///:memory:")
+
+    try:
+        assert isinstance(engine.pool, StaticPool)
+        assert engine.pool._recycle == 1800
+        assert engine.pool._pre_ping is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_create_database_engine_configures_non_sqlite_pool_without_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(database_module, "get_settings", _unexpected_settings_access)
+    engine = create_database_engine(
+        "postgresql+asyncpg://postgres:postgres@localhost/runtime_test"
+    )
+
+    try:
+        assert isinstance(engine.pool, AsyncAdaptedQueuePool)
+        assert engine.pool.size() == 10
+        assert engine.pool._max_overflow == 20
+        assert engine.pool._recycle == 1800
+        assert engine.pool._pre_ping is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_create_session_factory_binds_non_expiring_async_sessions() -> None:
+    engine = create_database_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = create_session_factory(engine)
+
+    try:
+        async with session_factory() as session:
+            assert isinstance(session, AsyncSession)
+            assert session.bind is engine
+            assert session.sync_session.expire_on_commit is False
+    finally:
+        await engine.dispose()
+
+
 async def _record(calls: list[str], value: str) -> None:
     calls.append(value)
+
+
+def _unexpected_settings_access() -> Never:
+    pytest.fail("pure database factory consulted application settings")
