@@ -29,6 +29,29 @@ class _StorageTelemetry:
             self.calls.append((provider, operation, "success"))
 
 
+def _storage(
+    *,
+    bucket_name: str,
+    client=None,
+    endpoint_url: str = "http://minio:9000",
+    access_key: str | None = "minioadmin",
+    secret_key: str | None = "minioadmin",
+    region: str | None = "us-east-1",
+    observability=None,
+) -> S3Storage:
+    return S3Storage(
+        bucket_name=bucket_name,
+        endpoint_url=endpoint_url,
+        access_key=access_key,
+        secret_key=secret_key,
+        region=region,
+        client=client,
+        observability=(
+            observability if observability is not None else _StorageTelemetry()
+        ),
+    )
+
+
 class FakeMinioClient:
     def __init__(self, *, bucket_present: bool = True) -> None:
         self.bucket_present = bucket_present
@@ -174,7 +197,7 @@ class _PresignedURLStringSubclass(str):
 async def test_s3_storage_uploads_recordings_with_env_backed_endpoint() -> None:
     client = FakeMinioClient()
     telemetry = _StorageTelemetry()
-    storage = S3Storage(
+    storage = _storage(
         bucket_name="recordings",
         endpoint_url="http://minio:9000",
         access_key="minioadmin",
@@ -208,7 +231,7 @@ async def test_s3_storage_uploads_recordings_with_env_backed_endpoint() -> None:
 @pytest.mark.anyio
 async def test_s3_storage_mints_fresh_download_url() -> None:
     client = FakeMinioClient()
-    storage = S3Storage(
+    storage = _storage(
         bucket_name="recordings",
         endpoint_url="http://minio:9000",
         access_key="minioadmin",
@@ -260,7 +283,7 @@ async def test_s3_storage_mints_fresh_download_url() -> None:
 async def test_s3_storage_rejects_malformed_successful_presigned_urls(
     result: object,
 ) -> None:
-    storage = S3Storage(
+    storage = _storage(
         bucket_name="recordings",
         client=SuccessfulPresignedResultMinioClient(result),
     )
@@ -292,7 +315,7 @@ async def test_s3_presigning_defects_propagate_exact_identity(
 
     defect = defect_type("S3_PRESIGN_DEFECT_SENTINEL")
     monkeypatch.setattr(s3_module.asyncio, "to_thread", run_inline)
-    storage = S3Storage(
+    storage = _storage(
         bucket_name="recordings",
         client=FailingOperationMinioClient(operation="sign", error=defect),
     )
@@ -307,7 +330,7 @@ async def test_s3_presigning_defects_propagate_exact_identity(
 async def test_s3_storage_returns_none_for_missing_object_without_signing() -> None:
     client = FakeMinioClient()
     client.missing_objects.add("calls/missing.mp3")
-    storage = S3Storage(bucket_name="recordings", client=client)
+    storage = _storage(bucket_name="recordings", client=client)
 
     signed_url = await storage.get_download_url(object_key="calls/missing.mp3")
 
@@ -318,7 +341,7 @@ async def test_s3_storage_returns_none_for_missing_object_without_signing() -> N
 @pytest.mark.anyio
 async def test_s3_storage_treats_missing_bucket_as_configuration_failure() -> None:
     client = FakeMinioClient(bucket_present=False)
-    storage = S3Storage(bucket_name="recordings", client=client)
+    storage = _storage(bucket_name="recordings", client=client)
 
     with pytest.raises(RuntimeError, match="Configured storage bucket is unavailable"):
         await storage.get_download_url(object_key="calls/missing.mp3")
@@ -334,7 +357,7 @@ async def test_s3_storage_maps_missing_bucket_races_to_configuration_failure(
 ) -> None:
     client = FakeMinioClient()
     client.missing_bucket_on.add(operation)
-    storage = S3Storage(bucket_name="recordings", client=client)
+    storage = _storage(bucket_name="recordings", client=client)
 
     with pytest.raises(
         StorageConfigurationError,
@@ -443,7 +466,7 @@ async def test_s3_storage_translates_known_sdk_and_transport_failures_once(
         operation=operation,
         error=provider_error,
     )
-    storage = S3Storage(bucket_name="recordings", client=client)
+    storage = _storage(bucket_name="recordings", client=client)
 
     with pytest.raises(ProviderFailure) as exc_info:
         if operation == "put" or operation == "bucket":
@@ -492,7 +515,7 @@ async def test_s3_storage_keeps_malformed_provider_responses_private(
     expected_disposition: str,
     expected_error_class: str,
 ) -> None:
-    storage = S3Storage(
+    storage = _storage(
         bucket_name="recordings",
         client=FailingOperationMinioClient(
             operation="put",
@@ -530,7 +553,7 @@ async def test_s3_storage_does_not_translate_injected_programming_defects(
         return operation(*args, **kwargs)
 
     monkeypatch.setattr(s3_module.asyncio, "to_thread", run_inline)
-    storage = S3Storage(
+    storage = _storage(
         bucket_name="recordings",
         client=FailingOperationMinioClient(operation="put", error=provider_error),
     )
@@ -551,7 +574,7 @@ async def test_s3_storage_propagates_cancellation_unchanged(
         raise asyncio.CancelledError
 
     monkeypatch.setattr(s3_module.asyncio, "to_thread", cancel_inline)
-    storage = S3Storage(bucket_name="recordings", client=FakeMinioClient())
+    storage = _storage(bucket_name="recordings", client=FakeMinioClient())
 
     with pytest.raises(asyncio.CancelledError):
         await storage.upload_bytes(
@@ -564,7 +587,7 @@ async def test_s3_storage_propagates_cancellation_unchanged(
 @pytest.mark.anyio
 async def test_s3_storage_calls_do_not_block_the_event_loop() -> None:
     client = BlockingMinioClient()
-    storage = S3Storage(bucket_name="recordings", client=client)
+    storage = _storage(bucket_name="recordings", client=client)
     heartbeat = asyncio.create_task(asyncio.sleep(0.02))
 
     await storage.upload_bytes(
@@ -578,7 +601,7 @@ async def test_s3_storage_calls_do_not_block_the_event_loop() -> None:
 
 
 def test_s3_storage_uses_bounded_network_policy() -> None:
-    storage = S3Storage(
+    storage = _storage(
         bucket_name="recordings",
         endpoint_url="http://minio:9000",
         access_key="minioadmin",

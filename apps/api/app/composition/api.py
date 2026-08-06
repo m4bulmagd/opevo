@@ -41,7 +41,7 @@ def _create_storage(
 ) -> StorageProvider:
     return S3Storage(
         bucket_name=settings.storage_bucket_name,
-        endpoint_url=settings.s3_endpoint_url,
+        endpoint_url=settings.s3_endpoint_url or "http://minio:9000",
         access_key=settings.s3_access_key,
         secret_key=settings.s3_secret_key,
         region=settings.s3_region,
@@ -96,6 +96,7 @@ async def _close_resource(
             status="failed",
             level=logging.WARNING,
         )
+        raise
 
 
 async def _close_observability(observability: Observability) -> None:
@@ -252,5 +253,15 @@ async def build_api_runtime(
             _cleanup=RuntimeCleanup(stack),
         )
     except BaseException:
-        await stack.aclose()
+        try:
+            await stack.aclose()
+        except BaseException as cleanup_error:
+            report_safe_exception(
+                logger,
+                event="api_runtime_partial_cleanup_failed",
+                operation="close_partial_api_runtime",
+                error=cleanup_error,
+                status="failed",
+                level=logging.WARNING,
+            )
         raise

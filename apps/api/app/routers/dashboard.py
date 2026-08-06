@@ -3,8 +3,9 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.composition.runtime import get_api_runtime
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 from app.core.database import get_session
 from app.core.rate_limit import limiter
 from app.schemas.dashboard import DashboardMetricsResponse
@@ -20,13 +21,17 @@ def get_dashboard_metrics_service(
     return DashboardMetricsService(session)
 
 
+def get_dashboard_settings(request: Request) -> Settings:
+    return get_api_runtime(request.app).settings
+
+
 @router.get("/metrics", response_model=DashboardMetricsResponse)
 @limiter.limit("60/minute")
 async def get_dashboard_metrics(
     request: Request,
     identity: AuthenticatedUserIdentity = Depends(require_user_identity),
     service: DashboardMetricsService = Depends(get_dashboard_metrics_service),
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(get_dashboard_settings),
 ) -> DashboardMetricsResponse:
     metrics = await service.get_metrics(
         identity.internal_user_id,

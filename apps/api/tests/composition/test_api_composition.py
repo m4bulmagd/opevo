@@ -30,14 +30,23 @@ def _api_runtime(settings, **overrides):
 
 
 class _OwnedResource:
-    def __init__(self, name: str, closed_resources: list[str]) -> None:
+    def __init__(
+        self,
+        name: str,
+        closed_resources: list[str],
+        *,
+        close_error: Exception | None = None,
+    ) -> None:
         self.name = name
         self.closed_resources = closed_resources
+        self.close_error = close_error
         self.close_calls = 0
 
     async def aclose(self) -> None:
         self.close_calls += 1
         self.closed_resources.append(self.name)
+        if self.close_error is not None:
+            raise self.close_error
 
 
 class _Engine(_OwnedResource):
@@ -230,6 +239,125 @@ async def test_build_api_runtime_unwinds_every_open_resource_on_late_failure(
 
 
 @pytest.mark.anyio
+async def test_runtime_close_attempts_every_resource_and_reports_close_failure(
+    settings,
+) -> None:
+    from app.composition.api import build_api_runtime
+
+    configured_settings = settings.model_copy(
+        update={
+            "app_env": "development",
+            "realtime_enabled": False,
+            "livekit_url": None,
+            "livekit_api_key": None,
+            "livekit_api_secret": None,
+        }
+    )
+    closed_resources: list[str] = []
+    observability = _OwnedResource("observability", closed_resources)
+    engine = _Engine("engine", closed_resources)
+    redis_client = _OwnedResource("redis", closed_resources)
+    auth_provider = _OwnedResource("auth", closed_resources)
+    storage_provider = _OwnedResource(
+        "storage",
+        closed_resources,
+        close_error=RuntimeError("storage close failed"),
+    )
+    arq_pool = _OwnedResource("arq_pool", closed_resources)
+
+    async def arq_pool_factory(_redis_url: str):
+        return arq_pool
+
+    runtime = await build_api_runtime(
+        configured_settings,
+        engine_factory=lambda _url: engine,
+        redis_factory=lambda _url: redis_client,
+        observability_factory=lambda **_kwargs: observability,
+        auth_factory=lambda **_kwargs: auth_provider,
+        readiness_factory=lambda **_kwargs: object(),
+        storage_factory=lambda **_kwargs: storage_provider,
+        arq_pool_factory=arq_pool_factory,
+        realtime_service_factory=_forbidden_factory("realtime service"),
+        webhook_receiver_factory=_forbidden_factory("LiveKit webhook receiver"),
+        recording_service_factory=_forbidden_factory("recording service"),
+    )
+
+    with pytest.raises(RuntimeError, match="storage close failed"):
+        await runtime.aclose()
+
+    assert closed_resources == [
+        "arq_pool",
+        "storage",
+        "auth",
+        "redis",
+        "engine",
+        "observability",
+    ]
+
+
+@pytest.mark.anyio
+async def test_partial_startup_preserves_construction_failure_when_cleanup_fails(
+    settings,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.composition.api import build_api_runtime
+
+    configured_settings = settings.model_copy(
+        update={
+            "app_env": "development",
+            "realtime_enabled": False,
+            "livekit_url": "wss://livekit.example.com",
+            "livekit_api_key": "livekit-key",
+            "livekit_api_secret": "livekit-secret",
+        }
+    )
+    closed_resources: list[str] = []
+    observability = _OwnedResource("observability", closed_resources)
+    engine = _Engine("engine", closed_resources)
+    redis_client = _OwnedResource("redis", closed_resources)
+    auth_provider = _OwnedResource("auth", closed_resources)
+    storage_provider = _OwnedResource(
+        "storage",
+        closed_resources,
+        close_error=RuntimeError("sensitive cleanup detail"),
+    )
+    arq_pool = _OwnedResource("arq_pool", closed_resources)
+
+    async def arq_pool_factory(_redis_url: str):
+        return arq_pool
+
+    def fail_webhook_receiver(**_kwargs: object) -> object:
+        raise RuntimeError("late construction failure")
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(RuntimeError, match="late construction failure"):
+            await build_api_runtime(
+                configured_settings,
+                engine_factory=lambda _url: engine,
+                redis_factory=lambda _url: redis_client,
+                observability_factory=lambda **_kwargs: observability,
+                auth_factory=lambda **_kwargs: auth_provider,
+                readiness_factory=lambda **_kwargs: object(),
+                storage_factory=lambda **_kwargs: storage_provider,
+                arq_pool_factory=arq_pool_factory,
+                realtime_service_factory=_forbidden_factory("realtime service"),
+                webhook_receiver_factory=fail_webhook_receiver,
+                recording_service_factory=_forbidden_factory("recording service"),
+            )
+
+    assert closed_resources == [
+        "arq_pool",
+        "storage",
+        "auth",
+        "redis",
+        "engine",
+        "observability",
+    ]
+    assert "event=storage_provider_close_failed" in caplog.text
+    assert "sensitive cleanup detail" not in caplog.text
+
+
+@pytest.mark.anyio
 async def test_build_api_runtime_validates_before_opening_resources(settings) -> None:
     from app.composition.api import build_api_runtime
 
@@ -346,3 +474,38 @@ def test_api_resource_accessors_read_the_runtime_as_the_only_source(settings) ->
     assert get_webhook_receiver(request) is webhook_receiver
     assert get_recording_service(request) is recording_service
     assert get_call_finalization_queue(request) is call_finalization_queue
+
+
+def test_dashboard_settings_dependency_reads_runtime_settings(settings) -> None:
+    from fastapi import FastAPI
+    from starlette.requests import Request
+
+    from app.routers.dashboard import get_dashboard_settings
+
+    configured_settings = settings.model_copy(
+        update={"dashboard_metrics_reference_time": None}
+    )
+    app = FastAPI()
+    app.state.runtime = _api_runtime(configured_settings)
+    request = Request({"type": "http", "app": app})
+
+    assert get_dashboard_settings(request) is configured_settings
+
+
+def test_recording_service_dependency_borrows_runtime_storage(settings) -> None:
+    from fastapi import FastAPI
+    from starlette.requests import Request
+
+    from app.services.recording_service import get_recording_service
+
+    storage_provider = object()
+    app = FastAPI()
+    app.state.runtime = _api_runtime(
+        settings,
+        storage_provider=storage_provider,
+    )
+    request = Request({"type": "http", "app": app})
+
+    service = get_recording_service(request)
+
+    assert service.provider is storage_provider

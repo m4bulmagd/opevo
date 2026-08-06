@@ -9,7 +9,7 @@ from urllib3.exceptions import HTTPError, TimeoutError as Urllib3TimeoutError
 from urllib3.util import Retry, Timeout
 
 from app.core.config import get_settings
-from app.core.observability import get_observability, instrument_provider
+from app.core.observability import Observability, get_observability, instrument_provider
 from app.core.provider_failures import (
     ProviderFailure,
     ProviderFailureClass,
@@ -30,27 +30,24 @@ class S3Storage(StorageProvider):
     def __init__(
         self,
         *,
-        bucket_name: str | None = None,
-        endpoint_url: str | None = None,
-        access_key: str | None = None,
-        secret_key: str | None = None,
-        region: str | None = None,
+        bucket_name: str,
+        endpoint_url: str,
+        access_key: str | None,
+        secret_key: str | None,
+        region: str | None,
+        observability: Observability,
         client=None,
-        observability=None,
     ) -> None:
-        settings = get_settings()
-        self.bucket_name = bucket_name or settings.storage_bucket_name
-        self.endpoint_url = (
-            endpoint_url or settings.s3_endpoint_url or "http://minio:9000"
-        )
-        self.access_key = access_key or settings.s3_access_key
-        self.secret_key = secret_key or settings.s3_secret_key
-        self.region = region or settings.s3_region
+        self.bucket_name = bucket_name
+        self.endpoint_url = endpoint_url
+        self.access_key = access_key
+        self.secret_key = secret_key
+        self.region = region
         self.client = client
         self._owns_client = client is None
         self._http_client: PoolManager | None = None
         self._bucket_verified = False
-        self.observability = observability or get_observability()
+        self.observability = observability
 
     def _build_client(self):
         from minio import Minio
@@ -380,4 +377,12 @@ class S3Storage(StorageProvider):
 
 @lru_cache()
 def get_s3_storage() -> S3Storage:
-    return S3Storage()
+    settings = get_settings()
+    return S3Storage(
+        bucket_name=settings.storage_bucket_name,
+        endpoint_url=settings.s3_endpoint_url or "http://minio:9000",
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        region=settings.s3_region,
+        observability=get_observability(),
+    )

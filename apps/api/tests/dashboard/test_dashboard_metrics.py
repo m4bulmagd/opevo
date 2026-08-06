@@ -166,31 +166,36 @@ async def test_dashboard_metrics_resolve_owner_and_return_exact_contract(
     configured_settings = get_settings().model_copy(
         update={"dashboard_metrics_reference_time": current}
     )
-    test_app.dependency_overrides[get_settings] = lambda: configured_settings
-    await _seed_dashboard(
-        client_database_url,
-        owner_clerk_user_id=clerk_user_id,
-        calls=[
-            _call(
-                started_at=current,
-                duration_seconds=30,
-                summary_data={
-                    "caller_intent": "Book a table",
-                    "action_items": ["Call the guest"],
-                    "sentiment": "positive",
-                    "follow_up_required": True,
-                },
-            ),
-            _call(started_at=previous, duration_seconds=90),
-        ],
-    )
+    runtime = test_app.state.runtime
+    previous_settings = runtime.settings
+    runtime.settings = configured_settings
+    try:
+        await _seed_dashboard(
+            client_database_url,
+            owner_clerk_user_id=clerk_user_id,
+            calls=[
+                _call(
+                    started_at=current,
+                    duration_seconds=30,
+                    summary_data={
+                        "caller_intent": "Book a table",
+                        "action_items": ["Call the guest"],
+                        "sentiment": "positive",
+                        "follow_up_required": True,
+                    },
+                ),
+                _call(started_at=previous, duration_seconds=90),
+            ],
+        )
 
-    response = await async_client.get(
-        "/api/dashboard/metrics",
-        headers={
-            "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
-        },
-    )
+        response = await async_client.get(
+            "/api/dashboard/metrics",
+            headers={
+                "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+            },
+        )
+    finally:
+        runtime.settings = previous_settings
 
     assert response.status_code == 200
     assert response.json() == {

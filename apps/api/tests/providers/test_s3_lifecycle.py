@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.observability import get_observability
 from app.providers.storage.s3 import S3Storage
 from app.providers.storage import s3 as s3_module
 
@@ -23,10 +24,54 @@ class DeletionInspectingClient:
         self.remove_calls.append((bucket_name, object_key))
 
 
+def test_explicit_storage_construction_does_not_read_global_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_global_read() -> None:
+        raise AssertionError("explicit S3 construction read global configuration")
+
+    monkeypatch.setattr(
+        s3_module,
+        "get_settings",
+        forbidden_global_read,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        s3_module,
+        "get_observability",
+        forbidden_global_read,
+        raising=False,
+    )
+
+    storage = S3Storage(
+        bucket_name="runtime-recordings",
+        endpoint_url="https://storage.example.com",
+        access_key="runtime-access",
+        secret_key="runtime-secret",
+        region="eu-west-3",
+        client=DeletionInspectingClient(),
+        observability=object(),
+    )
+
+    assert storage.bucket_name == "runtime-recordings"
+    assert storage.endpoint_url == "https://storage.example.com"
+    assert storage.access_key == "runtime-access"
+    assert storage.secret_key == "runtime-secret"
+    assert storage.region == "eu-west-3"
+
+
 @pytest.mark.anyio
 async def test_storage_provider_deletes_recording_object() -> None:
     client = DeletionInspectingClient()
-    storage = S3Storage(bucket_name="recordings", client=client)
+    storage = S3Storage(
+        bucket_name="recordings",
+        endpoint_url="http://minio:9000",
+        access_key="minioadmin",
+        secret_key="minioadmin",
+        region="us-east-1",
+        client=client,
+        observability=get_observability(),
+    )
 
     await storage.delete_object(object_key="calls/user/call.mp3")
 

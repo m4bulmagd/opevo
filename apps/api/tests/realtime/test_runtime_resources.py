@@ -305,7 +305,11 @@ async def test_lifespan_safely_reports_relay_and_cleanup_failures(
             recording_service_factory=lambda **_kwargs: object(),
         )
         await asyncio.sleep(0)
-        await runtime.aclose()
+        with pytest.raises(
+            RuntimeError,
+            match="REDIS_PROVIDER_SECRET customer text",
+        ):
+            await runtime.aclose()
 
     assert observed.redis_close_calls == 1
     assert pool.closed == 1

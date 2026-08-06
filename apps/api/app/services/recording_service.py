@@ -1,10 +1,10 @@
 from uuid import UUID
 
-from fastapi import Depends
+from fastapi import Request
 
+from app.composition.runtime import get_api_runtime
 from app.core.observability import bind_call_id
 from app.providers.storage.base import StorageProvider
-from app.providers.storage.s3 import S3Storage, get_s3_storage
 
 
 class RecordingService:
@@ -32,6 +32,8 @@ class RecordingService:
             return None
 
 def get_recording_service(
-    storage_provider: S3Storage = Depends(get_s3_storage),
+    request: Request,
 ) -> RecordingService:
-    return RecordingService(provider=storage_provider)
+    return RecordingService(
+        provider=get_api_runtime(request.app).storage_provider,
+    )
