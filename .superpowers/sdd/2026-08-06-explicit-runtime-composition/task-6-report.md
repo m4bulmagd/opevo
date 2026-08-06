@@ -625,3 +625,78 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
 - No real `.env` was read, and the existing synthetic/no-resolution guarantees
   remain covered by the focused gate.
 - No open concern remains for this Minor finding.
+
+## Fix Round 5/5 — complete background-only synthetic coverage
+
+### Minor finding addressed
+
+- Added a test-only generator that creates a distinct, nonblank synthetic value
+  for every supplied background-only sensitive setting.
+- Wired the resolved Compose ownership test to generate its temporary env input
+  directly from `BACKGROUND_ONLY_SENSITIVE_SETTINGS`. A future classified key
+  now automatically enters the synthetic env, must remain visible to the
+  background worker, and must be masked from the lifecycle worker.
+- Kept the intentional development S3 access-key and secret-key overrides
+  explicit. Their synthetic source values are still generated and written, but
+  the rendered background environment must contain the existing local MinIO
+  values instead.
+
+### RED and mutation evidence
+
+The future-key regression was added before the generator, producing the expected
+structural RED. The current fixed-known-key behavior was then extracted unchanged
+to isolate the reviewer's future-regression case:
+
+```text
+1 failed in 0.58s
+```
+
+The generated map contained every current background-only key but omitted the
+literal `FUTURE_BACKGROUND_PASSWORD`. Removing the known-key filter made the
+input set itself authoritative.
+
+### Verification
+
+Future-key regression, sensitive-name boundary matrix, and resolved synthetic
+Compose ownership test:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_deployment_readiness.py::test_background_only_synthetic_values_cover_every_owned_setting \
+  tests/test_deployment_readiness.py::test_sensitive_schema_setting_detection_is_boundary_aware \
+  tests/test_deployment_readiness.py::test_development_workers_filter_resolved_api_env_by_process_ownership
+# 20 passed in 1.66s
+```
+
+Focused deployment/composition gate, run outside the restricted sandbox for
+the existing subprocess lifespan check:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_deployment_readiness.py \
+  tests/composition/test_worker_composition.py
+# 209 passed in 14.65s
+```
+
+Static checks:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check \
+  tests/test_deployment_readiness.py
+# All checks passed!
+
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
+# Success: no issues found in 190 source files
+```
+
+### Final-loop self-review and concerns
+
+- Only the deployment-readiness test and this report changed.
+- No runtime, Compose, queue, cron, validator, timeout, concurrency, health,
+  shutdown, or protected-path behavior changed.
+- Every background-only ownership key now supplies a nonblank temp-env value;
+  absence from lifecycle therefore proves masking rather than missing test data.
+- Background expectations are derived from the same complete generated map,
+  apart from the explicit, independently asserted local S3 overrides.
+- No real `.env` was read.
+- No open concern remains for the final allowed Task 6 fix loop.

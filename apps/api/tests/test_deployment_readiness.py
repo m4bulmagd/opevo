@@ -141,6 +141,15 @@ def conventionally_sensitive_setting(setting_name: str) -> bool:
     )
 
 
+def background_only_synthetic_values(
+    setting_names: frozenset[str],
+) -> dict[str, str]:
+    return {
+        setting: f"sentinel-background-{setting.lower()}"
+        for setting in setting_names
+    }
+
+
 @pytest.mark.parametrize(
     ("setting_name", "expected"),
     [
@@ -169,6 +178,20 @@ def test_sensitive_schema_setting_detection_is_boundary_aware(
     expected: bool,
 ) -> None:
     assert conventionally_sensitive_setting(setting_name) is expected
+
+
+def test_background_only_synthetic_values_cover_every_owned_setting() -> None:
+    owned_settings = BACKGROUND_ONLY_SENSITIVE_SETTINGS | {
+        "FUTURE_BACKGROUND_PASSWORD"
+    }
+
+    synthetic_values = background_only_synthetic_values(owned_settings)
+
+    assert set(synthetic_values) == owned_settings
+    assert synthetic_values["FUTURE_BACKGROUND_PASSWORD"] == (
+        "sentinel-background-future_background_password"
+    )
+    assert all(synthetic_values.values())
 
 
 def render_compose(
@@ -1322,23 +1345,26 @@ def test_development_workers_filter_resolved_api_env_by_process_ownership(
         encoding="utf-8",
     )
 
+    background_only_values = background_only_synthetic_values(
+        BACKGROUND_ONLY_SENSITIVE_SETTINGS
+    )
+    local_background_overrides = frozenset({"S3_ACCESS_KEY", "S3_SECRET_KEY"})
     background_provider_values = {
-        "AGENT_DISPATCH_JWT_SECRET": (
-            "sentinel-background-dispatch-secret-at-least-32-bytes"
-        ),
+        setting: value
+        for setting, value in background_only_values.items()
+        if setting not in local_background_overrides
+    } | {
         "LIVEKIT_URL": "wss://sentinel-background-livekit.example.invalid",
-        "LIVEKIT_API_KEY": "sentinel-background-livekit-key",
-        "LIVEKIT_API_SECRET": "sentinel-background-livekit-secret",
         "LIVEKIT_AGENT_NAME": "sentinel-background-agent",
         "SUMMARY_PROVIDER": "gemini",
         "SUMMARY_MODEL": "sentinel-background-summary-model",
-        "GEMINI_API_KEY": "sentinel-background-gemini-key",
     }
     synthetic_storage_values = {
+        setting: background_only_values[setting]
+        for setting in local_background_overrides
+    } | {
         "STORAGE_BUCKET_NAME": "sentinel-env-bucket",
         "S3_ENDPOINT_URL": "https://sentinel-storage.example.invalid",
-        "S3_ACCESS_KEY": "sentinel-env-storage-key",
-        "S3_SECRET_KEY": "sentinel-env-storage-secret",
         "S3_REGION": "sentinel-env-region",
     }
     blocked_values = {
