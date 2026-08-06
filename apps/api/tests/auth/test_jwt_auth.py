@@ -15,6 +15,7 @@ from app.composition.runtime import ApiRuntime
 from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
 from app.core.dispatch_token import (
     DispatchTokenConfig,
+    DispatchTokenConfigurationError,
     dispatch_token_config,
     create_dispatch_token,
     verify_dispatch_token,
@@ -276,6 +277,29 @@ def test_create_dispatch_token_fails_safely_without_secret() -> None:
                 agent_dispatch_jwt_secret=None,
             )
         )
+
+
+@pytest.mark.parametrize(
+    "ttl_seconds",
+    [
+        pytest.param(True, id="bool"),
+        pytest.param(0, id="zero"),
+        pytest.param(-1, id="negative"),
+        pytest.param("7200", id="non-integer"),
+    ],
+)
+def test_dispatch_token_config_rejects_unsafe_lifetime(ttl_seconds: object) -> None:
+    from app.core.config import Settings
+
+    settings = Settings.model_construct(
+        agent_dispatch_jwt_secret=DISPATCH_SECRET,
+        agent_dispatch_jwt_ttl_seconds=ttl_seconds,
+    )
+
+    with pytest.raises(DispatchTokenConfigurationError) as exc_info:
+        dispatch_token_config(settings)
+
+    assert str(exc_info.value) == "Dispatch token lifetime is not configured safely"
 
 
 @pytest.mark.parametrize(

@@ -13,8 +13,9 @@ from presvo_contracts import (
 from app.core.config import Settings, get_settings
 from app.core.database import get_session_factory
 from app.core.dispatch_token import (
-    DispatchTokenError,
     DispatchTokenConfig,
+    DispatchTokenConfigurationError,
+    DispatchTokenError,
     create_dispatch_token,
     dispatch_token_config,
 )
@@ -63,7 +64,13 @@ async def deliver_livekit_dispatch(
     call_id, lifecycle_generation = _validated_dispatch_reference(event)
     session_factory = ctx.get("session_factory") or get_session_factory()
     settings = get_settings()
-    token_config = dispatch_token_config(settings)
+    try:
+        token_config = dispatch_token_config(settings)
+    except DispatchTokenConfigurationError:
+        raise OutboxDeliveryError(
+            "dispatch_configuration",
+            retryable=False,
+        ) from None
 
     async with livekit_dispatch_lock(session_factory, call_id):
         snapshot = await _dispatch_snapshot(

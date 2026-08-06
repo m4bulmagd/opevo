@@ -386,7 +386,6 @@ async def test_activation_flow_persists_profile_owned_assistant_content_patch(
     async_client,
     client_database_url,
     rs256_clerk_token_for,
-    monkeypatch,
     activation_runtime_enabled,
     field_name: str,
     value: str,
@@ -403,14 +402,11 @@ async def test_activation_flow_persists_profile_owned_assistant_content_patch(
         is_enabled=False,
     )
     # The controlled environment remains disabled; request composition is enabled.
-    try:
-        response = await async_client.patch(
-            "/api/agent/config",
-            headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
-            json={field_name: value},
-        )
-    finally:
-        get_settings.cache_clear()
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        json={field_name: value},
+    )
 
     config = await fetch_agent_config(
         client_database_url,
@@ -435,7 +431,6 @@ async def test_activation_flow_accepts_idempotent_enabled_value_with_content_pat
     async_client,
     client_database_url,
     rs256_clerk_token_for,
-    monkeypatch,
     activation_runtime_enabled,
 ) -> None:
     await seed_agent_config(
@@ -470,25 +465,20 @@ async def test_activation_flow_accepts_idempotent_enabled_value_with_content_pat
         await session.commit()
     await engine.dispose()
     # The controlled environment remains disabled; request composition is enabled.
-    try:
-        response = await async_client.patch(
-            "/api/agent/config",
-            headers={
-                "authorization": (
-                    f"Bearer {rs256_clerk_token_for('user_active_content')}"
-                )
-            },
-            json={
-                "agent_name": "Léa Verified",
-                "owner_context": "Atelier Martin reception",
-                "system_prompt": "Handle calls professionally.",
-                "knowledge_base": "Open weekdays.",
-                "pipeline_mode": "stt_llm_tts",
-                "is_enabled": True,
-            },
-        )
-    finally:
-        get_settings.cache_clear()
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={
+            "authorization": f"Bearer {rs256_clerk_token_for('user_active_content')}"
+        },
+        json={
+            "agent_name": "Léa Verified",
+            "owner_context": "Atelier Martin reception",
+            "system_prompt": "Handle calls professionally.",
+            "knowledge_base": "Open weekdays.",
+            "pipeline_mode": "stt_llm_tts",
+            "is_enabled": True,
+        },
+    )
 
     assert response.status_code == 200
     assert response.json()["agent_name"] == "Léa Verified"
@@ -510,7 +500,6 @@ async def test_activation_flow_allows_non_projected_patch_fields(
     async_client,
     client_database_url,
     rs256_clerk_token_for,
-    monkeypatch,
     activation_runtime_enabled,
 ) -> None:
     clerk_user_id = "user_managed_non_projected"
@@ -523,14 +512,11 @@ async def test_activation_flow_allows_non_projected_patch_fields(
         is_enabled=False,
     )
     # The controlled environment remains disabled; request composition is enabled.
-    try:
-        response = await async_client.patch(
-            "/api/agent/config",
-            headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
-            json={"pipeline_mode": "sts"},
-        )
-    finally:
-        get_settings.cache_clear()
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        json={"pipeline_mode": "sts"},
+    )
 
     assert response.status_code == 200
     assert response.json()["pipeline_mode"] == "sts"
@@ -541,7 +527,6 @@ async def test_activation_flow_rejects_direct_enable_without_mutation_or_outbox(
     async_client,
     client_database_url,
     rs256_clerk_token_for,
-    monkeypatch,
     activation_runtime_enabled,
 ) -> None:
     clerk_user_id = "user_activation_managed_enable"
@@ -556,14 +541,11 @@ async def test_activation_flow_rejects_direct_enable_without_mutation_or_outbox(
         is_enabled=False,
     )
     # The controlled environment remains disabled; request composition is enabled.
-    try:
-        response = await async_client.patch(
-            "/api/agent/config",
-            headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
-            json={"is_enabled": True},
-        )
-    finally:
-        get_settings.cache_clear()
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        json={"is_enabled": True},
+    )
 
     stored = await fetch_agent_config(
         client_database_url,
@@ -580,7 +562,6 @@ async def test_activation_flow_still_allows_customer_to_disable_routing(
     async_client,
     client_database_url,
     rs256_clerk_token_for,
-    monkeypatch,
     activation_runtime_enabled,
 ) -> None:
     clerk_user_id = "user_activation_disable"
@@ -595,14 +576,11 @@ async def test_activation_flow_still_allows_customer_to_disable_routing(
         is_enabled=True,
     )
     # The controlled environment remains disabled; request composition is enabled.
-    try:
-        response = await async_client.patch(
-            "/api/agent/config",
-            headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
-            json={"is_enabled": False},
-        )
-    finally:
-        get_settings.cache_clear()
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        json={"is_enabled": False},
+    )
 
     stored = await fetch_agent_config(
         client_database_url,

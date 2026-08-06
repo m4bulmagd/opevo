@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -1247,6 +1248,52 @@ async def test_terminal_invalid_payload_releases_authoritative_aggregate_call(
     await db_session.refresh(payload_target)
     assert payload_target.status == "pending"
     assert payload_target.failure_code is None
+
+
+@pytest.mark.anyio
+async def test_unsafe_dispatch_token_settings_fail_as_dispatch_configuration(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.core.config import get_settings
+
+    call, event, _subscription = await _seed_dispatch(db_session)
+    call_id = call.id
+    event_id = event.id
+    provider = _Provider()
+    metrics: list[tuple[str, str]] = []
+    monkeypatch.setenv("AGENT_DISPATCH_JWT_SECRET", "too-short")
+    get_settings.cache_clear()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with caplog.at_level(logging.CRITICAL):
+        result = await outbox_delivery_job(
+            {
+                "session_factory": session_factory,
+                "livekit_dispatch_provider": provider,
+                "outbox_handlers": {"livekit.dispatch": deliver_livekit_dispatch},
+                "outbox_now": lambda: event.next_attempt_at + timedelta(seconds=1),
+                "outbox_terminal_failure_metric": (
+                    lambda topic, code: metrics.append((topic, code))
+                ),
+            }
+        )
+
+    db_session.expire_all()
+    stored_call = await db_session.get(Call, call_id)
+    stored_event = await db_session.get(OutboxEvent, event_id)
+    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
+    assert stored_call is not None
+    assert stored_call.status == "failed"
+    assert stored_call.failure_code == "dispatch_configuration"
+    assert stored_event is not None
+    assert stored_event.status == "failed"
+    assert stored_event.last_error_code == "dispatch_configuration"
+    assert metrics == [("livekit.dispatch", "dispatch_configuration")]
+    assert provider.list_calls == []
+    assert provider.create_calls == []
+    assert "event=outbox_internal_defect" not in caplog.text
 
 
 @pytest.mark.anyio
