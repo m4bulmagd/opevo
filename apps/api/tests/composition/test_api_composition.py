@@ -667,11 +667,12 @@ async def test_sqlite_runtime_disposes_engine_without_masking_setup_failure(
         pass
 
     setup_error = SetupFailure("session schema setup failed")
+    dispose_error = (
+        DisposeFailure("engine dispose failed") if dispose_fails else None
+    )
     engine = _EngineProbe(
         setup_error=setup_error,
-        dispose_error=DisposeFailure("engine dispose failed")
-        if dispose_fails
-        else None,
+        dispose_error=dispose_error,
     )
 
     def engine_factory(database_url: str) -> _EngineProbe:
@@ -687,6 +688,7 @@ async def test_sqlite_runtime_disposes_engine_without_masking_setup_failure(
             pytest.fail("runtime must not be yielded after schema setup failure")
 
     assert caught.value is setup_error
+    assert caught.value.__cause__ is dispose_error
     assert engine.dispose_calls == 1
 
 
@@ -704,12 +706,11 @@ async def test_request_session_lifecycle_disposes_engine_when_dependency_close_f
         pass
 
     close_error = DependencyCloseFailure("dependency close failed")
-    dependency = _DependencyProbe(close_error)
-    engine = _EngineProbe(
-        dispose_error=DisposeFailure("engine dispose failed")
-        if dispose_fails
-        else None,
+    dispose_error = (
+        DisposeFailure("engine dispose failed") if dispose_fails else None
     )
+    dependency = _DependencyProbe(close_error)
+    engine = _EngineProbe(dispose_error=dispose_error)
 
     def engine_factory(database_url: str) -> _EngineProbe:
         assert database_url == f"sqlite+aiosqlite:///{tmp_path / 'close.db'}"
@@ -732,6 +733,7 @@ async def test_request_session_lifecycle_disposes_engine_when_dependency_close_f
             pass
 
     assert caught.value is close_error
+    assert caught.value.__cause__ is dispose_error
     assert dependency.close_calls == 1
     assert engine.dispose_calls == 1
 

@@ -336,3 +336,38 @@ production/shared-fixture tree.
   assertions remain visible and continue to pass against real SQLite.
 - The delta from `45427f0` is limited to the direct composition test file and
   this report.
+
+## Fix round 3/5
+
+The two parameterized cleanup tests now bind the exact disposal exception and
+assert it is the primary failure's `__cause__` when disposal fails. The same
+assertion requires `__cause__ is None` when disposal succeeds.
+
+Because diagnostic chaining already existed, the new assertions were verified
+with an explicit mutation check. After temporarily replacing
+`raise operation_error from cleanup_error` with `raise operation_error`:
+
+```text
+cd apps/api
+.venv/bin/python -m pytest -q tests/composition/test_api_composition.py \
+  -k "sqlite_runtime_disposes or lifecycle_disposes_engine"
+```
+
+Mutation RED result: `2 failed, 2 passed, 16 deselected in 0.60s`. Exactly the
+two cleanup-failure cases failed because `__cause__` was `None`; both
+successful-disposal cases continued to pass.
+
+After restoring exception chaining:
+
+```text
+.venv/bin/python -m pytest -q tests/composition/test_api_composition.py \
+  -k "sqlite_runtime_disposes or lifecycle_disposes_engine"
+# 4 passed, 16 deselected in 0.64s
+
+.venv/bin/ruff check tests/composition/test_api_composition.py
+# All checks passed!
+```
+
+Self-review from `73f9ac4`: the final code change is limited to exact cause
+assertions and named cleanup-error fixtures in the two direct failure tests;
+production behavior and test helper behavior are unchanged.
