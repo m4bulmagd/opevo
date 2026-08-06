@@ -22,26 +22,57 @@ async def operation_owned_resources(
         resources.append(resource)
         return resource
 
+    body_error: BaseException | None = None
     try:
         yield own
-    except BaseException:
-        await _close_all(resources, operation=operation, suppress=True)
-        raise
-    else:
-        await _close_all(resources, operation=operation, suppress=False)
+    except BaseException as error:
+        body_error = error
+
+    cleanup_task = asyncio.create_task(_close_all(resources, operation=operation))
+    cancelled_during_cleanup = False
+    while not cleanup_task.done():
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError:
+            cancelled_during_cleanup = True
+        except Exception:
+            pass
+
+    cleanup_error: Exception | None = None
+    cleanup_cancelled = False
+    try:
+        cleanup_task.result()
+    except asyncio.CancelledError:
+        cleanup_cancelled = True
+    except Exception as error:
+        cleanup_error = error
+
+    if (
+        isinstance(body_error, asyncio.CancelledError)
+        or cancelled_during_cleanup
+        or cleanup_cancelled
+    ):
+        raise asyncio.CancelledError
+    if body_error is not None:
+        raise body_error
+    if cleanup_error is not None:
+        raise cleanup_error
 
 
 async def _close_all(
     resources: list[object],
     *,
     operation: str,
-    suppress: bool,
 ) -> None:
-    first_error: BaseException | None = None
+    first_error: Exception | None = None
+    cancellation: asyncio.CancelledError | None = None
     for resource in reversed(resources):
         try:
             await _close(resource)
-        except BaseException as error:
+        except asyncio.CancelledError as error:
+            if cancellation is None:
+                cancellation = error
+        except Exception as error:
             report_safe_exception(
                 logger,
                 event="operation_resource_close_failed",
@@ -52,7 +83,9 @@ async def _close_all(
             )
             if first_error is None:
                 first_error = error
-    if first_error is not None and not suppress:
+    if cancellation is not None:
+        raise cancellation
+    if first_error is not None:
         raise first_error
 
 

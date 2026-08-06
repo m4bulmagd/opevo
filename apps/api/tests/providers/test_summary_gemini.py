@@ -423,12 +423,20 @@ async def test_gemini_propagates_cancellation_unchanged() -> None:
 
 
 @pytest.mark.anyio
-async def test_gemini_closes_an_internally_created_client_once_concurrently() -> None:
-    class Client:
+async def test_gemini_closes_owned_sdk_async_transport_not_sync_transport() -> None:
+    class AsyncClient:
         def __init__(self) -> None:
             self.close_calls = 0
 
         async def aclose(self) -> None:
+            self.close_calls += 1
+
+    class Client:
+        def __init__(self) -> None:
+            self.aio = AsyncClient()
+            self.close_calls = 0
+
+        def close(self) -> None:
             self.close_calls += 1
 
     client = Client()
@@ -439,19 +447,129 @@ async def test_gemini_closes_an_internally_created_client_once_concurrently() ->
     )
     provider.client = client
 
-    await asyncio.gather(provider.aclose(), provider.aclose())
+    await provider.aclose()
+
+    assert client.aio.close_calls == 1
+    assert client.close_calls == 0
+
+
+@pytest.mark.anyio
+async def test_gemini_owned_sync_only_client_uses_sync_close_fallback() -> None:
+    class SyncClient:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    client = SyncClient()
+    provider = GeminiSummaryProvider(
+        api_key="test-key",
+        model="gemini-test",
+        observability=object(),
+    )
+    provider.client = client
+
     await provider.aclose()
 
     assert client.close_calls == 1
 
 
 @pytest.mark.anyio
-async def test_gemini_never_closes_an_injected_client() -> None:
-    class Client:
+async def test_gemini_concurrent_closers_join_one_owned_cleanup() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class AsyncClient:
         def __init__(self) -> None:
             self.close_calls = 0
 
         async def aclose(self) -> None:
+            self.close_calls += 1
+            started.set()
+            await release.wait()
+
+    client = SimpleNamespace(aio=AsyncClient())
+    provider = GeminiSummaryProvider(
+        api_key="test-key",
+        model="gemini-test",
+        observability=object(),
+    )
+    provider.client = client
+
+    first = asyncio.create_task(provider.aclose())
+    await asyncio.wait_for(started.wait(), timeout=0.5)
+    second = asyncio.create_task(provider.aclose())
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, second)
+    await provider.aclose()
+
+    assert client.aio.close_calls == 1
+
+
+@pytest.mark.anyio
+async def test_gemini_cancelled_waiter_does_not_cancel_owned_cleanup_and_second_joins() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    class AsyncClient:
+        def __init__(self) -> None:
+            self.close_calls = 0
+            self.was_cancelled = False
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                self.was_cancelled = True
+                raise
+            finally:
+                finished.set()
+
+    client = SimpleNamespace(aio=AsyncClient())
+    provider = GeminiSummaryProvider(
+        api_key="test-key",
+        model="gemini-test",
+        observability=object(),
+    )
+    provider.client = client
+
+    first = asyncio.create_task(provider.aclose())
+    await asyncio.wait_for(started.wait(), timeout=0.5)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    second = asyncio.create_task(provider.aclose())
+    await asyncio.sleep(0)
+    assert not finished.is_set()
+    release.set()
+    await second
+
+    assert finished.is_set()
+    assert client.aio.close_calls == 1
+    assert client.aio.was_cancelled is False
+
+
+@pytest.mark.anyio
+async def test_gemini_never_closes_an_injected_client() -> None:
+    class AsyncClient:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    class Client:
+        def __init__(self) -> None:
+            self.aio = AsyncClient()
+            self.close_calls = 0
+
+        def close(self) -> None:
             self.close_calls += 1
 
     client = Client()
@@ -464,4 +582,5 @@ async def test_gemini_never_closes_an_injected_client() -> None:
 
     await provider.aclose()
 
+    assert client.aio.close_calls == 0
     assert client.close_calls == 0

@@ -87,6 +87,58 @@ class FakeRecordingReconciler:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "missing_field",
+    ["livekit_url", "livekit_api_key", "livekit_api_secret"],
+)
+async def test_uninjected_recording_reconcile_maps_missing_livekit_config_terminally(
+    settings,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_field: str,
+) -> None:
+    explicit_settings = settings.model_copy(
+        update={
+            "livekit_url": "wss://explicit.example.com",
+            "livekit_api_key": "explicit-key",
+            "livekit_api_secret": "explicit-secret",
+            missing_field: None,
+        }
+    )
+    for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
+        monkeypatch.setenv(name, f"PROCESS_ENV_{name}_SENTINEL")
+    monkeypatch.setattr(post_call, "get_settings", lambda: explicit_settings)
+
+    from livekit import api as livekit_api_module
+
+    sdk_calls = 0
+    storage_calls = 0
+
+    def forbidden_livekit_api(**_kwargs):
+        nonlocal sdk_calls
+        sdk_calls += 1
+        raise AssertionError("missing config reached LiveKit SDK")
+
+    def forbidden_storage(**_kwargs):
+        nonlocal storage_calls
+        storage_calls += 1
+        raise AssertionError("missing LiveKit config reached S3 construction")
+
+    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", forbidden_livekit_api)
+    monkeypatch.setattr(post_call, "S3Storage", forbidden_storage)
+
+    with pytest.raises(OutboxDeliveryError) as caught:
+        await deliver_recording_reconcile(
+            {"session_factory": object(), "observability": object()},
+            recording_event(uuid4()),
+        )
+
+    assert caught.value.error_code == "provider_terminal"
+    assert caught.value.retryable is False
+    assert sdk_calls == 0
+    assert storage_calls == 0
+
+
+@pytest.mark.anyio
 async def test_recording_fallback_closes_s3_then_livekit_once(
     settings,
     monkeypatch,

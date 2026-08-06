@@ -38,6 +38,7 @@ class GeminiSummaryProvider(SummaryProvider):
         self.model = model
         self.client = client
         self._owns_client = client is None
+        self._close_task: asyncio.Task[None] | None = None
         self.observability = observability
 
     def _get_client(self):
@@ -66,20 +67,31 @@ class GeminiSummaryProvider(SummaryProvider):
         return self.client
 
     async def aclose(self) -> None:
-        if not self._owns_client:
-            return
-        self._owns_client = False
-        client = self.client
-        self.client = None
-        if client is None:
-            return
-        close = getattr(client, "aclose", None)
+        close_task = self._close_task
+        if close_task is None:
+            if not self._owns_client:
+                return
+            client = self.client
+            if client is None:
+                self._owns_client = False
+                return
+            close_task = asyncio.create_task(self._close_owned_client(client))
+            self._close_task = close_task
+        await asyncio.shield(close_task)
+
+    async def _close_owned_client(self, client) -> None:
+        async_client = getattr(client, "aio", None)
+        close = getattr(async_client, "aclose", None)
         if callable(close):
             await close()
+            self.client = None
+            self._owns_client = False
             return
         close = getattr(client, "close", None)
         if callable(close):
             await asyncio.to_thread(close)
+        self.client = None
+        self._owns_client = False
 
     @instrument_provider("gemini", "generate_summary")
     async def generate_summary(self, transcript: list[dict]) -> StructuredSummary:

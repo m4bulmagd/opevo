@@ -34,6 +34,10 @@ from app.repositories.user_repository import UserRepository
 from app.services.forwarding_verification_service import COMPLETION_GRACE, as_utc
 from app.services.livekit_dispatch_lock import verification_dispatch_lock
 from app.workers.outbox._account_lifecycle import _require_current_worker_account
+from app.workers.outbox._livekit_client import (
+    LiveKitClientConfigurationError,
+    require_livekit_client_config,
+)
 from app.workers.outbox._owned_resources import operation_owned_resources
 from app.workers.outbox._livekit_delivery import ensure_livekit_dispatch
 from app.workers.outbox.failures import OutboxDeliveryError
@@ -73,6 +77,16 @@ async def deliver_livekit_verification_dispatch(
     now_provider = ctx.get("verification_now") or (lambda: datetime.now(UTC))
     settings = get_settings()
     observability = get_observability()
+    provider = ctx.get("livekit_dispatch_provider")
+    livekit_config = None
+    if provider is None:
+        try:
+            livekit_config = require_livekit_client_config(settings)
+        except LiveKitClientConfigurationError:
+            raise OutboxDeliveryError(
+                "dispatch_configuration",
+                retryable=False,
+            ) from None
 
     async with operation_owned_resources(
         operation="deliver_livekit_verification_dispatch"
@@ -86,15 +100,15 @@ async def deliver_livekit_verification_dispatch(
                 now=now_provider(),
                 settings=settings,
             )
-            provider = ctx.get("livekit_dispatch_provider")
             if provider is None:
                 from livekit import api
 
+                assert livekit_config is not None
                 livekit_api = own(
                     api.LiveKitAPI(
-                        url=settings.livekit_url,
-                        api_key=settings.livekit_api_key,
-                        api_secret=settings.livekit_api_secret,
+                        url=livekit_config.url,
+                        api_key=livekit_config.api_key,
+                        api_secret=livekit_config.api_secret,
                     )
                 )
                 provider = LiveKitDispatchAPIProvider(

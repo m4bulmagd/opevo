@@ -144,8 +144,63 @@ class _OwnedLiveKitApi:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "missing_field",
+    ["livekit_url", "livekit_api_key", "livekit_api_secret"],
+)
+async def test_uninjected_dispatch_rejects_missing_livekit_config_before_lock_or_sdk(
+    db_session,
+    settings,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_field: str,
+) -> None:
+    _call, event, _subscription = await _seed_dispatch(db_session)
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    explicit_settings = settings.model_copy(
+        update={
+            "livekit_url": "wss://explicit.example.com",
+            "livekit_api_key": "explicit-key",
+            "livekit_api_secret": "explicit-secret",
+            missing_field: None,
+        }
+    )
+    for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
+        monkeypatch.setenv(name, f"PROCESS_ENV_{name}_SENTINEL")
+    monkeypatch.setattr(customer_dispatch, "get_settings", lambda: explicit_settings)
+
+    class ForbiddenLock:
+        async def __aenter__(self):
+            raise AssertionError("missing config reached dispatch lock")
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+    monkeypatch.setattr(
+        customer_dispatch,
+        "livekit_dispatch_lock",
+        lambda *_args, **_kwargs: ForbiddenLock(),
+    )
+    sdk_calls = 0
+
+    def forbidden_livekit_api(**_kwargs):
+        nonlocal sdk_calls
+        sdk_calls += 1
+        raise AssertionError("missing config reached LiveKit SDK")
+
+    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", forbidden_livekit_api)
+
+    with pytest.raises(OutboxDeliveryError) as caught:
+        await deliver_livekit_dispatch({"session_factory": session_factory}, event)
+
+    assert caught.value.error_code == "dispatch_configuration"
+    assert caught.value.retryable is False
+    assert sdk_calls == 0
+
+
+@pytest.mark.anyio
 async def test_dispatch_handler_closes_its_operation_owned_livekit_client_once(
     db_session,
+    settings,
     monkeypatch,
 ) -> None:
     _call, event, _subscription = await _seed_dispatch(db_session)
@@ -154,6 +209,17 @@ async def test_dispatch_handler_closes_its_operation_owned_livekit_client_once(
     _OwnedLiveKitApi.fail_create = False
     _OwnedLiveKitApi.fail_close = False
     monkeypatch.setattr(livekit_api_module, "LiveKitAPI", _OwnedLiveKitApi)
+    monkeypatch.setattr(
+        customer_dispatch,
+        "get_settings",
+        lambda: settings.model_copy(
+            update={
+                "livekit_url": "wss://livekit.example.com",
+                "livekit_api_key": "livekit-key",
+                "livekit_api_secret": "livekit-secret",
+            }
+        ),
+    )
     monkeypatch.setattr(
         customer_dispatch,
         "create_dispatch_token",
@@ -169,6 +235,7 @@ async def test_dispatch_handler_closes_its_operation_owned_livekit_client_once(
 @pytest.mark.anyio
 async def test_dispatch_handler_preserves_operation_error_when_owned_close_fails(
     db_session,
+    settings,
     monkeypatch,
     caplog,
 ) -> None:
@@ -178,6 +245,17 @@ async def test_dispatch_handler_preserves_operation_error_when_owned_close_fails
     _OwnedLiveKitApi.fail_create = True
     _OwnedLiveKitApi.fail_close = True
     monkeypatch.setattr(livekit_api_module, "LiveKitAPI", _OwnedLiveKitApi)
+    monkeypatch.setattr(
+        customer_dispatch,
+        "get_settings",
+        lambda: settings.model_copy(
+            update={
+                "livekit_url": "wss://livekit.example.com",
+                "livekit_api_key": "livekit-key",
+                "livekit_api_secret": "livekit-secret",
+            }
+        ),
+    )
     monkeypatch.setattr(
         customer_dispatch,
         "create_dispatch_token",

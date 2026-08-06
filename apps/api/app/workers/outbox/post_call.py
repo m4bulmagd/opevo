@@ -18,6 +18,10 @@ from app.workers.outbox.failures import (
     OutboxDeliveryError,
     provider_failure_delivery_error,
 )
+from app.workers.outbox._livekit_client import (
+    LiveKitClientConfigurationError,
+    require_livekit_client_config,
+)
 from app.workers.outbox._owned_resources import operation_owned_resources
 
 
@@ -115,11 +119,20 @@ def build_recording_reconciler(
     if provider is None:
         from livekit import api
 
+        try:
+            livekit_config = require_livekit_client_config(settings)
+        except LiveKitClientConfigurationError:
+            raise ProviderFailure(
+                provider="livekit",
+                operation="list_recording_egresses",
+                disposition="terminal",
+                error_class="validation",
+            ) from None
         livekit_api = own(
             api.LiveKitAPI(
-                url=settings.livekit_url,
-                api_key=settings.livekit_api_key,
-                api_secret=settings.livekit_api_secret,
+                url=livekit_config.url,
+                api_key=livekit_config.api_key,
+                api_secret=livekit_config.api_secret,
             )
         )
         provider = LiveKitRecordingService(

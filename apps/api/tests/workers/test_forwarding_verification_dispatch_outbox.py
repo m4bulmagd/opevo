@@ -41,6 +41,66 @@ def _handler():
     return deliver_livekit_verification_dispatch
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "missing_field",
+    ["livekit_url", "livekit_api_key", "livekit_api_secret"],
+)
+async def test_uninjected_verification_rejects_missing_livekit_config_before_lock_or_sdk(
+    db_session,
+    settings,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_field: str,
+) -> None:
+    _user, _activation, event = await _seed_verification_dispatch(db_session)
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    explicit_settings = settings.model_copy(
+        update={
+            "livekit_url": "wss://explicit.example.com",
+            "livekit_api_key": "explicit-key",
+            "livekit_api_secret": "explicit-secret",
+            missing_field: None,
+        }
+    )
+    for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
+        monkeypatch.setenv(name, f"PROCESS_ENV_{name}_SENTINEL")
+    monkeypatch.setattr(
+        verification_dispatch,
+        "get_settings",
+        lambda: explicit_settings,
+    )
+
+    class ForbiddenLock:
+        async def __aenter__(self):
+            raise AssertionError("missing config reached verification lock")
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+    monkeypatch.setattr(
+        verification_dispatch,
+        "verification_dispatch_lock",
+        lambda *_args, **_kwargs: ForbiddenLock(),
+    )
+    from livekit import api as livekit_api_module
+
+    sdk_calls = 0
+
+    def forbidden_livekit_api(**_kwargs):
+        nonlocal sdk_calls
+        sdk_calls += 1
+        raise AssertionError("missing config reached LiveKit SDK")
+
+    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", forbidden_livekit_api)
+
+    with pytest.raises(OutboxDeliveryError) as caught:
+        await _handler()({"session_factory": session_factory}, event)
+
+    assert caught.value.error_code == "dispatch_configuration"
+    assert caught.value.retryable is False
+    assert sdk_calls == 0
+
+
 def _reconciliation_snapshot(*, persisted_dispatch_id: str | None = None):
     return verification_dispatch._VerificationDispatchSnapshot(
         activation_id=UUID("00000000-0000-0000-0000-000000000021"),
