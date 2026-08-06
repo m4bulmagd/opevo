@@ -54,6 +54,49 @@ class _Engine(_OwnedResource):
         await self.aclose()
 
 
+class _EngineProbe:
+    def __init__(
+        self,
+        *,
+        setup_error: BaseException | None = None,
+        dispose_error: BaseException | None = None,
+    ) -> None:
+        self.setup_error = setup_error
+        self.dispose_error = dispose_error
+        self.dispose_calls = 0
+
+    @asynccontextmanager
+    async def begin(self):
+        yield self
+
+    async def execute(self, _statement) -> None:
+        if self.setup_error is not None:
+            raise self.setup_error
+
+    async def dispose(self) -> None:
+        self.dispose_calls += 1
+        if self.dispose_error is not None:
+            raise self.dispose_error
+
+
+class _DependencyProbe:
+    def __init__(self, close_error: BaseException) -> None:
+        self.close_error = close_error
+        self.close_calls = 0
+        self._session = object()
+        self._yielded = False
+
+    async def __anext__(self) -> object:
+        if self._yielded:
+            raise StopAsyncIteration
+        self._yielded = True
+        return self._session
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        raise self.close_error
+
+
 def _forbidden_factory(name: str) -> Callable[..., Any]:
     def forbidden(*_args: object, **_kwargs: object) -> Any:
         raise AssertionError(f"{name} must not be constructed")
@@ -61,11 +104,20 @@ def _forbidden_factory(name: str) -> Callable[..., Any]:
     return forbidden
 
 
-async def _sqlite_api_runtime(settings, database_path):
+@asynccontextmanager
+async def _sqlite_api_runtime(
+    settings,
+    database_path,
+    *,
+    engine_factory=None,
+):
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from app.core.database import create_database_engine
+    if engine_factory is None:
+        from app.core.database import create_database_engine
+
+        engine_factory = create_database_engine
 
     class TrackingAsyncSession(AsyncSession):
         def __init__(self, *args, **kwargs) -> None:
@@ -76,44 +128,61 @@ async def _sqlite_api_runtime(settings, database_path):
             self.close_calls += 1
             await super().close()
 
-    engine = create_database_engine(f"sqlite+aiosqlite:///{database_path}")
-    async with engine.begin() as connection:
-        await connection.execute(
-            text("CREATE TABLE session_probe (value TEXT NOT NULL)")
+    engine = engine_factory(f"sqlite+aiosqlite:///{database_path}")
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("CREATE TABLE session_probe (value TEXT NOT NULL)")
+            )
+        session_factory = async_sessionmaker(
+            engine,
+            class_=TrackingAsyncSession,
+            expire_on_commit=False,
         )
-    session_factory = async_sessionmaker(
-        engine,
-        class_=TrackingAsyncSession,
-        expire_on_commit=False,
-    )
-    runtime = _api_runtime(
-        settings,
-        engine=engine,
-        session_factory=session_factory,
-    )
-    return runtime, engine, session_factory
+        runtime = _api_runtime(
+            settings,
+            engine=engine,
+            session_factory=session_factory,
+        )
+        yield runtime, session_factory
+    except BaseException as operation_error:
+        try:
+            await engine.dispose()
+        except BaseException as cleanup_error:
+            raise operation_error from cleanup_error
+        raise
+    await engine.dispose()
 
 
 @asynccontextmanager
-async def _request_session_lifecycle(settings, database_path):
+async def _request_session_lifecycle(
+    settings,
+    database_path,
+    *,
+    engine_factory=None,
+    dependency_factory=None,
+):
     from fastapi import FastAPI
     from starlette.requests import Request
 
-    from app.core.database import get_session
+    if dependency_factory is None:
+        from app.core.database import get_session
 
-    runtime, engine, session_factory = await _sqlite_api_runtime(
+        dependency_factory = get_session
+
+    async with _sqlite_api_runtime(
         settings,
         database_path,
-    )
-    app = FastAPI()
-    app.state.runtime = runtime
-    dependency = get_session(Request({"type": "http", "app": app}))
-    try:
-        session = await anext(dependency)
-        yield session, session_factory, dependency
-    finally:
-        await dependency.aclose()
-        await engine.dispose()
+        engine_factory=engine_factory,
+    ) as (runtime, session_factory):
+        app = FastAPI()
+        app.state.runtime = runtime
+        dependency = dependency_factory(Request({"type": "http", "app": app}))
+        try:
+            session = await anext(dependency)
+            yield session, session_factory, dependency
+        finally:
+            await dependency.aclose()
 
 
 @pytest.mark.anyio
@@ -582,6 +651,89 @@ async def test_request_session_rejects_missing_api_runtime() -> None:
     ):
         dependency = get_session(request)
         await anext(dependency)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("dispose_fails", [False, True])
+async def test_sqlite_runtime_disposes_engine_without_masking_setup_failure(
+    settings,
+    tmp_path,
+    dispose_fails: bool,
+) -> None:
+    class SetupFailure(RuntimeError):
+        pass
+
+    class DisposeFailure(RuntimeError):
+        pass
+
+    setup_error = SetupFailure("session schema setup failed")
+    engine = _EngineProbe(
+        setup_error=setup_error,
+        dispose_error=DisposeFailure("engine dispose failed")
+        if dispose_fails
+        else None,
+    )
+
+    def engine_factory(database_url: str) -> _EngineProbe:
+        assert database_url == f"sqlite+aiosqlite:///{tmp_path / 'setup.db'}"
+        return engine
+
+    with pytest.raises(SetupFailure, match="session schema setup failed") as caught:
+        async with _sqlite_api_runtime(
+            settings,
+            tmp_path / "setup.db",
+            engine_factory=engine_factory,
+        ):
+            pytest.fail("runtime must not be yielded after schema setup failure")
+
+    assert caught.value is setup_error
+    assert engine.dispose_calls == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("dispose_fails", [False, True])
+async def test_request_session_lifecycle_disposes_engine_when_dependency_close_fails(
+    settings,
+    tmp_path,
+    dispose_fails: bool,
+) -> None:
+    class DependencyCloseFailure(RuntimeError):
+        pass
+
+    class DisposeFailure(RuntimeError):
+        pass
+
+    close_error = DependencyCloseFailure("dependency close failed")
+    dependency = _DependencyProbe(close_error)
+    engine = _EngineProbe(
+        dispose_error=DisposeFailure("engine dispose failed")
+        if dispose_fails
+        else None,
+    )
+
+    def engine_factory(database_url: str) -> _EngineProbe:
+        assert database_url == f"sqlite+aiosqlite:///{tmp_path / 'close.db'}"
+        return engine
+
+    def dependency_factory(request):
+        assert request.app.state.runtime.engine is engine
+        return dependency
+
+    with pytest.raises(
+        DependencyCloseFailure,
+        match="dependency close failed",
+    ) as caught:
+        async with _request_session_lifecycle(
+            settings,
+            tmp_path / "close.db",
+            engine_factory=engine_factory,
+            dependency_factory=dependency_factory,
+        ):
+            pass
+
+    assert caught.value is close_error
+    assert dependency.close_calls == 1
+    assert engine.dispose_calls == 1
 
 
 @pytest.mark.anyio

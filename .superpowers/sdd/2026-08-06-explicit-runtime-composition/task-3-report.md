@@ -267,3 +267,72 @@ warning remains the pre-existing Starlette/httpx deprecation warning.
   does not hide transaction behavior or expected database results.
 - The fix-round delta is limited to the shared API fixture, its direct
   composition tests, and this report.
+
+## Fix round 2/5
+
+### Finding addressed
+
+The direct SQLite session-test helpers now express nested ownership:
+
+1. `_sqlite_api_runtime` is an async context manager that owns its engine from
+   construction through schema setup and the complete caller body.
+2. `_request_session_lifecycle` owns the request dependency inside that outer
+   engine scope.
+
+An engine is therefore disposed if schema setup fails and after dependency
+close fails. If engine disposal fails at the same time, the original setup or
+dependency-close exception remains primary and the disposal error is retained
+as its cause. Transaction assertions remain in their individual tests.
+
+### RED evidence
+
+Before adding engine/dependency ownership:
+
+```text
+cd apps/api
+.venv/bin/python -m pytest -q tests/composition/test_api_composition.py \
+  -k "sqlite_runtime_disposes or lifecycle_disposes_engine"
+```
+
+Result: `4 failed, 16 deselected in 0.49s`.
+
+Both setup-failure cases failed because `_sqlite_api_runtime` had no owning
+context-manager/factory seam. Both dependency-close cases failed because
+`_request_session_lifecycle` had no nested ownership/factory seam.
+
+### GREEN and proportional verification
+
+```text
+.venv/bin/python -m pytest -q tests/composition/test_api_composition.py \
+  -k "sqlite_runtime_disposes or lifecycle_disposes_engine"
+# 4 passed, 16 deselected in 0.53s
+
+.venv/bin/python -m pytest -q tests/composition/test_api_composition.py
+# 20 passed in 2.28s
+
+.venv/bin/python -m pytest -q tests/composition
+# 25 passed in 2.69s
+
+.venv/bin/ruff check tests/composition/test_api_composition.py
+# All checks passed!
+
+.venv/bin/mypy app/composition app/core app/routers app/webhooks
+# Success: no issues found in 37 source files
+```
+
+This round changes only test-local ownership helpers and their direct tests;
+it does not change the shared fixture or production code. The full composition
+package is therefore the proportional broader regression gate. The full API
+suite from Fix Round 1 remains `2769 passed, 133 skipped` on the unchanged
+production/shared-fixture tree.
+
+### Fix-round self-review
+
+- Setup failure before runtime yield disposes the engine exactly once.
+- Dependency-close failure disposes the outer engine exactly once.
+- Both paths are tested with successful and failing disposal, and assert the
+  exact primary failure object.
+- Normal commit, generator-close rollback, and handler-failure transaction
+  assertions remain visible and continue to pass against real SQLite.
+- The delta from `45427f0` is limited to the direct composition test file and
+  this report.
