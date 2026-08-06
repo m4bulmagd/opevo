@@ -2033,10 +2033,17 @@ async def test_terminal_outbox_metric_runs_once_after_durable_failed_commit(
 async def test_call_reconciliation_job_emits_exact_result_outcomes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.core.config import Settings
     from app.services.call_reconciliation_service import ReconciliationResult
     from app.workers.jobs import call_reconciliation as job_module
 
     observed: list[dict[str, int]] = []
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://worker.invalid/0",
+    )
 
     class Telemetry:
         def record_reconciliation_outcomes(self, result: dict[str, int]) -> None:
@@ -2055,17 +2062,22 @@ async def test_call_reconciliation_job_emits_exact_result_outcomes(
                 deferred=1,
             )
 
+    class ArqPool:
+        async def enqueue_job(
+            self,
+            _name: str,
+            _payload: dict,
+            **_kwargs,
+        ) -> None:
+            return None
+
     monkeypatch.setattr(job_module, "CallReconciliationService", Service)
-    runtime = SimpleNamespace(arq_pool=None, observability=Telemetry())
-    monkeypatch.setattr(
-        job_module,
-        "require_call_lifecycle_runtime",
-        lambda _ctx: runtime,
-    )
-    result = await job_module.call_reconciliation_job(
-        {
-            "session_factory": object(),
-        }
+    result = await job_module.reconcile_calls(
+        session_factory=object(),
+        arq_pool=ArqPool(),
+        observability=Telemetry(),
+        settings=settings,
+        now=lambda: datetime(2026, 8, 6, tzinfo=UTC),
     )
 
     assert result == {"scanned": 7, "recovered": 4, "failed": 2, "deferred": 1}

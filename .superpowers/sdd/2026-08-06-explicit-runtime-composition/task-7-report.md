@@ -106,3 +106,39 @@ incorrect implementation. It noted that the Task 7 file list names
 `test_outbox_architecture.py` although no Task 7 step defines a change there.
 That existing file already asserts the exact outbox registry, which excludes
 notifications. No source-text or removed-symbol change-detector test was added.
+
+## Fix Round 1: Full-suite observability test migration
+
+The independent full-suite review found one stale test at
+`tests/test_observability.py::test_call_reconciliation_job_emits_exact_result_outcomes`.
+It patched `require_call_lifecycle_runtime` to return a partial
+`SimpleNamespace` and passed `session_factory` through the removed legacy ARQ
+context contract.
+
+Exact RED reproduction:
+
+```text
+FAILED ...test_call_reconciliation_job_emits_exact_result_outcomes[asyncio]
+AttributeError: 'types.SimpleNamespace' object has no attribute 'session_factory'
+1 failed
+```
+
+The root cause was test coupling to the pre-Task 7 wrapper shape. Production
+runtime validation and forwarding were correct and were not weakened. The test
+now calls `reconcile_calls` directly with an explicit session factory, ARQ pool
+fake, telemetry, `Settings`, and fixed clock. Its original assertion still
+proves the exact reconciliation-outcome mapping recorded by observability.
+
+Fix-round verification:
+
+```text
+exact regression: 1 passed
+tests/test_observability.py: 65 passed
+full API suite: 2913 passed, 133 skipped
+
+ruff check tests/test_observability.py app/workers/jobs/call_reconciliation.py
+All checks passed!
+
+mypy app/workers/jobs/call_reconciliation.py
+Success: no issues found in 1 source file
+```
