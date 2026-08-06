@@ -1,7 +1,10 @@
+import importlib
+
 import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from tests import reconciliation_settings
 
 
 @pytest.mark.parametrize(
@@ -66,6 +69,25 @@ def test_connected_reconciliation_timeout_accepts_exact_two_minute_buffer() -> N
     )
 
     assert settings.call_reconciliation_connected_stale_seconds == 180
+
+
+def test_shared_reconciliation_settings_ignore_poisoned_duration_environment() -> (
+    None
+):
+    try:
+        with pytest.MonkeyPatch.context() as poisoned_environment:
+            poisoned_environment.setenv("MAX_CALL_DURATION_SECONDS", "4000")
+            reloaded = importlib.reload(reconciliation_settings)
+
+            settings = reloaded.TEST_RECONCILIATION_SETTINGS
+            assert settings.max_call_duration_seconds == 3600
+            assert settings.call_reconciliation_pending_stale_seconds == 120
+            assert settings.call_reconciliation_connected_stale_seconds == 3720
+            assert settings.call_reconciliation_ending_grace_seconds == 60
+            assert settings.call_reconciliation_finalizing_lease_seconds == 300
+            assert settings.call_reconciliation_max_attempts == 5
+    finally:
+        importlib.reload(reconciliation_settings)
 
 
 def test_worker_capacity_defaults_and_boundaries() -> None:

@@ -307,3 +307,63 @@ git diff --check 6d6f070
   behavior changed.
 
 No open fix-round concern.
+
+## Fix round 2/5
+
+### Finding addressed
+
+The shared reconciliation settings now set
+`max_call_duration_seconds=3600` alongside the five reconciliation policy
+fields. This closes the remaining environment seam in the Settings cross-field
+validation: an inherited `MAX_CALL_DURATION_SECONDS` can no longer make the
+helper fail to import when its explicit connected-stale timeout is 3720.
+
+A focused reload regression uses a scoped `pytest.MonkeyPatch` to set the
+poisoned environment value to 4000, reloads the real helper, and asserts all six
+controlled values as literals. Its `finally` reload runs after the scoped patch
+restores the environment, so both passing and failing runs leave the shared
+module in its normal state.
+
+### RED evidence
+
+Before the helper added the explicit duration:
+
+```text
+env PYTHONPATH=. .venv/bin/pytest -q \
+  tests/test_reconciliation_settings.py::\
+test_shared_reconciliation_settings_ignore_poisoned_duration_environment
+```
+
+Result: `1 failed`. `importlib.reload(reconciliation_settings)` raised the
+expected cross-field `ValidationError`: the 3720-second connected timeout was
+not at least the poisoned 4000-second maximum duration plus 120 seconds.
+
+### GREEN and verification
+
+```text
+env PYTHONPATH=. .venv/bin/pytest -q \
+  tests/test_reconciliation_settings.py \
+  tests/services/test_call_reconciliation_service.py \
+  tests/workers/test_call_reconciliation_wakeup.py
+# 35 passed in 2.85s
+
+env PYTHONPATH=. .venv/bin/ruff check \
+  tests/reconciliation_settings.py tests/test_reconciliation_settings.py
+# All checks passed!
+
+git diff --check af85139
+# exit 0
+```
+
+### Fix-round self-review
+
+- Removing the explicit maximum duration makes the poisoned reload test fail at
+  module construction, proving the regression is not a source-text check.
+- The test derives expected values as literals and exercises Pydantic Settings
+  environment precedence and validation through a real module reload.
+- Environment restoration occurs before the final module reload even when the
+  poisoned reload raises, preventing collection-order or cross-test coupling.
+- No application, production policy, Task 5, or later worker-composition code
+  changed.
+
+No open fix-round concern.

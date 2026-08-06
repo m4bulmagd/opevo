@@ -5,6 +5,7 @@ TEST_RECONCILIATION_SETTINGS = Settings(
     app_env="test",
     database_url="sqlite+aiosqlite://",
     redis_url="redis://explicit-reconciliation.invalid/0",
+    max_call_duration_seconds=3600,
     call_reconciliation_pending_stale_seconds=120,
     call_reconciliation_connected_stale_seconds=3720,
     call_reconciliation_ending_grace_seconds=60,
