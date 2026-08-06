@@ -12,7 +12,12 @@ from sqlalchemy import select
 from app.core.database import get_session
 from app.composition.lifecycle import RuntimeCleanup
 from app.composition.runtime import ApiRuntime
+from app.core.config import get_settings
 from app.core.dispatch_token import create_dispatch_token
+from tests.dispatch_token_config import (
+    TEST_DISPATCH_TOKEN_CONFIG,
+    settings_with_test_dispatch_token,
+)
 from app.core.observability import get_observability
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
@@ -141,7 +146,7 @@ def _build_completion_app(
     app = FastAPI()
     app.include_router(agent_router)
     app.state.runtime = ApiRuntime(
-        settings=object(),
+        settings=settings_with_test_dispatch_token(get_settings()),
         engine=object(),
         session_factory=object(),
         redis_client=object(),
@@ -162,6 +167,7 @@ def _build_completion_app(
     user_id = uuid4()
     agent_config_id = uuid4()
     if authenticated:
+
         async def override_require_agent_auth() -> AuthenticatedAgentIdentity:
             return AuthenticatedAgentIdentity(
                 user_id=user_id,
@@ -235,6 +241,7 @@ async def test_agent_completion_ignores_additive_legacy_fields_without_changing_
         call_id=str(call.id),
         user_id=str(active_user.id),
         agent_config_id=str(config.id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
 
     transport = httpx.ASGITransport(app=app)
@@ -266,8 +273,7 @@ async def test_agent_completion_ignores_additive_legacy_fields_without_changing_
 
 
 @pytest.mark.anyio
-async def test_agent_completion_endpoint_rejects_negative_duration(
-) -> None:
+async def test_agent_completion_endpoint_rejects_negative_duration() -> None:
     call_id = uuid4()
     fake_queue = FakeCallFinalizationQueue()
 
@@ -302,7 +308,9 @@ async def test_static_agent_token_is_rejected_in_every_environment(
     app = _build_completion_app(fake_queue)
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
             headers={"x-agent-token": "test-agent-token"},
@@ -357,10 +365,13 @@ async def test_deactivating_account_call_finalizes_with_dispatch_jwt(
         call_id=str(call.id),
         user_id=str(active_user.id),
         agent_config_id=str(config.id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
         response = await client.post(
             f"/api/agent/calls/{call.id}/complete",
             headers={"x-agent-token": token},
@@ -410,6 +421,7 @@ async def test_queue_outage_preserves_end_facts_recovery_and_recording_stop_inte
         call_id=str(call_id),
         user_id=str(active_user.id),
         agent_config_id=str(config.id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
 
     transport = httpx.ASGITransport(app=app)
@@ -463,9 +475,9 @@ async def test_queue_outage_preserves_end_facts_recovery_and_recording_stop_inte
             )
         ).scalars()
     )
-    assert [
-        (row.sequence_number, row.speaker, row.text) for row in recovery_rows
-    ] == [(1, "CALLER", "Durable recovery tail")]
+    assert [(row.sequence_number, row.speaker, row.text) for row in recovery_rows] == [
+        (1, "CALLER", "Durable recovery tail")
+    ]
 
 
 @pytest.mark.anyio
@@ -502,6 +514,7 @@ async def test_failed_call_completion_is_conflict_and_does_not_enqueue(
         call_id=str(call.id),
         user_id=str(active_user.id),
         agent_config_id=str(config.id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
 
     transport = httpx.ASGITransport(app=app)
@@ -575,6 +588,7 @@ async def test_completed_call_accepts_scoped_recovery_tail_then_finalizes_idempo
         call_id=str(call.id),
         user_id=str(active_user.id),
         agent_config_id=str(config.id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
 
     transport = httpx.ASGITransport(app=app)
@@ -677,10 +691,13 @@ async def test_dispatch_jwt_for_call_a_cannot_complete_call_b(
         call_id=str(call_a_id),
         user_id=str(user_id),
         agent_config_id=str(agent_config_id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
         response = await client.post(
             f"/api/agent/calls/{call_b_id}/complete",
             headers={"x-agent-token": token},
@@ -716,9 +733,7 @@ async def test_dispatch_jwt_rejects_durable_ownership_or_config_mismatch_before_
     signed_user_id = uuid4()
     signed_agent_config_id = uuid4()
     call_user_id = signed_user_id if call_user_matches else uuid4()
-    call_agent_config_id = (
-        signed_agent_config_id if call_config_matches else uuid4()
-    )
+    call_agent_config_id = signed_agent_config_id if call_config_matches else uuid4()
     config_user_id = signed_user_id if config_user_matches else uuid4()
     auth_session = FakeAuthSession(
         call=SimpleNamespace(
@@ -737,10 +752,13 @@ async def test_dispatch_jwt_rejects_durable_ownership_or_config_mismatch_before_
         call_id=str(call_id),
         user_id=str(signed_user_id),
         agent_config_id=str(signed_agent_config_id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
         response = await client.post(
             f"/api/agent/calls/{call_id}/complete",
             headers={"x-agent-token": token},

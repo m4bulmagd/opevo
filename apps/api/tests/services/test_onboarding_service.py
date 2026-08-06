@@ -115,7 +115,9 @@ async def test_get_status_returns_subscription_required_defaults(
 ) -> None:
     from app.services.onboarding_service import OnboardingService
 
-    status = await OnboardingService(db_session).get_status(active_user.id)
+    status = await OnboardingService(
+        db_session, activation_flow_enabled=False
+    ).get_status(active_user.id)
 
     assert status.subscription_status is None
     assert status.plan_tier is None
@@ -150,7 +152,9 @@ async def test_get_status_suspends_expired_subscription_period(
     _add_minutes(db_session, active_user.id)
     await db_session.commit()
 
-    status = await OnboardingService(db_session).get_status(active_user.id)
+    status = await OnboardingService(
+        db_session, activation_flow_enabled=False
+    ).get_status(active_user.id)
 
     assert status.stage == "suspended"
     assert status.can_activate is False
@@ -168,7 +172,9 @@ async def test_get_status_suspends_when_minutes_are_exhausted(
     _add_subscription(db_session, active_user.id)
     await db_session.commit()
 
-    status = await OnboardingService(db_session).get_status(active_user.id)
+    status = await OnboardingService(
+        db_session, activation_flow_enabled=False
+    ).get_status(active_user.id)
 
     assert status.stage == "suspended"
     assert status.minutes_remaining == 0
@@ -197,7 +203,9 @@ async def test_get_status_returns_provisioning_failed_with_retry(
     )
     await db_session.commit()
 
-    status = await OnboardingService(db_session).get_status(active_user.id)
+    status = await OnboardingService(
+        db_session, activation_flow_enabled=False
+    ).get_status(active_user.id)
 
     assert status.phone_number_status == "failed"
     assert status.can_retry_provisioning is True
@@ -219,7 +227,9 @@ async def test_get_status_never_labels_incomplete_provider_state_as_ready(
     _add_agent_config(db_session, active_user.id, complete=True)
     await db_session.commit()
 
-    status = await OnboardingService(db_session).get_status(active_user.id)
+    status = await OnboardingService(
+        db_session, activation_flow_enabled=False
+    ).get_status(active_user.id)
 
     assert status.stage == "number_provisioning_failed"
     assert status.phone_number_status == "failed"
@@ -240,7 +250,9 @@ async def test_get_status_requires_receptionist_setup_when_number_is_ready(
     _add_agent_config(db_session, active_user.id, complete=False)
     await db_session.commit()
 
-    status = await OnboardingService(db_session).get_status(active_user.id)
+    status = await OnboardingService(
+        db_session, activation_flow_enabled=False
+    ).get_status(active_user.id)
 
     assert status.phone_number == "+35315551234"
     assert status.phone_number_status == "ready"
@@ -262,7 +274,9 @@ async def test_get_status_returns_ready_when_receptionist_can_be_activated(
     _add_agent_config(db_session, active_user.id, complete=True)
     await db_session.commit()
 
-    status = await OnboardingService(db_session).get_status(active_user.id)
+    status = await OnboardingService(
+        db_session, activation_flow_enabled=False
+    ).get_status(active_user.id)
 
     assert status.minutes_remaining == 60
     assert status.agent_setup_complete is True
@@ -303,7 +317,9 @@ async def test_get_status_returns_routing_pending_for_inconsistent_projection(
     _add_agent_config(db_session, active_user.id, complete=True, enabled=True)
     await db_session.commit()
 
-    status = await OnboardingService(db_session).get_status(active_user.id)
+    status = await OnboardingService(
+        db_session, activation_flow_enabled=False
+    ).get_status(active_user.id)
 
     assert status.stage == "routing_pending"
     assert status.can_activate is True
@@ -328,7 +344,9 @@ async def test_get_status_is_live_only_when_full_projection_is_active(
     _add_agent_config(db_session, active_user.id, complete=True, enabled=True)
     await db_session.commit()
 
-    status = await OnboardingService(db_session).get_status(active_user.id)
+    status = await OnboardingService(
+        db_session, activation_flow_enabled=False
+    ).get_status(active_user.id)
 
     assert status.stage == "live"
     assert status.can_activate is True
@@ -359,6 +377,7 @@ async def test_retry_provisioning_delegates_to_activation_command() -> None:
         {"provisioning_repository": object()},
     )
     result = await OnboardingService(
+        activation_flow_enabled=False,
         readiness_service=readiness_service,
         activation_provisioning_service=commands,
     ).retry_provisioning(

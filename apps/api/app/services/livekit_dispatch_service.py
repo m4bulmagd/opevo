@@ -7,7 +7,6 @@ from presvo_contracts import ContractError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import report_safe_exception
-from app.core.config import get_settings
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.call_repository import CallRepository
@@ -98,8 +97,8 @@ class LiveKitDispatchService:
     def __init__(
         self,
         session: AsyncSession,
-        dispatch_client=None,
         *,
+        activation_flow_enabled: bool,
         phone_number_repository: PhoneNumberRepository | None = None,
         agent_config_repository: AgentConfigRepository | None = None,
         call_repository: CallRepository | None = None,
@@ -120,15 +119,19 @@ class LiveKitDispatchService:
     ) -> None:
         self.session = session
         self.now_provider = now_provider or (lambda: datetime.now(UTC))
-        # Kept as a compatibility argument for callers while intentionally unused:
-        # webhook handling records provider intent and never dispatches directly.
-        self.dispatch_client = dispatch_client
-        self.phone_number_repository = phone_number_repository or PhoneNumberRepository(session)
-        self.agent_config_repository = agent_config_repository or AgentConfigRepository(session)
+        self.activation_flow_enabled = activation_flow_enabled
+        self.phone_number_repository = phone_number_repository or PhoneNumberRepository(
+            session
+        )
+        self.agent_config_repository = agent_config_repository or AgentConfigRepository(
+            session
+        )
         self.call_repository = call_repository or CallRepository(session)
         self.user_repository = user_repository or UserRepository(session)
         self.usage_repository = usage_repository or UsageRepository(session)
-        self.subscription_repository = subscription_repository or SubscriptionRepository(session)
+        self.subscription_repository = (
+            subscription_repository or SubscriptionRepository(session)
+        )
         self.business_profile_repository = (
             business_profile_repository or BusinessProfileRepository(session)
         )
@@ -257,10 +260,9 @@ class LiveKitDispatchService:
             await self._best_effort_outbox_wakeup()
             return DispatchJoinResult("verification_claimed")
 
-        settings = get_settings()
         activation = None
         business_profile = None
-        if settings.activation_flow_enabled:
+        if self.activation_flow_enabled:
             activation = await self.activation_repository.get_by_user_id_for_update(
                 user.id
             )
@@ -299,12 +301,10 @@ class LiveKitDispatchService:
             agent_config=agent_config,
             business_profile=business_profile,
             activation=activation,
-            activation_required=settings.activation_flow_enabled,
+            activation_required=self.activation_flow_enabled,
             now=self.now_provider(),
         )
-        eligible = readiness.can_dispatch(
-            called_number_matches=called_number_matches
-        )
+        eligible = readiness.can_dispatch(called_number_matches=called_number_matches)
         if not eligible:
             await self.session.commit()
             return DispatchJoinResult("denied")
@@ -361,12 +361,17 @@ class LiveKitDispatchService:
                     if error.contract_name == "CallStartedEvent"
                     else "unknown"
                 )
-                code = error.code if error.code in {
-                    "malformed_json",
-                    "missing_schema_version",
-                    "unsupported_schema_version",
-                    "invalid_payload",
-                } else "unknown"
+                code = (
+                    error.code
+                    if error.code
+                    in {
+                        "malformed_json",
+                        "missing_schema_version",
+                        "unsupported_schema_version",
+                        "invalid_payload",
+                    }
+                    else "unknown"
+                )
                 logger.warning(
                     "operation=publish_call_started contract_name=%s "
                     "code=%s transport=redis",
@@ -480,7 +485,6 @@ class LiveKitDispatchService:
             await enqueue_outbox_wakeup(self.arq_pool)
         except Exception as error:
             logger.warning(
-                "outbox wakeup enqueue failed operation=livekit_dispatch "
-                "error_type=%s",
+                "outbox wakeup enqueue failed operation=livekit_dispatch error_type=%s",
                 type(error).__name__,
             )

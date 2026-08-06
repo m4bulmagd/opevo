@@ -45,7 +45,10 @@ from app.repositories.recording_egress_operation_repository import (
 from app.services.outbox_service import OutboxService
 from app.services.activation_provisioning_service import ActivationProvisioningService
 from app.services.activation_go_live_service import ActivationGoLiveService
-from app.services.onboarding_service import OnboardingRetryNotAllowedError, OnboardingService
+from app.services.onboarding_service import (
+    OnboardingRetryNotAllowedError,
+    OnboardingService,
+)
 from app.services.routing_fingerprint import routing_fingerprint
 from app.workers.outbox import customer_dispatch
 from tests.fakes import CaptureMeter, CaptureTracer
@@ -141,16 +144,12 @@ def _add_retryable_activation(
 
 
 @pytest_asyncio.fixture
-async def outbox_session_factory() -> AsyncIterator[
-    async_sessionmaker[AsyncSession]
-]:
+async def outbox_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     database_url = os.getenv("TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("PostgreSQL outbox tests require TEST_DATABASE_URL")
     if database_url.startswith("postgresql://"):
-        database_url = database_url.replace(
-            "postgresql://", "postgresql+asyncpg://", 1
-        )
+        database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     if not database_url.startswith("postgresql+asyncpg://"):
         pytest.skip("TEST_DATABASE_URL must identify a PostgreSQL database")
 
@@ -332,9 +331,7 @@ async def test_outbox_event_rolls_back_with_business_transaction(
         )
         await session.rollback()
 
-        assert await session.scalar(
-            select(func.count()).select_from(OutboxEvent)
-        ) == 0
+        assert await session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
 @pytest.mark.anyio
@@ -380,9 +377,7 @@ async def test_concurrent_add_once_returns_one_durable_identity(
 
     assert first_id == second_id
     async with outbox_session_factory() as session:
-        assert await session.scalar(
-            select(func.count()).select_from(OutboxEvent)
-        ) == 1
+        assert await session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
 
 
 @pytest.mark.anyio
@@ -403,7 +398,9 @@ async def test_concurrent_onboarding_retry_creates_one_new_attempt(
     async def retry() -> str:
         async with outbox_session_factory() as session:
             try:
-                await OnboardingService(session).retry_provisioning(
+                await OnboardingService(
+                    session, activation_flow_enabled=False
+                ).retry_provisioning(
                     user_id,
                     arq_pool=None,
                 )
@@ -533,14 +530,15 @@ async def test_concurrent_go_live_commands_create_one_durable_attempt(
 
     assert first.stage == second.stage == "activating"
     async with outbox_session_factory() as session:
-        assert await session.scalar(
-            select(func.count()).select_from(OutboxEvent)
-        ) == 1
-        assert await session.scalar(
-            select(func.count())
-            .select_from(ActivationEvent)
-            .where(ActivationEvent.event_type == "go_live_requested")
-        ) == 1
+        assert await session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(ActivationEvent)
+                .where(ActivationEvent.event_type == "go_live_requested")
+            )
+            == 1
+        )
 
 
 @pytest.mark.anyio
@@ -627,16 +625,22 @@ async def test_concurrent_provisioning_confirmation_creates_one_durable_intent(
         operation_key = f"activation:provision:{activation_id}:g1"
         assert activation.provisioning_idempotency_key == operation_key
         assert provisioning.provider_operation_key == operation_key
-        assert await session.scalar(
-            select(func.count())
-            .select_from(OutboxEvent)
-            .where(OutboxEvent.topic == "phone.provision")
-        ) == 1
-        assert await session.scalar(
-            select(func.count())
-            .select_from(ActivationEvent)
-            .where(ActivationEvent.event_type == "provisioning_consented")
-        ) == 1
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(OutboxEvent)
+                .where(OutboxEvent.topic == "phone.provision")
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(ActivationEvent)
+                .where(ActivationEvent.event_type == "provisioning_consented")
+            )
+            == 1
+        )
 
 
 @pytest.mark.anyio
@@ -647,9 +651,10 @@ async def test_expired_processing_lease_is_reclaimed_after_worker_crash(
     claimed_at = datetime.now(UTC)
 
     async with outbox_session_factory() as session:
-        assert len(
-            await OutboxRepository(session).claim_batch(limit=1, now=claimed_at)
-        ) == 1
+        assert (
+            len(await OutboxRepository(session).claim_batch(limit=1, now=claimed_at))
+            == 1
+        )
         await session.commit()
 
     async with outbox_session_factory() as session:
@@ -945,7 +950,9 @@ async def test_dispatch_provider_failure_retains_provider_exhausted_call_code(
         "outbox_now": lambda: current_time,
         "outbox_terminal_failure_metric": lambda _topic, _code: None,
     }
-    expected_attempts = len(OUTBOX_RETRY_DELAYS) + 1 if disposition == "retryable" else 1
+    expected_attempts = (
+        len(OUTBOX_RETRY_DELAYS) + 1 if disposition == "retryable" else 1
+    )
     for _attempt in range(expected_attempts):
         await outbox_delivery_job(ctx)
         async with outbox_session_factory() as session:
@@ -1268,9 +1275,7 @@ async def test_composed_internal_defect_redacts_exception_alert_telemetry_and_st
             },
         )
     ]
-    assert meter.instruments[
-        "presvo.outbox.terminal_failures"
-    ].measurements == [
+    assert meter.instruments["presvo.outbox.terminal_failures"].measurements == [
         (1, {"topic": "phone.disable", "error_class": "unknown"})
     ]
     assert tracer.spans[0].attributes["presvo.failure.kind"] == "internal"
@@ -2131,9 +2136,7 @@ async def test_routing_retries_and_reapplies_new_desired_state_after_mid_call_ch
 
     class ChangingProvider(_CapturingRoutingProvider):
         async def disable_number(self, *, provider_number_id: str) -> str:
-            result = await super().disable_number(
-                provider_number_id=provider_number_id
-            )
+            result = await super().disable_number(provider_number_id=provider_number_id)
             async with outbox_session_factory() as session:
                 subscription = await session.scalar(
                     select(Subscription).where(Subscription.user_id == user_id)
@@ -2374,9 +2377,7 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
 
     monkeypatch.setattr(phone_outbox, "provision_phone_number", capture)
 
-    result = await outbox_delivery_job(
-        {"session_factory": outbox_session_factory}
-    )
+    result = await outbox_delivery_job({"session_factory": outbox_session_factory})
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
     assert calls == [
@@ -2474,9 +2475,9 @@ async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_rout
     assert first == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
     async with outbox_session_factory() as session:
         assert await PhoneNumberRepository(session).get_by_user_id(user_id) is None
-        provisioning = await PhoneNumberProvisioningRepository(
-            session
-        ).get_by_user_id(user_id)
+        provisioning = await PhoneNumberProvisioningRepository(session).get_by_user_id(
+            user_id
+        )
         assert provisioning is not None
         assert provisioning.can_retry is True
         assert provisioning.provider_operation_key == event.idempotency_key
@@ -2591,9 +2592,9 @@ async def test_reclaimed_crashed_provision_recovers_reference_only_cleanup(
 
     async with outbox_session_factory() as session:
         stored_event = await session.get(OutboxEvent, event.id)
-        provisioning = await PhoneNumberProvisioningRepository(
-            session
-        ).get_by_user_id(user_id)
+        provisioning = await PhoneNumberProvisioningRepository(session).get_by_user_id(
+            user_id
+        )
         assert stored_event is not None
         assert stored_event.status == "processing"
         assert provisioning is not None
@@ -2747,9 +2748,9 @@ async def test_pending_order_retries_outbox_without_customer_retry(
 
     async with outbox_session_factory() as session:
         stored_event = await session.get(OutboxEvent, event.id)
-        provisioning = await PhoneNumberProvisioningRepository(
-            session
-        ).get_by_user_id(user_id)
+        provisioning = await PhoneNumberProvisioningRepository(session).get_by_user_id(
+            user_id
+        )
         assert stored_event is not None
         assert stored_event.status == "pending"
         assert stored_event.attempt_count == len(OUTBOX_RETRY_DELAYS) + 1
@@ -2824,9 +2825,9 @@ async def test_existing_order_conflict_is_terminal_and_disables_customer_retry(
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
     async with outbox_session_factory() as session:
         stored_event = await session.get(OutboxEvent, event.id)
-        provisioning = await PhoneNumberProvisioningRepository(
-            session
-        ).get_by_user_id(user_id)
+        provisioning = await PhoneNumberProvisioningRepository(session).get_by_user_id(
+            user_id
+        )
         assert stored_event is not None
         assert stored_event.status == "failed"
         assert stored_event.last_error_code == "provider_terminal"
@@ -2859,7 +2860,9 @@ async def test_customer_retry_new_event_reuses_original_provider_operation_key(
         user_id = user.id
 
     async with outbox_session_factory() as session:
-        await OnboardingService(session).retry_provisioning(
+        await OnboardingService(
+            session, activation_flow_enabled=False
+        ).retry_provisioning(
             user_id,
             arq_pool=None,
         )
@@ -2901,9 +2904,9 @@ async def test_customer_retry_new_event_reuses_original_provider_operation_key(
     assert retry_event.idempotency_key != original_provider_key
     assert provider_keys == [original_provider_key]
     async with outbox_session_factory() as session:
-        provisioning = await PhoneNumberProvisioningRepository(
-            session
-        ).get_by_user_id(user_id)
+        provisioning = await PhoneNumberProvisioningRepository(session).get_by_user_id(
+            user_id
+        )
         assert provisioning is not None
         assert provisioning.status == "succeeded"
         assert provisioning.provider_operation_key == original_provider_key

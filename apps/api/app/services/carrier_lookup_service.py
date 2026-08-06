@@ -10,7 +10,6 @@ from app.providers.carrier_lookup.base import (
     normalize_carrier_name,
     normalize_number_type,
 )
-from app.providers.carrier_lookup.factory import build_carrier_lookup_provider
 from app.providers.telephony.telnyx import normalize_french_number
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.user_repository import UserRepository
@@ -24,12 +23,12 @@ class CarrierLookupUnavailableError(Exception):
 class CarrierLookupService:
     def __init__(
         self,
-        session: AsyncSession | None = None,
+        session: AsyncSession | None,
         *,
-        provider: CarrierLookupProvider | None = None,
+        provider: CarrierLookupProvider,
     ) -> None:
         self.session = session
-        self.provider = provider or build_carrier_lookup_provider()
+        self.provider = provider
 
     async def lookup_number(self, e164: str) -> CarrierLookupResult:
         try:
@@ -41,22 +40,15 @@ class CarrierLookupService:
         if not isinstance(provider_result, CarrierLookupResult):
             raise self._contract_failure()
         try:
-            result_number = normalize_french_number(
-                provider_result.normalized_number
-            )
-            country_code = self._required_contract_string(
-                provider_result.country_code
-            )
+            result_number = normalize_french_number(provider_result.normalized_number)
+            country_code = self._required_contract_string(provider_result.country_code)
             carrier_name = self._safe_carrier_name(provider_result.carrier_name)
             number_type = normalize_number_type(provider_result.number_type)
             looked_up_at = self._safe_timestamp(provider_result.looked_up_at)
         except (TypeError, ValueError):
             raise self._contract_failure() from None
 
-        if (
-            country_code != "FR"
-            or result_number != requested_number
-        ):
+        if country_code != "FR" or result_number != requested_number:
             raise self._contract_failure()
 
         return CarrierLookupResult(
@@ -79,10 +71,7 @@ class CarrierLookupService:
             if user is None:
                 raise CarrierLookupUnavailableError
             require_active_account(user)
-            if (
-                profile is None
-                or profile.existing_phone_e164 is None
-            ):
+            if profile is None or profile.existing_phone_e164 is None:
                 raise CarrierLookupUnavailableError
             expected_number = profile.existing_phone_e164
         finally:
@@ -101,10 +90,7 @@ class CarrierLookupService:
             if user is None:
                 raise CarrierLookupUnavailableError
             require_active_account(user)
-            if (
-                profile is None
-                or profile.existing_phone_e164 != expected_number
-            ):
+            if profile is None or profile.existing_phone_e164 != expected_number:
                 raise CarrierLookupUnavailableError
             profile.detected_carrier = result.normalized_carrier
             profile.detected_number_type = result.number_type
@@ -136,10 +122,7 @@ class CarrierLookupService:
                 await session.rollback()
                 return
             require_active_account(user)
-            if (
-                profile is None
-                or profile.existing_phone_e164 != expected_number
-            ):
+            if profile is None or profile.existing_phone_e164 != expected_number:
                 await session.rollback()
                 return
             profile.detected_carrier = None

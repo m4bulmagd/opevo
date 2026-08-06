@@ -1,7 +1,6 @@
 import logging
 import time
 from contextlib import AsyncExitStack
-from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -14,10 +13,18 @@ from app.core.auth import get_auth_provider
 from app.composition.lifecycle import RuntimeCleanup
 from app.composition.runtime import ApiRuntime
 from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
-from app.core.dispatch_token import create_dispatch_token, verify_dispatch_token
+from app.core.dispatch_token import (
+    DispatchTokenConfig,
+    dispatch_token_config,
+    create_dispatch_token,
+    verify_dispatch_token,
+)
 
 
 DISPATCH_SECRET = "dispatch-test-secret-with-enough-entropy-for-all-hmac-tests"
+EXPLICIT_DISPATCH_SECRET = (
+    "explicit-dispatch-secret-different-from-controlled-environment"
+)
 
 
 @pytest.mark.anyio
@@ -181,26 +188,12 @@ async def test_rest_maps_provider_outage_to_generic_503(test_app) -> None:
         test_app.state.runtime.auth_provider = original_provider
 
     assert response.status_code == 503
-    assert response.json() == {
-        "detail": "Authentication temporarily unavailable"
-    }
+    assert response.json() == {"detail": "Authentication temporarily unavailable"}
     assert "TOKEN_SENTINEL" not in response.text
 
 
-def _configure_dispatch_tokens(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    ttl: int | None = None,
-) -> None:
-    monkeypatch.setenv("AGENT_DISPATCH_JWT_SECRET", DISPATCH_SECRET)
-    if ttl is None:
-        monkeypatch.delenv("AGENT_DISPATCH_JWT_TTL_SECONDS", raising=False)
-    else:
-        monkeypatch.setenv("AGENT_DISPATCH_JWT_TTL_SECONDS", str(ttl))
-
-    from app.core.config import get_settings
-
-    get_settings.cache_clear()
+def _dispatch_config(*, ttl: int = 7200) -> DispatchTokenConfig:
+    return DispatchTokenConfig(secret=DISPATCH_SECRET, ttl_seconds=ttl)
 
 
 def _encode_dispatch_payload(payload: dict, *, algorithm: str = "HS256") -> str:
@@ -218,10 +211,7 @@ def _valid_dispatch_payload() -> dict:
     }
 
 
-def test_dispatch_token_contains_all_required_call_scoped_claims(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_dispatch_tokens(monkeypatch)
+def test_dispatch_token_contains_all_required_call_scoped_claims() -> None:
     call_id = str(uuid4())
     user_id = str(uuid4())
     agent_config_id = str(uuid4())
@@ -230,6 +220,7 @@ def test_dispatch_token_contains_all_required_call_scoped_claims(
         call_id,
         user_id,
         agent_config_id,
+        config=_dispatch_config(),
     )
     payload = jwt.decode(token, DISPATCH_SECRET, algorithms=["HS256"])
 
@@ -241,21 +232,49 @@ def test_dispatch_token_contains_all_required_call_scoped_claims(
     assert payload["exp"] - payload["iat"] == 7200
 
 
-def test_create_dispatch_token_fails_safely_without_secret(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("AGENT_DISPATCH_JWT_SECRET", raising=False)
-    from app.core.config import get_settings
+def test_dispatch_token_uses_explicit_config_instead_of_environment() -> None:
+    config = DispatchTokenConfig(
+        secret=EXPLICIT_DISPATCH_SECRET,
+        ttl_seconds=37,
+    )
+    call_id = str(uuid4())
+    user_id = str(uuid4())
+    agent_config_id = str(uuid4())
 
-    get_settings.cache_clear()
+    token = create_dispatch_token(
+        call_id,
+        user_id,
+        agent_config_id,
+        config=config,
+    )
+    payload = jwt.decode(
+        token,
+        EXPLICIT_DISPATCH_SECRET,
+        algorithms=["HS256"],
+    )
+
+    assert payload["exp"] - payload["iat"] == 37
+    assert (
+        verify_dispatch_token(
+            token,
+            expected_call_id=call_id,
+            expected_user_id=user_id,
+            config=config,
+        )["agent_config_id"]
+        == agent_config_id
+    )
+
+
+def test_create_dispatch_token_fails_safely_without_secret() -> None:
+    from app.core.config import Settings
 
     with pytest.raises(ValueError, match="configured"):
-        create_dispatch_token(
-            call_id=str(uuid4()),
-            user_id=str(uuid4()),
-            agent_config_id=str(uuid4()),
+        dispatch_token_config(
+            Settings(
+                database_url="sqlite+aiosqlite://",
+                redis_url="redis://localhost:6379/0",
+                agent_dispatch_jwt_secret=None,
+            )
         )
 
 
@@ -268,24 +287,18 @@ def test_create_dispatch_token_fails_safely_without_secret(
     ],
 )
 def test_dispatch_token_sign_and_verify_reject_unsafe_hmac_secrets(
-    monkeypatch: pytest.MonkeyPatch,
     unsafe_secret: str,
 ) -> None:
-    monkeypatch.setenv("AGENT_DISPATCH_JWT_SECRET", unsafe_secret)
-    from app.core.config import get_settings
-
-    get_settings.cache_clear()
-    payload = _valid_dispatch_payload()
-    token = jwt.encode(payload, DISPATCH_SECRET, algorithm="HS256")
+    from app.core.config import Settings
 
     with pytest.raises(ValueError, match="configured safely"):
-        create_dispatch_token(
-            call_id=payload["call_id"],
-            user_id=payload["user_id"],
-            agent_config_id=payload["agent_config_id"],
+        dispatch_token_config(
+            Settings(
+                database_url="sqlite+aiosqlite://",
+                redis_url="redis://localhost:6379/0",
+                agent_dispatch_jwt_secret=unsafe_secret,
+            )
         )
-    with pytest.raises(ValueError, match="configured safely"):
-        verify_dispatch_token(token, expected_call_id=payload["call_id"])
 
 
 @pytest.mark.parametrize(
@@ -293,10 +306,8 @@ def test_dispatch_token_sign_and_verify_reject_unsafe_hmac_secrets(
     ["call_id", "user_id", "agent_config_id", "iat", "exp"],
 )
 def test_verify_dispatch_token_rejects_every_missing_required_claim(
-    monkeypatch: pytest.MonkeyPatch,
     missing_claim: str,
 ) -> None:
-    _configure_dispatch_tokens(monkeypatch)
     payload = _valid_dispatch_payload()
     expected_call_id = payload["call_id"]
     payload.pop(missing_claim)
@@ -305,6 +316,7 @@ def test_verify_dispatch_token_rejects_every_missing_required_claim(
         verify_dispatch_token(
             _encode_dispatch_payload(payload),
             expected_call_id=expected_call_id,
+            config=_dispatch_config(),
         )
 
 
@@ -313,19 +325,17 @@ def test_verify_dispatch_token_rejects_every_missing_required_claim(
     ["not-a-jwt", "", "header.payload.signature"],
 )
 def test_verify_dispatch_token_rejects_malformed_tokens(
-    monkeypatch: pytest.MonkeyPatch,
     token: str,
 ) -> None:
-    _configure_dispatch_tokens(monkeypatch)
-
     with pytest.raises(ValueError, match="Invalid dispatch token"):
-        verify_dispatch_token(token, expected_call_id=str(uuid4()))
+        verify_dispatch_token(
+            token,
+            expected_call_id=str(uuid4()),
+            config=_dispatch_config(),
+        )
 
 
-def test_verify_dispatch_token_rejects_expired_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_dispatch_tokens(monkeypatch)
+def test_verify_dispatch_token_rejects_expired_token() -> None:
     payload = _valid_dispatch_payload()
     payload["iat"] = int(time.time()) - 10
     payload["exp"] = int(time.time()) - 1
@@ -334,32 +344,32 @@ def test_verify_dispatch_token_rejects_expired_token(
         verify_dispatch_token(
             _encode_dispatch_payload(payload),
             expected_call_id=payload["call_id"],
+            config=_dispatch_config(),
         )
 
 
-def test_verify_dispatch_token_rejects_non_hs256_algorithm(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_dispatch_tokens(monkeypatch)
+def test_verify_dispatch_token_rejects_non_hs256_algorithm() -> None:
     payload = _valid_dispatch_payload()
 
     with pytest.raises(ValueError, match="Invalid dispatch token"):
         verify_dispatch_token(
             _encode_dispatch_payload(payload, algorithm="HS384"),
             expected_call_id=payload["call_id"],
+            config=_dispatch_config(),
         )
 
 
-def test_verify_dispatch_token_rejects_wrong_call_without_echoing_identifiers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_dispatch_tokens(monkeypatch)
+def test_verify_dispatch_token_rejects_wrong_call_without_echoing_identifiers() -> None:
     payload = _valid_dispatch_payload()
     wrong_call_id = str(uuid4())
     token = _encode_dispatch_payload(payload)
 
     with pytest.raises(ValueError) as exc_info:
-        verify_dispatch_token(token, expected_call_id=wrong_call_id)
+        verify_dispatch_token(
+            token,
+            expected_call_id=wrong_call_id,
+            config=_dispatch_config(),
+        )
 
     message = str(exc_info.value)
     assert payload["call_id"] not in message
@@ -367,10 +377,7 @@ def test_verify_dispatch_token_rejects_wrong_call_without_echoing_identifiers(
     assert token not in message
 
 
-def test_verify_dispatch_token_rejects_wrong_user(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_dispatch_tokens(monkeypatch)
+def test_verify_dispatch_token_rejects_wrong_user() -> None:
     payload = _valid_dispatch_payload()
 
     with pytest.raises(ValueError, match="Invalid dispatch token"):
@@ -378,13 +385,11 @@ def test_verify_dispatch_token_rejects_wrong_user(
             _encode_dispatch_payload(payload),
             payload["call_id"],
             expected_user_id=str(uuid4()),
+            config=_dispatch_config(),
         )
 
 
-def test_verify_dispatch_token_rejects_invalid_identifier_claim_type(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_dispatch_tokens(monkeypatch)
+def test_verify_dispatch_token_rejects_invalid_identifier_claim_type() -> None:
     payload = _valid_dispatch_payload()
     payload["agent_config_id"] = 123
 
@@ -392,6 +397,7 @@ def test_verify_dispatch_token_rejects_invalid_identifier_claim_type(
         verify_dispatch_token(
             _encode_dispatch_payload(payload),
             expected_call_id=payload["call_id"],
+            config=_dispatch_config(),
         )
 
 

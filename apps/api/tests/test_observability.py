@@ -2015,8 +2015,8 @@ async def test_call_reconciliation_job_emits_exact_result_outcomes(
             observed.append(result)
 
     class Service:
-        def __init__(self, _factory) -> None:
-            pass
+        def __init__(self, _factory, *, settings) -> None:
+            assert settings is not None
 
         async def reconcile(self, _now, *, limit: int):
             assert limit == 100

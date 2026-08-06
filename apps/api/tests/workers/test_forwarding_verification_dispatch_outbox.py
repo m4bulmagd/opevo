@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.provider_failures import ProviderFailure
 from app.core.verification_token import verify_verification_token
+from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG
 from app.models.call import Call
 from app.models.customer_activation import CustomerActivation
 from app.models.user import User
@@ -82,7 +83,9 @@ def _verification_reconciliation_dispatch(
     )
 
 
-def test_verification_reconciliation_requires_a_valid_matching_verification_contract() -> None:
+def test_verification_reconciliation_requires_a_valid_matching_verification_contract() -> (
+    None
+):
     snapshot = _reconciliation_snapshot()
     valid = _verification_reconciliation_metadata(snapshot)
     wrong_variant = dump_contract_json(
@@ -110,8 +113,7 @@ def test_verification_reconciliation_requires_a_valid_matching_verification_cont
         "wrong_variant": wrong_variant,
         "bad_uuid": json.dumps(valid | {"verification_session_id": "not-a-uuid"}),
         "mismatched_uuid": json.dumps(
-            valid
-            | {"verification_session_id": "00000000-0000-0000-0000-000000000026"}
+            valid | {"verification_session_id": "00000000-0000-0000-0000-000000000026"}
         ),
         "mismatched_user_id": json.dumps(
             valid | {"user_id": "00000000-0000-0000-0000-000000000027"}
@@ -483,6 +485,7 @@ async def test_handler_creates_exact_verification_job_and_persists_identity(
         metadata["completion_token"],
         expected_session_id=session_id,
         expected_user_id=str(user_id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
     assert metadata["completion_token"] not in json.dumps(outbox_payload)
     assert dump_contract(parse_dispatch(created["metadata"])) == metadata
@@ -859,8 +862,5 @@ async def test_verification_topic_is_registered_but_never_classified_as_call(
     _user, _activation, event = await _seed_verification_dispatch(db_session)
 
     assert "livekit.verification_dispatch" in SUPPORTED_OUTBOX_TOPICS
-    assert (
-        DEFAULT_OUTBOX_HANDLERS["livekit.verification_dispatch"]
-        is _handler()
-    )
+    assert DEFAULT_OUTBOX_HANDLERS["livekit.verification_dispatch"] is _handler()
     assert _validated_event_call_id(event) is None

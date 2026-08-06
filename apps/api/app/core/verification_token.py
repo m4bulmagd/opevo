@@ -5,8 +5,7 @@ import jwt
 
 from app.core.dispatch_token import (
     ALGORITHM,
-    DispatchTokenConfigurationError,
-    require_dispatch_secret,
+    DispatchTokenConfig,
 )
 
 
@@ -37,9 +36,9 @@ def create_verification_token(
     *,
     session_id: str,
     user_id: str,
+    config: DispatchTokenConfig,
     ttl_seconds: int = DEFAULT_VERIFICATION_TOKEN_TTL_SECONDS,
 ) -> str:
-    secret = require_dispatch_secret()
     normalized_session_id = _identifier(session_id)
     normalized_user_id = _identifier(user_id)
     if (
@@ -60,7 +59,7 @@ def create_verification_token(
             "iat": issued_at,
             "exp": issued_at + ttl_seconds,
         },
-        secret,
+        config.secret,
         algorithm=ALGORITHM,
     )
 
@@ -70,8 +69,8 @@ def verify_verification_token(
     *,
     expected_session_id: str,
     expected_user_id: str,
+    config: DispatchTokenConfig,
 ) -> dict:
-    secret = require_dispatch_secret()
     try:
         normalized_expected_session_id = _identifier(expected_session_id)
         normalized_expected_user_id = _identifier(expected_user_id)
@@ -79,7 +78,7 @@ def verify_verification_token(
             raise VerificationTokenError("Invalid verification token")
         payload = jwt.decode(
             token,
-            secret,
+            config.secret,
             algorithms=[ALGORITHM],
             audience=VERIFICATION_AUDIENCE,
             options={"require": list(REQUIRED_VERIFICATION_CLAIMS)},
@@ -99,8 +98,6 @@ def verify_verification_token(
             or user_id != normalized_expected_user_id
         ):
             raise VerificationTokenError("Invalid verification token")
-    except DispatchTokenConfigurationError:
-        raise
     except (jwt.PyJWTError, KeyError, TypeError, ValueError):
         raise VerificationTokenError("Invalid verification token") from None
 

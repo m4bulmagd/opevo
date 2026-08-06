@@ -19,6 +19,7 @@ from app.models.user import User
 from app.repositories.call_repository import CallRepository, CallTransitionError
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.call_reconciliation_service import CallReconciliationService
+from tests.reconciliation_settings import TEST_RECONCILIATION_SETTINGS
 from app.services.livekit_dispatch_lock import livekit_dispatch_lock
 
 
@@ -145,8 +146,12 @@ async def test_parallel_reconciliation_claims_stale_ending_once(
         call_id = call.id
 
     await asyncio.gather(
-        CallReconciliationService(state_session_factory).reconcile(now),
-        CallReconciliationService(state_session_factory).reconcile(now),
+        CallReconciliationService(
+            state_session_factory, settings=TEST_RECONCILIATION_SETTINGS
+        ).reconcile(now),
+        CallReconciliationService(
+            state_session_factory, settings=TEST_RECONCILIATION_SETTINGS
+        ).reconcile(now),
     )
 
     async with state_session_factory() as session:
@@ -230,22 +235,31 @@ async def test_concurrent_phase_b_creates_each_durable_effect_once(
     assert [first.already_completed, second.already_completed].count(True) == 1
 
     async with state_session_factory() as session:
-        assert await session.scalar(
-            select(func.count())
-            .select_from(UsageLedger)
-            .where(UsageLedger.call_id == call_id)
-        ) == 1
-        assert await session.scalar(
-            select(func.count())
-            .select_from(Notification)
-            .where(Notification.call_id == call_id)
-        ) == 1
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(UsageLedger)
+                .where(UsageLedger.call_id == call_id)
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(Notification)
+                .where(Notification.call_id == call_id)
+            )
+            == 1
+        )
         topics = list(
             (
                 await session.execute(
                     select(OutboxEvent.topic).where(
                         (OutboxEvent.aggregate_id == call_id)
-                        | (OutboxEvent.idempotency_key == f"phone.disable:call:{call_id}")
+                        | (
+                            OutboxEvent.idempotency_key
+                            == f"phone.disable:call:{call_id}"
+                        )
                     )
                 )
             ).scalars()
@@ -271,7 +285,9 @@ async def test_pending_timeout_waits_for_shared_dispatch_advisory_lock(
 
     async with livekit_dispatch_lock(state_session_factory, call_id):
         task = asyncio.create_task(
-            CallReconciliationService(state_session_factory).reconcile(now)
+            CallReconciliationService(
+                state_session_factory, settings=TEST_RECONCILIATION_SETTINGS
+            ).reconcile(now)
         )
         await asyncio.sleep(0.1)
         assert task.done() is False
@@ -326,7 +342,9 @@ async def test_reconciliation_generation_lease_rejects_old_worker_on_postgresql(
         "complete_finalization",
         defer_phase_b,
     )
-    result = await CallReconciliationService(state_session_factory).reconcile(now)
+    result = await CallReconciliationService(
+        state_session_factory, settings=TEST_RECONCILIATION_SETTINGS
+    ).reconcile(now)
     monkeypatch.setattr(
         CallLifecycleService,
         "complete_finalization",
@@ -355,13 +373,19 @@ async def test_reconciliation_generation_lease_rejects_old_worker_on_postgresql(
     async with state_session_factory() as session:
         stored = await session.get(Call, call_id)
         assert stored.status == "completed"
-        assert await session.scalar(
-            select(func.count())
-            .select_from(UsageLedger)
-            .where(UsageLedger.call_id == call_id)
-        ) == 1
-        assert await session.scalar(
-            select(func.count())
-            .select_from(Notification)
-            .where(Notification.call_id == call_id)
-        ) == 1
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(UsageLedger)
+                .where(UsageLedger.call_id == call_id)
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(Notification)
+                .where(Notification.call_id == call_id)
+            )
+            == 1
+        )

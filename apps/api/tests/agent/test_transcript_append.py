@@ -15,7 +15,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.core.database import get_session
 from app.composition.lifecycle import RuntimeCleanup
 from app.composition.runtime import ApiRuntime
+from app.core.config import get_settings
 from app.core.dispatch_token import create_dispatch_token
+from tests.dispatch_token_config import (
+    TEST_DISPATCH_TOKEN_CONFIG,
+    settings_with_test_dispatch_token,
+)
 from app.core.observability import get_observability
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
@@ -91,6 +96,7 @@ async def _runtime_call(
         call_id=str(call.id),
         user_id=str(active_user.id),
         agent_config_id=str(config.id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
     return call, config, token
 
@@ -105,7 +111,7 @@ def _runtime_app(db_session, *, queue: CapturingQueue | None = None) -> FastAPI:
     app.include_router(router)
     app.dependency_overrides[get_session] = override_session
     app.state.runtime = ApiRuntime(
-        settings=object(),
+        settings=settings_with_test_dispatch_token(get_settings()),
         engine=object(),
         session_factory=object(),
         redis_client=object(),
@@ -189,9 +195,7 @@ async def test_actual_agent_http_route_matches_golden_contracts(
     )
     queue = CapturingQueue() if needs_queue else None
     request_fixture = json.loads((FIXTURES / request_name).read_text())
-    acknowledgement_fixture = json.loads(
-        (FIXTURES / acknowledgement_name).read_text()
-    )
+    acknowledgement_fixture = json.loads((FIXTURES / acknowledgement_name).read_text())
 
     response = await _post(
         _runtime_app(db_session, queue=queue),
@@ -308,6 +312,7 @@ async def test_append_rejects_token_for_a_different_call(
         call_id=str(uuid4()),
         user_id=str(active_user.id),
         agent_config_id=str(config.id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
 
     response = await _post(
@@ -318,9 +323,12 @@ async def test_append_rejects_token_for_a_different_call(
     )
 
     assert response.status_code == 401
-    assert await db_session.scalar(
-        select(CallMessage).where(CallMessage.call_id == call.id)
-    ) is None
+    assert (
+        await db_session.scalar(
+            select(CallMessage).where(CallMessage.call_id == call.id)
+        )
+        is None
+    )
 
 
 @pytest.mark.anyio
@@ -550,6 +558,9 @@ async def test_locked_row_claim_mismatch_maps_to_401_before_persistence_or_queue
 
     assert response.status_code == 401
     assert response.json() == {"detail": "invalid_agent_token"}
-    assert await db_session.scalar(
-        select(CallMessage).where(CallMessage.call_id == call_id)
-    ) is None
+    assert (
+        await db_session.scalar(
+            select(CallMessage).where(CallMessage.call_id == call_id)
+        )
+        is None
+    )

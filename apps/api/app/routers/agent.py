@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
-from app.core.dispatch_token import DispatchTokenError, verify_dispatch_token
+from app.core.dispatch_token import (
+    DispatchTokenError,
+    dispatch_token_config,
+    verify_dispatch_token,
+)
 from app.core.contract_http import contract_request_openapi, parse_contract_request
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
@@ -64,6 +68,7 @@ async def _best_effort_outbox_wakeup(request: Request) -> None:
 
 async def require_agent_auth(
     call_id: UUID,
+    request: Request,
     x_agent_token: str | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> AuthenticatedAgentIdentity:
@@ -77,6 +82,7 @@ async def require_agent_auth(
         claims = verify_dispatch_token(
             x_agent_token,
             expected_call_id=str(call_id),
+            config=dispatch_token_config(get_api_runtime(request.app).settings),
         )
         signed_user_id = UUID(claims["user_id"])
         signed_agent_config_id = UUID(claims["agent_config_id"])
@@ -123,10 +129,15 @@ def get_agent_config_service(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> AgentConfigService:
+    settings = get_api_runtime(request.app).settings
     return AgentConfigService(
         session,
         agent_config_repository=AgentConfigRepository(session),
-        readiness_service=CustomerReadinessService(session),
+        readiness_service=CustomerReadinessService(
+            session,
+            activation_flow_enabled=settings.activation_flow_enabled,
+        ),
+        activation_flow_enabled=settings.activation_flow_enabled,
         arq_pool=get_api_runtime(request.app).arq_pool,
     )
 

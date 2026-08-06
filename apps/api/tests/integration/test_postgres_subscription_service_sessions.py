@@ -104,7 +104,9 @@ async def test_billing_and_onboarding_share_a_real_postgres_async_session(
         await session.commit()
 
         usage = await BillingQueryService(session).get_usage_snapshot(user.id)
-        onboarding = await OnboardingService(session).get_status(user.id)
+        onboarding = await OnboardingService(
+            session, activation_flow_enabled=False
+        ).get_status(user.id)
 
     assert usage.minutes_remaining == 60
     assert usage.subscription_status == "trialing"
@@ -261,7 +263,4 @@ async def test_concurrent_reactivation_checkout_requests_share_provider_identity
     assert len(attempts) == 1
     assert attempts[0].lifecycle_generation == 2
     assert attempts[0].status == "completed"
-    assert (
-        attempts[0].stripe_checkout_session_id
-        == "cs_shared_by_stripe_idempotency"
-    )
+    assert attempts[0].stripe_checkout_session_id == "cs_shared_by_stripe_idempotency"

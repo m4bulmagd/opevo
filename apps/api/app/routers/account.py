@@ -18,6 +18,9 @@ def get_account_lifecycle_service(
 ) -> AccountLifecycleService:
     return AccountLifecycleService(
         session,
+        activation_flow_enabled=(
+            get_api_runtime(request.app).settings.activation_flow_enabled
+        ),
         arq_pool=get_api_runtime(request.app).arq_pool,
     )
 

@@ -1,10 +1,11 @@
 import time
+from dataclasses import dataclass
 from typing import TypeGuard
 from uuid import UUID
 
 import jwt
 
-from app.core.config import get_settings
+from app.core.config import Settings
 
 ALGORITHM = "HS256"
 REQUIRED_CLAIMS = ("call_id", "user_id", "agent_config_id", "iat", "exp")
@@ -26,6 +27,12 @@ class DispatchTokenConfigurationError(DispatchTokenError):
     """Dispatch token signing or verification is not configured safely."""
 
 
+@dataclass(frozen=True, slots=True)
+class DispatchTokenConfig:
+    secret: str
+    ttl_seconds: int
+
+
 def is_dispatch_secret_safe(secret: object) -> TypeGuard[str]:
     if not isinstance(secret, str):
         return False
@@ -36,14 +43,22 @@ def is_dispatch_secret_safe(secret: object) -> TypeGuard[str]:
     return not any(marker in lowered for marker in UNSAFE_SECRET_MARKERS)
 
 
-def require_dispatch_secret() -> str:
-    settings = get_settings()
+def dispatch_token_config(settings: Settings) -> DispatchTokenConfig:
     secret = settings.agent_dispatch_jwt_secret
     if not is_dispatch_secret_safe(secret):
         raise DispatchTokenConfigurationError(
             "Dispatch token signing is not configured safely"
         )
-    return secret.strip()
+    ttl_seconds = settings.agent_dispatch_jwt_ttl_seconds
+    if (
+        isinstance(ttl_seconds, bool)
+        or not isinstance(ttl_seconds, int)
+        or ttl_seconds <= 0
+    ):
+        raise DispatchTokenConfigurationError(
+            "Dispatch token lifetime is not configured safely"
+        )
+    return DispatchTokenConfig(secret=secret.strip(), ttl_seconds=ttl_seconds)
 
 
 def _identifier(value: object) -> str:
@@ -59,34 +74,30 @@ def create_dispatch_token(
     call_id: str,
     user_id: str,
     agent_config_id: str,
+    *,
+    config: DispatchTokenConfig,
 ) -> str:
-    settings = get_settings()
-    secret = require_dispatch_secret()
     normalized_call_id = _identifier(call_id)
     normalized_user_id = _identifier(user_id)
     normalized_agent_config_id = _identifier(agent_config_id)
-    ttl_seconds = settings.agent_dispatch_jwt_ttl_seconds
-    if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
-        raise DispatchTokenConfigurationError(
-            "Dispatch token lifetime is not configured safely"
-        )
     issued_at = int(time.time())
     payload = {
         "call_id": normalized_call_id,
         "user_id": normalized_user_id,
         "agent_config_id": normalized_agent_config_id,
         "iat": issued_at,
-        "exp": issued_at + ttl_seconds,
+        "exp": issued_at + config.ttl_seconds,
     }
-    return jwt.encode(payload, secret, algorithm=ALGORITHM)
+    return jwt.encode(payload, config.secret, algorithm=ALGORITHM)
 
 
 def verify_dispatch_token(
     token: str,
     expected_call_id: str,
     expected_user_id: str | None = None,
+    *,
+    config: DispatchTokenConfig,
 ) -> dict:
-    secret = require_dispatch_secret()
     try:
         normalized_expected_call_id = _identifier(expected_call_id)
         normalized_expected_user_id = (
@@ -96,7 +107,7 @@ def verify_dispatch_token(
             raise DispatchTokenError("Invalid dispatch token")
         payload = jwt.decode(
             token,
-            secret,
+            config.secret,
             algorithms=[ALGORITHM],
             options={"require": list(REQUIRED_CLAIMS)},
         )
@@ -118,8 +129,6 @@ def verify_dispatch_token(
             )
         ):
             raise DispatchTokenError("Invalid dispatch token")
-    except DispatchTokenConfigurationError:
-        raise
     except (jwt.PyJWTError, KeyError, TypeError, ValueError):
         raise DispatchTokenError("Invalid dispatch token") from None
 

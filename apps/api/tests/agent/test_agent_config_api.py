@@ -32,6 +32,19 @@ def _activation_flow_defaults_off_for_legacy_config_tests(
     get_settings.cache_clear()
 
 
+@pytest.fixture
+def activation_runtime_enabled(test_app):
+    runtime = test_app.state.runtime
+    previous_settings = runtime.settings
+    runtime.settings = previous_settings.model_copy(
+        update={"activation_flow_enabled": True}
+    )
+    try:
+        yield
+    finally:
+        runtime.settings = previous_settings
+
+
 def test_activation_flow_defaults_off() -> None:
     settings = Settings(
         database_url="sqlite+aiosqlite://",
@@ -374,6 +387,7 @@ async def test_activation_flow_persists_profile_owned_assistant_content_patch(
     client_database_url,
     rs256_clerk_token_for,
     monkeypatch,
+    activation_runtime_enabled,
     field_name: str,
     value: str,
 ) -> None:
@@ -388,8 +402,7 @@ async def test_activation_flow_persists_profile_owned_assistant_content_patch(
         knowledge_base="Original knowledge",
         is_enabled=False,
     )
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
-    get_settings.cache_clear()
+    # The controlled environment remains disabled; request composition is enabled.
     try:
         response = await async_client.patch(
             "/api/agent/config",
@@ -423,6 +436,7 @@ async def test_activation_flow_accepts_idempotent_enabled_value_with_content_pat
     client_database_url,
     rs256_clerk_token_for,
     monkeypatch,
+    activation_runtime_enabled,
 ) -> None:
     await seed_agent_config(
         client_database_url,
@@ -455,8 +469,7 @@ async def test_activation_flow_accepts_idempotent_enabled_value_with_content_pat
         )
         await session.commit()
     await engine.dispose()
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
-    get_settings.cache_clear()
+    # The controlled environment remains disabled; request composition is enabled.
     try:
         response = await async_client.patch(
             "/api/agent/config",
@@ -498,6 +511,7 @@ async def test_activation_flow_allows_non_projected_patch_fields(
     client_database_url,
     rs256_clerk_token_for,
     monkeypatch,
+    activation_runtime_enabled,
 ) -> None:
     clerk_user_id = "user_managed_non_projected"
     await seed_agent_config(
@@ -508,8 +522,7 @@ async def test_activation_flow_allows_non_projected_patch_fields(
         pipeline_mode="stt_llm_tts",
         is_enabled=False,
     )
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
-    get_settings.cache_clear()
+    # The controlled environment remains disabled; request composition is enabled.
     try:
         response = await async_client.patch(
             "/api/agent/config",
@@ -529,6 +542,7 @@ async def test_activation_flow_rejects_direct_enable_without_mutation_or_outbox(
     client_database_url,
     rs256_clerk_token_for,
     monkeypatch,
+    activation_runtime_enabled,
 ) -> None:
     clerk_user_id = "user_activation_managed_enable"
     await seed_agent_config(
@@ -541,8 +555,7 @@ async def test_activation_flow_rejects_direct_enable_without_mutation_or_outbox(
         knowledge_base="Open weekdays.",
         is_enabled=False,
     )
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
-    get_settings.cache_clear()
+    # The controlled environment remains disabled; request composition is enabled.
     try:
         response = await async_client.patch(
             "/api/agent/config",
@@ -568,6 +581,7 @@ async def test_activation_flow_still_allows_customer_to_disable_routing(
     client_database_url,
     rs256_clerk_token_for,
     monkeypatch,
+    activation_runtime_enabled,
 ) -> None:
     clerk_user_id = "user_activation_disable"
     await seed_agent_config(
@@ -580,8 +594,7 @@ async def test_activation_flow_still_allows_customer_to_disable_routing(
         knowledge_base="Open weekdays.",
         is_enabled=True,
     )
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
-    get_settings.cache_clear()
+    # The controlled environment remains disabled; request composition is enabled.
     try:
         response = await async_client.patch(
             "/api/agent/config",

@@ -2,6 +2,7 @@ import logging
 
 import pytest
 
+from app.core.config import Settings
 from app.services.call_reconciliation_service import ReconciliationResult
 from app.workers.jobs import call_reconciliation as job_module
 
@@ -24,14 +25,20 @@ async def test_recovered_calls_wake_outbox_after_reconciliation_without_affectin
     wake_fails: bool,
 ) -> None:
     class _Service:
-        def __init__(self, _factory) -> None:
-            pass
+        def __init__(self, _factory, *, settings: Settings) -> None:
+            assert settings.call_reconciliation_pending_stale_seconds == 17
 
         async def reconcile(self, _now, *, limit: int):
             assert limit == 100
             return ReconciliationResult(scanned=1, recovered=1)
 
+    explicit_settings = Settings(
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://explicit.invalid/0",
+        call_reconciliation_pending_stale_seconds=17,
+    )
     monkeypatch.setattr(job_module, "CallReconciliationService", _Service)
+    monkeypatch.setattr(job_module, "get_settings", lambda: explicit_settings)
     pool = _Pool(fail=wake_fails)
 
     result = await job_module.call_reconciliation_job(
@@ -65,8 +72,8 @@ async def test_any_scanned_stale_work_wakes_possible_recording_intent(
     result: ReconciliationResult,
 ) -> None:
     class _Service:
-        def __init__(self, _factory) -> None:
-            pass
+        def __init__(self, _factory, *, settings: Settings) -> None:
+            assert isinstance(settings, Settings)
 
         async def reconcile(self, _now, *, limit: int):
             assert limit == 100
@@ -100,8 +107,8 @@ async def test_call_reconciliation_snapshot_is_observed_without_changing_result(
     observed_snapshots: list[object] = []
 
     class _Service:
-        def __init__(self, _factory) -> None:
-            pass
+        def __init__(self, _factory, *, settings: Settings) -> None:
+            assert isinstance(settings, Settings)
 
         async def reconcile(self, _now, *, limit: int):
             assert limit == 100
@@ -132,7 +139,11 @@ async def test_call_reconciliation_snapshot_is_observed_without_changing_result(
 
     monkeypatch.setattr(job_module, "CallReconciliationService", _Service)
     monkeypatch.setattr(job_module, "CallRepository", _Repository)
-    monkeypatch.setattr(job_module, "get_settings", object)
+    explicit_settings = Settings(
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://explicit.invalid/0",
+    )
+    monkeypatch.setattr(job_module, "get_settings", lambda: explicit_settings)
 
     with caplog.at_level(logging.WARNING, logger=job_module.logger.name):
         response = await job_module.call_reconciliation_job(

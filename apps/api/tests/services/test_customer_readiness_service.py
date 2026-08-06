@@ -125,6 +125,7 @@ def build_service(
         repositories["activation_repository"] = FakeByUserRepository(activation)
     return (
         CustomerReadinessService(
+            None,
             **repositories,
             activation_flow_enabled=activation_flow_enabled,
         ),
@@ -212,7 +213,9 @@ async def test_missing_user_returns_fail_closed_readiness_result() -> None:
 
 
 @pytest.mark.anyio
-async def test_enabled_activation_flow_loads_prerequisites_once_and_blocks_stale_projection() -> None:
+async def test_enabled_activation_flow_loads_prerequisites_once_and_blocks_stale_projection() -> (
+    None
+):
     user, subscription, phone, provisioning, agent_config = build_records()
     profile = BusinessProfile(
         user_id=user.id,
@@ -260,7 +263,9 @@ async def test_enabled_activation_flow_loads_prerequisites_once_and_blocks_stale
             assert repository.calls == [user.id]
 
 
-def test_activation_prerequisites_are_named_immutable_and_reject_null_fingerprints() -> None:
+def test_activation_prerequisites_are_named_immutable_and_reject_null_fingerprints() -> (
+    None
+):
     activation = CustomerActivation(
         user_id=uuid4(),
         forwarding_verified_at=NOW,

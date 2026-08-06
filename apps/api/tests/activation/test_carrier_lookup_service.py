@@ -73,7 +73,7 @@ async def test_lookup_number_normalizes_provider_brand_and_safe_number_type() ->
         lookup_result(carrier_name="Orange France", number_type="mobile network")
     )
 
-    result = await CarrierLookupService(provider=provider).lookup_number(
+    result = await CarrierLookupService(None, provider=provider).lookup_number(
         "+33 6 12 34 56 78"
     )
 
@@ -97,7 +97,7 @@ async def test_lookup_number_rejects_non_french_or_mismatched_results(
 ) -> None:
     with pytest.raises(ProviderFailure) as exc_info:
         await CarrierLookupService(
-            provider=ResultProvider(unsafe_result)
+            None, provider=ResultProvider(unsafe_result)
         ).lookup_number("+33612345678")
 
     assert exc_info.value.disposition == "terminal"
@@ -125,7 +125,7 @@ async def test_lookup_number_converts_malformed_provider_contract_to_safe_error(
 
     with pytest.raises(ProviderFailure) as exc_info:
         await CarrierLookupService(
-            provider=ResultProvider(malformed_result)
+            None, provider=ResultProvider(malformed_result)
         ).lookup_number("+33612345678")
 
     assert exc_info.value.disposition == "terminal"

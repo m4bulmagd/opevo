@@ -361,7 +361,9 @@ async def test_two_owner_requests_converge_on_one_generation_operation_and_inten
     async def request() -> UUID:
         async with account_session_factory() as session:
             await barrier.wait()
-            operation = await AccountLifecycleService(session).request_in_transaction(
+            operation = await AccountLifecycleService(
+                session, activation_flow_enabled=False
+            ).request_in_transaction(
                 seeded.user_id,
                 trigger="owner_request",
             )
@@ -446,7 +448,9 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
     await asyncio.wait_for(entered.wait(), timeout=5)
 
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(session).request_in_transaction(
+        operation = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).request_in_transaction(
             user_id,
             trigger="owner_request",
         )
@@ -470,7 +474,9 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
     )
 
     async with account_session_factory() as session:
-        projection = await AccountLifecycleService(session).get_account(user_id)
+        projection = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).get_account(user_id)
         await session.rollback()
         checkout = await BillingQueryService(session).prepare_checkout_attempt(user_id)
         with pytest.raises(LocalBillingConflictError) as local_billing:
@@ -523,7 +529,9 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
         assert cleanup_event is not None
 
     async with account_session_factory() as session:
-        pending_projection = await AccountLifecycleService(session).get_account(user_id)
+        pending_projection = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).get_account(user_id)
     assert pending_projection.reactivation_allowed is False
     assert pending_projection.blocker == "reactivation_not_ready"
 
@@ -563,9 +571,9 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
     await asyncio.wait_for(cleanup_release_entered.wait(), timeout=5)
     async with account_session_factory() as session:
         processing = await session.get(ProviderCleanupOperation, cleanup.id)
-        processing_projection = await AccountLifecycleService(session).get_account(
-            user_id
-        )
+        processing_projection = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).get_account(user_id)
     assert processing is not None
     assert processing.status == "processing"
     assert processing_projection.reactivation_allowed is False
@@ -581,7 +589,9 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
                 PhoneNumberProvisioning.user_id == user_id
             )
         )
-        retry_projection = await AccountLifecycleService(session).get_account(user_id)
+        retry_projection = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).get_account(user_id)
     assert retrying is not None
     assert retrying.status == "pending"
     assert provisioning is not None
@@ -593,9 +603,9 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
     await deliver_provider_cleanup(cleanup_ctx, cleanup_event)
 
     async with account_session_factory() as session:
-        phone_cleanup_projection = await AccountLifecycleService(session).get_account(
-            user_id
-        )
+        phone_cleanup_projection = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).get_account(user_id)
         provisioning_count = await session.scalar(
             select(func.count())
             .select_from(PhoneNumberProvisioning)
@@ -619,7 +629,9 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
     assert provisioning_count == 0
 
     async with account_session_factory() as session:
-        stale_projection = await AccountLifecycleService(session).get_account(user_id)
+        stale_projection = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).get_account(user_id)
         stale_checkout = await BillingQueryService(session).prepare_checkout_attempt(
             user_id
         )
@@ -653,9 +665,9 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
     ]
     assert subscriptions.calls == ["sub-stale-after-deactivation"]
     async with account_session_factory() as session:
-        completed_projection = await AccountLifecycleService(session).get_account(
-            user_id
-        )
+        completed_projection = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).get_account(user_id)
         completed_checkout = await BillingQueryService(
             session
         ).get_checkout_eligibility(user_id)
@@ -757,7 +769,9 @@ async def test_owner_request_and_terminal_stripe_event_converge_on_one_operation
     async def owner_request() -> None:
         async with account_session_factory() as session:
             competing_started.set()
-            operation = await AccountLifecycleService(session).request_in_transaction(
+            operation = await AccountLifecycleService(
+                session, activation_flow_enabled=False
+            ).request_in_transaction(
                 seeded.user_id,
                 trigger="owner_request",
             )
@@ -780,7 +794,8 @@ async def test_owner_request_and_terminal_stripe_event_converge_on_one_operation
         await asyncio.wait_for(competing_started.wait(), timeout=1)
         if first_commit == "owner":
             operation = await AccountLifecycleService(
-                first_session
+                first_session,
+                activation_flow_enabled=False,
             ).request_in_transaction(
                 seeded.user_id,
                 trigger="owner_request",
@@ -835,7 +850,9 @@ async def test_worker_cancellation_commit_and_lifecycle_entry_use_compatible_loc
         suffix="worker-lifecycle-locks",
     )
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(session).request_in_transaction(
+        operation = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).request_in_transaction(
             seeded.user_id,
             trigger="owner_request",
         )
@@ -915,7 +932,9 @@ async def test_worker_cancellation_commit_and_lifecycle_entry_use_compatible_loc
 
     async def enter_lifecycle() -> UUID:
         async with account_session_factory() as session:
-            existing = await AccountLifecycleService(session).request_in_transaction(
+            existing = await AccountLifecycleService(
+                session, activation_flow_enabled=False
+            ).request_in_transaction(
                 seeded.user_id,
                 trigger="owner_request",
             )
@@ -1178,7 +1197,9 @@ async def test_stale_enable_provision_invoice_and_go_live_work_is_provider_free(
         suffix="stale-work",
     )
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(session).request_in_transaction(
+        operation = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).request_in_transaction(
             seeded.user_id,
             trigger="owner_request",
         )
@@ -1312,7 +1333,9 @@ async def test_stale_verification_dispatch_is_provider_free_and_keeps_claim_stat
         activation_id = activation.id
 
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(session).request_in_transaction(
+        operation = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).request_in_transaction(
             seeded.user_id,
             trigger="owner_request",
         )
@@ -1476,7 +1499,9 @@ async def test_stale_go_live_command_preserves_activation_config_and_outbox(
         await session.commit()
 
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(session).request_in_transaction(
+        operation = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).request_in_transaction(
             seeded.user_id,
             trigger="owner_request",
         )
@@ -1744,7 +1769,9 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         other_clerk_user_id = other.clerk_user_id
 
     async with account_session_factory() as session:
-        operation = await AccountLifecycleService(session).request_in_transaction(
+        operation = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).request_in_transaction(
             seeded.user_id,
             trigger="owner_request",
         )

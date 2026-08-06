@@ -4,7 +4,6 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.models.agent_config import AgentConfig
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
@@ -60,6 +59,8 @@ class AgentConfigService:
         session: AsyncSession,
         agent_config_repository: AgentConfigRepository,
         readiness_service: CustomerReadinessService,
+        *,
+        activation_flow_enabled: bool,
         arq_pool=None,
     ) -> None:
         self.session = session
@@ -68,6 +69,7 @@ class AgentConfigService:
         self.customer_activation_repository = CustomerActivationRepository(session)
         self.user_repository = UserRepository(session)
         self.readiness_service = readiness_service
+        self.activation_flow_enabled = activation_flow_enabled
         self.outbox_service = OutboxService(session)
         self.projection_service = ReceptionistProjectionService()
         self.arq_pool = arq_pool
@@ -94,10 +96,10 @@ class AgentConfigService:
         requested = (
             requested_fields if requested_fields is not None else set(updates.keys())
         )
-        activation_flow_enabled = get_settings().activation_flow_enabled
         profile = (
             await self.business_profile_repository.get_or_create_for_update(user_id)
-            if activation_flow_enabled and PROFILE_MANAGED_CONTENT_FIELDS & requested
+            if self.activation_flow_enabled
+            and PROFILE_MANAGED_CONTENT_FIELDS & requested
             else None
         )
         activation = (
@@ -109,7 +111,7 @@ class AgentConfigService:
             user_id
         )
         if (
-            activation_flow_enabled
+            self.activation_flow_enabled
             and "is_enabled" in requested
             and updates.get("is_enabled") is True
             and not config.is_enabled

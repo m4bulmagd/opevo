@@ -42,6 +42,7 @@ class OnboardingService:
         self,
         session: AsyncSession | None = None,
         *,
+        activation_flow_enabled: bool,
         readiness_service: CustomerReadinessService | None = None,
         user_repository: UserRepository | None = None,
         subscription_repository: SubscriptionRepository | None = None,
@@ -54,6 +55,7 @@ class OnboardingService:
         if readiness_service is None:
             readiness_service = CustomerReadinessService(
                 session,
+                activation_flow_enabled=activation_flow_enabled,
                 user_repository=user_repository,
                 subscription_repository=subscription_repository,
                 usage_repository=usage_repository,
@@ -69,7 +71,9 @@ class OnboardingService:
         self.session = session
         self.activation_provisioning_service = activation_provisioning_service
         if self.activation_provisioning_service is None and session is not None:
-            self.activation_provisioning_service = ActivationProvisioningService(session)
+            self.activation_provisioning_service = ActivationProvisioningService(
+                session
+            )
 
     async def get_status(self, user_id: UUID | str) -> OnboardingStatusResponse:
         context = await self.readiness_service.evaluate(user_id)
@@ -110,9 +114,7 @@ class OnboardingService:
             ),
             minutes_remaining=context.balance,
             phone_number=(
-                context.phone_number.e164
-                if context.phone_number is not None
-                else None
+                context.phone_number.e164 if context.phone_number is not None else None
             ),
             phone_number_status=phone_number_status,
             agent_setup_complete=agent_setup_complete,

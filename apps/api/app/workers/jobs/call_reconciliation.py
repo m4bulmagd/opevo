@@ -14,9 +14,13 @@ logger = logging.getLogger(__name__)
 
 async def call_reconciliation_job(ctx: dict) -> dict[str, int]:
     session_factory = ctx.get("session_factory") or get_session_factory()
+    settings = get_settings()
     now_provider = ctx.get("call_reconciliation_now") or (lambda: datetime.now(UTC))
     now = now_provider()
-    result = await CallReconciliationService(session_factory).reconcile(
+    result = await CallReconciliationService(
+        session_factory,
+        settings=settings,
+    ).reconcile(
         now,
         limit=100,
     )
@@ -59,7 +63,7 @@ async def call_reconciliation_job(ctx: dict) -> dict[str, int]:
                 async with session_factory() as session:
                     snapshot = await CallRepository(session).observability_snapshot(
                         now,
-                        get_settings(),
+                        settings,
                     )
                 telemetry.record_call_snapshot(snapshot)
             except Exception as error:

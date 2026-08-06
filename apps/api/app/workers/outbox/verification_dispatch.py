@@ -14,7 +14,10 @@ from presvo_contracts import (
 
 from app.core.config import get_settings
 from app.core.database import get_session_factory
-from app.core.dispatch_token import DispatchTokenConfigurationError
+from app.core.dispatch_token import (
+    DispatchTokenConfigurationError,
+    dispatch_token_config,
+)
 from app.core.verification_token import (
     VerificationTokenError,
     create_verification_token,
@@ -186,7 +189,8 @@ async def _verification_dispatch_snapshot(
                 retryable=False,
             )
 
-        worker_name = get_settings().livekit_agent_name.strip()
+        settings = get_settings()
+        worker_name = settings.livekit_agent_name.strip()
         if not worker_name:
             await session.rollback()
             raise OutboxDeliveryError(
@@ -204,6 +208,7 @@ async def _verification_dispatch_snapshot(
                     completion_token=create_verification_token(
                         session_id=session_id,
                         user_id=str(user_id),
+                        config=dispatch_token_config(settings),
                     ),
                     message=VERIFICATION_MESSAGE,
                     tts_provider="speechmatics",
@@ -250,9 +255,8 @@ def _reconcile_verification_dispatches(
             and metadata is not None
             and metadata.verification_session_id == expected_session_id
             and metadata.user_id == snapshot.user_id
-            and metadata.agent_identity == _verification_agent_identity(
-                snapshot.session_id
-            )
+            and metadata.agent_identity
+            == _verification_agent_identity(snapshot.session_id)
         ):
             matches.append(dispatch)
 

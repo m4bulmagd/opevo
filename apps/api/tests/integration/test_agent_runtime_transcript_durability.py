@@ -30,6 +30,7 @@ from agent.session_runtime import SessionRuntime  # noqa: E402
 
 from app.core.database import get_session  # noqa: E402
 from app.core.dispatch_token import create_dispatch_token  # noqa: E402
+from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG  # noqa: E402
 from app.models.agent_config import AgentConfig  # noqa: E402
 from app.models.call import Call  # noqa: E402
 from app.models.call_message import CallMessage  # noqa: E402
@@ -148,6 +149,7 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
         call_id=str(call.id),
         user_id=str(active_user.id),
         agent_config_id=str(config.id),
+        config=TEST_DISPATCH_TOKEN_CONFIG,
     )
     metadata = create_contract(
         CustomerCallDispatch,

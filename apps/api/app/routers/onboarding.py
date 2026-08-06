@@ -6,14 +6,25 @@ from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.schemas.activation import ActivationSnapshotResponse
 from app.schemas.onboarding import OnboardingStatusResponse
-from app.services.onboarding_service import OnboardingRetryNotAllowedError, OnboardingService
+from app.services.onboarding_service import (
+    OnboardingRetryNotAllowedError,
+    OnboardingService,
+)
 
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
 
-def get_onboarding_service(session: AsyncSession = Depends(get_session)) -> OnboardingService:
-    return OnboardingService(session)
+def get_onboarding_service(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> OnboardingService:
+    return OnboardingService(
+        session,
+        activation_flow_enabled=(
+            get_api_runtime(request.app).settings.activation_flow_enabled
+        ),
+    )
 
 
 @router.get("", response_model=OnboardingStatusResponse)

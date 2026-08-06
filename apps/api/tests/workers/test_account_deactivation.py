@@ -474,11 +474,9 @@ async def test_exact_telnyx_disable_404_continues_release_and_reset(
         }
     }
     phone_number_resource = MagicMock()
-    phone_number_resource.modify.side_effect = (
-        telnyx.error.ResourceNotFoundError(
-            [{"title": "private provider response"}],
-            http_status=404,
-        )
+    phone_number_resource.modify.side_effect = telnyx.error.ResourceNotFoundError(
+        [{"title": "private provider response"}],
+        http_status=404,
     )
     phone_number_resource.return_value = phone_number
     telephony_provider = TelephonyTelnyx(
@@ -593,7 +591,9 @@ async def test_real_subscription_ended_request_disables_before_drain_and_release
         call_id = call.id
 
     async with deactivation_session_factory() as session:
-        operation = await AccountLifecycleService(session).request_in_transaction(
+        operation = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).request_in_transaction(
             user_id,
             trigger="subscription_ended",
             stripe_subscription_id=PRIVATE_SUBSCRIPTION_ID,
@@ -766,7 +766,9 @@ async def test_restart_from_each_committed_timestamp_skips_completed_provider_wo
             (
                 "telephony.disable",
                 ProviderFailure(
-                    provider="telnyx", operation="disable_number", disposition="retryable",
+                    provider="telnyx",
+                    operation="disable_number",
+                    disposition="retryable",
                     error_class="rate_limited",
                 ),
             ),
@@ -790,7 +792,9 @@ async def test_restart_from_each_committed_timestamp_skips_completed_provider_wo
             (
                 "telephony.release",
                 ProviderFailure(
-                    provider="telnyx", operation="release_number", disposition="retryable",
+                    provider="telnyx",
+                    operation="release_number",
+                    disposition="retryable",
                     error_class="unavailable",
                 ),
             ),
@@ -847,7 +851,9 @@ async def test_retryable_provider_failures_are_non_exhausting_and_committed(
             (
                 "telephony.disable",
                 ProviderFailure(
-                    provider="telnyx", operation="disable_number", disposition="terminal",
+                    provider="telnyx",
+                    operation="disable_number",
+                    disposition="terminal",
                     error_class="authentication",
                 ),
             ),
@@ -859,7 +865,9 @@ async def test_retryable_provider_failures_are_non_exhausting_and_committed(
             (
                 "telephony.disable",
                 ProviderFailure(
-                    provider="telnyx", operation="disable_number", disposition="terminal",
+                    provider="telnyx",
+                    operation="disable_number",
+                    disposition="terminal",
                     error_class="validation",
                 ),
             ),
@@ -904,7 +912,9 @@ async def test_retryable_provider_failures_are_non_exhausting_and_committed(
             (
                 "telephony.release",
                 ProviderFailure(
-                    provider="telnyx", operation="release_number", disposition="terminal",
+                    provider="telnyx",
+                    operation="release_number",
+                    disposition="terminal",
                     error_class="conflict",
                 ),
             ),
@@ -1014,7 +1024,9 @@ async def test_terminal_failure_redacts_raw_cause_from_customer_projection_and_l
         f"RAW_ERROR {PRIVATE_PHONE_PROVIDER_ID} {PRIVATE_E164} {PRIVATE_CONTENT}"
     )
     terminal_error = ProviderFailure(
-        provider="telnyx", operation="disable_number", disposition="terminal",
+        provider="telnyx",
+        operation="disable_number",
+        disposition="terminal",
         error_class="authentication",
     )
     terminal_error.__cause__ = raw_error
@@ -1028,8 +1040,12 @@ async def test_terminal_failure_redacts_raw_cause_from_customer_projection_and_l
         await deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     async with deactivation_session_factory() as session:
-        projection = await AccountLifecycleService(session).get_account(seeded.user_id)
-    exported = f"{projection.model_dump()} {caplog.text!r} {ctx['observability'].results!r}"
+        projection = await AccountLifecycleService(
+            session, activation_flow_enabled=False
+        ).get_account(seeded.user_id)
+    exported = (
+        f"{projection.model_dump()} {caplog.text!r} {ctx['observability'].results!r}"
+    )
     assert projection.blocker == "deactivation_attention_required"
     for private_value in (
         "RAW_ERROR",
@@ -1105,9 +1121,9 @@ async def test_observability_snapshot_aggregates_only_safe_operation_dimensions(
         await session.commit()
 
     async with deactivation_session_factory() as session:
-        snapshot = await AccountDeactivationRepository(
-            session
-        ).observability_snapshot(NOW)
+        snapshot = await AccountDeactivationRepository(session).observability_snapshot(
+            NOW
+        )
 
     assert snapshot.counts == {
         ("owner_request", "pending"): 0,

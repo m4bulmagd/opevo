@@ -67,7 +67,9 @@ class _RoutingProvider:
             raise ProviderFailure(
                 provider="telnyx",
                 operation="enable_number",
-                disposition=("retryable" if self.failure == "provider_retryable" else "terminal"),
+                disposition=(
+                    "retryable" if self.failure == "provider_retryable" else "terminal"
+                ),
                 error_class="unavailable",
             )
         return "app-active"
@@ -109,7 +111,9 @@ class _StateChangingRoutingProvider(_RoutingProvider):
         if self.compensation_failures_remaining:
             self.compensation_failures_remaining -= 1
             raise ProviderFailure(
-                provider="telnyx", operation="disable_number", disposition="terminal",
+                provider="telnyx",
+                operation="disable_number",
+                disposition="terminal",
                 error_class="validation",
             )
         self.external_connection_name = "app-disabled"
@@ -154,7 +158,9 @@ class _ProviderIdentityChangingWithFailedCompensation(
         if self.compensation_failures_remaining:
             self.compensation_failures_remaining -= 1
             raise ProviderFailure(
-                provider="telnyx", operation="disable_number", disposition="terminal",
+                provider="telnyx",
+                operation="disable_number",
+                disposition="terminal",
                 error_class="validation",
             )
         self.externally_active.discard(provider_number_id)
@@ -195,9 +201,7 @@ async def _seed_ready_customer(db_session, user):
         business_type="Plomberie",
         public_description="Dépannage et installation de plomberie.",
         timezone="Europe/Paris",
-        business_hours={
-            day: {"closed": True, "intervals": []} for day in WEEKDAYS
-        },
+        business_hours={day: {"closed": True, "intervals": []} for day in WEEKDAYS},
         existing_phone_e164=SOURCE_NUMBER,
         confirmed_carrier="orange",
         receptionist_name="Léa",
@@ -350,6 +354,7 @@ async def test_old_active_projection_cannot_admit_calls_before_attempt_succeeds(
     ).go_live(active_user.id, arq_pool=None)
     dispatch = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         realtime_service=None,
         recording_service=object(),
     )
@@ -394,7 +399,9 @@ async def test_pending_go_live_replay_is_idempotent_and_does_not_wake_again(
 
     assert first.stage == second.stage == "activating"
     assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
-    assert await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 1
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 1
+    )
     assert pool.jobs == [
         ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
     ]
@@ -542,7 +549,11 @@ async def test_go_live_after_disable_starts_fresh_attempt_from_actual_state(
     await AgentConfigService(
         db_session,
         AgentConfigRepository(db_session),
-        CustomerReadinessService(db_session),
+        CustomerReadinessService(
+            db_session,
+            activation_flow_enabled=True,
+        ),
+        activation_flow_enabled=True,
     ).update_by_user_id(
         active_user.id,
         {"is_enabled": False},
@@ -622,7 +633,9 @@ async def test_terminal_failure_allows_new_attempt_and_stale_event_is_obsolete(
     await service.go_live(active_user.id, arq_pool=None)
     events = list(
         (
-            await db_session.scalars(select(OutboxEvent).order_by(OutboxEvent.created_at))
+            await db_session.scalars(
+                select(OutboxEvent).order_by(OutboxEvent.created_at)
+            )
         ).all()
     )
     assert len(events) == 2
@@ -822,9 +835,7 @@ async def test_post_enable_ineligibility_compensates_and_retries_failed_disable(
     first = await outbox_delivery_job(ctx)
 
     db_session.expire_all()
-    after_failed_compensation = await db_session.get(
-        CustomerActivation, activation_id
-    )
+    after_failed_compensation = await db_session.get(CustomerActivation, activation_id)
     pending_event = await db_session.get(OutboxEvent, event_id)
     projected_phone = await db_session.get(PhoneNumber, phone_id)
     assert after_failed_compensation is not None
@@ -1041,9 +1052,7 @@ async def test_provider_identity_change_retains_old_id_until_compensation_succee
     assert pending_activation is not None
     assert first == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
     assert pending.status == "pending"
-    assert (
-        pending.routing_target_provider_number_id == "fake-number-go-live"
-    )
+    assert pending.routing_target_provider_number_id == "fake-number-go-live"
     assert pending_activation.activated_at is None
     assert provider.enabled == ["fake-number-go-live"]
     assert provider.disabled == ["fake-number-go-live"]

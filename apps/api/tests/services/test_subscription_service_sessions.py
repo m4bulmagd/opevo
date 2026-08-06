@@ -99,9 +99,8 @@ async def test_billing_query_runs_same_session_reads_sequentially() -> None:
 async def test_onboarding_runs_same_session_reads_sequentially() -> None:
     guard = SingleSessionGuard()
     service = OnboardingService(
-        user_repository=UserLookupRepository(
-            SimpleNamespace(status="active"), guard
-        ),
+        activation_flow_enabled=False,
+        user_repository=UserLookupRepository(SimpleNamespace(status="active"), guard),
         subscription_repository=UserLookupRepository(None, guard),
         usage_repository=UsageRepository(0, guard),
         phone_number_repository=UserLookupRepository(None, guard),
@@ -148,6 +147,7 @@ async def test_onboarding_routes_only_with_central_subscription_access(
         knowledge_base="Open weekdays.",
     )
     service = OnboardingService(
+        activation_flow_enabled=False,
         user_repository=UserLookupRepository(SimpleNamespace(status="active")),
         subscription_repository=UserLookupRepository(subscription),
         usage_repository=UsageRepository(60),
@@ -172,6 +172,7 @@ async def test_trialing_subscription_can_retry_failed_provisioning() -> None:
     )
     provisioning = SimpleNamespace(status="failed", can_retry=True)
     service = OnboardingService(
+        activation_flow_enabled=False,
         user_repository=UserLookupRepository(SimpleNamespace(status="active")),
         subscription_repository=UserLookupRepository(subscription),
         usage_repository=UsageRepository(60),
@@ -209,6 +210,7 @@ async def test_onboarding_is_not_live_when_routing_flags_diverge(
         knowledge_base="Open weekdays.",
     )
     service = OnboardingService(
+        activation_flow_enabled=False,
         user_repository=UserLookupRepository(SimpleNamespace(status="active")),
         subscription_repository=UserLookupRepository(subscription),
         usage_repository=UsageRepository(60),

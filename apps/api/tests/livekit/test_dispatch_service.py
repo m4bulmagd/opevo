@@ -36,14 +36,6 @@ def test_allowed_duration_never_exceeds_configured_maximum() -> None:
     )
 
 
-class FakeDispatchClient:
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
-
-    async def create_dispatch(self, *, room_name: str, metadata: str) -> None:
-        self.calls.append({"room_name": room_name, "metadata": metadata})
-
-
 class FakeRealtimeService:
     def __init__(self) -> None:
         self.events: list[dict] = []
@@ -51,7 +43,9 @@ class FakeRealtimeService:
     async def publish_call_started(
         self, user_id: UUID, *, room_name: str, call_id: UUID
     ) -> None:
-        self.events.append({"user_id": user_id, "room_name": room_name, "call_id": call_id})
+        self.events.append(
+            {"user_id": user_id, "room_name": room_name, "call_id": call_id}
+        )
 
 
 @dataclass
@@ -144,10 +138,7 @@ class FakeCallRepository:
         *,
         call_id: UUID,
     ):
-        if (
-            self.call.id != call_id
-            or self.call.recording_egress_id is not None
-        ):
+        if self.call.id != call_id or self.call.recording_egress_id is not None:
             return None
         return self.call
 
@@ -314,7 +305,6 @@ class FakeCallLifecycleService:
 
 def build_dispatch_service(
     session,
-    dispatch_client,
     *,
     phone_number_repository=None,
     agent_config_repository=None,
@@ -329,11 +319,25 @@ def build_dispatch_service(
     resolved_call_repository = call_repository or FakeCallRepository(call_id=uuid4())
     return LiveKitDispatchService(
         session,
-        dispatch_client,
-        phone_number_repository=phone_number_repository or FakePhoneNumberRepository(FakePhoneNumber(id=uuid4(), user_id=uuid4(), e164="+33000000000")),
-        agent_config_repository=agent_config_repository or FakeAgentConfigRepository(FakeAgentConfig(id=uuid4(), agent_name="A", owner_context=None, system_prompt="", knowledge_base="", pipeline_mode="stt_llm_tts")),
+        activation_flow_enabled=False,
+        phone_number_repository=phone_number_repository
+        or FakePhoneNumberRepository(
+            FakePhoneNumber(id=uuid4(), user_id=uuid4(), e164="+33000000000")
+        ),
+        agent_config_repository=agent_config_repository
+        or FakeAgentConfigRepository(
+            FakeAgentConfig(
+                id=uuid4(),
+                agent_name="A",
+                owner_context=None,
+                system_prompt="",
+                knowledge_base="",
+                pipeline_mode="stt_llm_tts",
+            )
+        ),
         call_repository=resolved_call_repository,
-        user_repository=user_repository or FakeUserRepository(FakeUser(id=uuid4(), full_name=None, email="x@x.com")),
+        user_repository=user_repository
+        or FakeUserRepository(FakeUser(id=uuid4(), full_name=None, email="x@x.com")),
         usage_repository=usage_repository or FakeUsageRepository(),
         realtime_service=realtime_service or FakeRealtimeService(),
         recording_service=recording_service or FakeRecordingService(),
@@ -342,14 +346,15 @@ def build_dispatch_service(
             or FakeRecordingLifecycleService(resolved_call_repository)
         ),
         call_lifecycle_service=(
-            call_lifecycle_service
-            or FakeCallLifecycleService(resolved_call_repository)
+            call_lifecycle_service or FakeCallLifecycleService(resolved_call_repository)
         ),
     )
 
 
 @pytest.mark.anyio
-async def test_dispatch_service_persists_recording_metadata_when_egress_starts() -> None:
+async def test_dispatch_service_persists_recording_metadata_when_egress_starts() -> (
+    None
+):
     user_id = uuid4()
     phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
     agent_config = FakeAgentConfig(
@@ -362,14 +367,12 @@ async def test_dispatch_service_persists_recording_metadata_when_egress_starts()
     )
     user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
 
-    dispatch_client = FakeDispatchClient()
     recording_service = FakeRecordingService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
     call_repository.call.user_id = user_id
     service = build_dispatch_service(
         session,
-        dispatch_client,
         phone_number_repository=FakePhoneNumberRepository(phone_number),
         agent_config_repository=FakeAgentConfigRepository(agent_config),
         call_repository=call_repository,
@@ -407,7 +410,9 @@ async def test_dispatch_service_persists_recording_metadata_when_egress_starts()
 
 
 @pytest.mark.anyio
-async def test_dispatch_service_skips_agent_join_when_recording_already_started() -> None:
+async def test_dispatch_service_skips_agent_join_when_recording_already_started() -> (
+    None
+):
     user_id = uuid4()
     phone_number = FakePhoneNumber(id=uuid4(), user_id=user_id, e164="+33999888777")
     agent_config = FakeAgentConfig(
@@ -420,14 +425,12 @@ async def test_dispatch_service_skips_agent_join_when_recording_already_started(
     )
     user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
 
-    dispatch_client = FakeDispatchClient()
     recording_service = FakeRecordingService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
     call_repository.call.recording_egress_id = "egress_existing"
     service = build_dispatch_service(
         session,
-        dispatch_client,
         phone_number_repository=FakePhoneNumberRepository(phone_number),
         agent_config_repository=FakeAgentConfigRepository(agent_config),
         call_repository=call_repository,
@@ -453,7 +456,9 @@ async def test_dispatch_service_skips_agent_join_when_recording_already_started(
 
 
 @pytest.mark.anyio
-async def test_dispatch_service_ends_call_without_direct_provider_stop_on_sip_leave() -> None:
+async def test_dispatch_service_ends_call_without_direct_provider_stop_on_sip_leave() -> (
+    None
+):
     recording_service = FakeRecordingService()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
@@ -461,7 +466,6 @@ async def test_dispatch_service_ends_call_without_direct_provider_stop_on_sip_le
     call_repository.call.recording_egress_id = "egress_123"
     service = build_dispatch_service(
         session,
-        FakeDispatchClient(),
         call_repository=call_repository,
         recording_service=recording_service,
     )
@@ -486,7 +490,9 @@ async def test_dispatch_service_ends_call_without_direct_provider_stop_on_sip_le
 
 
 @pytest.mark.anyio
-async def test_dispatch_service_does_not_call_recording_provider_during_sip_leave(caplog) -> None:
+async def test_dispatch_service_does_not_call_recording_provider_during_sip_leave(
+    caplog,
+) -> None:
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
     call_repository.call.status = "connected"
@@ -494,7 +500,6 @@ async def test_dispatch_service_does_not_call_recording_provider_during_sip_leav
     call_repository.call.recording_egress_id = "egress_123"
     service = build_dispatch_service(
         session,
-        FakeDispatchClient(),
         call_repository=call_repository,
         recording_service=FakeFailingStopRecordingService(),
     )
@@ -536,14 +541,12 @@ async def test_dispatch_service_continues_when_recording_egress_fails(caplog) ->
     )
     user = FakeUser(id=user_id, full_name="Sam", email="active@example.com")
 
-    dispatch_client = FakeDispatchClient()
     session = FakeSession()
     call_repository = FakeCallRepository(call_id=uuid4())
     call_repository.call.user_id = user_id
     call_repository.call.livekit_room_id = ROOM_NAME_SENTINEL
     service = build_dispatch_service(
         session,
-        dispatch_client,
         phone_number_repository=FakePhoneNumberRepository(phone_number),
         agent_config_repository=FakeAgentConfigRepository(agent_config),
         call_repository=call_repository,
@@ -564,7 +567,6 @@ async def test_dispatch_service_continues_when_recording_egress_fails(caplog) ->
             }
         )
 
-    assert dispatch_client.calls == []
     assert call_repository.pending_by_room_calls == [ROOM_NAME_SENTINEL]
     assert call_repository.recording_metadata_calls == []
     assert RECORDING_START_SENTINEL not in caplog.text
@@ -593,7 +595,6 @@ async def test_dispatch_service_propagates_recording_start_defects() -> None:
     call_repository.call.livekit_room_id = ROOM_NAME_SENTINEL
     service = build_dispatch_service(
         FakeSession(),
-        FakeDispatchClient(),
         phone_number_repository=FakePhoneNumberRepository(phone_number),
         agent_config_repository=FakeAgentConfigRepository(agent_config),
         call_repository=call_repository,

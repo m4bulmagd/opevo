@@ -10,11 +10,13 @@ from presvo_contracts import (
     parse_dispatch,
 )
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.database import get_session_factory
 from app.core.dispatch_token import (
     DispatchTokenError,
+    DispatchTokenConfig,
     create_dispatch_token,
+    dispatch_token_config,
 )
 from app.models.outbox_event import OutboxEvent
 from app.providers.livekit_dispatch.base import LiveKitDispatch
@@ -60,9 +62,16 @@ async def deliver_livekit_dispatch(
 ) -> None:
     call_id, lifecycle_generation = _validated_dispatch_reference(event)
     session_factory = ctx.get("session_factory") or get_session_factory()
+    settings = get_settings()
+    token_config = dispatch_token_config(settings)
 
     async with livekit_dispatch_lock(session_factory, call_id):
-        snapshot = await _dispatch_snapshot(session_factory, call_id)
+        snapshot = await _dispatch_snapshot(
+            session_factory,
+            call_id,
+            settings=settings,
+            token_config=token_config,
+        )
         provider = ctx.get("livekit_dispatch_provider")
         if provider is None:
             provider = LiveKitDispatchAPIProvider()
@@ -116,7 +125,13 @@ def _validated_dispatch_reference(event: OutboxEvent) -> tuple[UUID, int]:
     return call_id, lifecycle_generation
 
 
-async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapshot:
+async def _dispatch_snapshot(
+    session_factory,
+    call_id: UUID,
+    *,
+    settings: Settings,
+    token_config: DispatchTokenConfig,
+) -> _DispatchSnapshot:
     async with session_factory() as session:
         call_repository = CallRepository(session)
         call = await call_repository.get_by_id(call_id)
@@ -136,7 +151,6 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
             )
         await session.refresh(call)
 
-        settings = get_settings()
         activation = None
         business_profile = None
         if settings.activation_flow_enabled:
@@ -221,6 +235,7 @@ async def _dispatch_snapshot(session_factory, call_id: UUID) -> _DispatchSnapsho
                 call_id=str(call.id),
                 user_id=str(call.user_id),
                 agent_config_id=str(agent_config.id),
+                config=token_config,
             )
             metadata = dump_contract_json(
                 create_contract(

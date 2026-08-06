@@ -38,6 +38,7 @@ class AccountLifecycleService:
         self,
         session: AsyncSession,
         *,
+        activation_flow_enabled: bool,
         account_deactivation_repository: AccountDeactivationRepository | None = None,
         agent_config_repository: AgentConfigRepository | None = None,
         phone_number_repository: PhoneNumberRepository | None = None,
@@ -68,7 +69,10 @@ class AccountLifecycleService:
         self.provider_cleanup_repository = (
             provider_cleanup_repository or ProviderCleanupRepository(session)
         )
-        self.readiness_service = readiness_service or CustomerReadinessService(session)
+        self.readiness_service = readiness_service or CustomerReadinessService(
+            session,
+            activation_flow_enabled=activation_flow_enabled,
+        )
         self.subscription_repository = (
             subscription_repository or SubscriptionRepository(session)
         )

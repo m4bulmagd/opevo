@@ -69,14 +69,26 @@ async def _seed_owner(
     return user_id
 
 
-async def _owner_state(database_url: str, user_id: UUID) -> tuple[User, AgentConfig, PhoneNumber, list[AccountDeactivationOperation], list[OutboxEvent]]:
+async def _owner_state(
+    database_url: str, user_id: UUID
+) -> tuple[
+    User,
+    AgentConfig,
+    PhoneNumber,
+    list[AccountDeactivationOperation],
+    list[OutboxEvent],
+]:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = await session.get(User, user_id)
         assert user is not None
-        config = await session.scalar(select(AgentConfig).where(AgentConfig.user_id == user_id))
-        phone = await session.scalar(select(PhoneNumber).where(PhoneNumber.user_id == user_id))
+        config = await session.scalar(
+            select(AgentConfig).where(AgentConfig.user_id == user_id)
+        )
+        phone = await session.scalar(
+            select(PhoneNumber).where(PhoneNumber.user_id == user_id)
+        )
         assert config is not None
         assert phone is not None
         operations = list(
@@ -166,10 +178,12 @@ async def test_active_account_serving_comes_from_central_readiness(
 ) -> None:
     unavailable = AccountLifecycleService(
         db_session,
+        activation_flow_enabled=False,
         readiness_service=FakeCustomerReadinessService(serving=False),
     )
     available = AccountLifecycleService(
         db_session,
+        activation_flow_enabled=False,
         readiness_service=FakeCustomerReadinessService(serving=True),
     )
 
@@ -205,6 +219,7 @@ async def test_inactive_response_allows_reactivation_only_after_cleanup_finishes
     await db_session.flush()
     service = AccountLifecycleService(
         db_session,
+        activation_flow_enabled=False,
         readiness_service=FakeCustomerReadinessService(serving=True),
     )
 
@@ -262,7 +277,9 @@ async def test_inactive_cleanup_blocker_is_bounded_reactivation_not_ready(
     db_session.add(operation)
     await db_session.flush()
 
-    response = await AccountLifecycleService(db_session).get_account(active_user.id)
+    response = await AccountLifecycleService(
+        db_session, activation_flow_enabled=False
+    ).get_account(active_user.id)
 
     assert response.reactivation_allowed is False
     assert response.blocker == "reactivation_not_ready"
@@ -295,7 +312,9 @@ async def test_inactive_response_blocks_on_unresolved_provider_cleanup(
     )
     await db_session.flush()
 
-    response = await AccountLifecycleService(db_session).get_account(active_user.id)
+    response = await AccountLifecycleService(
+        db_session, activation_flow_enabled=False
+    ).get_account(active_user.id)
 
     assert response.reactivation_allowed is False
     assert response.blocker == expected_blocker
@@ -319,7 +338,9 @@ async def test_inactive_response_blocks_while_prior_provisioning_can_still_compl
     )
     await db_session.flush()
 
-    response = await AccountLifecycleService(db_session).get_account(active_user.id)
+    response = await AccountLifecycleService(
+        db_session, activation_flow_enabled=False
+    ).get_account(active_user.id)
 
     assert response.reactivation_allowed is False
     assert response.blocker == "reactivation_not_ready"
@@ -348,13 +369,16 @@ async def test_completed_and_stale_subscription_events_do_not_restart_deactivati
     completed.completed_at = completed.requested_at
     db_session.add(completed)
     await db_session.flush()
-    service = AccountLifecycleService(db_session)
+    service = AccountLifecycleService(db_session, activation_flow_enabled=False)
 
-    assert await service.request_in_transaction(
-        active_user.id,
-        trigger="subscription_ended",
-        stripe_subscription_id="sub-completed",
-    ) == completed
+    assert (
+        await service.request_in_transaction(
+            active_user.id,
+            trigger="subscription_ended",
+            stripe_subscription_id="sub-completed",
+        )
+        == completed
+    )
 
     active_user.status = "active"
     active_user.lifecycle_generation = 3
@@ -369,14 +393,20 @@ async def test_completed_and_stale_subscription_events_do_not_restart_deactivati
     db_session.add(subscription)
     await db_session.flush()
 
-    assert await service.request_in_transaction(
-        active_user.id,
-        trigger="subscription_ended",
-        stripe_subscription_id="sub-completed",
-    ) is None
-    assert await db_session.scalar(
-        select(func.count()).select_from(AccountDeactivationOperation)
-    ) == 1
+    assert (
+        await service.request_in_transaction(
+            active_user.id,
+            trigger="subscription_ended",
+            stripe_subscription_id="sub-completed",
+        )
+        is None
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(AccountDeactivationOperation)
+        )
+        == 1
+    )
 
 
 @pytest.mark.anyio
@@ -394,7 +424,7 @@ async def test_subscription_end_request_leaves_worker_phase_timestamps_unclaimed
     )
     db_session.add(subscription)
     await db_session.flush()
-    service = AccountLifecycleService(db_session)
+    service = AccountLifecycleService(db_session, activation_flow_enabled=False)
 
     operation = await service.request_in_transaction(
         active_user.id,
@@ -425,25 +455,31 @@ async def test_deactivation_progress_advances_to_the_first_unfinished_phase(
     )
     db_session.add(operation)
     await db_session.flush()
-    service = AccountLifecycleService(db_session)
+    service = AccountLifecycleService(db_session, activation_flow_enabled=False)
 
     assert (await service.get_account(active_user.id)).deactivation is not None
     assert (await service.get_account(active_user.id)).deactivation.state == "requested"
 
     operation.status = "processing"
     await db_session.flush()
-    assert (await service.get_account(active_user.id)).deactivation.state == "disabling_routing"
+    assert (
+        await service.get_account(active_user.id)
+    ).deactivation.state == "disabling_routing"
 
     operation.routing_disabled_at = operation.requested_at
     await db_session.flush()
-    assert (await service.get_account(active_user.id)).deactivation.state == "canceling_subscription"
+    assert (
+        await service.get_account(active_user.id)
+    ).deactivation.state == "canceling_subscription"
 
     operation.subscription_canceled_at = operation.requested_at
     operation.active_call_drained_at = operation.requested_at
     operation.number_released_at = operation.requested_at
     operation.activation_reset_at = operation.requested_at
     await db_session.flush()
-    assert (await service.get_account(active_user.id)).deactivation.state == "finalizing"
+    assert (
+        await service.get_account(active_user.id)
+    ).deactivation.state == "finalizing"
 
 
 @pytest.mark.anyio
@@ -468,7 +504,7 @@ async def test_owner_repeat_after_completion_keeps_the_inactive_generation(
     completed.completed_at = completed.requested_at
     db_session.add(completed)
     await db_session.commit()
-    service = AccountLifecycleService(db_session)
+    service = AccountLifecycleService(db_session, activation_flow_enabled=False)
 
     response = await service.request_owner_deactivation(
         active_user.id,
@@ -479,6 +515,9 @@ async def test_owner_repeat_after_completion_keeps_the_inactive_generation(
     assert stored is not None
     assert stored.lifecycle_generation == 2
     assert response.status == "inactive"
-    assert await db_session.scalar(
-        select(func.count()).select_from(AccountDeactivationOperation)
-    ) == 1
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(AccountDeactivationOperation)
+        )
+        == 1
+    )

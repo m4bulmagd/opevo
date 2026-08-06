@@ -11,7 +11,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.database import get_session
+from app.core.config import Settings
 from app.core.dispatch_token import create_dispatch_token
+from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG
+from tests.conftest import install_test_api_runtime
 from app.models.activation_event import ActivationEvent
 from app.models.business_profile import BusinessProfile
 from app.models.call import Call
@@ -233,6 +236,7 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
         ).open_window(user_id)
         claim_result = await LiveKitDispatchService(
             db_session,
+            activation_flow_enabled=True,
             realtime_service=realtime,
             recording_service=recording,
             now_provider=lambda: now + timedelta(minutes=1),
@@ -273,6 +277,7 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
             call_id=str(uuid4()),
             user_id=str(user_id),
             agent_config_id=str(uuid4()),
+            config=TEST_DISPATCH_TOKEN_CONFIG,
         )
 
         from app.routers.activation import router as activation_router
@@ -283,6 +288,16 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
 
         completion_app = FastAPI()
         completion_app.include_router(activation_router)
+        install_test_api_runtime(
+            completion_app,
+            settings=Settings(
+                app_env="test",
+                database_url="sqlite+aiosqlite://",
+                redis_url="redis://explicit-verification.invalid/0",
+                agent_dispatch_jwt_secret=(TEST_DISPATCH_TOKEN_CONFIG.secret),
+                agent_dispatch_jwt_ttl_seconds=(TEST_DISPATCH_TOKEN_CONFIG.ttl_seconds),
+            ),
+        )
         completion_app.dependency_overrides[get_session] = override_session
         transport = httpx.ASGITransport(app=completion_app)
         async with httpx.AsyncClient(
@@ -302,6 +317,7 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
 
         replay_result = await LiveKitDispatchService(
             db_session,
+            activation_flow_enabled=True,
             realtime_service=realtime,
             recording_service=recording,
             now_provider=lambda: now + timedelta(minutes=2),

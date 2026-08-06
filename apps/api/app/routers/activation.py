@@ -6,7 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
-from app.core.dispatch_token import DispatchTokenConfigurationError
+from app.core.dispatch_token import (
+    DispatchTokenConfigurationError,
+    dispatch_token_config,
+)
 from app.core.contract_http import contract_request_openapi, parse_contract_request
 from app.core.verification_token import (
     VerificationTokenError,
@@ -39,6 +42,7 @@ from app.services.carrier_lookup_service import (
     CarrierLookupService,
     CarrierLookupUnavailableError,
 )
+from app.providers.carrier_lookup.factory import build_carrier_lookup_provider
 from app.services.forwarding_verification_service import (
     ForwardingVerificationConflictError,
     ForwardingVerificationService,
@@ -81,9 +85,14 @@ def get_business_profile_service(
 
 
 def get_carrier_lookup_service(
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> CarrierLookupService:
-    return CarrierLookupService(session)
+    settings = get_api_runtime(request.app).settings
+    return CarrierLookupService(
+        session,
+        provider=build_carrier_lookup_provider(settings=settings),
+    )
 
 
 def get_forwarding_verification_service(
@@ -283,11 +292,9 @@ async def complete_forwarding_verification(
         get_forwarding_verification_service
     ),
 ) -> VerificationCompletionAcknowledgement:
-    activation = (
-        await CustomerActivationRepository(session).get_by_verification_session_id(
-            session_id
-        )
-    )
+    activation = await CustomerActivationRepository(
+        session
+    ).get_by_verification_session_id(session_id)
     if activation is None:
         raise _verification_auth_error()
     try:
@@ -295,6 +302,7 @@ async def complete_forwarding_verification(
             x_verification_token or "",
             expected_session_id=session_id,
             expected_user_id=str(activation.user_id),
+            config=dispatch_token_config(get_api_runtime(request.app).settings),
         )
     except (VerificationTokenError, DispatchTokenConfigurationError):
         raise _verification_auth_error() from None

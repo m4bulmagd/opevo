@@ -3,7 +3,8 @@ from datetime import UTC, datetime, timedelta
 import logging
 from uuid import UUID
 
-from app.core.config import get_settings
+from app.core.config import Settings
+from app.core.database import AsyncSessionFactory
 from app.repositories.call_repository import CallRepository
 from app.repositories.usage_repository import UsageRepository
 from app.services.call_lifecycle_service import CallLifecycleService
@@ -23,9 +24,14 @@ class ReconciliationResult:
 
 
 class CallReconciliationService:
-    def __init__(self, session_factory, *, settings=None) -> None:
+    def __init__(
+        self,
+        session_factory: AsyncSessionFactory,
+        *,
+        settings: Settings,
+    ) -> None:
         self.session_factory = session_factory
-        self.settings = settings or get_settings()
+        self.settings = settings
 
     async def reconcile(
         self,

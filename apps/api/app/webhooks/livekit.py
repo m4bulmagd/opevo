@@ -311,6 +311,7 @@ async def handle_livekit_webhook(
         elif event_type in ("participant_joined", "participant_left"):
             service = LiveKitDispatchService(
                 session,
+                activation_flow_enabled=settings.activation_flow_enabled,
                 phone_number_repository=PhoneNumberRepository(session),
                 agent_config_repository=AgentConfigRepository(session),
                 call_repository=CallRepository(session),

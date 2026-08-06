@@ -3,7 +3,6 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
@@ -85,9 +84,7 @@ def activation_readiness_prerequisites(
         routing_fingerprint(profile, phone_number) if profile is not None else None
     )
     verified_fingerprint = (
-        activation.verified_routing_fingerprint
-        if activation is not None
-        else None
+        activation.verified_routing_fingerprint if activation is not None else None
     )
     forwarding_verified = bool(
         activation is not None
@@ -130,9 +127,7 @@ def build_customer_readiness_snapshot(
     return CustomerReadinessSnapshot(
         user_status=user.status if user is not None else None,
         plan_tier=subscription.plan_tier if subscription is not None else None,
-        subscription_status=(
-            subscription.status if subscription is not None else None
-        ),
+        subscription_status=(subscription.status if subscription is not None else None),
         current_period_start=(
             subscription.current_period_start if subscription is not None else None
         ),
@@ -140,9 +135,7 @@ def build_customer_readiness_snapshot(
             subscription.current_period_end if subscription is not None else None
         ),
         balance=balance,
-        provisioning_status=(
-            provisioning.status if provisioning is not None else None
-        ),
+        provisioning_status=(provisioning.status if provisioning is not None else None),
         number_provisioned=number_is_provisioned(
             provisioning=provisioning,
             phone_number=phone_number,
@@ -155,9 +148,7 @@ def build_customer_readiness_snapshot(
         ),
         phone_active=bool(phone_number is not None and phone_number.is_active),
         phone_connection_name=(
-            phone_number.provider_connection_name
-            if phone_number is not None
-            else None
+            phone_number.provider_connection_name if phone_number is not None else None
         ),
         agent_present=agent_config is not None,
         agent_enabled=bool(
@@ -238,8 +229,9 @@ def evaluate_customer_readiness(
 class CustomerReadinessService:
     def __init__(
         self,
-        session: AsyncSession | None = None,
+        session: AsyncSession | None,
         *,
+        activation_flow_enabled: bool,
         user_repository: UserRepository | None = None,
         subscription_repository: SubscriptionRepository | None = None,
         usage_repository: UsageRepository | None = None,
@@ -248,10 +240,7 @@ class CustomerReadinessService:
         agent_config_repository: AgentConfigRepository | None = None,
         business_profile_repository: BusinessProfileRepository | None = None,
         activation_repository: CustomerActivationRepository | None = None,
-        activation_flow_enabled: bool | None = None,
     ) -> None:
-        if activation_flow_enabled is None:
-            activation_flow_enabled = get_settings().activation_flow_enabled
         if user_repository is None:
             user_repository = UserRepository(self._require_session(session))
         if subscription_repository is None:
@@ -310,7 +299,10 @@ class CustomerReadinessService:
         business_profile = None
         activation = None
         if self.activation_flow_enabled:
-            if self.business_profile_repository is None or self.activation_repository is None:
+            if (
+                self.business_profile_repository is None
+                or self.activation_repository is None
+            ):
                 raise RuntimeError("activation repositories are required")
             business_profile = await self.business_profile_repository.get_by_user_id(
                 user_id

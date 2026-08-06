@@ -178,6 +178,7 @@ async def test_open_window_is_claimed_before_normal_call_admission(
     recording = _Recording()
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         realtime_service=realtime,
         recording_service=recording,
         now_provider=lambda: FIXED_NOW,
@@ -207,9 +208,9 @@ async def test_open_window_is_claimed_before_normal_call_admission(
     assert await db_session.scalar(select(func.count()).select_from(CallMessage)) == 0
     assert await db_session.scalar(select(func.count()).select_from(Notification)) == 0
     assert await db_session.scalar(select(func.count()).select_from(UsageLedger)) == 0
-    assert await db_session.scalar(
-        select(func.count()).select_from(ActivationEvent)
-    ) == 1
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 1
+    )
     assert realtime.events == []
     assert recording.starts == []
 
@@ -222,6 +223,7 @@ async def test_present_mismatched_diversion_does_not_claim(
     activation = await _seed_open_window(db_session, active_user)
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
         now_provider=lambda: FIXED_NOW,
@@ -241,12 +243,10 @@ async def test_present_mismatched_diversion_does_not_claim(
     assert result.status == "denied"
     assert activation.verification_status == "open"
     assert activation.verification_session_id is None
-    assert await db_session.scalar(
-        select(func.count()).select_from(ActivationEvent)
-    ) == 0
-    assert await db_session.scalar(
-        select(func.count()).select_from(OutboxEvent)
-    ) == 0
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 0
+    )
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
     assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
 
 
@@ -260,6 +260,7 @@ async def test_malformed_diversion_value_does_not_escape_verification_admission(
     activation = await _seed_open_window(db_session, active_user)
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
         now_provider=lambda: FIXED_NOW,
@@ -280,9 +281,7 @@ async def test_malformed_diversion_value_does_not_escape_verification_admission(
     assert activation.verification_status == "open"
     assert activation.verification_session_id is None
     assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
-    assert await db_session.scalar(
-        select(func.count()).select_from(OutboxEvent)
-    ) == 0
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
 @pytest.mark.anyio
@@ -290,6 +289,7 @@ async def test_missing_diversion_is_allowed(db_session, active_user) -> None:
     activation = await _seed_open_window(db_session, active_user)
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
         now_provider=lambda: FIXED_NOW,
@@ -319,6 +319,7 @@ async def test_no_window_continues_unchanged_normal_dispatch(
     realtime = _Realtime()
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=False,
         realtime_service=realtime,
         recording_service=_Recording(),
         now_provider=lambda: FIXED_NOW,
@@ -352,6 +353,7 @@ async def test_deactivation_commit_prevents_later_customer_call_admission(
     await db_session.commit()
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=False,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
         now_provider=lambda: FIXED_NOW,
@@ -377,6 +379,7 @@ async def test_malformed_or_wrong_called_number_does_not_claim(
     activation = await _seed_open_window(db_session, active_user)
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
         now_provider=lambda: FIXED_NOW,
@@ -396,12 +399,10 @@ async def test_malformed_or_wrong_called_number_does_not_claim(
     assert result.status == "denied"
     assert activation.verification_status == "open"
     assert activation.verification_session_id is None
-    assert await db_session.scalar(
-        select(func.count()).select_from(ActivationEvent)
-    ) == 0
-    assert await db_session.scalar(
-        select(func.count()).select_from(OutboxEvent)
-    ) == 0
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 0
+    )
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
 @pytest.mark.anyio
@@ -411,6 +412,7 @@ async def test_expired_window_does_not_claim(db_session, active_user) -> None:
     await db_session.commit()
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
         now_provider=lambda: FIXED_NOW,
@@ -422,12 +424,10 @@ async def test_expired_window_does_not_claim(db_session, active_user) -> None:
     assert result.status == "denied"
     assert activation.verification_status == "open"
     assert activation.verification_session_id is None
-    assert await db_session.scalar(
-        select(func.count()).select_from(ActivationEvent)
-    ) == 0
-    assert await db_session.scalar(
-        select(func.count()).select_from(OutboxEvent)
-    ) == 0
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 0
+    )
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
 @pytest.mark.anyio
@@ -452,6 +452,7 @@ async def test_outbox_failure_rolls_back_claim_and_audit(
     )
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         inbound_verification_service=inbound,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
@@ -466,12 +467,10 @@ async def test_outbox_failure_rolls_back_claim_and_audit(
     assert activation.verification_session_id is None
     assert activation.verification_claimed_at is None
     assert activation.verification_routing_fingerprint is None
-    assert await db_session.scalar(
-        select(func.count()).select_from(ActivationEvent)
-    ) == 0
-    assert await db_session.scalar(
-        select(func.count()).select_from(OutboxEvent)
-    ) == 0
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 0
+    )
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
 class _VerificationReceiver:
@@ -505,9 +504,7 @@ async def test_duplicate_webhook_id_claims_and_dispatches_exactly_once(
                     business_type="Plomberie",
                     public_description="Dépannage et installation de plomberie.",
                     timezone="Europe/Paris",
-                    business_hours={
-                        "monday": {"closed": False, "intervals": []}
-                    },
+                    business_hours={"monday": {"closed": False, "intervals": []}},
                     existing_phone_e164=SOURCE_NUMBER,
                     confirmed_carrier="orange",
                     receptionist_name="Léa",
@@ -559,15 +556,11 @@ async def test_duplicate_webhook_id_claims_and_dispatches_exactly_once(
         activation = await session.scalar(select(CustomerActivation))
         assert activation is not None
         assert activation.verification_status == "claimed"
-        assert await session.scalar(
-            select(func.count()).select_from(WebhookEvent)
-        ) == 1
-        assert await session.scalar(
-            select(func.count()).select_from(ActivationEvent)
-        ) == 1
-        assert await session.scalar(
-            select(func.count()).select_from(OutboxEvent)
-        ) == 1
+        assert await session.scalar(select(func.count()).select_from(WebhookEvent)) == 1
+        assert (
+            await session.scalar(select(func.count()).select_from(ActivationEvent)) == 1
+        )
+        assert await session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
         assert await session.scalar(select(func.count()).select_from(Call)) == 0
     await engine.dispose()
     assert first.status_code == 202
@@ -583,6 +576,7 @@ async def test_same_room_redelivery_with_new_event_id_is_verification_idempotent
     activation = await _seed_open_window(db_session, active_user)
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
         now_provider=lambda: FIXED_NOW,
@@ -598,12 +592,10 @@ async def test_same_room_redelivery_with_new_event_id_is_verification_idempotent
     await db_session.refresh(activation)
     assert first.status == second.status == "verification_claimed"
     assert activation.verification_session_id == first_session_id
-    assert await db_session.scalar(
-        select(func.count()).select_from(ActivationEvent)
-    ) == 1
-    assert await db_session.scalar(
-        select(func.count()).select_from(OutboxEvent)
-    ) == 1
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 1
+    )
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
     assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
 
 
@@ -615,6 +607,7 @@ async def test_same_room_replay_after_success_never_becomes_a_customer_call(
     activation = await _seed_open_window(db_session, active_user)
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
         now_provider=lambda: FIXED_NOW,
@@ -688,6 +681,7 @@ async def test_same_room_redelivery_rejects_corrupt_claim_audit_identity(
     await _seed_open_window(db_session, active_user)
     service = LiveKitDispatchService(
         db_session,
+        activation_flow_enabled=True,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
         now_provider=lambda: FIXED_NOW,
@@ -701,10 +695,8 @@ async def test_same_room_redelivery_rejects_corrupt_claim_audit_identity(
     result = await service.handle_participant_joined(_sip_join())
 
     assert result.status == "denied"
-    assert await db_session.scalar(
-        select(func.count()).select_from(ActivationEvent)
-    ) == 1
-    assert await db_session.scalar(
-        select(func.count()).select_from(OutboxEvent)
-    ) == 1
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ActivationEvent)) == 1
+    )
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
     assert await db_session.scalar(select(func.count()).select_from(Call)) == 0

@@ -20,6 +20,7 @@ from app.models.phone_number import PhoneNumber
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.services.forwarding_verification_service import ForwardingVerificationService
+from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG
 
 
 SOURCE_NUMBER = "+33199000000"
@@ -52,9 +53,7 @@ async def _seed_claimed_verification(
                     business_type="Plomberie",
                     public_description="Dépannage et installation de plomberie.",
                     timezone="Europe/Paris",
-                    business_hours={
-                        "monday": {"closed": False, "intervals": []}
-                    },
+                    business_hours={"monday": {"closed": False, "intervals": []}},
                     existing_phone_e164=SOURCE_NUMBER,
                     confirmed_carrier="orange",
                     receptionist_name="Léa",
@@ -91,9 +90,7 @@ async def _seed_claimed_verification(
         session_id = claim.session_id
         if fixed_session_id is not None:
             activation = await session.scalar(
-                select(CustomerActivation).where(
-                    CustomerActivation.user_id == user.id
-                )
+                select(CustomerActivation).where(CustomerActivation.user_id == user.id)
             )
             assert activation is not None
             activation.verification_session_id = fixed_session_id
@@ -119,7 +116,11 @@ async def test_actual_verification_route_matches_golden_contracts(
         client_database_url,
         fixed_session_id=acknowledgement_fixture["session_id"],
     )
-    token = create_verification_token(session_id=session_id, user_id=user_id)
+    token = create_verification_token(
+        session_id=session_id,
+        user_id=user_id,
+        config=TEST_DISPATCH_TOKEN_CONFIG,
+    )
 
     response = await async_client.post(
         f"/api/activation/verification/{session_id}/complete",
@@ -140,20 +141,17 @@ async def _load_artifact_counts(database_url: str) -> dict[str, int]:
                 await session.scalar(select(func.count()).select_from(Call)) or 0
             ),
             "messages": int(
-                await session.scalar(select(func.count()).select_from(CallMessage))
-                or 0
+                await session.scalar(select(func.count()).select_from(CallMessage)) or 0
             ),
             "notifications": int(
                 await session.scalar(select(func.count()).select_from(Notification))
                 or 0
             ),
             "usage": int(
-                await session.scalar(select(func.count()).select_from(UsageLedger))
-                or 0
+                await session.scalar(select(func.count()).select_from(UsageLedger)) or 0
             ),
             "outbox": int(
-                await session.scalar(select(func.count()).select_from(OutboxEvent))
-                or 0
+                await session.scalar(select(func.count()).select_from(OutboxEvent)) or 0
             ),
         }
     await engine.dispose()
@@ -166,7 +164,11 @@ async def test_completion_requires_only_verification_token_and_writes_no_call_ar
     client_database_url: str,
 ) -> None:
     session_id, user_id = await _seed_claimed_verification(client_database_url)
-    token = create_verification_token(session_id=session_id, user_id=user_id)
+    token = create_verification_token(
+        session_id=session_id,
+        user_id=user_id,
+        config=TEST_DISPATCH_TOKEN_CONFIG,
+    )
 
     response = await async_client.post(
         f"/api/activation/verification/{session_id}/complete",
@@ -195,7 +197,11 @@ async def test_duplicate_completion_returns_the_exact_same_success_once(
     client_database_url: str,
 ) -> None:
     session_id, user_id = await _seed_claimed_verification(client_database_url)
-    token = create_verification_token(session_id=session_id, user_id=user_id)
+    token = create_verification_token(
+        session_id=session_id,
+        user_id=user_id,
+        config=TEST_DISPATCH_TOKEN_CONFIG,
+    )
     expected = {
         "schema_version": 1,
         "status": "verified",
@@ -258,18 +264,21 @@ async def test_completion_authentication_failures_are_generic_401(
         headers["x-verification-token"] = create_verification_token(
             session_id=session_id,
             user_id=str(uuid4()),
+            config=TEST_DISPATCH_TOKEN_CONFIG,
         )
     elif credential_case == "wrong_session":
         path_session_id = str(uuid4())
         headers["x-verification-token"] = create_verification_token(
             session_id=session_id,
             user_id=user_id,
+            config=TEST_DISPATCH_TOKEN_CONFIG,
         )
     elif credential_case == "call_token":
         headers["x-verification-token"] = create_dispatch_token(
             call_id=str(uuid4()),
             user_id=user_id,
             agent_config_id=str(uuid4()),
+            config=TEST_DISPATCH_TOKEN_CONFIG,
         )
 
     response = await async_client.post(
@@ -316,7 +325,11 @@ async def test_authenticated_unclaimable_completion_is_stable_safe_409(
             profile.existing_phone_e164 = ALTERNATE_SOURCE_NUMBER
         await session.commit()
     await engine.dispose()
-    token = create_verification_token(session_id=session_id, user_id=user_id)
+    token = create_verification_token(
+        session_id=session_id,
+        user_id=user_id,
+        config=TEST_DISPATCH_TOKEN_CONFIG,
+    )
 
     response = await async_client.post(
         f"/api/activation/verification/{session_id}/complete",

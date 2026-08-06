@@ -65,7 +65,9 @@ async def livekit_session_factory():
         if engine is not None:
             await engine.dispose()
         async with admin.connect() as connection:
-            await connection.execute(text(f"DROP SCHEMA IF EXISTS {quoted_schema} CASCADE"))
+            await connection.execute(
+                text(f"DROP SCHEMA IF EXISTS {quoted_schema} CASCADE")
+            )
         await admin.dispose()
 
 
@@ -87,7 +89,9 @@ class _Recording:
 
 
 class _PausingCallRepository(CallRepository):
-    def __init__(self, session, *, selected: asyncio.Event, resume: asyncio.Event) -> None:
+    def __init__(
+        self, session, *, selected: asyncio.Event, resume: asyncio.Event
+    ) -> None:
         super().__init__(session)
         self.selected = selected
         self.resume = resume
@@ -198,6 +202,7 @@ async def test_concurrent_distinct_joins_create_one_call_and_one_intent(
         async with livekit_session_factory() as session:
             result = await LiveKitDispatchService(
                 session,
+                activation_flow_enabled=False,
                 realtime_service=_Realtime(),
                 recording_service=_Recording(),
             ).handle_participant_joined(
@@ -307,6 +312,7 @@ async def test_account_lock_orders_admission_against_deactivation_commit(
                 async with livekit_session_factory() as deactivation_session:
                     service = AccountLifecycleService(
                         deactivation_session,
+                        activation_flow_enabled=False,
                         user_repository=_SignalingUserRepository(
                             deactivation_session,
                             entered=competing_entered,
@@ -322,6 +328,7 @@ async def test_account_lock_orders_admission_against_deactivation_commit(
             await asyncio.wait_for(competing_entered.wait(), timeout=1)
             admission = await LiveKitDispatchService(
                 admission_session,
+                activation_flow_enabled=False,
                 realtime_service=_Realtime(),
                 recording_service=_Recording(),
             ).handle_participant_joined(sip_join)
@@ -337,6 +344,7 @@ async def test_account_lock_orders_admission_against_deactivation_commit(
                 async with livekit_session_factory() as admission_session:
                     return await LiveKitDispatchService(
                         admission_session,
+                        activation_flow_enabled=False,
                         user_repository=_SignalingUserRepository(
                             admission_session,
                             entered=competing_entered,
@@ -348,7 +356,8 @@ async def test_account_lock_orders_admission_against_deactivation_commit(
             admission_task = asyncio.create_task(admit())
             await asyncio.wait_for(competing_entered.wait(), timeout=1)
             await AccountLifecycleService(
-                deactivation_session
+                deactivation_session,
+                activation_flow_enabled=False,
             ).request_in_transaction(
                 user_id,
                 trigger="owner_request",
@@ -369,7 +378,9 @@ async def test_account_lock_orders_admission_against_deactivation_commit(
         assert len(calls) == 1
         assert calls[0].user_id == user_id
         assert calls[0].phone_number_id == phone_id
-        dispatch_events = [event for event in events if event.topic == "livekit.dispatch"]
+        dispatch_events = [
+            event for event in events if event.topic == "livekit.dispatch"
+        ]
         assert len(dispatch_events) == 1
         assert dispatch_events[0].payload == {
             "call_id": str(calls[0].id),
@@ -405,6 +416,7 @@ async def test_agent_join_cannot_resurrect_call_failed_after_stale_pending_read(
     async with livekit_session_factory() as join_session:
         join_service = LiveKitDispatchService(
             join_session,
+            activation_flow_enabled=False,
             call_repository=_PausingCallRepository(
                 join_session,
                 selected=selected,
@@ -479,6 +491,7 @@ async def test_end_before_begin_claim_makes_start_ineligible_without_provider_io
         task = asyncio.create_task(
             LiveKitDispatchService(
                 dispatch_session,
+                activation_flow_enabled=False,
                 realtime_service=None,
                 recording_service=recording,
                 recording_lifecycle_service=_PausingBeginLifecycle(
@@ -568,6 +581,7 @@ async def test_end_after_claim_then_delete_purges_call_and_late_success_only_upd
         dispatch_task = asyncio.create_task(
             LiveKitDispatchService(
                 dispatch_session,
+                activation_flow_enabled=False,
                 realtime_service=None,
                 recording_service=provider,
             ).handle_participant_joined(
@@ -600,9 +614,7 @@ async def test_end_after_claim_then_delete_purges_call_and_late_success_only_upd
             await CallHistoryService(
                 delete_session,
                 recording_service=None,
-                recording_lifecycle_service=RecordingLifecycleService(
-                    delete_session
-                ),
+                recording_lifecycle_service=RecordingLifecycleService(delete_session),
             ).delete_call(user_id, call_id)
 
         resume.set()

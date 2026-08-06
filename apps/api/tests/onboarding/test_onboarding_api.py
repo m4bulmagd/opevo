@@ -122,7 +122,9 @@ async def test_retry_provisioning_rejects_non_retryable_state() -> None:
 
 
 @pytest.mark.anyio
-async def test_onboarding_status_remains_compatibility_projection_of_central_readiness() -> None:
+async def test_onboarding_status_remains_compatibility_projection_of_central_readiness() -> (
+    None
+):
     from app.services.onboarding_service import OnboardingService
 
     evaluated_at = datetime(2026, 7, 18, 10, 30, tzinfo=UTC)
@@ -155,7 +157,7 @@ async def test_onboarding_status_remains_compatibility_projection_of_central_rea
 
     readiness_service.evaluate = evaluate
     response = await OnboardingService(
-        readiness_service=readiness_service
+        activation_flow_enabled=False, readiness_service=readiness_service
     ).get_status(UUID("00000000-0000-0000-0000-000000000000"))
 
     assert response.model_dump() == {

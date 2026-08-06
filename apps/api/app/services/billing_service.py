@@ -87,6 +87,7 @@ class BillingService:
         self.outbox_service = OutboxService(session)
         self.account_lifecycle_service = AccountLifecycleService(
             session,
+            activation_flow_enabled=self.settings.activation_flow_enabled,
             account_deactivation_repository=self.account_deactivation_repository,
             phone_number_repository=self.phone_number_repository,
             subscription_repository=self.subscription_repository,

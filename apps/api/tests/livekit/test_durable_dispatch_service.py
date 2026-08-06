@@ -383,7 +383,7 @@ async def test_activation_flow_denies_before_go_live_and_admits_after_provider_s
         )
         service = LiveKitDispatchService(
             db_session,
-            _ForbiddenDirectDispatch(),
+            activation_flow_enabled=True,
             realtime_service=None,
             recording_service=_Recording(),
         )
@@ -442,7 +442,7 @@ async def test_livekit_outbox_rechecks_current_activation_prerequisites(
         )
         service = LiveKitDispatchService(
             db_session,
-            _ForbiddenDirectDispatch(),
+            activation_flow_enabled=True,
             realtime_service=None,
             recording_service=_Recording(),
         )
@@ -461,8 +461,16 @@ async def test_livekit_outbox_rechecks_current_activation_prerequisites(
         await db_session.commit()
         session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
+        settings = get_settings()
+        from app.core.dispatch_token import dispatch_token_config
+
         with pytest.raises(OutboxDeliveryError) as error:
-            await _dispatch_snapshot(session_factory, call_id)
+            await _dispatch_snapshot(
+                session_factory,
+                call_id,
+                settings=settings,
+                token_config=dispatch_token_config(settings),
+            )
 
         assert error.value.error_code == "dispatch_ineligible"
     finally:
@@ -476,7 +484,7 @@ async def test_disabled_activation_flow_preserves_legacy_dispatch(
 ) -> None:
     from app.core.config import get_settings
 
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
     get_settings.cache_clear()
     try:
         await _seed_eligible_user(db_session)
@@ -488,7 +496,7 @@ async def test_disabled_activation_flow_preserves_legacy_dispatch(
         )
         service = LiveKitDispatchService(
             db_session,
-            _ForbiddenDirectDispatch(),
+            activation_flow_enabled=False,
             realtime_service=None,
             recording_service=_Recording(),
         )
@@ -564,12 +572,11 @@ async def test_sip_join_commits_call_and_dispatch_intent_without_provider_io(
     db_session,
 ) -> None:
     user, phone, config = await _seed_eligible_user(db_session)
-    direct = _ForbiddenDirectDispatch()
     realtime = _Realtime()
     pool = _Pool()
     service = LiveKitDispatchService(
         db_session,
-        direct,
+        activation_flow_enabled=False,
         realtime_service=realtime,
         recording_service=_Recording(),
         arq_pool=pool,
@@ -591,7 +598,6 @@ async def test_sip_join_commits_call_and_dispatch_intent_without_provider_io(
         "call_id": str(calls[0].id),
         "lifecycle_generation": user.lifecycle_generation,
     }
-    assert direct.calls == 0
     assert pool.jobs == [
         ("outbox_delivery_job", {}, {"_queue_name": "arq:queue:background"})
     ]
@@ -610,7 +616,7 @@ async def test_sip_join_is_durable_without_realtime_service(db_session) -> None:
     pool = _Pool()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=None,
         recording_service=_Recording(),
         arq_pool=pool,
@@ -637,7 +643,7 @@ async def test_realtime_publish_failure_cannot_change_durable_acceptance(
     user, _phone, _config = await _seed_eligible_user(db_session)
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=_FailingRealtime(),
         recording_service=_Recording(),
     )
@@ -667,7 +673,7 @@ async def test_realtime_contract_failure_logs_only_bounded_contract_fields(
     user, _phone, _config = await _seed_eligible_user(db_session)
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=_ContractFailingRealtime(),
         recording_service=_Recording(),
     )
@@ -699,7 +705,7 @@ async def test_same_room_replay_is_idempotent(db_session) -> None:
     await _seed_eligible_user(db_session)
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
         arq_pool=_Pool(),
@@ -740,7 +746,7 @@ async def test_missing_trunk_or_forged_sip_attributes_create_no_intent(
     recording = _Recording()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=_Realtime(),
         recording_service=recording,
     )
@@ -809,7 +815,7 @@ async def test_readiness_blocker_creates_no_call_or_outbox(
     await db_session.commit()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=_Realtime(),
         recording_service=_Recording(),
     )
@@ -837,7 +843,7 @@ async def test_only_expected_agent_identity_connects_and_starts_recording(
     recording = _Recording()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=None,
         recording_service=recording,
     )
@@ -898,7 +904,7 @@ async def test_sip_leave_commits_and_enqueues_finalization_without_realtime(
     pool = _Pool()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=None,
         recording_service=_Recording(),
         arq_pool=pool,
@@ -958,7 +964,7 @@ async def test_sip_leave_outbox_wake_failure_cannot_undo_terminal_intent(
     pool = _FailingPool()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=None,
         recording_service=_Recording(),
         arq_pool=pool,
@@ -1011,7 +1017,7 @@ async def test_agent_join_commits_connected_state_before_recording_io_and_then_p
     recording = _CommitAwareRecording(db_session)
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=_Realtime(),
         recording_service=recording,
     )
@@ -1047,7 +1053,7 @@ async def test_lost_begin_claim_wakes_reconciliation_without_provider_io(
     pool = _Pool()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=None,
         recording_service=recording,
         recording_lifecycle_service=lifecycle,
@@ -1085,7 +1091,7 @@ async def test_prepare_failure_rolls_back_connection_operation_and_start_event(
     recording = _Recording()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=None,
         recording_service=recording,
         recording_lifecycle_service=_FailingPrepareLifecycle(db_session),
@@ -1138,7 +1144,7 @@ async def test_result_persistence_failure_leaves_starting_claim_and_cannot_resta
     recording = _Recording()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=None,
         recording_service=recording,
         recording_lifecycle_service=_FailingResultLifecycle(db_session),
@@ -1179,7 +1185,7 @@ async def test_error_result_persistence_failure_cannot_restart_provider(
     recording = _TypedFailingRecording()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=None,
         recording_service=recording,
         recording_lifecycle_service=_FailingErrorResultLifecycle(db_session),
@@ -1222,7 +1228,7 @@ async def test_completion_racing_success_preserves_terminal_facts_and_stop_inten
     recording = _CompletingRecording(session_factory)
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=_Realtime(),
         recording_service=recording,
     )
@@ -1283,7 +1289,7 @@ async def test_untyped_start_failure_propagates_without_recording_retry(
     recording = _UntypedFailingRecording()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=None,
         recording_service=recording,
     )
@@ -1326,7 +1332,7 @@ async def test_typed_start_failure_uses_structured_outcome_and_allowlisted_error
     recording = _TypedFailingRecording()
     service = LiveKitDispatchService(
         db_session,
-        _ForbiddenDirectDispatch(),
+        activation_flow_enabled=False,
         realtime_service=None,
         recording_service=recording,
     )

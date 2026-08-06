@@ -12,6 +12,7 @@ from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.services import call_reconciliation_service as reconciliation_module
 from app.services.recording_lifecycle_service import RecordingLifecycleService
+from tests.reconciliation_settings import TEST_RECONCILIATION_SETTINGS
 
 
 HAS_RECONCILIATION = find_spec("app.services.call_reconciliation_service") is not None
@@ -139,7 +140,9 @@ async def test_reconciliation_recovers_each_stale_nonterminal_state(
     ids = [pending.id, connected.id, ending.id, finalizing.id]
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    result = await CallReconciliationService(factory).reconcile(now, limit=100)
+    result = await CallReconciliationService(
+        factory, settings=TEST_RECONCILIATION_SETTINGS
+    ).reconcile(now, limit=100)
 
     db_session.expire_all()
     stored = [await db_session.get(Call, call_id) for call_id in ids]
@@ -179,7 +182,9 @@ async def test_stale_pending_failure_requests_stop_for_migrated_recording(
     await db_session.commit()
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await CallReconciliationService(factory).reconcile(now)
+    await CallReconciliationService(
+        factory, settings=TEST_RECONCILIATION_SETTINGS
+    ).reconcile(now)
 
     db_session.expire_all()
     stored_call = await db_session.get(Call, call_id)
@@ -241,15 +246,16 @@ async def test_stale_pending_failure_rolls_back_when_recording_stop_fails(
     )
 
     with pytest.raises(RuntimeError, match="forced recording stop failure"):
-        await CallReconciliationService(factory).reconcile(now)
+        await CallReconciliationService(
+            factory, settings=TEST_RECONCILIATION_SETTINGS
+        ).reconcile(now)
 
     db_session.expire_all()
     stored_call = await db_session.get(Call, call_id)
     stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
     stop_event = await db_session.scalar(
         select(OutboxEvent).where(
-            OutboxEvent.idempotency_key
-            == f"recording.reconcile:{operation_id}:stop"
+            OutboxEvent.idempotency_key == f"recording.reconcile:{operation_id}:stop"
         )
     )
     assert stored_call is not None
@@ -300,7 +306,9 @@ async def test_reconciliation_exhausts_uncharged_but_repairs_charged_call(
     charged_id = charged.id
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await CallReconciliationService(factory).reconcile(now, limit=100)
+    await CallReconciliationService(
+        factory, settings=TEST_RECONCILIATION_SETTINGS
+    ).reconcile(now, limit=100)
 
     db_session.expire_all()
     uncharged_stored = await db_session.get(Call, uncharged_id)
@@ -343,7 +351,9 @@ async def test_reconciliation_ignores_fresh_and_terminal_calls(
     identities = [(call.id, call.status, call.state_changed_at) for call in calls]
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    result = await CallReconciliationService(factory).reconcile(now, limit=100)
+    result = await CallReconciliationService(
+        factory, settings=TEST_RECONCILIATION_SETTINGS
+    ).reconcile(now, limit=100)
 
     assert result.recovered == result.failed == 0
     db_session.expire_all()
@@ -373,7 +383,9 @@ async def test_reconciliation_honors_limit_and_exact_pending_boundary(
     call_ids = [call.id for call in calls]
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    result = await CallReconciliationService(factory).reconcile(now, limit=1)
+    result = await CallReconciliationService(
+        factory, settings=TEST_RECONCILIATION_SETTINGS
+    ).reconcile(now, limit=1)
 
     assert result.scanned == result.failed == 1
     db_session.expire_all()
@@ -401,7 +413,9 @@ async def test_connected_recovery_clamps_end_and_duration_to_operational_bound(
     call_id = call.id
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await CallReconciliationService(factory).reconcile(now)
+    await CallReconciliationService(
+        factory, settings=TEST_RECONCILIATION_SETTINGS
+    ).reconcile(now)
 
     db_session.expire_all()
     stored = await db_session.get(Call, call_id)
@@ -441,7 +455,9 @@ async def test_ending_recovery_derives_missing_duration_at_exact_boundary(
     call_id = call.id
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await CallReconciliationService(factory).reconcile(now)
+    await CallReconciliationService(
+        factory, settings=TEST_RECONCILIATION_SETTINGS
+    ).reconcile(now)
 
     db_session.expire_all()
     stored = await db_session.get(Call, call_id)
@@ -482,14 +498,15 @@ async def test_ending_recovery_persists_recording_stop_before_phase_b(
     await db_session.commit()
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await CallReconciliationService(factory).reconcile(now)
+    await CallReconciliationService(
+        factory, settings=TEST_RECONCILIATION_SETTINGS
+    ).reconcile(now)
 
     db_session.expire_all()
     stored_operation = await db_session.get(RecordingEgressOperation, operation_id)
     event = await db_session.scalar(
         select(OutboxEvent).where(
-            OutboxEvent.idempotency_key
-            == f"recording.reconcile:{operation_id}:stop"
+            OutboxEvent.idempotency_key == f"recording.reconcile:{operation_id}:stop"
         )
     )
     stored_call = await db_session.get(Call, call_id)
@@ -535,7 +552,9 @@ async def test_phase_b_failure_leaves_committed_new_generation_and_lease(
     )
 
     with caplog.at_level("WARNING"):
-        result = await CallReconciliationService(factory).reconcile(now)
+        result = await CallReconciliationService(
+            factory, settings=TEST_RECONCILIATION_SETTINGS
+        ).reconcile(now)
 
     assert result.recovered == 0
     assert result.deferred == 1

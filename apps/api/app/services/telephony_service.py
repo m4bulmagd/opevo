@@ -2,11 +2,9 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.provider_failures import ProviderFailure, ProviderOperation
 from app.models.phone_number import PhoneNumber
 from app.providers.telephony.base import TelephonyProvider
-from app.providers.telephony.factory import create_telephony_provider
 from app.providers.telephony.telnyx import normalize_french_number
 from app.repositories.phone_number_repository import PhoneNumberRepository
 
@@ -19,13 +17,14 @@ class AcquiredPhoneNumber:
 
 
 class TelephonyService:
-    def __init__(self, session: AsyncSession, provider: TelephonyProvider | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        provider: TelephonyProvider,
+    ) -> None:
         self.session = session
-        self.provider = (
-            provider
-            if provider is not None
-            else create_telephony_provider(get_settings())
-        )
+        self.provider = provider
         self.phone_number_repository = PhoneNumberRepository(session)
 
     async def provision_number(

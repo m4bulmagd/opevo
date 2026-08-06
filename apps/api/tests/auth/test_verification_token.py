@@ -6,11 +6,18 @@ from uuid import uuid4
 import jwt
 import pytest
 
-from app.core.dispatch_token import create_dispatch_token, verify_dispatch_token
+from app.core.dispatch_token import (
+    DispatchTokenConfig,
+    dispatch_token_config,
+    create_dispatch_token,
+    verify_dispatch_token,
+)
 
 
 DISPATCH_SECRET = "verification-test-secret-with-enough-entropy-for-hmac-tests"
 AUDIENCE = "presvo-forwarding-verification"
+EXPLICIT_SECRET = "explicit-verification-secret-not-from-the-controlled-environment"
+TOKEN_CONFIG = DispatchTokenConfig(secret=DISPATCH_SECRET, ttl_seconds=7200)
 
 
 def _verification_token_module() -> ModuleType:
@@ -20,17 +27,7 @@ def _verification_token_module() -> ModuleType:
         pytest.fail("verification-scoped token API is missing")
 
 
-def _configure_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AGENT_DISPATCH_JWT_SECRET", DISPATCH_SECRET)
-    from app.core.config import get_settings
-
-    get_settings.cache_clear()
-
-
-def test_verification_token_has_distinct_audience_and_bounded_lifetime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_tokens(monkeypatch)
+def test_verification_token_has_distinct_audience_and_bounded_lifetime() -> None:
     module = _verification_token_module()
     session_id = str(uuid4())
     user_id = str(uuid4())
@@ -38,6 +35,7 @@ def test_verification_token_has_distinct_audience_and_bounded_lifetime(
     token = module.create_verification_token(
         session_id=session_id,
         user_id=user_id,
+        config=TOKEN_CONFIG,
     )
     payload = jwt.decode(
         token,
@@ -56,38 +54,59 @@ def test_verification_token_has_distinct_audience_and_bounded_lifetime(
     assert set(payload) == {"aud", "sub", "user_id", "iat", "exp"}
 
 
+def test_verification_token_uses_explicit_dispatch_config() -> None:
+    module = _verification_token_module()
+    config = DispatchTokenConfig(secret=EXPLICIT_SECRET, ttl_seconds=17)
+    session_id = str(uuid4())
+    user_id = str(uuid4())
+
+    token = module.create_verification_token(
+        session_id=session_id,
+        user_id=user_id,
+        config=config,
+    )
+
+    assert (
+        module.verify_verification_token(
+            token,
+            expected_session_id=session_id,
+            expected_user_id=user_id,
+            config=config,
+        )["sub"]
+        == session_id
+    )
+
+
 @pytest.mark.parametrize("ttl_seconds", [True, 0, -1, 901])
 def test_verification_token_rejects_unbounded_lifetime(
-    monkeypatch: pytest.MonkeyPatch,
     ttl_seconds: int,
 ) -> None:
-    _configure_tokens(monkeypatch)
     module = _verification_token_module()
 
     with pytest.raises(ValueError, match="configured safely"):
         module.create_verification_token(
             session_id=str(uuid4()),
             user_id=str(uuid4()),
+            config=TOKEN_CONFIG,
             ttl_seconds=ttl_seconds,
         )
 
 
-def test_verification_token_verifies_exact_session_and_owner(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_tokens(monkeypatch)
+def test_verification_token_verifies_exact_session_and_owner() -> None:
     module = _verification_token_module()
     session_id = str(uuid4())
     user_id = str(uuid4())
     token = module.create_verification_token(
         session_id=session_id,
         user_id=user_id,
+        config=TOKEN_CONFIG,
     )
 
     claims = module.verify_verification_token(
         token,
         expected_session_id=session_id,
         expected_user_id=user_id,
+        config=TOKEN_CONFIG,
     )
 
     assert claims["aud"] == AUDIENCE
@@ -107,10 +126,8 @@ def test_verification_token_verifies_exact_session_and_owner(
     ],
 )
 def test_verification_token_failures_are_generic(
-    monkeypatch: pytest.MonkeyPatch,
     case: str,
 ) -> None:
-    _configure_tokens(monkeypatch)
     module = _verification_token_module()
     session_id = str(uuid4())
     user_id = str(uuid4())
@@ -147,6 +164,7 @@ def test_verification_token_failures_are_generic(
             token,
             expected_session_id=expected_session_id,
             expected_user_id=expected_user_id,
+            config=TOKEN_CONFIG,
         )
 
     assert str(exc_info.value) == "Invalid verification token"
@@ -156,10 +174,7 @@ def test_verification_token_failures_are_generic(
     assert user_id not in str(exc_info.value)
 
 
-def test_call_and_verification_tokens_are_cross_rejected(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_tokens(monkeypatch)
+def test_call_and_verification_tokens_are_cross_rejected() -> None:
     module = _verification_token_module()
     session_id = str(uuid4())
     call_id = str(uuid4())
@@ -168,10 +183,12 @@ def test_call_and_verification_tokens_are_cross_rejected(
         call_id=call_id,
         user_id=user_id,
         agent_config_id=str(uuid4()),
+        config=TOKEN_CONFIG,
     )
     verification_token = module.create_verification_token(
         session_id=session_id,
         user_id=user_id,
+        config=TOKEN_CONFIG,
     )
 
     with pytest.raises(ValueError, match="Invalid verification token"):
@@ -179,12 +196,14 @@ def test_call_and_verification_tokens_are_cross_rejected(
             call_token,
             expected_session_id=session_id,
             expected_user_id=user_id,
+            config=TOKEN_CONFIG,
         )
     with pytest.raises(ValueError, match="Invalid dispatch token"):
         verify_dispatch_token(
             verification_token,
             expected_call_id=call_id,
             expected_user_id=user_id,
+            config=TOKEN_CONFIG,
         )
 
 
@@ -193,28 +212,24 @@ def test_call_and_verification_tokens_are_cross_rejected(
     ["too-short", "replace-with-a-long-random-secret"],
 )
 def test_verification_tokens_reuse_dispatch_secret_safety_validation(
-    monkeypatch: pytest.MonkeyPatch,
     unsafe_secret: str,
 ) -> None:
-    monkeypatch.setenv("AGENT_DISPATCH_JWT_SECRET", unsafe_secret)
-    from app.core.config import get_settings
-
-    get_settings.cache_clear()
-    module = _verification_token_module()
+    from app.core.config import Settings
 
     with pytest.raises(ValueError, match="configured safely"):
-        module.create_verification_token(
-            session_id=str(uuid4()),
-            user_id=str(uuid4()),
+        dispatch_token_config(
+            Settings(
+                database_url="sqlite+aiosqlite://",
+                redis_url="redis://localhost:6379/0",
+                agent_dispatch_jwt_secret=unsafe_secret,
+            )
         )
 
 
 @pytest.mark.parametrize("missing_claim", ["aud", "sub", "user_id", "iat", "exp"])
 def test_verification_token_rejects_every_missing_required_claim(
-    monkeypatch: pytest.MonkeyPatch,
     missing_claim: str,
 ) -> None:
-    _configure_tokens(monkeypatch)
     module = _verification_token_module()
     session_id = str(uuid4())
     user_id = str(uuid4())
@@ -234,6 +249,7 @@ def test_verification_token_rejects_every_missing_required_claim(
             token,
             expected_session_id=session_id,
             expected_user_id=user_id,
+            config=TOKEN_CONFIG,
         )
 
     assert str(exc_info.value) == "Invalid verification token"
@@ -255,11 +271,9 @@ def test_verification_token_rejects_every_missing_required_claim(
     ],
 )
 def test_verification_token_rejects_invalid_claim_shapes_and_algorithm(
-    monkeypatch: pytest.MonkeyPatch,
     mutation: dict[str, object],
     algorithm: str,
 ) -> None:
-    _configure_tokens(monkeypatch)
     module = _verification_token_module()
     session_id = str(uuid4())
     user_id = str(uuid4())
@@ -279,6 +293,7 @@ def test_verification_token_rejects_invalid_claim_shapes_and_algorithm(
             token,
             expected_session_id=session_id,
             expected_user_id=user_id,
+            config=TOKEN_CONFIG,
         )
 
     assert str(exc_info.value) == "Invalid verification token"
