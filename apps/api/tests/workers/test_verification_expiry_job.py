@@ -1,3 +1,4 @@
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -6,11 +7,22 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.composition.lifecycle import RuntimeCleanup
+from app.composition.runtime import (
+    WORKER_RUNTIME_KEY,
+    BackgroundWorkerRuntime,
+    CallLifecycleWorkerRuntime,
+    WorkerRuntimeConfigurationError,
+)
+from app.core.config import Settings
 from app.models.activation_event import ActivationEvent
 from app.models.customer_activation import CustomerActivation
 from app.models.user import User
 from app.workers import arq_worker
-from app.workers.jobs.verification_expiry import verification_expiry_job
+from app.workers.jobs.verification_expiry import (
+    expire_verification_windows,
+    verification_expiry_job,
+)
 from app.services.forwarding_verification_service import (
     build_expiry_user_claim_statement,
 )
@@ -49,15 +61,49 @@ async def _seed_window(
     return activation
 
 
-def _context(db_session, *, now: datetime, batch_size: int = 100) -> dict:
-    return {
-        "session_factory": async_sessionmaker(
-            db_session.bind,
-            expire_on_commit=False,
-        ),
-        "verification_expiry_now": lambda: now,
-        "verification_expiry_batch_size": batch_size,
-    }
+def _session_factory(db_session):
+    return async_sessionmaker(
+        db_session.bind,
+        expire_on_commit=False,
+    )
+
+
+def _settings() -> Settings:
+    return Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://worker.invalid/0",
+    )
+
+
+def _background_runtime(
+    db_session,
+    *,
+    now: datetime,
+) -> BackgroundWorkerRuntime:
+    return BackgroundWorkerRuntime(
+        settings=_settings(),
+        session_factory=_session_factory(db_session),
+        arq_pool=object(),
+        observability=object(),
+        queue_observer=object(),
+        outbox_handlers={},
+        now=lambda: now,
+        _cleanup=RuntimeCleanup(AsyncExitStack()),
+    )
+
+
+def _lifecycle_runtime() -> CallLifecycleWorkerRuntime:
+    return CallLifecycleWorkerRuntime(
+        settings=_settings(),
+        session_factory=object(),
+        arq_pool=object(),
+        observability=object(),
+        queue_observer=object(),
+        now=lambda: FIXED_NOW,
+        _cleanup=RuntimeCleanup(AsyncExitStack()),
+    )
 
 
 @pytest.mark.anyio
@@ -72,7 +118,7 @@ async def test_job_expires_open_window_at_exact_deadline(
     activation_id = activation.id
 
     result = await verification_expiry_job(
-        _context(db_session, now=FIXED_NOW)
+        {WORKER_RUNTIME_KEY: _background_runtime(db_session, now=FIXED_NOW)}
     )
 
     db_session.expire_all()
@@ -99,11 +145,11 @@ async def test_job_preserves_claim_through_completion_grace(
     )
     activation_id = activation.id
 
-    result = await verification_expiry_job(
-        _context(
-            db_session,
-            now=FIXED_NOW + timedelta(minutes=2) - timedelta(microseconds=1),
-        )
+    result = await expire_verification_windows(
+        session_factory=_session_factory(db_session),
+        now=lambda: (
+            FIXED_NOW + timedelta(minutes=2) - timedelta(microseconds=1)
+        ),
     )
 
     db_session.expire_all()
@@ -124,8 +170,9 @@ async def test_job_expires_claim_at_exact_grace_deadline(
     )
     activation_id = activation.id
 
-    result = await verification_expiry_job(
-        _context(db_session, now=FIXED_NOW + timedelta(minutes=2))
+    result = await expire_verification_windows(
+        session_factory=_session_factory(db_session),
+        now=lambda: FIXED_NOW + timedelta(minutes=2),
     )
 
     db_session.expire_all()
@@ -140,10 +187,16 @@ async def test_duplicate_cron_execution_is_idempotent(
     db_session,
 ) -> None:
     await _seed_window(db_session, status="open", expires_at=FIXED_NOW)
-    context = _context(db_session, now=FIXED_NOW)
+    session_factory = _session_factory(db_session)
 
-    first = await verification_expiry_job(context)
-    second = await verification_expiry_job(context)
+    first = await expire_verification_windows(
+        session_factory=session_factory,
+        now=lambda: FIXED_NOW,
+    )
+    second = await expire_verification_windows(
+        session_factory=session_factory,
+        now=lambda: FIXED_NOW,
+    )
 
     assert first == {"expired": 1}
     assert second == {"expired": 0}
@@ -160,10 +213,18 @@ async def test_job_processes_a_bounded_batch(
 ) -> None:
     for _ in range(3):
         await _seed_window(db_session, status="open", expires_at=FIXED_NOW)
-    context = _context(db_session, now=FIXED_NOW, batch_size=2)
+    session_factory = _session_factory(db_session)
 
-    first = await verification_expiry_job(context)
-    second = await verification_expiry_job(context)
+    first = await expire_verification_windows(
+        session_factory=session_factory,
+        now=lambda: FIXED_NOW,
+        batch_size=2,
+    )
+    second = await expire_verification_windows(
+        session_factory=session_factory,
+        now=lambda: FIXED_NOW,
+        batch_size=2,
+    )
 
     assert first == {"expired": 2}
     assert second == {"expired": 1}
@@ -193,3 +254,18 @@ def test_expiry_user_claim_sql_is_user_first_and_skips_locked_rows() -> None:
     assert "SELECT users.id" in compiled
     assert "FOR UPDATE OF users SKIP LOCKED" in compiled
     assert "LIMIT 25" in compiled
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "ctx",
+    [{}, {WORKER_RUNTIME_KEY: _lifecycle_runtime()}],
+)
+async def test_verification_expiry_wrapper_rejects_invalid_runtime(
+    ctx: dict,
+) -> None:
+    with pytest.raises(
+        WorkerRuntimeConfigurationError,
+        match="background",
+    ):
+        await verification_expiry_job(ctx)

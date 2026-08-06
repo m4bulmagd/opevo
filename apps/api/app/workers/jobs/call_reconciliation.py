@@ -1,10 +1,15 @@
 import logging
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import datetime
+from typing import Any
+
+from arq.connections import ArqRedis
 
 from app.composition.runtime import require_call_lifecycle_runtime
-from app.core.database import get_session_factory
-from app.core.config import get_settings
+from app.core.config import Settings
+from app.core.database import AsyncSessionFactory
 from app.core.logging import report_safe_exception
+from app.core.observability import Observability
 from app.repositories.call_repository import CallRepository
 from app.services.call_reconciliation_service import CallReconciliationService
 from app.workers.queueing import enqueue_outbox_wakeup
@@ -13,20 +18,22 @@ from app.workers.queueing import enqueue_outbox_wakeup
 logger = logging.getLogger(__name__)
 
 
-async def call_reconciliation_job(ctx: dict) -> dict[str, int]:
-    runtime = require_call_lifecycle_runtime(ctx)
-    session_factory = ctx.get("session_factory") or get_session_factory()
-    settings = get_settings()
-    now_provider = ctx.get("call_reconciliation_now") or (lambda: datetime.now(UTC))
-    now = now_provider()
+async def reconcile_calls(
+    *,
+    session_factory: AsyncSessionFactory,
+    arq_pool: ArqRedis,
+    observability: Observability,
+    settings: Settings,
+    now: Callable[[], datetime],
+) -> dict[str, int]:
+    current_time = now()
     result = await CallReconciliationService(
         session_factory,
         settings=settings,
     ).reconcile(
-        now,
+        current_time,
         limit=100,
     )
-    arq_pool = runtime.arq_pool
     if result.scanned and arq_pool is not None:
         try:
             await enqueue_outbox_wakeup(arq_pool)
@@ -57,16 +64,15 @@ async def call_reconciliation_job(ctx: dict) -> dict[str, int]:
         "failed": result.failed,
         "deferred": result.deferred,
     }
-    telemetry = runtime.observability
-    telemetry.record_reconciliation_outcomes(response)
-    if hasattr(telemetry, "record_call_snapshot"):
+    observability.record_reconciliation_outcomes(response)
+    if hasattr(observability, "record_call_snapshot"):
         try:
             async with session_factory() as session:
                 snapshot = await CallRepository(session).observability_snapshot(
-                    now,
+                    current_time,
                     settings,
                 )
-            telemetry.record_call_snapshot(snapshot)
+            observability.record_call_snapshot(snapshot)
         except Exception as error:
             report_safe_exception(
                 logger,
@@ -77,3 +83,16 @@ async def call_reconciliation_job(ctx: dict) -> dict[str, int]:
                 level=logging.WARNING,
             )
     return response
+
+
+async def call_reconciliation_job(
+    ctx: dict[str, Any],
+) -> dict[str, int]:
+    runtime = require_call_lifecycle_runtime(ctx)
+    return await reconcile_calls(
+        session_factory=runtime.session_factory,
+        arq_pool=runtime.arq_pool,
+        observability=runtime.observability,
+        settings=runtime.settings,
+        now=runtime.now,
+    )

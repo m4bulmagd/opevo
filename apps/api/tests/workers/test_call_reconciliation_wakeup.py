@@ -5,7 +5,12 @@ from datetime import UTC, datetime
 import pytest
 
 from app.composition.lifecycle import RuntimeCleanup
-from app.composition.runtime import WORKER_RUNTIME_KEY, CallLifecycleWorkerRuntime
+from app.composition.runtime import (
+    WORKER_RUNTIME_KEY,
+    BackgroundWorkerRuntime,
+    CallLifecycleWorkerRuntime,
+    WorkerRuntimeConfigurationError,
+)
 from app.core.config import Settings
 from app.services.call_reconciliation_service import ReconciliationResult
 from app.workers.jobs import call_reconciliation as job_module
@@ -27,18 +32,42 @@ class _Telemetry:
         pass
 
 
-def _runtime(pool: object, telemetry: object | None = None) -> CallLifecycleWorkerRuntime:
+def _runtime(
+    pool: object,
+    telemetry: object | None = None,
+    *,
+    session_factory: object = object(),
+    settings: Settings | None = None,
+    now: object | None = None,
+) -> CallLifecycleWorkerRuntime:
     return CallLifecycleWorkerRuntime(
-        settings=Settings(
-            _env_file=None,
-            app_env="test",
-            database_url="sqlite+aiosqlite://",
-            redis_url="redis://worker.invalid/0",
-        ),
-        session_factory=object(),
+        settings=settings or _settings(),
+        session_factory=session_factory,
         arq_pool=pool,
         observability=telemetry or _Telemetry(),
         queue_observer=object(),
+        now=now or (lambda: datetime(2026, 8, 6, tzinfo=UTC)),
+        _cleanup=RuntimeCleanup(AsyncExitStack()),
+    )
+
+
+def _settings() -> Settings:
+    return Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://worker.invalid/0",
+    )
+
+
+def _background_runtime() -> BackgroundWorkerRuntime:
+    return BackgroundWorkerRuntime(
+        settings=_settings(),
+        session_factory=object(),
+        arq_pool=object(),
+        observability=object(),
+        queue_observer=object(),
+        outbox_handlers={},
         now=lambda: datetime(2026, 8, 6, tzinfo=UTC),
         _cleanup=RuntimeCleanup(AsyncExitStack()),
     )
@@ -64,14 +93,14 @@ async def test_recovered_calls_wake_outbox_after_reconciliation_without_affectin
         call_reconciliation_pending_stale_seconds=17,
     )
     monkeypatch.setattr(job_module, "CallReconciliationService", _Service)
-    monkeypatch.setattr(job_module, "get_settings", lambda: explicit_settings)
     pool = _Pool(fail=wake_fails)
 
-    result = await job_module.call_reconciliation_job(
-        {
-            "session_factory": object(),
-            WORKER_RUNTIME_KEY: _runtime(pool),
-        }
+    result = await job_module.reconcile_calls(
+        session_factory=object(),
+        arq_pool=pool,
+        observability=_Telemetry(),
+        settings=explicit_settings,
+        now=lambda: datetime(2026, 8, 6, tzinfo=UTC),
     )
 
     assert result == {
@@ -108,11 +137,12 @@ async def test_any_scanned_stale_work_wakes_possible_recording_intent(
     monkeypatch.setattr(job_module, "CallReconciliationService", _Service)
     pool = _Pool()
 
-    await job_module.call_reconciliation_job(
-        {
-            "session_factory": object(),
-            WORKER_RUNTIME_KEY: _runtime(pool),
-        }
+    await job_module.reconcile_calls(
+        session_factory=object(),
+        arq_pool=pool,
+        observability=_Telemetry(),
+        settings=_settings(),
+        now=lambda: datetime(2026, 8, 6, tzinfo=UTC),
     )
 
     assert pool.jobs == [
@@ -169,15 +199,15 @@ async def test_call_reconciliation_snapshot_is_observed_without_changing_result(
         database_url="sqlite+aiosqlite://",
         redis_url="redis://explicit.invalid/0",
     )
-    monkeypatch.setattr(job_module, "get_settings", lambda: explicit_settings)
 
     with caplog.at_level(logging.WARNING, logger=job_module.logger.name):
         telemetry = _SnapshotTelemetry()
-        response = await job_module.call_reconciliation_job(
-            {
-                "session_factory": _SessionContext,
-                WORKER_RUNTIME_KEY: _runtime(object(), telemetry),
-            }
+        response = await job_module.reconcile_calls(
+            session_factory=_SessionContext,
+            arq_pool=object(),
+            observability=telemetry,
+            settings=explicit_settings,
+            now=lambda: datetime(2026, 8, 6, tzinfo=UTC),
         )
 
     assert response == {
@@ -201,3 +231,66 @@ async def test_call_reconciliation_snapshot_is_observed_without_changing_result(
     )
     assert caplog.record_tuples == expected_logs
     assert "PRIVATE_SNAPSHOT_DETAIL" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_call_reconciliation_wrapper_passes_lifecycle_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory = object()
+    pool = object()
+    telemetry = _Telemetry()
+    settings = _settings()
+
+    def now() -> datetime:
+        return datetime(2026, 8, 6, tzinfo=UTC)
+
+    captured: list[dict[str, object]] = []
+
+    async def capture(**dependencies: object) -> dict[str, int]:
+        captured.append(dependencies)
+        return {"scanned": 0, "recovered": 0, "failed": 0, "deferred": 0}
+
+    monkeypatch.setattr(job_module, "reconcile_calls", capture)
+    runtime = _runtime(
+        pool,
+        telemetry,
+        session_factory=session_factory,
+        settings=settings,
+        now=now,
+    )
+
+    result = await job_module.call_reconciliation_job(
+        {WORKER_RUNTIME_KEY: runtime}
+    )
+
+    assert result == {
+        "scanned": 0,
+        "recovered": 0,
+        "failed": 0,
+        "deferred": 0,
+    }
+    assert captured == [
+        {
+            "session_factory": session_factory,
+            "arq_pool": pool,
+            "observability": telemetry,
+            "settings": settings,
+            "now": now,
+        }
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "ctx",
+    [{}, {WORKER_RUNTIME_KEY: _background_runtime()}],
+)
+async def test_call_reconciliation_wrapper_rejects_invalid_runtime(
+    ctx: dict,
+) -> None:
+    with pytest.raises(
+        WorkerRuntimeConfigurationError,
+        match="call-lifecycle",
+    ):
+        await job_module.call_reconciliation_job(ctx)

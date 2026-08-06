@@ -1,14 +1,19 @@
+from typing import Any
 from uuid import UUID
 
-from app.core.database import get_session_factory
+from app.composition.runtime import require_call_lifecycle_runtime
+from app.core.database import AsyncSessionFactory
 from app.services.call_lifecycle_service import CallLifecycleService
 
 
-async def call_finalization_job(ctx, payload: dict) -> dict:
+async def finalize_call(
+    payload: dict,
+    *,
+    session_factory: AsyncSessionFactory,
+) -> dict:
     if not isinstance(payload, dict) or set(payload) != {"call_id"}:
         raise ValueError("Call finalization payload must contain call_id only")
     call_id = UUID(payload["call_id"])
-    session_factory = ctx.get("session_factory") or get_session_factory()
     async with session_factory() as session:
         service = CallLifecycleService(session)
         claim = await service.claim_finalization(call_id)
@@ -29,3 +34,14 @@ async def call_finalization_job(ctx, payload: dict) -> dict:
         "status": "skipped" if result.already_completed else "completed",
         "minutes_charged": result.minutes_charged,
     }
+
+
+async def call_finalization_job(
+    ctx: dict[str, Any],
+    payload: dict,
+) -> dict:
+    runtime = require_call_lifecycle_runtime(ctx)
+    return await finalize_call(
+        payload,
+        session_factory=runtime.session_factory,
+    )

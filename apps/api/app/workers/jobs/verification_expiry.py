@@ -1,7 +1,10 @@
 import logging
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import datetime
+from typing import Any
 
-from app.core.database import get_session_factory
+from app.composition.runtime import require_background_runtime
+from app.core.database import AsyncSessionFactory
 from app.services.forwarding_verification_service import (
     DEFAULT_EXPIRY_BATCH_SIZE,
     ForwardingVerificationService,
@@ -11,19 +14,16 @@ from app.services.forwarding_verification_service import (
 logger = logging.getLogger(__name__)
 
 
-async def verification_expiry_job(ctx: dict) -> dict[str, int]:
-    session_factory = ctx.get("session_factory") or get_session_factory()
-    now_provider = ctx.get("verification_expiry_now") or (
-        lambda: datetime.now(UTC)
-    )
-    batch_size = ctx.get(
-        "verification_expiry_batch_size",
-        DEFAULT_EXPIRY_BATCH_SIZE,
-    )
+async def expire_verification_windows(
+    *,
+    session_factory: AsyncSessionFactory,
+    now: Callable[[], datetime],
+    batch_size: int = DEFAULT_EXPIRY_BATCH_SIZE,
+) -> dict[str, int]:
     async with session_factory() as session:
         expired = await ForwardingVerificationService(
             session,
-            now_provider=now_provider,
+            now_provider=now,
         ).expire_batch(limit=batch_size)
     logger.info(
         "verification expiry completed expired=%d",
@@ -36,3 +36,13 @@ async def verification_expiry_job(ctx: dict) -> dict[str, int]:
         },
     )
     return {"expired": expired}
+
+
+async def verification_expiry_job(
+    ctx: dict[str, Any],
+) -> dict[str, int]:
+    runtime = require_background_runtime(ctx)
+    return await expire_verification_windows(
+        session_factory=runtime.session_factory,
+        now=runtime.now,
+    )
