@@ -199,27 +199,36 @@ async def active_user(db_session: AsyncSession):
     return user
 
 
+async def _initialize_test_database(
+    database_url: str,
+    *,
+    engine_factory=None,
+) -> None:
+    if engine_factory is None:
+        from app.core.database import create_database_engine
+
+        engine_factory = create_database_engine
+
+    engine = engine_factory(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+    except BaseException as setup_error:
+        try:
+            await engine.dispose()
+        except BaseException as cleanup_error:
+            raise setup_error from cleanup_error
+        raise
+    await engine.dispose()
+
+
 @pytest_asyncio.fixture
 async def test_app(tmp_path: Path, settings):
-    from app.core.database import create_database_engine
     from app import main as main_module
 
     original_app = main_module.app
-    database_url = os.getenv("CLIENT_TEST_DATABASE_URL")
-    if database_url is None:
-        database_path = tmp_path / "test_client.db"
-        database_url = f"sqlite+aiosqlite:///{database_path}"
-    elif database_url.startswith("postgresql://"):
-        database_url = database_url.replace(
-            "postgresql://",
-            "postgresql+asyncpg://",
-            1,
-        )
-
-    setup_engine = create_database_engine(database_url)
-    async with setup_engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    await setup_engine.dispose()
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'test_client.db'}"
+    await _initialize_test_database(database_url)
 
     app = main_module.create_app(
         settings.model_copy(update={"database_url": database_url})

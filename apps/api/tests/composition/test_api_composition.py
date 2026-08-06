@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 import pytest
@@ -92,6 +92,28 @@ async def _sqlite_api_runtime(settings, database_path):
         session_factory=session_factory,
     )
     return runtime, engine, session_factory
+
+
+@asynccontextmanager
+async def _request_session_lifecycle(settings, database_path):
+    from fastapi import FastAPI
+    from starlette.requests import Request
+
+    from app.core.database import get_session
+
+    runtime, engine, session_factory = await _sqlite_api_runtime(
+        settings,
+        database_path,
+    )
+    app = FastAPI()
+    app.state.runtime = runtime
+    dependency = get_session(Request({"type": "http", "app": app}))
+    try:
+        session = await anext(dependency)
+        yield session, session_factory, dependency
+    finally:
+        await dependency.aclose()
+        await engine.dispose()
 
 
 @pytest.mark.anyio
@@ -567,21 +589,12 @@ async def test_request_session_persists_committed_work_and_closes(
     settings,
     tmp_path,
 ) -> None:
-    from fastapi import FastAPI
     from sqlalchemy import text
-    from starlette.requests import Request
 
-    from app.core.database import get_session
-
-    runtime, engine, session_factory = await _sqlite_api_runtime(
+    async with _request_session_lifecycle(
         settings,
         tmp_path / "committed.db",
-    )
-    app = FastAPI()
-    app.state.runtime = runtime
-    dependency = get_session(Request({"type": "http", "app": app}))
-    try:
-        session = await anext(dependency)
+    ) as (session, session_factory, dependency):
         await session.execute(
             text("INSERT INTO session_probe (value) VALUES ('committed')")
         )
@@ -595,9 +608,6 @@ async def test_request_session_persists_committed_work_and_closes(
                 text("SELECT value FROM session_probe")
             )
             assert result.scalar_one() == "committed"
-    finally:
-        await dependency.aclose()
-        await engine.dispose()
 
 
 @pytest.mark.anyio
@@ -605,21 +615,12 @@ async def test_request_session_rolls_back_and_closes_when_generator_closes(
     settings,
     tmp_path,
 ) -> None:
-    from fastapi import FastAPI
     from sqlalchemy import text
-    from starlette.requests import Request
 
-    from app.core.database import get_session
-
-    runtime, engine, session_factory = await _sqlite_api_runtime(
+    async with _request_session_lifecycle(
         settings,
         tmp_path / "generator-close.db",
-    )
-    app = FastAPI()
-    app.state.runtime = runtime
-    dependency = get_session(Request({"type": "http", "app": app}))
-    try:
-        session = await anext(dependency)
+    ) as (session, session_factory, dependency):
         await session.execute(
             text("INSERT INTO session_probe (value) VALUES ('rolled-back')")
         )
@@ -634,9 +635,6 @@ async def test_request_session_rolls_back_and_closes_when_generator_closes(
                 text("SELECT COUNT(*) FROM session_probe")
             )
             assert result.scalar_one() == 0
-    finally:
-        await dependency.aclose()
-        await engine.dispose()
 
 
 @pytest.mark.anyio
@@ -644,21 +642,12 @@ async def test_request_session_rolls_back_and_closes_on_handler_failure(
     settings,
     tmp_path,
 ) -> None:
-    from fastapi import FastAPI
     from sqlalchemy import text
-    from starlette.requests import Request
 
-    from app.core.database import get_session
-
-    runtime, engine, session_factory = await _sqlite_api_runtime(
+    async with _request_session_lifecycle(
         settings,
         tmp_path / "handler-failure.db",
-    )
-    app = FastAPI()
-    app.state.runtime = runtime
-    dependency = get_session(Request({"type": "http", "app": app}))
-    try:
-        session = await anext(dependency)
+    ) as (session, session_factory, dependency):
         await session.execute(
             text("INSERT INTO session_probe (value) VALUES ('rolled-back')")
         )
@@ -673,17 +662,79 @@ async def test_request_session_rolls_back_and_closes_on_handler_failure(
                 text("SELECT COUNT(*) FROM session_probe")
             )
             assert result.scalar_one() == 0
-    finally:
-        await dependency.aclose()
-        await engine.dispose()
 
 
 @pytest.mark.anyio
-async def test_shared_test_app_uses_its_runtime_session_factory(
-    test_app,
-    client_database_url,
+async def test_shared_test_app_always_uses_isolated_tmp_path_sqlite(
+    settings,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import conftest
+
     from app.core.database import get_session
 
-    assert test_app.state.runtime.settings.database_url == client_database_url
-    assert get_session not in test_app.dependency_overrides
+    monkeypatch.setenv(
+        "CLIENT_TEST_DATABASE_URL",
+        f"sqlite+aiosqlite:///{tmp_path / 'persistent.db'}",
+    )
+    fixture = conftest.test_app.__wrapped__(tmp_path, settings)
+    application = await anext(fixture)
+    try:
+        assert application.state.runtime.settings.database_url == (
+            f"sqlite+aiosqlite:///{tmp_path / 'test_client.db'}"
+        )
+        assert get_session not in application.dependency_overrides
+    finally:
+        await fixture.aclose()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("dispose_fails", [False, True])
+async def test_test_database_setup_disposes_engine_without_masking_setup_failure(
+    dispose_fails: bool,
+) -> None:
+    import conftest
+
+    class SetupFailure(RuntimeError):
+        pass
+
+    class DisposeFailure(RuntimeError):
+        pass
+
+    class Connection:
+        async def run_sync(self, _operation) -> None:
+            raise SetupFailure("schema setup failed")
+
+    class BeginContext:
+        async def __aenter__(self) -> Connection:
+            return Connection()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class Engine:
+        def __init__(self) -> None:
+            self.dispose_calls = 0
+
+        def begin(self) -> BeginContext:
+            return BeginContext()
+
+        async def dispose(self) -> None:
+            self.dispose_calls += 1
+            if dispose_fails:
+                raise DisposeFailure("dispose failed")
+
+    engine = Engine()
+
+    def engine_factory(database_url: str) -> Engine:
+        assert database_url == "sqlite+aiosqlite:///isolated.db"
+        return engine
+
+    with pytest.raises(SetupFailure, match="schema setup failed"):
+        await conftest._initialize_test_database(
+            "sqlite+aiosqlite:///isolated.db",
+            engine_factory=engine_factory,
+        )
+
+    assert engine.dispose_calls == 1

@@ -185,3 +185,85 @@ worker jobs still import them. Removing those functions or migrating worker
 callers here would cross the locked Task 3/P1A boundary into the later typed
 worker-runtime tasks. They are no longer used by the FastAPI request session
 dependency or the shared API test application.
+
+## Fix round 1/5
+
+### Findings addressed
+
+- The shared `test_app` fixture no longer reads `CLIENT_TEST_DATABASE_URL`.
+  It always uses `sqlite+aiosqlite:///<tmp_path>/test_client.db`, so every test
+  gets an isolated database even if that environment variable names a
+  persistent SQLite file or a network PostgreSQL database.
+- The previous tautological runtime/database assertion was replaced with a
+  test that poisons `CLIENT_TEST_DATABASE_URL` and independently derives the
+  required tmp-path SQLite URL.
+- Test schema initialization now disposes its setup engine on success and on
+  every `BaseException`, including connection, schema, and cancellation
+  failures. If disposal also fails, the original setup exception remains the
+  primary exception.
+- The three request-transaction tests now share one small async context manager
+  for runtime/request/dependency ownership and teardown. Commit, rollback,
+  handler-exception, close-count, and persistence assertions remain explicit
+  in each test.
+- Dedicated PostgreSQL integration fixtures were not modified.
+
+### RED evidence
+
+Before the fix implementation:
+
+```text
+cd apps/api
+.venv/bin/python -m pytest -q tests/composition/test_api_composition.py \
+  -k "shared_test_app_always or test_database_setup_disposes"
+```
+
+Result: `3 failed, 13 deselected in 1.18s`.
+
+- The poisoned environment selected `persistent.db` instead of the required
+  `test_client.db`.
+- Both disposal parameter cases failed because
+  `conftest._initialize_test_database` did not exist.
+
+### GREEN and regression verification
+
+```text
+.venv/bin/python -m pytest -q tests/composition/test_api_composition.py \
+  -k "shared_test_app_always or test_database_setup_disposes"
+# 3 passed, 13 deselected in 1.20s
+
+.venv/bin/python -m pytest -q tests/composition/test_api_composition.py
+# 16 passed in 2.16s
+
+.venv/bin/python -m pytest -q \
+  tests/composition/test_api_composition.py \
+  tests/agent/test_call_completion.py tests/auth/test_jwt_auth.py
+# 63 passed in 6.33s
+
+.venv/bin/ruff check app tests/conftest.py \
+  tests/composition/test_api_composition.py
+# All checks passed!
+
+.venv/bin/mypy app/composition app/core app/routers app/webhooks
+# Success: no issues found in 37 source files
+```
+
+Full API suite outside the restricted sandbox:
+
+```text
+.venv/bin/python -m pytest -q
+```
+
+Result: `2769 passed, 133 skipped, 1 warning in 250.61s`, exit code 0. The
+warning remains the pre-existing Starlette/httpx deprecation warning.
+
+### Fix-round self-review
+
+- The isolated database URL is derived solely from the pytest-provided
+  `tmp_path`; no environment or persistent path can override it.
+- Setup-engine disposal is attempted exactly once on success and failure.
+- A cleanup failure cannot replace the schema/connection/cancellation failure
+  that triggered cleanup.
+- The async test helper centralizes only resource ownership and teardown; it
+  does not hide transaction behavior or expected database results.
+- The fix-round delta is limited to the shared API fixture, its direct
+  composition tests, and this report.
