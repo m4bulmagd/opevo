@@ -228,11 +228,9 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
         )
         assert summary_event is not None
     await deliver_summary_generate(
-        {
-            "session_factory": session_factory,
-            "summary_provider": summary_provider,
-        },
         summary_event,
+        session_factory=session_factory,
+        summary_provider=summary_provider,
     )
 
     async with session_factory() as session:

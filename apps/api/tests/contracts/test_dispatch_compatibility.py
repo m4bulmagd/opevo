@@ -7,7 +7,7 @@ from presvo_contracts import dump_contract, parse_dispatch
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.core.config import get_settings
+from app.core.dispatch_token import DispatchTokenConfig
 from app.models.agent_config import AgentConfig
 from app.models.usage_ledger import UsageLedger
 from app.workers.outbox.customer_dispatch import deliver_livekit_dispatch
@@ -64,25 +64,27 @@ async def test_customer_outbox_producer_matches_golden_fixture_exactly(
     await db_session.commit()
 
     provider = CustomerProvider()
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
-    monkeypatch.setenv("LIVEKIT_AGENT_NAME", "fixture-worker")
-    monkeypatch.setenv("MAX_CALL_DURATION_SECONDS", "300")
-    get_settings.cache_clear()
+    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
+    monkeypatch.setenv("LIVEKIT_AGENT_NAME", "poison-environment-agent")
+    monkeypatch.setenv("MAX_CALL_DURATION_SECONDS", "999")
     monkeypatch.setattr(
         "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "fixture-dispatch-token",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    try:
-        await deliver_livekit_dispatch(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-            },
-            event,
-        )
-    finally:
-        get_settings.cache_clear()
+    await deliver_livekit_dispatch(
+        event,
+        session_factory=session_factory,
+        provider=provider,
+        token_config=DispatchTokenConfig(
+            secret="fixture-explicit-customer-secret",
+            ttl_seconds=300,
+        ),
+        livekit_agent_name="fixture-worker",
+        activation_flow_enabled=False,
+        max_call_duration_seconds=300,
+        now=lambda: FIXED_NOW,
+    )
 
     assert len(provider.create_calls) == 1
     produced = dump_contract(parse_dispatch(provider.create_calls[0]["metadata"]))
@@ -101,24 +103,23 @@ async def test_verification_outbox_producer_matches_golden_fixture_exactly(
         session_id=VERIFICATION_SESSION_ID,
     )
     provider = VerificationProvider()
-    monkeypatch.setenv("LIVEKIT_AGENT_NAME", "fixture-worker")
-    get_settings.cache_clear()
+    monkeypatch.setenv("LIVEKIT_AGENT_NAME", "poison-environment-agent")
     monkeypatch.setattr(
         "app.workers.outbox.verification_dispatch.create_verification_token",
         lambda **_kwargs: "fixture-completion-token",
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    try:
-        await deliver_livekit_verification_dispatch(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-                "verification_now": lambda: FIXED_NOW,
-            },
-            event,
-        )
-    finally:
-        get_settings.cache_clear()
+    await deliver_livekit_verification_dispatch(
+        event,
+        session_factory=session_factory,
+        provider=provider,
+        token_config=DispatchTokenConfig(
+            secret="fixture-explicit-verification-secret",
+            ttl_seconds=300,
+        ),
+        livekit_agent_name="fixture-worker",
+        now=lambda: FIXED_NOW,
+    )
 
     assert len(provider.create_calls) == 1
     produced = dump_contract(parse_dispatch(provider.create_calls[0]["metadata"]))

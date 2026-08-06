@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -16,13 +17,16 @@ from presvo_contracts import (
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.core.database import AsyncSessionFactory
+from app.core.dispatch_token import DispatchTokenConfig
 from app.core.provider_failures import ProviderFailure
 from app.core.verification_token import verify_verification_token
 from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG
 from app.models.call import Call
 from app.models.customer_activation import CustomerActivation
+from app.models.outbox_event import OutboxEvent
 from app.models.user import User
-from app.providers.livekit_dispatch.base import LiveKitDispatch
+from app.providers.livekit_dispatch.base import LiveKitDispatch, LiveKitDispatchProvider
 from app.services.outbox_service import OutboxService, SUPPORTED_OUTBOX_TOPICS
 from app.workers.outbox.delivery import _validated_event_call_id
 from app.workers.outbox.failures import OutboxDeliveryError
@@ -36,17 +40,26 @@ FIXED_NOW = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
 SUCCESS_MESSAGE = VERIFICATION_MESSAGE
 
 
-async def _handler(dependencies: dict[str, object], event) -> None:
-    from app.core.config import get_settings
+def _fixed_now() -> datetime:
+    return FIXED_NOW
 
-    settings = get_settings()
+
+async def _handler(
+    event: OutboxEvent,
+    *,
+    session_factory: AsyncSessionFactory,
+    provider: LiveKitDispatchProvider,
+    token_config: DispatchTokenConfig = TEST_DISPATCH_TOKEN_CONFIG,
+    livekit_agent_name: str = "ai-call-agent",
+    now: Callable[[], datetime] = _fixed_now,
+) -> None:
     await _deliver_livekit_verification_dispatch_explicit(
         event,
-        session_factory=dependencies["session_factory"],
-        provider=dependencies["livekit_dispatch_provider"],
-        token_config=TEST_DISPATCH_TOKEN_CONFIG,
-        livekit_agent_name=settings.livekit_agent_name,
-        now=dependencies.get("verification_now", lambda: FIXED_NOW),
+        session_factory=session_factory,
+        provider=provider,
+        token_config=token_config,
+        livekit_agent_name=livekit_agent_name,
+        now=now,
     )
 
 
@@ -197,12 +210,9 @@ async def test_verification_reconciliation_never_persists_foreign_agent_identity
 
     with caplog.at_level("INFO"), pytest.raises(OutboxDeliveryError) as caught:
         await _handler(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-                "verification_now": lambda: FIXED_NOW,
-            },
             event,
+            session_factory=session_factory,
+            provider=provider,
         )
 
     db_session.expire_all()
@@ -247,12 +257,9 @@ async def test_verification_empty_provider_dispatch_id_is_conflict_without_creat
 
     with pytest.raises(OutboxDeliveryError) as caught:
         await _handler(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-                "verification_now": lambda: FIXED_NOW,
-            },
             event,
+            session_factory=session_factory,
+            provider=provider,
         )
 
     db_session.expire_all()
@@ -450,19 +457,14 @@ async def test_handler_creates_exact_verification_job_and_persists_identity(
     user_id = user.id
     outbox_payload = dict(event.payload)
     provider = _Provider()
-    monkeypatch.setenv("LIVEKIT_AGENT_NAME", "configured-worker")
-    from app.core.config import get_settings
-
-    get_settings.cache_clear()
+    monkeypatch.setenv("LIVEKIT_AGENT_NAME", "ambient-worker-must-not-win")
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     await _handler(
-        {
-            "session_factory": session_factory,
-            "livekit_dispatch_provider": provider,
-            "verification_now": lambda: FIXED_NOW,
-        },
         event,
+        session_factory=session_factory,
+        provider=provider,
+        livekit_agent_name="configured-worker",
     )
 
     db_session.expire_all()
@@ -531,12 +533,9 @@ async def test_matching_provider_dispatch_reconciles_without_create(db_session) 
     )
 
     await _handler(
-        {
-            "session_factory": session_factory,
-            "livekit_dispatch_provider": provider,
-            "verification_now": lambda: FIXED_NOW,
-        },
         event,
+        session_factory=session_factory,
+        provider=provider,
     )
 
     db_session.expire_all()
@@ -556,12 +555,9 @@ async def test_create_timeout_reconciles_to_one_verification_dispatch(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     await _handler(
-        {
-            "session_factory": session_factory,
-            "livekit_dispatch_provider": provider,
-            "verification_now": lambda: FIXED_NOW,
-        },
         event,
+        session_factory=session_factory,
+        provider=provider,
     )
 
     db_session.expire_all()
@@ -587,15 +583,17 @@ async def test_success_before_persist_reconciles_on_retry_without_second_create(
         fail_recovery_list_once=True,
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    ctx = {
-        "session_factory": session_factory,
-        "livekit_dispatch_provider": provider,
-        "verification_now": lambda: FIXED_NOW,
-    }
-
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _handler(ctx, event)
-    await _handler(ctx, event)
+        await _handler(
+            event,
+            session_factory=session_factory,
+            provider=provider,
+        )
+    await _handler(
+        event,
+        session_factory=session_factory,
+        provider=provider,
+    )
 
     assert exc_info.value.error_code == "provider_retryable"
     assert exc_info.value.retryable is True
@@ -618,12 +616,9 @@ async def test_completion_race_persists_dispatch_only_for_the_same_session(
     provider = _CompletingProvider(session_factory, activation_id)
 
     await _handler(
-        {
-            "session_factory": session_factory,
-            "livekit_dispatch_provider": provider,
-            "verification_now": lambda: FIXED_NOW,
-        },
         event,
+        session_factory=session_factory,
+        provider=provider,
     )
 
     db_session.expire_all()
@@ -674,12 +669,9 @@ async def test_foreign_duplicate_and_persisted_dispatch_conflicts_are_terminal(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await _handler(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-                "verification_now": lambda: FIXED_NOW,
-            },
             event,
+            session_factory=session_factory,
+            provider=provider,
         )
 
     assert exc_info.value.error_code == "dispatch_conflict"
@@ -709,12 +701,9 @@ async def test_handler_rejects_mismatched_event_identity_without_provider_io(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await _handler(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-                "verification_now": lambda: FIXED_NOW,
-            },
             event,
+            session_factory=session_factory,
+            provider=provider,
         )
 
     assert exc_info.value.error_code == "dispatch_configuration"
@@ -743,12 +732,9 @@ async def test_stale_verification_state_never_calls_provider(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await _handler(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-                "verification_now": lambda: FIXED_NOW,
-            },
             event,
+            session_factory=session_factory,
+            provider=provider,
         )
 
     assert exc_info.value.error_code == "dispatch_ineligible"
@@ -784,12 +770,9 @@ async def test_claimed_verification_dispatch_rechecks_account_before_provider_io
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await _handler(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-                "verification_now": lambda: FIXED_NOW,
-            },
             event,
+            session_factory=session_factory,
+            provider=provider,
         )
 
     assert exc_info.value.error_code == "dispatch_ineligible"
@@ -811,12 +794,9 @@ async def test_stale_account_generation_never_dispatches_verification(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await _handler(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-                "verification_now": lambda: FIXED_NOW,
-            },
             event,
+            session_factory=session_factory,
+            provider=provider,
         )
 
     assert exc_info.value.error_code == "dispatch_ineligible"
@@ -850,12 +830,9 @@ async def test_deactivation_during_verification_reconciliation_prevents_create(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await _handler(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-                "verification_now": lambda: FIXED_NOW,
-            },
             event,
+            session_factory=session_factory,
+            provider=provider,
         )
 
     assert exc_info.value.error_code == "dispatch_ineligible"

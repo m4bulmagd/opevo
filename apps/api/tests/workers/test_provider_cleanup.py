@@ -1,3 +1,5 @@
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
@@ -63,20 +65,26 @@ class _UnusedSubscriptions:
         raise AssertionError(f"unexpected subscription cleanup: {subscription_id}")
 
 
+@dataclass(frozen=True)
+class _ProviderCleanupDependencies:
+    session_factory: async_sessionmaker
+    now: Callable[[], datetime]
+    telephony_provider: RecordingTelephony | None = None
+    subscription_provider: RecordingSubscriptions | None = None
+
+
 async def _deliver_provider_cleanup(
-    dependencies: dict[str, object],
+    dependencies: _ProviderCleanupDependencies,
     event: OutboxEvent,
 ) -> None:
     await _deliver_provider_cleanup_explicit(
         event,
-        session_factory=dependencies["session_factory"],
-        telephony_provider=dependencies.get(
-            "telephony_provider", _UnusedTelephony()
+        session_factory=dependencies.session_factory,
+        telephony_provider=dependencies.telephony_provider or _UnusedTelephony(),
+        subscription_provider=(
+            dependencies.subscription_provider or _UnusedSubscriptions()
         ),
-        subscription_provider=dependencies.get(
-            "subscription_provider", _UnusedSubscriptions()
-        ),
-        now=dependencies["provider_cleanup_now"],
+        now=dependencies.now,
     )
 
 
@@ -114,11 +122,11 @@ async def test_phone_cleanup_commits_disable_before_release_and_is_replay_safe(
     )
     calls: list[str] = []
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    ctx = {
-        "session_factory": session_factory,
-        "telephony_provider": RecordingTelephony(calls),
-        "provider_cleanup_now": lambda: datetime.now(UTC),
-    }
+    ctx = _ProviderCleanupDependencies(
+        session_factory=session_factory,
+        telephony_provider=RecordingTelephony(calls),
+        now=lambda: datetime.now(UTC),
+    )
 
     await _deliver_provider_cleanup(ctx, event)
     await _deliver_provider_cleanup(ctx, event)
@@ -148,11 +156,11 @@ async def test_phone_cleanup_retries_release_without_repeating_committed_disable
     calls: list[str] = []
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     failing = RecordingTelephony(calls, fail_release=True)
-    ctx = {
-        "session_factory": session_factory,
-        "telephony_provider": failing,
-        "provider_cleanup_now": lambda: datetime.now(UTC),
-    }
+    ctx = _ProviderCleanupDependencies(
+        session_factory=session_factory,
+        telephony_provider=failing,
+        now=lambda: datetime.now(UTC),
+    )
 
     with pytest.raises(OutboxDeliveryError) as raised:
         await _deliver_provider_cleanup(ctx, event)
@@ -184,11 +192,11 @@ async def test_stale_subscription_cleanup_retries_then_cancels_once(
     calls: list[str] = []
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     provider = RecordingSubscriptions(calls, fail=True)
-    ctx = {
-        "session_factory": session_factory,
-        "subscription_provider": provider,
-        "provider_cleanup_now": lambda: datetime.now(UTC),
-    }
+    ctx = _ProviderCleanupDependencies(
+        session_factory=session_factory,
+        subscription_provider=provider,
+        now=lambda: datetime.now(UTC),
+    )
 
     with pytest.raises(OutboxDeliveryError):
         await _deliver_provider_cleanup(ctx, event)

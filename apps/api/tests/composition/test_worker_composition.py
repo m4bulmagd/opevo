@@ -607,7 +607,8 @@ async def test_background_composition_binds_selected_providers_and_runtime_value
         events,
         captured_handler_dependencies=captured,
     )
-    clock = lambda: datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
+    def clock() -> datetime:
+        return datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
     settings = _test_settings(
         telephony_mode="fake",
         billing_mode="fake",
@@ -848,6 +849,46 @@ async def test_validation_failure_precedes_every_background_factory() -> None:
             outbox_handlers_factory=forbidden("handlers"),
         )
 
+    assert constructed == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("invalid_ttl", [0, -1, True])
+async def test_dispatch_token_validation_precedes_every_background_factory(
+    invalid_ttl: object,
+) -> None:
+    constructed: list[str] = []
+
+    def forbidden(name: str):
+        def factory(*_args: Any, **_kwargs: Any):
+            constructed.append(name)
+            raise AssertionError(f"{name} must not be constructed")
+
+        return factory
+
+    settings = _test_settings().model_copy(
+        update={"agent_dispatch_jwt_ttl_seconds": invalid_ttl}
+    )
+
+    with pytest.raises(WorkerRuntimeConfigurationError) as caught:
+        await build_background_worker_runtime(
+            settings,
+            arq_redis=_BorrowedRedis(),
+            engine_factory=forbidden("engine"),
+            session_factory_factory=forbidden("session_factory"),
+            observability_factory=forbidden("observability"),
+            observer_factory=forbidden("observer"),
+            telephony_provider_factory=forbidden("telephony"),
+            subscription_provider_factory=forbidden("subscription"),
+            livekit_api_factory=forbidden("livekit"),
+            livekit_dispatch_provider_factory=forbidden("dispatch"),
+            summary_provider_factory=forbidden("summary"),
+            storage_provider_factory=forbidden("storage"),
+            recording_provider_factory=forbidden("recording"),
+            outbox_handlers_factory=forbidden("handlers"),
+        )
+
+    assert str(caught.value) == "background worker dispatch token configuration is invalid"
     assert constructed == []
 
 

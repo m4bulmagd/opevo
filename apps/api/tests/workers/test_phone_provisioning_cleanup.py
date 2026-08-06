@@ -19,9 +19,15 @@ from app.workers.outbox.delivery import (
     deliver_outbox_batch,
 )
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.outbox.phone import deliver_phone_provision as _deliver_phone_provision_explicit
-from app.workers.outbox.phone_provisioning import provision_phone_number as _provision_phone_number_explicit
-from app.workers.outbox.provider_cleanup import deliver_provider_cleanup as _deliver_provider_cleanup_explicit
+from app.workers.outbox.phone import (
+    deliver_phone_provision as _deliver_phone_provision_explicit,
+)
+from app.workers.outbox.phone_provisioning import (
+    provision_phone_number as _provision_phone_number_explicit,
+)
+from app.workers.outbox.provider_cleanup import (
+    deliver_provider_cleanup as _deliver_provider_cleanup_explicit,
+)
 
 
 class LateProvisioningProvider:
@@ -71,30 +77,38 @@ class SimulatedWorkerCrash(BaseException):
     pass
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 async def _provision_phone_number(
-    dependencies: dict[str, Any],
     payload: dict[str, Any],
     *,
+    session_factory,
+    telephony_provider,
     provider_operation_key: str | None = None,
 ) -> None:
     await _provision_phone_number_explicit(
         payload,
-        session_factory=dependencies["session_factory"],
-        telephony_provider=dependencies["telephony_provider"],
+        session_factory=session_factory,
+        telephony_provider=telephony_provider,
         provider_operation_key=provider_operation_key,
     )
 
 
 async def _deliver_phone_provision(
-    dependencies: dict[str, Any],
     event: OutboxEvent,
+    *,
+    session_factory,
+    telephony_provider,
+    now=_utc_now,
 ) -> None:
     await _deliver_phone_provision_explicit(
         event,
-        session_factory=dependencies["session_factory"],
-        telephony_provider=dependencies["telephony_provider"],
+        session_factory=session_factory,
+        telephony_provider=telephony_provider,
         activation_flow_enabled=False,
-        now=dependencies.get("routing_now", lambda: datetime.now(UTC)),
+        now=now,
     )
 
 
@@ -104,15 +118,18 @@ class _UnusedSubscriptions:
 
 
 async def _deliver_provider_cleanup(
-    dependencies: dict[str, Any],
     event: OutboxEvent,
+    *,
+    session_factory,
+    telephony_provider,
+    now=_utc_now,
 ) -> None:
     await _deliver_provider_cleanup_explicit(
         event,
-        session_factory=dependencies["session_factory"],
-        telephony_provider=dependencies["telephony_provider"],
+        session_factory=session_factory,
+        telephony_provider=telephony_provider,
         subscription_provider=_UnusedSubscriptions(),
-        now=dependencies.get("provider_cleanup_now", lambda: datetime.now(UTC)),
+        now=now,
     )
 
 
@@ -184,13 +201,11 @@ async def test_phone_provisioning_admission_waits_for_prior_provider_cleanup(
     with pytest.raises(UnresolvedProviderWorkError) as raised:
         await _provision_phone_number(
             {
-                "session_factory": session_factory,
-                "telephony_provider": ForbiddenProvider(),
-            },
-            {
                 "user_id": str(active_user.id),
                 "lifecycle_generation": active_user.lifecycle_generation,
             },
+            session_factory=session_factory,
+            telephony_provider=ForbiddenProvider(),
             provider_operation_key="activation:phone.provision:new-lifecycle",
         )
 
@@ -218,13 +233,11 @@ async def test_late_provisioning_adopts_exact_identity_for_durable_cleanup(
     with pytest.raises(AccountStateBlockedError):
         await _provision_phone_number(
             {
-                "session_factory": session_factory,
-                "telephony_provider": provider,
-            },
-            {
                 "user_id": str(user_id),
                 "lifecycle_generation": 1,
             },
+            session_factory=session_factory,
+            telephony_provider=provider,
             provider_operation_key="activation:phone.provision:late-boundary",
         )
 
@@ -276,15 +289,11 @@ async def test_crash_before_cleanup_adoption_recovers_same_provider_order(
         "user_id": str(user_id),
         "lifecycle_generation": 1,
     }
-    ctx = {
-        "session_factory": session_factory,
-        "telephony_provider": provider,
-    }
-
     with pytest.raises(RuntimeError, match="simulated crash"):
         await _provision_phone_number(
-            ctx,
             payload,
+            session_factory=session_factory,
+            telephony_provider=provider,
             provider_operation_key="activation:phone.provision:crash-boundary",
         )
     assert (
@@ -296,8 +305,9 @@ async def test_crash_before_cleanup_adoption_recovers_same_provider_order(
 
     with pytest.raises(AccountStateBlockedError):
         await _provision_phone_number(
-            ctx,
             payload,
+            session_factory=session_factory,
+            telephony_provider=provider,
             provider_operation_key="activation:phone.provision:crash-boundary",
         )
 
@@ -337,20 +347,23 @@ async def test_delivery_wrapper_recovers_exact_crashed_order_after_deactivation(
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     provider = AcceptedThenRecoverableProvider(user_id)
-    ctx = {
-        "session_factory": session_factory,
-        "telephony_provider": provider,
-    }
-
     with pytest.raises(SimulatedWorkerCrash):
-        await _deliver_phone_provision(ctx, event)
+        await _deliver_phone_provision(
+            event,
+            session_factory=session_factory,
+            telephony_provider=provider,
+        )
 
     await db_session.refresh(active_user)
     active_user.status = "inactive"
     active_user.lifecycle_generation = 2
     await db_session.commit()
 
-    await _deliver_phone_provision(ctx, event)
+    await _deliver_phone_provision(
+        event,
+        session_factory=session_factory,
+        telephony_provider=provider,
+    )
 
     assert provider.provision_keys == [operation_key]
     assert provider.recovery_keys == [operation_key]
@@ -374,7 +387,11 @@ async def test_delivery_wrapper_recovers_exact_crashed_order_after_deactivation(
     )
     assert cleanup_event is not None
 
-    await _deliver_provider_cleanup(ctx, cleanup_event)
+    await _deliver_provider_cleanup(
+        cleanup_event,
+        session_factory=session_factory,
+        telephony_provider=provider,
+    )
 
     await db_session.refresh(cleanup)
     assert cleanup.status == "completed"
@@ -438,11 +455,7 @@ async def test_missing_stale_order_lookup_retries_outbox_without_ordering_again(
             recovery_keys.append(operation_key)
 
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    ctx = {
-        "session_factory": session_factory,
-        "telephony_provider": LookupPendingProvider(),
-        "outbox_now": lambda: current_time,
-    }
+    provider = LookupPendingProvider()
     results: list[dict[str, int]] = []
     terminal_metrics: list[tuple[str, str]] = []
 
@@ -451,7 +464,12 @@ async def test_missing_stale_order_lookup_retries_outbox_without_ordering_again(
             terminal_metrics.append((topic, code))
 
     async def handler(claimed_event: OutboxEvent) -> None:
-        await _deliver_phone_provision(ctx, claimed_event)
+        await _deliver_phone_provision(
+            claimed_event,
+            session_factory=session_factory,
+            telephony_provider=provider,
+            now=lambda: current_time,
+        )
 
     for _ in range(len(OUTBOX_RETRY_DELAYS) + 1):
         results.append(
@@ -556,11 +574,9 @@ async def test_stale_delivery_only_admits_matching_running_attempt(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     with pytest.raises(OutboxDeliveryError) as raised:
         await _deliver_phone_provision(
-            {
-                "session_factory": session_factory,
-                "telephony_provider": ForbiddenProvider(),
-            },
             event,
+            session_factory=session_factory,
+            telephony_provider=ForbiddenProvider(),
         )
 
     assert raised.value.error_code == "dispatch_ineligible"

@@ -15,6 +15,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import Settings
+from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG
 from app.models import Base
 from app.models.account_deactivation_operation import AccountDeactivationOperation
 from app.models.agent_config import AgentConfig
@@ -225,6 +226,52 @@ class _ForbiddenDispatchProvider:
     async def create_dispatch(self, **_kwargs):
         self.calls.append("create")
         raise AssertionError("stale verification must not invoke LiveKit")
+
+
+class _AccountObservability:
+    def record_account_deactivation_completion(self, *_args, **_kwargs) -> None:
+        pass
+
+    def record_account_deactivation_result(self, *_args, **_kwargs) -> None:
+        pass
+
+    def record_account_deactivation_attention(self, *_args, **_kwargs) -> None:
+        pass
+
+
+async def _deliver_account_event(
+    event: OutboxEvent,
+    *,
+    session_factory,
+    telephony_provider,
+    subscription_provider,
+    now: datetime = NOW,
+) -> None:
+    await deliver_account_deactivation(
+        event,
+        session_factory=session_factory,
+        telephony_provider=telephony_provider,
+        subscription_provider=subscription_provider,
+        observability=_AccountObservability(),
+        now=lambda: now,
+    )
+
+
+async def _deliver_cleanup_event(
+    event: OutboxEvent,
+    *,
+    session_factory,
+    telephony_provider=None,
+    subscription_provider=None,
+    now: datetime = NOW,
+) -> None:
+    await deliver_provider_cleanup(
+        event,
+        session_factory=session_factory,
+        telephony_provider=telephony_provider or _WorkerTelephonyProvider(),
+        subscription_provider=(subscription_provider or _WorkerSubscriptionProvider()),
+        now=lambda: now,
+    )
 
 
 class _RetainedRecordingPlayback:
@@ -438,11 +485,9 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
     provider = _BarrierProvisioningProvider(entered=entered, resume=resume)
     provisioning_task = asyncio.create_task(
         provision_phone_number(
-            {
-                "session_factory": account_session_factory,
-                "telephony_provider": provider,
-            },
             {"user_id": str(user_id), "lifecycle_generation": 1},
+            session_factory=account_session_factory,
+            telephony_provider=provider,
             provider_operation_key="activation:phone.provision:pg-late",
         )
     )
@@ -464,14 +509,11 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
             )
         )
         assert event is not None
-    await deliver_account_deactivation(
-        {
-            "session_factory": account_session_factory,
-            "telephony_provider": provider,
-            "subscription_provider": _WorkerSubscriptionProvider(),
-            "account_deactivation_now": lambda: NOW,
-        },
+    await _deliver_account_event(
         event,
+        session_factory=account_session_factory,
+        telephony_provider=provider,
+        subscription_provider=_WorkerSubscriptionProvider(),
     )
 
     async with account_session_factory() as session:
@@ -561,13 +603,12 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
                 )
 
     cleanup_provider = BarrierRetryCleanupProvider()
-    cleanup_ctx = {
-        "session_factory": account_session_factory,
-        "telephony_provider": cleanup_provider,
-        "provider_cleanup_now": lambda: NOW,
-    }
     first_cleanup = asyncio.create_task(
-        deliver_provider_cleanup(cleanup_ctx, cleanup_event)
+        _deliver_cleanup_event(
+            cleanup_event,
+            session_factory=account_session_factory,
+            telephony_provider=cleanup_provider,
+        )
     )
     await asyncio.wait_for(cleanup_release_entered.wait(), timeout=5)
     async with account_session_factory() as session:
@@ -600,8 +641,16 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
     assert retry_projection.reactivation_allowed is False
 
     cleanup_provider.fail_release = False
-    await deliver_provider_cleanup(cleanup_ctx, cleanup_event)
-    await deliver_provider_cleanup(cleanup_ctx, cleanup_event)
+    await _deliver_cleanup_event(
+        cleanup_event,
+        session_factory=account_session_factory,
+        telephony_provider=cleanup_provider,
+    )
+    await _deliver_cleanup_event(
+        cleanup_event,
+        session_factory=account_session_factory,
+        telephony_provider=cleanup_provider,
+    )
 
     async with account_session_factory() as session:
         phone_cleanup_projection = await AccountLifecycleService(
@@ -641,21 +690,15 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
     assert stale_checkout.allowed is False
 
     subscriptions = _WorkerSubscriptionProvider()
-    await deliver_provider_cleanup(
-        {
-            "session_factory": account_session_factory,
-            "subscription_provider": subscriptions,
-            "provider_cleanup_now": lambda: NOW,
-        },
+    await _deliver_cleanup_event(
         stale_event,
+        session_factory=account_session_factory,
+        subscription_provider=subscriptions,
     )
-    await deliver_provider_cleanup(
-        {
-            "session_factory": account_session_factory,
-            "subscription_provider": subscriptions,
-            "provider_cleanup_now": lambda: NOW,
-        },
+    await _deliver_cleanup_event(
         stale_event,
+        session_factory=account_session_factory,
+        subscription_provider=subscriptions,
     )
 
     assert provider.provision_calls == 1
@@ -722,14 +765,22 @@ async def test_reclaimed_provider_cleanup_is_single_flight_without_transactions(
             else:
                 second_provider_call.set()
 
-    ctx = {
-        "session_factory": tracking_factory,
-        "subscription_provider": BarrierSubscriptionProvider(),
-        "provider_cleanup_now": lambda: NOW,
-    }
-    first = asyncio.create_task(deliver_provider_cleanup(ctx, event))
+    subscription_provider = BarrierSubscriptionProvider()
+    first = asyncio.create_task(
+        _deliver_cleanup_event(
+            event,
+            session_factory=tracking_factory,
+            subscription_provider=subscription_provider,
+        )
+    )
     await asyncio.wait_for(entered.wait(), timeout=5)
-    reclaimed = asyncio.create_task(deliver_provider_cleanup(ctx, event))
+    reclaimed = asyncio.create_task(
+        _deliver_cleanup_event(
+            event,
+            session_factory=tracking_factory,
+            subscription_provider=subscription_provider,
+        )
+    )
     await asyncio.sleep(0.1)
     overlapped = second_provider_call.is_set()
     resume.set()
@@ -783,7 +834,9 @@ async def test_owner_request_and_terminal_stripe_event_converge_on_one_operation
         async with account_session_factory() as session:
             competing_started.set()
             assert (
-                await BillingService(session, settings=Settings()).handle_event(envelope)
+                await BillingService(session, settings=Settings()).handle_event(
+                    envelope
+                )
                 is True
             )
 
@@ -930,14 +983,11 @@ async def test_worker_cancellation_commit_and_lifecycle_entry_use_compatible_loc
     telephony = _WorkerTelephonyProvider()
 
     async def deliver() -> None:
-        await deliver_account_deactivation(
-            {
-                "session_factory": account_session_factory,
-                "telephony_provider": telephony,
-                "subscription_provider": subscription_provider,
-                "account_deactivation_now": lambda: NOW,
-            },
+        await _deliver_account_event(
             event,
+            session_factory=account_session_factory,
+            telephony_provider=telephony,
+            subscription_provider=subscription_provider,
         )
 
     async def enter_lifecycle() -> UUID:
@@ -1068,14 +1118,11 @@ async def test_stale_drain_evidence_never_releases_while_call_is_active(
 
     telephony = _ForbiddenReleaseProvider()
     with pytest.raises(OutboxDeliveryError) as error:
-        await deliver_account_deactivation(
-            {
-                "session_factory": account_session_factory,
-                "telephony_provider": telephony,
-                "subscription_provider": _ForbiddenSubscriptionProvider(),
-                "account_deactivation_now": lambda: NOW,
-            },
+        await _deliver_account_event(
             event,
+            session_factory=account_session_factory,
+            telephony_provider=telephony,
+            subscription_provider=_ForbiddenSubscriptionProvider(),
         )
 
     assert error.value.error_code == "account_call_draining"
@@ -1245,11 +1292,11 @@ async def test_stale_enable_provision_invoice_and_go_live_work_is_provider_free(
     for delivery, event in zip(deliveries, stale_events, strict=True):
         with pytest.raises(OutboxDeliveryError) as error:
             await delivery(
-                {
-                    "session_factory": account_session_factory,
-                    "telephony_provider": telephony,
-                },
                 event,
+                session_factory=account_session_factory,
+                telephony_provider=telephony,
+                activation_flow_enabled=False,
+                now=lambda: NOW,
             )
         assert error.value.error_code == "dispatch_ineligible"
 
@@ -1358,12 +1405,12 @@ async def test_stale_verification_dispatch_is_provider_free_and_keeps_claim_stat
     provider = _ForbiddenDispatchProvider()
     with pytest.raises(OutboxDeliveryError) as error:
         await deliver_livekit_verification_dispatch(
-            {
-                "session_factory": account_session_factory,
-                "livekit_dispatch_provider": provider,
-                "verification_now": lambda: NOW,
-            },
             event,
+            session_factory=account_session_factory,
+            provider=provider,
+            token_config=TEST_DISPATCH_TOKEN_CONFIG,
+            livekit_agent_name="explicit-account-concurrency-agent",
+            now=lambda: NOW,
         )
 
     assert error.value.error_code == "dispatch_ineligible"
@@ -1803,14 +1850,11 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
     tracking = _TrackingSessionFactory(account_session_factory)
     telephony = _WorkerTelephonyProvider(tracking.assert_provider_safe)
     subscriptions = _WorkerSubscriptionProvider(tracking.assert_provider_safe)
-    await deliver_account_deactivation(
-        {
-            "session_factory": tracking,
-            "telephony_provider": telephony,
-            "subscription_provider": subscriptions,
-            "account_deactivation_now": lambda: NOW,
-        },
+    await _deliver_account_event(
         event,
+        session_factory=tracking,
+        telephony_provider=telephony,
+        subscription_provider=subscriptions,
     )
 
     assert [name for name, _identity in telephony.calls] == ["disable", "release"]

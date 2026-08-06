@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from types import SimpleNamespace
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -29,6 +31,8 @@ from app.models.provider_cleanup_operation import ProviderCleanupOperation
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.usage_ledger import UsageLedger
+from app.core.database import AsyncSessionFactory
+from app.core.dispatch_token import DispatchTokenConfig
 from app.repositories.account_deactivation_repository import (
     AccountDeactivationObservabilitySnapshot,
     AccountDeactivationRepository,
@@ -50,8 +54,18 @@ from app.services.onboarding_service import (
     OnboardingService,
 )
 from app.services.routing_fingerprint import routing_fingerprint
+from app.providers.livekit_dispatch.base import LiveKitDispatch, LiveKitDispatchProvider
+from app.providers.subscriptions.base import SubscriptionProvider
+from app.providers.telephony.base import TelephonyProvider
 from app.workers.outbox import customer_dispatch
 from app.workers.outbox.delivery import deliver_outbox_batch, reconcile_outbox
+from app.workers.outbox.customer_dispatch import deliver_livekit_dispatch
+from app.workers.outbox.phone import deliver_phone_provision, deliver_phone_routing
+from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
+from app.workers.outbox.verification_dispatch import (
+    deliver_livekit_verification_dispatch,
+)
+from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG
 from tests.fakes import CaptureMeter, CaptureTracer
 
 
@@ -83,51 +97,152 @@ class _DeliveryObservability:
             self.delegate.record_account_deactivation_snapshot(snapshot)
 
 
-def _bound_test_handlers(ctx: dict) -> dict:
-    bound = {}
-    for topic, handler in ctx.get("outbox_handlers", {}).items():
-
-        async def call(event: OutboxEvent, handler=handler) -> None:
-            await handler(ctx, event)
-
-        bound[topic] = call
-    return bound
+OutboxHandler = Callable[[OutboxEvent], Awaitable[None]]
+TerminalFailureMetric = Callable[[str, str], object]
 
 
-async def _deliver_outbox_batch(ctx: dict) -> dict[str, int]:
-    observability = _DeliveryObservability(ctx.get("observability"))
-    result = await deliver_outbox_batch(
-        session_factory=ctx["session_factory"],
-        handlers=_bound_test_handlers(ctx),
-        observability=observability,
-        now=ctx.get("outbox_now", lambda: datetime.now(UTC)),
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _customer_dispatch_handler(
+    *,
+    session_factory: AsyncSessionFactory,
+    provider: object,
+    now: Callable[[], datetime],
+    token_config: DispatchTokenConfig = TEST_DISPATCH_TOKEN_CONFIG,
+) -> OutboxHandler:
+    return partial(
+        deliver_livekit_dispatch,
+        session_factory=session_factory,
+        provider=cast(LiveKitDispatchProvider, provider),
+        token_config=token_config,
+        livekit_agent_name="ai-call-agent",
+        activation_flow_enabled=False,
+        max_call_duration_seconds=3600,
+        now=now,
     )
-    metric = ctx.get("outbox_terminal_failure_metric")
-    if metric is not None:
+
+
+def _verification_dispatch_handler(
+    *,
+    session_factory: AsyncSessionFactory,
+    provider: object,
+    now: Callable[[], datetime],
+    token_config: DispatchTokenConfig = TEST_DISPATCH_TOKEN_CONFIG,
+) -> OutboxHandler:
+    return partial(
+        deliver_livekit_verification_dispatch,
+        session_factory=session_factory,
+        provider=cast(LiveKitDispatchProvider, provider),
+        token_config=token_config,
+        livekit_agent_name="ai-call-agent",
+        now=now,
+    )
+
+
+def _phone_provision_handler(
+    *,
+    session_factory: AsyncSessionFactory,
+    provider: object,
+    now: Callable[[], datetime],
+) -> OutboxHandler:
+    return partial(
+        deliver_phone_provision,
+        session_factory=session_factory,
+        telephony_provider=cast(TelephonyProvider, provider),
+        activation_flow_enabled=False,
+        now=now,
+    )
+
+
+def _phone_routing_handler(
+    *,
+    session_factory: AsyncSessionFactory,
+    provider: object,
+    now: Callable[[], datetime] = _utc_now,
+) -> OutboxHandler:
+    return partial(
+        deliver_phone_routing,
+        session_factory=session_factory,
+        telephony_provider=cast(TelephonyProvider, provider),
+        activation_flow_enabled=False,
+        now=now,
+    )
+
+
+class _UnusedSubscriptionProvider(SubscriptionProvider):
+    async def cancel_immediately(self, subscription_id: str) -> None:
+        raise AssertionError(f"unexpected subscription cleanup: {subscription_id}")
+
+
+class _ForbiddenDispatchProvider:
+    async def list_dispatches(self, *, room_name: str) -> list[LiveKitDispatch]:
+        raise AssertionError(f"unexpected dispatch lookup: {room_name}")
+
+    async def create_dispatch(
+        self,
+        *,
+        agent_name: str,
+        room_name: str,
+        metadata: str,
+    ) -> LiveKitDispatch:
+        raise AssertionError(
+            f"unexpected dispatch creation: {agent_name} {room_name} {metadata}"
+        )
+
+
+def _provider_cleanup_handler(
+    *,
+    session_factory: AsyncSessionFactory,
+    provider: object,
+    now: Callable[[], datetime],
+) -> OutboxHandler:
+    return partial(
+        deliver_provider_cleanup,
+        session_factory=session_factory,
+        telephony_provider=cast(TelephonyProvider, provider),
+        subscription_provider=_UnusedSubscriptionProvider(),
+        now=now,
+    )
+
+
+async def _deliver_outbox_batch(
+    *,
+    session_factory: AsyncSessionFactory,
+    handlers: Mapping[str, OutboxHandler],
+    now: Callable[[], datetime] = _utc_now,
+    observability_delegate: object | None = None,
+    terminal_failure_metric: TerminalFailureMetric | None = None,
+) -> dict[str, int]:
+    observability = _DeliveryObservability(observability_delegate)
+    result = await deliver_outbox_batch(
+        session_factory=session_factory,
+        handlers=handlers,
+        observability=observability,
+        now=now,
+    )
+    if terminal_failure_metric is not None:
         for topic, error_class in observability.terminal_failures:
-            returned = metric(topic, error_class)
+            returned = terminal_failure_metric(topic, error_class)
             if hasattr(returned, "__await__"):
                 await returned
     return result
 
 
-async def _reconcile_outbox(ctx: dict) -> dict[str, int]:
+async def _reconcile_outbox(
+    *,
+    session_factory: AsyncSessionFactory,
+    handlers: Mapping[str, OutboxHandler],
+    now: Callable[[], datetime] = _utc_now,
+    observability_delegate: object | None = None,
+) -> dict[str, int]:
     return await reconcile_outbox(
-        session_factory=ctx["session_factory"],
-        handlers=_bound_test_handlers(ctx),
-        observability=_DeliveryObservability(ctx.get("observability")),
-        now=ctx.get("outbox_now", lambda: datetime.now(UTC)),
+        session_factory=session_factory,
+        handlers=handlers,
+        observability=_DeliveryObservability(observability_delegate),
+        now=now,
     )
-
-
-@pytest.fixture
-def activation_flow_disabled(monkeypatch: pytest.MonkeyPatch):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
 
 
 def _valid_business_hours() -> dict[str, dict[str, object]]:
@@ -832,15 +947,13 @@ async def test_terminal_failure_does_not_block_later_same_user_event(
 
     delivered: list[UUID] = []
 
-    async def handler(_ctx: dict, event: OutboxEvent) -> None:
+    async def handler(event: OutboxEvent) -> None:
         delivered.append(event.id)
 
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "outbox_handlers": {"phone.disable": handler},
-            "outbox_now": lambda: now,
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
+        now=lambda: now,
     )
 
     assert result == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
@@ -864,7 +977,7 @@ async def test_retryable_provider_failure_retries_all_backoffs_then_exhausts(
     current_time = event.next_attempt_at + timedelta(seconds=1)
     metric_calls: list[tuple[str, str]] = []
 
-    async def retryable_handler(_ctx: dict, _event: OutboxEvent) -> None:
+    async def retryable_handler(_event: OutboxEvent) -> None:
         raise ProviderFailure(
             provider="telnyx",
             operation="disable_number",
@@ -879,15 +992,13 @@ async def test_retryable_provider_failure_retries_all_backoffs_then_exhausts(
             assert committed.status == "failed"
         metric_calls.append((topic, error_code))
 
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "outbox_handlers": {"phone.disable": retryable_handler},
-        "outbox_now": lambda: current_time,
-        "outbox_terminal_failure_metric": metric,
-    }
-
     for expected_attempt, delay in enumerate(OUTBOX_RETRY_DELAYS, start=1):
-        result = await _deliver_outbox_batch(ctx)
+        result = await _deliver_outbox_batch(
+            session_factory=outbox_session_factory,
+            handlers={"phone.disable": retryable_handler},
+            now=lambda: current_time,
+            terminal_failure_metric=metric,
+        )
         assert result == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
         async with outbox_session_factory() as session:
             stored = await session.get(OutboxEvent, event.id)
@@ -898,7 +1009,12 @@ async def test_retryable_provider_failure_retries_all_backoffs_then_exhausts(
             assert stored.last_error_code == "provider_retryable"
         current_time += delay
 
-    result = await _deliver_outbox_batch(ctx)
+    result = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": retryable_handler},
+        now=lambda: current_time,
+        terminal_failure_metric=metric,
+    )
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
 
     async with outbox_session_factory() as session:
@@ -907,7 +1023,7 @@ async def test_retryable_provider_failure_retries_all_backoffs_then_exhausts(
         assert stored.status == "failed"
         assert stored.attempt_count == 6
         assert stored.last_error_code == "provider_retryable"
-    assert metric_calls == [("phone.disable", "provider_retryable")]
+    assert metric_calls == [("phone.disable", "unavailable")]
 
 
 def test_root_outbox_classifier_separates_provider_and_internal_failures() -> None:
@@ -994,7 +1110,7 @@ async def test_dispatch_provider_failure_retains_provider_exhausted_call_code(
     current_time = event.next_attempt_at + timedelta(seconds=1)
     calls = 0
 
-    async def failing_handler(_ctx: dict, _event: OutboxEvent) -> None:
+    async def failing_handler(_event: OutboxEvent) -> None:
         nonlocal calls
         calls += 1
         raise ProviderFailure(
@@ -1004,17 +1120,16 @@ async def test_dispatch_provider_failure_retains_provider_exhausted_call_code(
             error_class="unavailable",
         )
 
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "outbox_handlers": {"livekit.dispatch": failing_handler},
-        "outbox_now": lambda: current_time,
-        "outbox_terminal_failure_metric": lambda _topic, _code: None,
-    }
     expected_attempts = (
         len(OUTBOX_RETRY_DELAYS) + 1 if disposition == "retryable" else 1
     )
     for _attempt in range(expected_attempts):
-        await _deliver_outbox_batch(ctx)
+        await _deliver_outbox_batch(
+            session_factory=outbox_session_factory,
+            handlers={"livekit.dispatch": failing_handler},
+            now=lambda: current_time,
+            terminal_failure_metric=lambda _topic, _code: None,
+        )
         async with outbox_session_factory() as session:
             stored = await session.get(OutboxEvent, event.id)
             assert stored is not None
@@ -1046,7 +1161,6 @@ async def test_dispatch_provider_failure_retains_provider_exhausted_call_code(
 )
 async def test_livekit_dispatch_configuration_errors_are_durable_terminal_failures(
     outbox_session_factory: async_sessionmaker[AsyncSession],
-    activation_flow_disabled,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     dispatch_kind: str,
@@ -1104,16 +1218,26 @@ async def test_livekit_dispatch_configuration_errors_are_durable_terminal_failur
     )
     terminal_metrics: list[tuple[str, str]] = []
     caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
+    handler = (
+        _customer_dispatch_handler(
+            session_factory=outbox_session_factory,
+            provider=provider,
+            now=lambda: verification_now,
+        )
+        if dispatch_kind == "customer"
+        else _verification_dispatch_handler(
+            session_factory=outbox_session_factory,
+            provider=provider,
+            now=lambda: verification_now,
+        )
+    )
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "livekit_dispatch_provider": provider,
-            "verification_now": lambda: verification_now,
-            "outbox_now": lambda: event.next_attempt_at + timedelta(seconds=1),
-            "outbox_terminal_failure_metric": (
-                lambda topic, error_code: terminal_metrics.append((topic, error_code))
-            ),
-        }
+        session_factory=outbox_session_factory,
+        handlers={event.topic: handler},
+        now=lambda: event.next_attempt_at + timedelta(seconds=1),
+        terminal_failure_metric=lambda topic, error_code: terminal_metrics.append(
+            (topic, error_code)
+        ),
     )
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
@@ -1121,7 +1245,7 @@ async def test_livekit_dispatch_configuration_errors_are_durable_terminal_failur
         "event=outbox_internal_defect" in record.getMessage()
         for record in caplog.records
     )
-    assert terminal_metrics == [(event.topic, "dispatch_configuration")]
+    assert terminal_metrics == [(event.topic, "validation")]
     async with outbox_session_factory() as session:
         stored = await session.get(OutboxEvent, event.id)
         assert stored is not None
@@ -1147,7 +1271,6 @@ async def test_livekit_dispatch_configuration_errors_are_durable_terminal_failur
 )
 async def test_untyped_livekit_provider_value_error_is_durable_internal_defect(
     outbox_session_factory: async_sessionmaker[AsyncSession],
-    activation_flow_disabled,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     dispatch_kind: str,
@@ -1195,14 +1318,25 @@ async def test_untyped_livekit_provider_value_error_is_durable_internal_defect(
         lambda **_kwargs: "verification-jwt",
     )
     caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
+    provider = FaultingProvider()
+    handler = (
+        _customer_dispatch_handler(
+            session_factory=outbox_session_factory,
+            provider=provider,
+            now=lambda: verification_now,
+        )
+        if dispatch_kind == "customer"
+        else _verification_dispatch_handler(
+            session_factory=outbox_session_factory,
+            provider=provider,
+            now=lambda: verification_now,
+        )
+    )
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "livekit_dispatch_provider": FaultingProvider(),
-            "verification_now": lambda: verification_now,
-            "outbox_now": lambda: current_time,
-            "outbox_terminal_failure_metric": lambda _topic, _code: None,
-        }
+        session_factory=outbox_session_factory,
+        handlers={event.topic: handler},
+        now=lambda: current_time,
+        terminal_failure_metric=lambda _topic, _code: None,
     )
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
@@ -1245,7 +1379,7 @@ async def test_terminal_provider_failure_stops_on_first_attempt(
     calls = 0
     metric_calls: list[tuple[str, str]] = []
 
-    async def terminal_handler(_ctx: dict, _event: OutboxEvent) -> None:
+    async def terminal_handler(_event: OutboxEvent) -> None:
         nonlocal calls
         calls += 1
         raise ProviderFailure(
@@ -1259,17 +1393,15 @@ async def test_terminal_provider_failure_stops_on_first_attempt(
         metric_calls.append((topic, error_code))
 
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "outbox_handlers": {"phone.disable": terminal_handler},
-            "outbox_now": lambda: current_time,
-            "outbox_terminal_failure_metric": metric,
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": terminal_handler},
+        now=lambda: current_time,
+        terminal_failure_metric=metric,
     )
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
     assert calls == 1
-    assert metric_calls == [("phone.disable", "provider_terminal")]
+    assert metric_calls == [("phone.disable", "unknown")]
     async with outbox_session_factory() as session:
         stored = await session.get(OutboxEvent, event.id)
         assert stored is not None
@@ -1314,7 +1446,7 @@ async def test_composed_internal_defect_redacts_exception_alert_telemetry_and_st
     defect.__cause__ = private_cause
     assert all(sentinel in str(private_cause) for sentinel in sentinels)
 
-    async def defective_handler(_ctx: dict, _event: OutboxEvent) -> None:
+    async def defective_handler(_event: OutboxEvent) -> None:
         nonlocal calls
         calls += 1
         async with observability.provider_operation(
@@ -1325,12 +1457,10 @@ async def test_composed_internal_defect_redacts_exception_alert_telemetry_and_st
 
     caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "outbox_handlers": {"phone.disable": defective_handler},
-            "outbox_now": lambda: current_time,
-            "observability": observability,
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": defective_handler},
+        now=lambda: current_time,
+        observability_delegate=observability,
     )
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
@@ -1402,7 +1532,6 @@ async def test_composed_internal_defect_redacts_exception_alert_telemetry_and_st
 @pytest.mark.anyio
 async def test_customer_snapshot_type_error_becomes_durable_internal_defect(
     outbox_session_factory: async_sessionmaker[AsyncSession],
-    activation_flow_disabled,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1420,12 +1549,16 @@ async def test_customer_snapshot_type_error_becomes_durable_internal_defect(
         fail_token_builder,
     )
     caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
+    handler = _customer_dispatch_handler(
+        session_factory=outbox_session_factory,
+        provider=_ForbiddenDispatchProvider(),
+        now=lambda: current_time,
+    )
 
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "outbox_now": lambda: current_time,
-        }
+        session_factory=outbox_session_factory,
+        handlers={"livekit.dispatch": handler},
+        now=lambda: current_time,
     )
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
@@ -1474,13 +1607,16 @@ async def test_verification_snapshot_runtime_error_becomes_durable_internal_defe
         fail_token_builder,
     )
     caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
+    handler = _verification_dispatch_handler(
+        session_factory=outbox_session_factory,
+        provider=_ForbiddenDispatchProvider(),
+        now=lambda: verification_now,
+    )
 
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "verification_now": lambda: verification_now,
-            "outbox_now": lambda: current_time,
-        }
+        session_factory=outbox_session_factory,
+        handlers={"livekit.verification_dispatch": handler},
+        now=lambda: current_time,
     )
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
@@ -1519,7 +1655,7 @@ async def test_raising_internal_defect_logger_cannot_block_terminal_persistence(
     calls = 0
     defect = TypeError("HANDLER_PRIVATE_SENTINEL")
 
-    async def defective_handler(_ctx: dict, _event: OutboxEvent) -> None:
+    async def defective_handler(_event: OutboxEvent) -> None:
         nonlocal calls
         calls += 1
         raise defect
@@ -1528,12 +1664,10 @@ async def test_raising_internal_defect_logger_cannot_block_terminal_persistence(
     outbox_delivery.logger.addFilter(logger_filter)
     try:
         first = await _deliver_outbox_batch(
-            {
-                "session_factory": outbox_session_factory,
-                "outbox_handlers": {"phone.disable": defective_handler},
-                "outbox_now": lambda: current_time,
-                "outbox_terminal_failure_metric": lambda _topic, _code: None,
-            }
+            session_factory=outbox_session_factory,
+            handlers={"phone.disable": defective_handler},
+            now=lambda: current_time,
+            terminal_failure_metric=lambda _topic, _code: None,
         )
     finally:
         outbox_delivery.logger.removeFilter(logger_filter)
@@ -1549,12 +1683,10 @@ async def test_raising_internal_defect_logger_cannot_block_terminal_persistence(
 
     current_time += OutboxRepository.CLAIM_LEASE
     second = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "outbox_handlers": {"phone.disable": defective_handler},
-            "outbox_now": lambda: current_time,
-            "outbox_terminal_failure_metric": lambda _topic, _code: None,
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": defective_handler},
+        now=lambda: current_time,
+        terminal_failure_metric=lambda _topic, _code: None,
     )
 
     assert second == {"claimed": 0, "delivered": 0, "retried": 0, "failed": 0}
@@ -1574,22 +1706,21 @@ async def test_cancellation_propagates_without_failure_and_lease_reclaims_event(
 
     cancellation = asyncio.CancelledError("durable cancellation")
 
-    async def cancelled_handler(_ctx: dict, _event: OutboxEvent) -> None:
+    async def cancelled_handler(_event: OutboxEvent) -> None:
         raise cancellation
 
     def metric(topic: str, error_code: str) -> None:
         metric_calls.append((topic, error_code))
 
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "outbox_handlers": {"phone.disable": cancelled_handler},
-        "outbox_now": lambda: current_time,
-        "outbox_terminal_failure_metric": metric,
-    }
     caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
 
     with pytest.raises(asyncio.CancelledError) as caught:
-        await _deliver_outbox_batch(ctx)
+        await _deliver_outbox_batch(
+            session_factory=outbox_session_factory,
+            handlers={"phone.disable": cancelled_handler},
+            now=lambda: current_time,
+            terminal_failure_metric=metric,
+        )
 
     assert caught.value is cancellation
 
@@ -1605,12 +1736,16 @@ async def test_cancellation_propagates_without_failure_and_lease_reclaims_event(
 
     current_time += OutboxRepository.CLAIM_LEASE
 
-    async def successful_handler(_ctx: dict, _event: OutboxEvent) -> None:
+    async def successful_handler(_event: OutboxEvent) -> None:
         nonlocal successful_calls
         successful_calls += 1
 
-    ctx["outbox_handlers"] = {"phone.disable": successful_handler}
-    assert await _deliver_outbox_batch(ctx) == {
+    assert await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": successful_handler},
+        now=lambda: current_time,
+        terminal_failure_metric=metric,
+    ) == {
         "claimed": 1,
         "delivered": 1,
         "retried": 0,
@@ -1637,20 +1772,19 @@ async def test_non_exhausting_delivery_error_keeps_using_bounded_backoff(
     event = await _add_event(outbox_session_factory)
     current_time = event.next_attempt_at + timedelta(seconds=1)
 
-    async def draining_handler(_ctx: dict, _event: OutboxEvent) -> None:
+    async def draining_handler(_event: OutboxEvent) -> None:
         raise OutboxDeliveryError(
             "account_call_draining",
             retryable=True,
             exhaustible=False,
         )
 
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "outbox_handlers": {"phone.disable": draining_handler},
-        "outbox_now": lambda: current_time,
-    }
     for expected_attempt in range(1, len(OUTBOX_RETRY_DELAYS) + 4):
-        result = await _deliver_outbox_batch(ctx)
+        result = await _deliver_outbox_batch(
+            session_factory=outbox_session_factory,
+            handlers={"phone.disable": draining_handler},
+            now=lambda: current_time,
+        )
         assert result == {
             "claimed": 1,
             "delivered": 0,
@@ -1674,16 +1808,17 @@ async def test_delivered_event_is_not_repeated_by_harmless_duplicate_wakeup(
     await _add_event(outbox_session_factory)
     delivery_keys: list[str] = []
 
-    async def handler(_ctx: dict, event: OutboxEvent) -> None:
+    async def handler(event: OutboxEvent) -> None:
         delivery_keys.append(event.idempotency_key)
 
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "outbox_handlers": {"phone.disable": handler},
-    }
-
-    first = await _deliver_outbox_batch(ctx)
-    second = await _deliver_outbox_batch(ctx)
+    first = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
+    )
+    second = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
+    )
 
     assert first["delivered"] == 1
     assert second["claimed"] == 0
@@ -1697,7 +1832,7 @@ async def test_provider_handler_runs_after_claim_transaction_releases_row_lock(
 
     await _add_event(outbox_session_factory)
 
-    async def handler(_ctx: dict, item: OutboxEvent) -> None:
+    async def handler(item: OutboxEvent) -> None:
         async with outbox_session_factory() as probe_session:
             locked = await probe_session.scalar(
                 select(OutboxEvent)
@@ -1708,10 +1843,8 @@ async def test_provider_handler_runs_after_claim_transaction_releases_row_lock(
             await probe_session.rollback()
 
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "outbox_handlers": {"phone.disable": handler},
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
     )
 
     assert result["delivered"] == 1
@@ -1726,7 +1859,7 @@ async def test_delivery_claims_each_event_only_when_its_handler_is_ready(
     second = await _add_event(outbox_session_factory)
     handler_order: list[UUID] = []
 
-    async def handler(_ctx: dict, item: OutboxEvent) -> None:
+    async def handler(item: OutboxEvent) -> None:
         if item.id == first.id:
             async with outbox_session_factory() as probe_session:
                 later = await probe_session.get(OutboxEvent, second.id)
@@ -1735,10 +1868,8 @@ async def test_delivery_claims_each_event_only_when_its_handler_is_ready(
         handler_order.append(item.id)
 
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "outbox_handlers": {"phone.disable": handler},
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
     )
 
     assert result == {"claimed": 2, "delivered": 2, "retried": 0, "failed": 0}
@@ -1762,14 +1893,12 @@ async def test_unknown_topic_is_terminal_without_provider_retry(
         session.add(event)
         await session.commit()
 
-    async def unrelated_handler(_ctx: dict, _event: OutboxEvent) -> None:
+    async def unrelated_handler(_event: OutboxEvent) -> None:
         raise AssertionError("unknown topic must not run a provider")
 
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "outbox_handlers": {"phone.disable": unrelated_handler},
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": unrelated_handler},
     )
 
     assert result["failed"] == 1
@@ -1790,14 +1919,12 @@ async def test_reconciliation_sweep_recovers_committed_event_without_wakeup(
     event = await _add_event(outbox_session_factory)
     calls: list[str] = []
 
-    async def handler(_ctx: dict, item: OutboxEvent) -> None:
+    async def handler(item: OutboxEvent) -> None:
         calls.append(item.idempotency_key)
 
     result = await _reconcile_outbox(
-        {
-            "session_factory": outbox_session_factory,
-            "outbox_handlers": {"phone.disable": handler},
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
     )
 
     assert result["delivered"] == 1
@@ -1829,7 +1956,7 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
     query_attempts: list[str] = []
     snapshot_sessions: list[AsyncSession] = []
     metric_attempts: list[str] = []
-    runtime_clock = datetime(2026, 7, 19, 12, 30, tzinfo=UTC)
+    runtime_clock = event.next_attempt_at + timedelta(seconds=1)
     outbox_clocks: list[datetime] = []
     recording_clocks: list[datetime] = []
     deactivation_clocks: list[datetime] = []
@@ -1925,7 +2052,7 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
             if failure_target == "deactivation_metric":
                 raise RuntimeError(private_exception_message)
 
-    async def handler(_ctx: dict, item: OutboxEvent) -> None:
+    async def handler(item: OutboxEvent) -> None:
         delivered.append(item.idempotency_key)
 
     monkeypatch.setattr(
@@ -1949,12 +2076,10 @@ async def test_reconciliation_snapshot_failures_are_independently_isolated(
     )
 
     result = await _reconcile_outbox(
-        {
-            "session_factory": outbox_session_factory,
-            "outbox_handlers": {"phone.disable": handler},
-            "observability": SnapshotObservability(),
-            "outbox_now": lambda: runtime_clock,
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
+        observability_delegate=SnapshotObservability(),
+        now=lambda: runtime_clock,
     )
 
     assert result == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
@@ -2090,12 +2215,14 @@ async def test_stale_enable_after_cancellation_converges_to_disabled_current_sta
         payload={"user_id": str(user_id), "lifecycle_generation": 1},
     )
     provider = _CapturingRoutingProvider()
+    handler = _phone_routing_handler(
+        session_factory=outbox_session_factory,
+        provider=provider,
+    )
 
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "telephony_provider": provider,
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.enable": handler},
     )
 
     assert result["delivered"] == 1
@@ -2112,7 +2239,6 @@ async def test_stale_enable_after_cancellation_converges_to_disabled_current_sta
 @pytest.mark.anyio
 async def test_stale_disable_after_reactivation_converges_to_enabled_current_state(
     outbox_session_factory: async_sessionmaker[AsyncSession],
-    activation_flow_disabled,
 ) -> None:
 
     user_id = await _seed_routing_state(
@@ -2127,12 +2253,14 @@ async def test_stale_disable_after_reactivation_converges_to_enabled_current_sta
         payload={"user_id": str(user_id)},
     )
     provider = _CapturingRoutingProvider()
+    handler = _phone_routing_handler(
+        session_factory=outbox_session_factory,
+        provider=provider,
+    )
 
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "telephony_provider": provider,
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
     )
 
     assert result["delivered"] == 1
@@ -2163,12 +2291,14 @@ async def test_disable_replay_reapplies_provider_when_projection_already_disable
         payload={"user_id": str(user_id)},
     )
     provider = _CapturingRoutingProvider()
+    handler = _phone_routing_handler(
+        session_factory=outbox_session_factory,
+        provider=provider,
+    )
 
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "telephony_provider": provider,
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
     )
 
     assert result["delivered"] == 1
@@ -2179,7 +2309,6 @@ async def test_disable_replay_reapplies_provider_when_projection_already_disable
 @pytest.mark.anyio
 async def test_routing_retries_and_reapplies_new_desired_state_after_mid_call_change(
     outbox_session_factory: async_sessionmaker[AsyncSession],
-    activation_flow_disabled,
 ) -> None:
 
     user_id = await _seed_routing_state(
@@ -2208,16 +2337,24 @@ async def test_routing_retries_and_reapplies_new_desired_state_after_mid_call_ch
             return result
 
     provider = ChangingProvider()
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "telephony_provider": provider,
-        "outbox_now": lambda: current_time,
-    }
+    handler = _phone_routing_handler(
+        session_factory=outbox_session_factory,
+        provider=provider,
+        now=lambda: current_time,
+    )
 
-    first = await _deliver_outbox_batch(ctx)
+    first = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
+        now=lambda: current_time,
+    )
     assert first["retried"] == 1
     current_time += timedelta(seconds=10)
-    second = await _deliver_outbox_batch(ctx)
+    second = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": handler},
+        now=lambda: current_time,
+    )
 
     assert second["delivered"] == 1
     assert provider.disabled == [f"pn_{user_id.hex}"]
@@ -2303,11 +2440,9 @@ async def test_provisioning_provider_runs_without_provisioning_row_lock(
             return "app-disabled"
 
     await provision_phone_number(
-        {
-            "session_factory": tracking_factory,
-            "telephony_provider": LockProbingProvider(),
-        },
         {"user_id": str(user_id), "lifecycle_generation": 1},
+        session_factory=tracking_factory,
+        telephony_provider=cast(TelephonyProvider, LockProbingProvider()),
         provider_operation_key="provision:lock-boundary",
     )
 
@@ -2364,24 +2499,23 @@ async def test_same_provisioning_key_serializes_provider_execution_past_lease_ov
         async def disable_number(self, *, provider_number_id: str) -> str:
             return "app-disabled"
 
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "telephony_provider": BlockingProvider(),
-    }
+    provider = cast(TelephonyProvider, BlockingProvider())
     payload = {"user_id": str(user_id), "lifecycle_generation": 1}
     operation_key = "outbox:phone-provision:lease-overlap"
     first = asyncio.create_task(
         provision_phone_number(
-            ctx,
             payload,
+            session_factory=outbox_session_factory,
+            telephony_provider=provider,
             provider_operation_key=operation_key,
         )
     )
     await asyncio.wait_for(first_provider_started.wait(), timeout=2)
     reclaimed = asyncio.create_task(
         provision_phone_number(
-            ctx,
             payload,
+            session_factory=outbox_session_factory,
+            telephony_provider=provider,
             provider_operation_key=operation_key,
         )
     )
@@ -2432,12 +2566,29 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
     )
     calls: list[tuple[dict, str | None]] = []
 
-    async def capture(_ctx, payload, *, provider_operation_key):
+    async def capture(
+        payload,
+        *,
+        session_factory,
+        telephony_provider,
+        provider_operation_key,
+    ):
+        assert session_factory is outbox_session_factory
+        assert telephony_provider is forbidden_provider
         calls.append((payload, provider_operation_key))
 
     monkeypatch.setattr(phone_outbox, "provision_phone_number", capture)
 
-    result = await _deliver_outbox_batch({"session_factory": outbox_session_factory})
+    forbidden_provider = cast(TelephonyProvider, object())
+    handler = _phone_provision_handler(
+        session_factory=outbox_session_factory,
+        provider=forbidden_provider,
+        now=_utc_now,
+    )
+    result = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.provision": handler},
+    )
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
     assert calls == [
@@ -2524,13 +2675,17 @@ async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_rout
             return "app-disabled"
 
     provider = CrashThenReconcileDisabledProvider()
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "telephony_provider": provider,
-        "outbox_now": lambda: current_time,
-    }
+    handler = _phone_provision_handler(
+        session_factory=outbox_session_factory,
+        provider=provider,
+        now=lambda: current_time,
+    )
 
-    first = await _deliver_outbox_batch(ctx)
+    first = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.provision": handler},
+        now=lambda: current_time,
+    )
     assert first == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
     async with outbox_session_factory() as session:
         assert await PhoneNumberRepository(session).get_by_user_id(user_id) is None
@@ -2542,7 +2697,11 @@ async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_rout
         assert provisioning.provider_operation_key == event.idempotency_key
 
     current_time += timedelta(seconds=10)
-    second = await _deliver_outbox_batch(ctx)
+    second = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.provision": handler},
+        now=lambda: current_time,
+    )
 
     assert second == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
     assert provider.operation_keys == [event.idempotency_key, event.idempotency_key]
@@ -2638,15 +2797,28 @@ async def test_reclaimed_crashed_provision_recovers_reference_only_cleanup(
             self.released_ids.append(provider_number_id)
 
     provider = AcceptedThenRecoveredProvider()
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "telephony_provider": provider,
-        "outbox_now": lambda: current_time,
+    provision_handler = _phone_provision_handler(
+        session_factory=outbox_session_factory,
+        provider=provider,
+        now=lambda: current_time,
+    )
+    cleanup_handler = _provider_cleanup_handler(
+        session_factory=outbox_session_factory,
+        provider=provider,
+        now=lambda: current_time,
+    )
+    handlers = {
+        "phone.provision": provision_handler,
+        "provider.cleanup": cleanup_handler,
     }
     monkeypatch.setattr(outbox_delivery, "OUTBOX_BATCH_SIZE", 1)
 
     with pytest.raises(SimulatedWorkerCrash):
-        await _deliver_outbox_batch(ctx)
+        await _deliver_outbox_batch(
+            session_factory=outbox_session_factory,
+            handlers=handlers,
+            now=lambda: current_time,
+        )
 
     async with outbox_session_factory() as session:
         stored_event = await session.get(OutboxEvent, event.id)
@@ -2672,7 +2844,11 @@ async def test_reclaimed_crashed_provision_recovers_reference_only_cleanup(
         current_time = stored_event.next_attempt_at + timedelta(seconds=1)
         await session.commit()
 
-    recovered = await _deliver_outbox_batch(ctx)
+    recovered = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers=handlers,
+        now=lambda: current_time,
+    )
 
     assert recovered == {
         "claimed": 1,
@@ -2703,7 +2879,11 @@ async def test_reclaimed_crashed_provision_recovers_reference_only_cleanup(
         assert cleanup_event is not None
         assert cleanup_event.payload == {"cleanup_operation_id": str(cleanup.id)}
 
-    cleaned = await _deliver_outbox_batch(ctx)
+    cleaned = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers=handlers,
+        now=lambda: current_time,
+    )
 
     assert cleaned == {
         "claimed": 1,
@@ -2779,14 +2959,18 @@ async def test_pending_order_retries_outbox_without_customer_retry(
             raise AssertionError
 
     provider = PendingProvider()
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "telephony_provider": provider,
-        "outbox_now": lambda: current_time,
-    }
+    handler = _phone_provision_handler(
+        session_factory=outbox_session_factory,
+        provider=provider,
+        now=lambda: current_time,
+    )
     expected_delays = (*OUTBOX_RETRY_DELAYS, OUTBOX_RETRY_DELAYS[-1])
     for expected_attempt, delay in enumerate(expected_delays, start=1):
-        result = await _deliver_outbox_batch(ctx)
+        result = await _deliver_outbox_batch(
+            session_factory=outbox_session_factory,
+            handlers={"phone.provision": handler},
+            now=lambda: current_time,
+        )
 
         assert result == {
             "claimed": 1,
@@ -2871,11 +3055,14 @@ async def test_existing_order_conflict_is_terminal_and_disables_customer_retry(
         async def disable_number(self, *, provider_number_id: str) -> str:
             raise AssertionError
 
+    handler = _phone_provision_handler(
+        session_factory=outbox_session_factory,
+        provider=ConflictProvider(),
+        now=_utc_now,
+    )
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "telephony_provider": ConflictProvider(),
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.provision": handler},
     )
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
@@ -2948,11 +3135,14 @@ async def test_customer_retry_new_event_reuses_original_provider_operation_key(
         async def disable_number(self, *, provider_number_id: str) -> str:
             return "app-disabled"
 
+    handler = _phone_provision_handler(
+        session_factory=outbox_session_factory,
+        provider=RetryProvider(),
+        now=_utc_now,
+    )
     result = await _deliver_outbox_batch(
-        {
-            "session_factory": outbox_session_factory,
-            "telephony_provider": RetryProvider(),
-        }
+        session_factory=outbox_session_factory,
+        handlers={"phone.provision": handler},
     )
 
     assert result == {"claimed": 1, "delivered": 1, "retried": 0, "failed": 0}
@@ -2982,7 +3172,7 @@ async def test_provider_idempotency_key_closes_side_effect_before_ack_crash_boun
     provider_side_effect_count = 0
     first_delivery = True
 
-    async def idempotent_provider_handler(_ctx: dict, item: OutboxEvent) -> None:
+    async def idempotent_provider_handler(item: OutboxEvent) -> None:
         nonlocal provider_side_effect_count, first_delivery
         if item.idempotency_key not in provider_seen:
             provider_seen.add(item.idempotency_key)
@@ -2996,16 +3186,18 @@ async def test_provider_idempotency_key_closes_side_effect_before_ack_crash_boun
                 error_class="unavailable",
             )
 
-    ctx = {
-        "session_factory": outbox_session_factory,
-        "outbox_handlers": {"phone.disable": idempotent_provider_handler},
-        "outbox_now": lambda: current_time,
-    }
-
-    first = await _deliver_outbox_batch(ctx)
+    first = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": idempotent_provider_handler},
+        now=lambda: current_time,
+    )
     assert first["retried"] == 1
     current_time += timedelta(seconds=10)
-    second = await _deliver_outbox_batch(ctx)
+    second = await _deliver_outbox_batch(
+        session_factory=outbox_session_factory,
+        handlers={"phone.disable": idempotent_provider_handler},
+        now=lambda: current_time,
+    )
 
     assert second["delivered"] == 1
     assert provider_side_effect_count == 1

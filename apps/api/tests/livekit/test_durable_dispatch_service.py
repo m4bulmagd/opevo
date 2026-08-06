@@ -32,6 +32,7 @@ from app.services.routing_fingerprint import routing_fingerprint
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.recording_lifecycle_service import RecordingLifecycleService
 from app.services.livekit_dispatch_service import LiveKitDispatchService
+from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG
 
 
 @pytest.fixture(autouse=True)
@@ -419,62 +420,54 @@ async def test_activation_flow_denies_before_go_live_and_admits_after_provider_s
 @pytest.mark.parametrize("invalidation", ["activation_pending", "routing_changed"])
 async def test_livekit_outbox_rechecks_current_activation_prerequisites(
     db_session,
-    monkeypatch,
     invalidation: str,
 ) -> None:
-    from app.core.config import get_settings
     from app.workers.outbox.failures import OutboxDeliveryError
     from app.workers.outbox.customer_dispatch import _dispatch_snapshot
 
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
-    get_settings.cache_clear()
-    try:
-        user, phone, config = await _seed_eligible_user(
-            db_session,
-            with_provisioning=True,
-        )
-        profile, activation = await _seed_verified_activation(
-            db_session,
-            user=user,
-            phone=phone,
-            config=config,
-            active=True,
-        )
-        service = LiveKitDispatchService(
-            db_session,
+    user, phone, config = await _seed_eligible_user(
+        db_session,
+        with_provisioning=True,
+    )
+    profile, activation = await _seed_verified_activation(
+        db_session,
+        user=user,
+        phone=phone,
+        config=config,
+        active=True,
+    )
+    service = LiveKitDispatchService(
+        db_session,
+        activation_flow_enabled=True,
+        realtime_service=None,
+        recording_service=_Recording(),
+    )
+    accepted = await service.handle_participant_joined(
+        _sip_join(room="room-stale-livekit-dispatch")
+    )
+    assert accepted.status == "accepted"
+    call = (await db_session.scalars(select(Call))).one()
+    call_id = call.id
+
+    if invalidation == "activation_pending":
+        activation.activated_at = None
+    else:
+        profile.existing_phone_e164 = "+33199000201"
+        profile.routing_revision += 1
+    await db_session.commit()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    with pytest.raises(OutboxDeliveryError) as error:
+        await _dispatch_snapshot(
+            session_factory,
+            call_id,
+            livekit_agent_name="explicit-test-agent",
             activation_flow_enabled=True,
-            realtime_service=None,
-            recording_service=_Recording(),
+            max_call_duration_seconds=3600,
+            token_config=TEST_DISPATCH_TOKEN_CONFIG,
         )
-        accepted = await service.handle_participant_joined(
-            _sip_join(room="room-stale-livekit-dispatch")
-        )
-        assert accepted.status == "accepted"
-        call = (await db_session.scalars(select(Call))).one()
-        call_id = call.id
 
-        if invalidation == "activation_pending":
-            activation.activated_at = None
-        else:
-            profile.existing_phone_e164 = "+33199000201"
-            profile.routing_revision += 1
-        await db_session.commit()
-        session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-
-        settings = get_settings()
-        from app.core.dispatch_token import dispatch_token_config
-
-        with pytest.raises(OutboxDeliveryError) as error:
-            await _dispatch_snapshot(
-                session_factory,
-                call_id,
-                settings=settings,
-                token_config=dispatch_token_config(settings),
-            )
-
-        assert error.value.error_code == "dispatch_ineligible"
-    finally:
-        get_settings.cache_clear()
+    assert error.value.error_code == "dispatch_ineligible"
 
 
 @pytest.mark.anyio

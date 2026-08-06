@@ -146,6 +146,15 @@ class RecordingObservability:
 
 
 @dataclass(frozen=True)
+class _AccountDeactivationDependencies:
+    session_factory: TrackingSessionFactory
+    telephony_provider: RecordingTelephonyProvider | TelephonyTelnyx
+    subscription_provider: RecordingSubscriptionProvider
+    observability: RecordingObservability
+    now: Callable[[], datetime]
+
+
+@dataclass(frozen=True)
 class SeededOperation:
     operation_id: UUID
     user_id: UUID
@@ -333,42 +342,46 @@ def _ctx(
     calls: list[tuple[str, str]] | None = None,
     telephony_failure: tuple[str, Exception] | None = None,
     subscription_failure: Exception | None = None,
-) -> tuple[dict[str, Any], list[tuple[str, str]], TrackingSessionFactory]:
+) -> tuple[
+    _AccountDeactivationDependencies,
+    list[tuple[str, str]],
+    TrackingSessionFactory,
+]:
     provider_calls = calls if calls is not None else []
     tracking_factory = TrackingSessionFactory(session_factory)
     telemetry = RecordingObservability()
     return (
-        {
-            "session_factory": tracking_factory,
-            "telephony_provider": RecordingTelephonyProvider(
+        _AccountDeactivationDependencies(
+            session_factory=tracking_factory,
+            telephony_provider=RecordingTelephonyProvider(
                 provider_calls,
                 tracking_factory.assert_no_active_transaction,
                 failure=telephony_failure,
             ),
-            "subscription_provider": RecordingSubscriptionProvider(
+            subscription_provider=RecordingSubscriptionProvider(
                 provider_calls,
                 tracking_factory.assert_no_active_transaction,
                 failure=subscription_failure,
             ),
-            "observability": telemetry,
-            "account_deactivation_now": lambda: NOW,
-        },
+            observability=telemetry,
+            now=lambda: NOW,
+        ),
         provider_calls,
         tracking_factory,
     )
 
 
 async def _deliver_account_deactivation(
-    dependencies: dict[str, Any],
+    dependencies: _AccountDeactivationDependencies,
     event: OutboxEvent,
 ) -> None:
     await _deliver_account_deactivation_explicit(
         event,
-        session_factory=dependencies["session_factory"],
-        telephony_provider=dependencies["telephony_provider"],
-        subscription_provider=dependencies["subscription_provider"],
-        observability=dependencies["observability"],
-        now=dependencies["account_deactivation_now"],
+        session_factory=dependencies.session_factory,
+        telephony_provider=dependencies.telephony_provider,
+        subscription_provider=dependencies.subscription_provider,
+        observability=dependencies.observability,
+        now=dependencies.now,
     )
 
 
@@ -507,16 +520,16 @@ async def test_exact_telnyx_disable_404_continues_release_and_reset(
     )
     tracking_factory = TrackingSessionFactory(deactivation_session_factory)
     subscription_calls: list[tuple[str, str]] = []
-    ctx = {
-        "session_factory": tracking_factory,
-        "telephony_provider": telephony_provider,
-        "subscription_provider": RecordingSubscriptionProvider(
+    ctx = _AccountDeactivationDependencies(
+        session_factory=tracking_factory,
+        telephony_provider=telephony_provider,
+        subscription_provider=RecordingSubscriptionProvider(
             subscription_calls,
             tracking_factory.assert_no_active_transaction,
         ),
-        "observability": RecordingObservability(),
-        "account_deactivation_now": lambda: NOW,
-    }
+        observability=RecordingObservability(),
+        now=lambda: NOW,
+    )
 
     await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
@@ -1013,7 +1026,7 @@ async def test_logs_payload_and_observability_exclude_private_values(
 
     await _deliver_account_deactivation(ctx, event)
 
-    telemetry = ctx["observability"]
+    telemetry = ctx.observability
     exported = repr(
         {
             "payload": event.payload,
@@ -1065,7 +1078,7 @@ async def test_terminal_failure_redacts_raw_cause_from_customer_projection_and_l
             session, activation_flow_enabled=False
         ).get_account(seeded.user_id)
     exported = (
-        f"{projection.model_dump()} {caplog.text!r} {ctx['observability'].results!r}"
+        f"{projection.model_dump()} {caplog.text!r} {ctx.observability.results!r}"
     )
     assert projection.blocker == "deactivation_attention_required"
     for private_value in (

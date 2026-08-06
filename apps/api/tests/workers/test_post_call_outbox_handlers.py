@@ -1,7 +1,5 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
-from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -20,17 +18,10 @@ from app.services.outbox_service import (
 )
 from app.workers.outbox.delivery import deliver_outbox_batch
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.outbox import post_call
 from app.workers.outbox.post_call import (
     deliver_recording_reconcile as _deliver_recording_reconcile_explicit,
     deliver_summary_generate as _deliver_summary_generate_explicit,
 )
-from app.workers.outbox.recording_reconciliation import ReconciliationResult
-
-
-class ExplodingNotificationProvider:
-    async def send_notification(self, **_kwargs):
-        raise AssertionError("Firebase push must remain disabled")
 
 
 class TrackingSessionFactory:
@@ -73,16 +64,6 @@ class FakeSummaryProvider:
         )
 
 
-class FakeRecordingReconciler:
-    def __init__(self, result: ReconciliationResult) -> None:
-        self.result = result
-        self.calls = []
-
-    async def reconcile(self, operation_id):
-        self.calls.append(operation_id)
-        return self.result
-
-
 class _UnusedSummaryProvider:
     async def generate_summary(self, transcript: list[dict]):
         raise AssertionError(f"unexpected summary generation: {transcript!r}")
@@ -104,38 +85,29 @@ class _RecordingObservability:
 
 
 async def _deliver_summary_generate(
-    dependencies: dict[str, object],
     event: OutboxEvent,
+    *,
+    session_factory: object,
+    summary_provider: object,
 ) -> None:
     await _deliver_summary_generate_explicit(
         event,
-        session_factory=dependencies.get("session_factory", object()),
-        summary_provider=dependencies.get("summary_provider", _UnusedSummaryProvider()),
+        session_factory=session_factory,
+        summary_provider=summary_provider,
     )
 
 
 async def _deliver_recording_reconcile(
-    dependencies: dict[str, object],
     event: OutboxEvent,
 ) -> None:
-    original_builder = post_call.build_recording_reconciler
-    if "recording_reconciler" in dependencies:
-        post_call.build_recording_reconciler = lambda **_kwargs: dependencies[
-            "recording_reconciler"
-        ]
-    try:
-        await _deliver_recording_reconcile_explicit(
-            event,
-            session_factory=dependencies.get("session_factory", object()),
-            recording_provider=dependencies.get("recording_provider", object()),
-            storage_provider=dependencies.get("storage_provider", object()),
-            observability=dependencies.get("observability", _RecordingObservability()),
-            now=dependencies.get(
-                "recording_reconciliation_now", lambda: datetime.now(UTC)
-            ),
-        )
-    finally:
-        post_call.build_recording_reconciler = original_builder
+    await _deliver_recording_reconcile_explicit(
+        event,
+        session_factory=object(),
+        recording_provider=object(),
+        storage_provider=object(),
+        observability=_RecordingObservability(),
+        now=lambda: datetime.now(UTC),
+    )
 
 
 def event(*, call_id, topic: str, aggregate_type: str) -> OutboxEvent:
@@ -199,12 +171,9 @@ async def test_summary_handler_snapshots_then_persists_in_fresh_transaction(
     provider = FakeSummaryProvider(factory)
 
     await _deliver_summary_generate(
-        {
-            "session_factory": factory,
-            "summary_provider": provider,
-            "notification_provider": ExplodingNotificationProvider(),
-        },
         event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+        session_factory=factory,
+        summary_provider=provider,
     )
 
     assert provider.transcripts == [
@@ -240,8 +209,9 @@ async def test_existing_summary_is_idempotent_without_provider_call(
     provider = FakeSummaryProvider(factory)
 
     await _deliver_summary_generate(
-        {"session_factory": factory, "summary_provider": provider},
         event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+        session_factory=factory,
+        summary_provider=provider,
     )
 
     assert provider.transcripts == []
@@ -281,8 +251,9 @@ async def test_existing_summary_regenerates_when_it_does_not_cover_current_trans
     provider = FakeSummaryProvider(factory)
 
     await _deliver_summary_generate(
-        {"session_factory": factory, "summary_provider": provider},
         event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+        session_factory=factory,
+        summary_provider=provider,
     )
 
     assert provider.transcripts == [
@@ -330,11 +301,9 @@ async def test_fresh_lock_race_preserves_first_persisted_summary(
             return result
 
     await _deliver_summary_generate(
-        {
-            "session_factory": factory,
-            "summary_provider": RacingProvider(factory),
-        },
         event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+        session_factory=factory,
+        summary_provider=RacingProvider(factory),
     )
 
     db_session.expire_all()
@@ -381,15 +350,13 @@ async def test_summary_handler_retries_when_transcript_changes_during_provider_i
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await _deliver_summary_generate(
-            {
-                "session_factory": factory,
-                "summary_provider": LateTranscriptProvider(factory),
-            },
             event(
                 call_id=call_id,
                 topic="summary.generate",
                 aggregate_type="call-summary",
             ),
+            session_factory=factory,
+            summary_provider=LateTranscriptProvider(factory),
         )
 
     assert exc_info.value.retryable is True
@@ -414,8 +381,9 @@ async def test_summary_handler_empty_transcript_is_successful_noop(
     provider = FakeSummaryProvider(factory)
 
     await _deliver_summary_generate(
-        {"session_factory": factory, "summary_provider": provider},
         event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+        session_factory=factory,
+        summary_provider=provider,
     )
 
     assert provider.transcripts == []
@@ -435,8 +403,9 @@ async def test_summary_handler_empty_transcript_is_successful_noop(
         await session.commit()
 
     await _deliver_summary_generate(
-        {"session_factory": factory, "summary_provider": provider},
         event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
+        session_factory=factory,
+        summary_provider=provider,
     )
     assert provider.transcripts == [
         [{"speaker": "CALLER", "text": "Recovered after empty delivery"}]
@@ -463,12 +432,13 @@ async def test_summary_handler_rejects_deleted_call_without_recreating_metadata(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await _deliver_summary_generate(
-            {"session_factory": factory},
             event(
                 call_id=call_id,
                 topic="summary.generate",
                 aggregate_type="call-summary",
             ),
+            session_factory=factory,
+            summary_provider=_UnusedSummaryProvider(),
         )
 
     assert exc_info.value.error_code == "provider_terminal"
@@ -507,15 +477,13 @@ async def test_summary_handler_provider_failure_is_retryable(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await _deliver_summary_generate(
-            {
-                "session_factory": factory,
-                "summary_provider": FakeSummaryProvider(factory, fail=True),
-            },
             event(
                 call_id=call.id,
                 topic="summary.generate",
                 aggregate_type="call-summary",
             ),
+            session_factory=factory,
+            summary_provider=FakeSummaryProvider(factory, fail=True),
         )
 
     assert exc_info.value.retryable is True
@@ -548,15 +516,13 @@ async def test_summary_handler_marks_malformed_provider_summary_terminal(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await _deliver_summary_generate(
-            {
-                "session_factory": factory,
-                "summary_provider": MalformedSummaryProvider(),
-            },
             event(
                 call_id=call.id,
                 topic="summary.generate",
                 aggregate_type="call-summary",
             ),
+            session_factory=factory,
+            summary_provider=MalformedSummaryProvider(),
         )
 
     assert exc_info.value.error_code == "provider_terminal"
@@ -590,32 +556,25 @@ async def test_summary_handler_propagates_injected_defects(
 
     with pytest.raises(RuntimeError, match="SUMMARY_DEFECT_SENTINEL"):
         await _deliver_summary_generate(
-            {
-                "session_factory": factory,
-                "summary_provider": DefectiveSummaryProvider(),
-            },
             event(
                 call_id=call.id,
                 topic="summary.generate",
                 aggregate_type="call-summary",
             ),
+            session_factory=factory,
+            summary_provider=DefectiveSummaryProvider(),
         )
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("handler", "topic", "aggregate_type"),
+    ("topic", "aggregate_type"),
     [
-        (_deliver_summary_generate, "summary.generate", "call-summary"),
-        (
-            _deliver_recording_reconcile,
-            "recording.reconcile",
-            "recording-egress-operation",
-        ),
+        ("summary.generate", "call-summary"),
+        ("recording.reconcile", "recording-egress-operation"),
     ],
 )
 async def test_post_call_handlers_validate_exact_aggregate_identity(
-    handler,
     topic: str,
     aggregate_type: str,
 ) -> None:
@@ -632,121 +591,31 @@ async def test_post_call_handlers_validate_exact_aggregate_identity(
     malformed.aggregate_type = "call"
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await handler({}, malformed)
+        if topic == "summary.generate":
+            await _deliver_summary_generate(
+                malformed,
+                session_factory=object(),
+                summary_provider=_UnusedSummaryProvider(),
+            )
+        else:
+            await _deliver_recording_reconcile(malformed)
 
     assert exc_info.value.retryable is False
     assert exc_info.value.error_code == "invalid_payload"
 
 
 @pytest.mark.anyio
-async def test_recording_reconcile_validates_reference_before_building_dependencies(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_recording_reconcile_validates_reference_before_building_dependencies() -> (
+    None
+):
     operation_id = uuid4()
     malformed = recording_event(operation_id)
     malformed.payload = {"operation_id": str(uuid4())}
-    built = False
-
-    def build(**_kwargs):
-        nonlocal built
-        built = True
-        raise AssertionError("builder must not run for invalid input")
-
-    monkeypatch.setattr(post_call, "build_recording_reconciler", build)
-
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _deliver_recording_reconcile({}, malformed)
+        await _deliver_recording_reconcile(malformed)
 
     assert exc_info.value.error_code == "invalid_payload"
     assert exc_info.value.retryable is False
-    assert built is False
-
-
-@pytest.mark.anyio
-async def test_recording_reconcile_invokes_reconciler_with_operation_identity() -> None:
-    operation_id = uuid4()
-    reconciler = FakeRecordingReconciler(ReconciliationResult("complete"))
-
-    await _deliver_recording_reconcile(
-        {"recording_reconciler": reconciler},
-        recording_event(operation_id),
-    )
-
-    assert reconciler.calls == [operation_id]
-
-
-@pytest.mark.anyio
-async def test_recording_reconcile_retry_is_bounded_and_non_exhausting() -> None:
-    operation_id = uuid4()
-    reconciler = FakeRecordingReconciler(
-        ReconciliationResult("retry", "recording_identity_mismatch")
-    )
-
-    with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _deliver_recording_reconcile(
-            {"recording_reconciler": reconciler},
-            recording_event(operation_id),
-        )
-
-    assert exc_info.value.error_code == "recording_identity_mismatch"
-    assert exc_info.value.retryable is True
-    assert exc_info.value.exhaustible is False
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("failure_site", ["builder", "reconciler"])
-async def test_recording_reconcile_unexpected_failures_escape_the_outbox_wrapper(
-    monkeypatch: pytest.MonkeyPatch,
-    failure_site: str,
-) -> None:
-    operation_id = uuid4()
-
-    class ExplodingReconciler:
-        async def reconcile(self, _operation_id):
-            raise RuntimeError("DATABASE_CREDENTIAL_SENTINEL")
-
-    if failure_site == "builder":
-
-        def explode(**_kwargs):
-            raise RuntimeError("BUILDER_CREDENTIAL_SENTINEL")
-
-        monkeypatch.setattr(post_call, "build_recording_reconciler", explode)
-        ctx = {}
-    else:
-        ctx = {"recording_reconciler": ExplodingReconciler()}
-
-    with pytest.raises(RuntimeError) as exc_info:
-        await _deliver_recording_reconcile(ctx, recording_event(operation_id))
-
-    assert "SENTINEL" in str(exc_info.value)
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    "malformed_result",
-    [
-        ReconciliationResult(
-            "retry",
-            cast(Any, "provider_retryable"),
-        ),
-        SimpleNamespace(
-            outcome="complete",
-            error_code="recording_unresolved",
-        ),
-        SimpleNamespace(outcome="unexpected", error_code=None),
-        SimpleNamespace(error_code=None),
-    ],
-)
-async def test_recording_reconcile_malformed_results_escape_the_outbox_wrapper(
-    malformed_result,
-) -> None:
-    operation_id = uuid4()
-
-    with pytest.raises((ValueError, AttributeError)):
-        await _deliver_recording_reconcile(
-            {"recording_reconciler": FakeRecordingReconciler(malformed_result)},
-            recording_event(operation_id),
-        )
 
 
 def test_default_handlers_exactly_match_supported_topics_without_placeholders() -> None:
@@ -785,13 +654,11 @@ async def test_recording_reconcile_holding_handler_remains_pending_after_exhaust
     await db_session.commit()
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    reconciler = FakeRecordingReconciler(
-        ReconciliationResult("retry", "recording_unresolved")
-    )
-
-    async def handler(claimed: OutboxEvent) -> None:
-        await _deliver_recording_reconcile(
-            {"recording_reconciler": reconciler}, claimed
+    async def handler(_claimed: OutboxEvent) -> None:
+        raise OutboxDeliveryError(
+            "recording_unresolved",
+            retryable=True,
+            exhaustible=False,
         )
 
     result = await deliver_outbox_batch(

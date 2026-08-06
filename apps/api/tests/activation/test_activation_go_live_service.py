@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -27,7 +28,7 @@ from app.services.customer_readiness_service import CustomerReadinessService
 from app.services.forwarding_verification_service import as_utc
 from app.services.livekit_dispatch_service import LiveKitDispatchService
 from app.services.routing_fingerprint import routing_fingerprint
-from app.workers.outbox.delivery import outbox_delivery_job
+from app.workers.outbox.delivery import deliver_outbox_batch
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.outbox.phone import deliver_phone_routing
 
@@ -77,6 +78,41 @@ class _RoutingProvider:
     async def disable_number(self, *, provider_number_id: str) -> str:
         self.disabled.append(provider_number_id)
         return "app-disabled"
+
+
+class _OutboxObservability:
+    def record_outbox_terminal_failure(self, _topic: str, _error_class: str) -> None:
+        pass
+
+
+def _routing_handler(
+    session_factory,
+    provider,
+    now: Callable[[], datetime],
+) -> Callable[[OutboxEvent], Awaitable[None]]:
+    async def handle(event: OutboxEvent) -> None:
+        await deliver_phone_routing(
+            event,
+            session_factory=session_factory,
+            telephony_provider=provider,
+            activation_flow_enabled=True,
+            now=now,
+        )
+
+    return handle
+
+
+async def _deliver_phone_outbox(
+    session_factory,
+    handler: Callable[[OutboxEvent], Awaitable[None]],
+    now: Callable[[], datetime],
+) -> dict[str, int]:
+    return await deliver_outbox_batch(
+        session_factory=session_factory,
+        handlers={"phone.enable": handler},
+        observability=_OutboxObservability(),
+        now=now,
+    )
 
 
 class _StateChangingRoutingProvider(_RoutingProvider):
@@ -486,12 +522,11 @@ async def test_provider_projection_activates_only_the_current_attempt(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     await deliver_phone_routing(
-        {
-            "session_factory": session_factory,
-            "telephony_provider": provider,
-            "routing_now": lambda: FIXED_NOW + timedelta(seconds=2),
-        },
         event,
+        session_factory=session_factory,
+        telephony_provider=provider,
+        activation_flow_enabled=True,
+        now=lambda: FIXED_NOW + timedelta(seconds=2),
     )
 
     db_session.expire_all()
@@ -590,8 +625,11 @@ async def test_go_live_after_disable_starts_fresh_attempt_from_actual_state(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     stale_disable = await _claim_event(db_session, stale_disable.id)
     await deliver_phone_routing(
-        {"session_factory": session_factory, "telephony_provider": provider},
         stale_disable,
+        session_factory=session_factory,
+        telephony_provider=provider,
+        activation_flow_enabled=True,
+        now=lambda: FIXED_NOW,
     )
 
     db_session.expire_all()
@@ -649,8 +687,11 @@ async def test_terminal_failure_allows_new_attempt_and_stale_event_is_obsolete(
     provider = _RoutingProvider()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     await deliver_phone_routing(
-        {"session_factory": session_factory, "telephony_provider": provider},
         first_event,
+        session_factory=session_factory,
+        telephony_provider=provider,
+        activation_flow_enabled=True,
+        now=lambda: FIXED_NOW,
     )
 
     await db_session.refresh(activation)
@@ -679,14 +720,16 @@ async def test_terminal_provider_error_atomically_returns_to_ready_to_activate(
     await db_session.commit()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    result = await outbox_delivery_job(
-        {
-            "session_factory": session_factory,
-            "outbox_handlers": {"phone.enable": deliver_phone_routing},
-            "telephony_provider": _RoutingProvider(failure="provider_terminal"),
-            "outbox_now": lambda: datetime.now(UTC) + timedelta(seconds=5),
-            "outbox_terminal_failure_metric": lambda *_args: None,
-        }
+    def delivery_now() -> datetime:
+        return datetime.now(UTC) + timedelta(seconds=5)
+    result = await _deliver_phone_outbox(
+        session_factory,
+        _routing_handler(
+            session_factory,
+            _RoutingProvider(failure="provider_terminal"),
+            delivery_now,
+        ),
+        delivery_now,
     )
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
@@ -729,28 +772,23 @@ async def test_retry_exhaustion_performs_the_same_safe_failure_transition(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     current_time = datetime.now(UTC) + timedelta(seconds=5)
 
-    async def retryable(_ctx: dict, _event: OutboxEvent) -> None:
+    async def retryable(_event: OutboxEvent) -> None:
         raise OutboxDeliveryError("provider_retryable", retryable=True)
 
     from app.workers.outbox.delivery import OUTBOX_RETRY_DELAYS
 
     for delay in OUTBOX_RETRY_DELAYS:
-        result = await outbox_delivery_job(
-            {
-                "session_factory": session_factory,
-                "outbox_handlers": {"phone.enable": retryable},
-                "outbox_now": lambda: current_time,
-            }
+        result = await _deliver_phone_outbox(
+            session_factory,
+            retryable,
+            lambda: current_time,
         )
         assert result["retried"] == 1
         current_time += delay
-    result = await outbox_delivery_job(
-        {
-            "session_factory": session_factory,
-            "outbox_handlers": {"phone.enable": retryable},
-            "outbox_now": lambda: current_time,
-            "outbox_terminal_failure_metric": lambda *_args: None,
-        }
+    result = await _deliver_phone_outbox(
+        session_factory,
+        retryable,
+        lambda: current_time,
     )
 
     assert result["failed"] == 1
@@ -785,14 +823,12 @@ async def test_current_attempt_fails_safely_if_phone_disappears_before_delivery(
     await db_session.commit()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    result = await outbox_delivery_job(
-        {
-            "session_factory": session_factory,
-            "outbox_handlers": {"phone.enable": deliver_phone_routing},
-            "telephony_provider": _RoutingProvider(),
-            "outbox_now": lambda: datetime.now(UTC) + timedelta(seconds=5),
-            "outbox_terminal_failure_metric": lambda *_args: None,
-        }
+    def delivery_now() -> datetime:
+        return datetime.now(UTC) + timedelta(seconds=5)
+    result = await _deliver_phone_outbox(
+        session_factory,
+        _routing_handler(session_factory, _RoutingProvider(), delivery_now),
+        delivery_now,
     )
 
     assert result["failed"] == 1
@@ -824,15 +860,13 @@ async def test_post_enable_ineligibility_compensates_and_retries_failed_disable(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     provider = _StateChangingRoutingProvider(session_factory, active_user.id)
     current_time = datetime.now(UTC) + timedelta(seconds=5)
-    ctx = {
-        "session_factory": session_factory,
-        "outbox_handlers": {"phone.enable": deliver_phone_routing},
-        "telephony_provider": provider,
-        "outbox_now": lambda: current_time,
-        "outbox_terminal_failure_metric": lambda *_args: None,
-    }
 
-    first = await outbox_delivery_job(ctx)
+    def delivery_now() -> datetime:
+        return current_time
+
+    handler = _routing_handler(session_factory, provider, delivery_now)
+
+    first = await _deliver_phone_outbox(session_factory, handler, delivery_now)
 
     db_session.expire_all()
     after_failed_compensation = await db_session.get(CustomerActivation, activation_id)
@@ -852,7 +886,7 @@ async def test_post_enable_ineligibility_compensates_and_retries_failed_disable(
     assert projected_phone.is_active is True
 
     current_time = as_utc(pending_event.next_attempt_at)
-    second = await outbox_delivery_job(ctx)
+    second = await _deliver_phone_outbox(session_factory, handler, delivery_now)
 
     db_session.expire_all()
     stored_activation = await db_session.get(CustomerActivation, activation_id)
@@ -902,16 +936,14 @@ async def test_persistent_compensation_failure_never_false_terminalizes(
         compensation_failures=100,
     )
     current_time = datetime.now(UTC) + timedelta(seconds=5)
-    ctx = {
-        "session_factory": session_factory,
-        "outbox_handlers": {"phone.enable": deliver_phone_routing},
-        "telephony_provider": provider,
-        "outbox_now": lambda: current_time,
-        "outbox_terminal_failure_metric": lambda *_args: None,
-    }
+
+    def delivery_now() -> datetime:
+        return current_time
+
+    handler = _routing_handler(session_factory, provider, delivery_now)
 
     for _ in range(7):
-        result = await outbox_delivery_job(ctx)
+        result = await _deliver_phone_outbox(session_factory, handler, delivery_now)
         assert result == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
         async with session_factory() as session:
             pending = await session.get(OutboxEvent, event_id)
@@ -964,15 +996,13 @@ async def test_provider_identity_change_compensates_old_id_before_retry_success(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     provider = _ProviderIdentityChangingRoutingProvider(session_factory, phone_id)
     current_time = datetime.now(UTC) + timedelta(seconds=5)
-    ctx = {
-        "session_factory": session_factory,
-        "outbox_handlers": {"phone.enable": deliver_phone_routing},
-        "telephony_provider": provider,
-        "outbox_now": lambda: current_time,
-        "outbox_terminal_failure_metric": lambda *_args: None,
-    }
 
-    first = await outbox_delivery_job(ctx)
+    def delivery_now() -> datetime:
+        return current_time
+
+    handler = _routing_handler(session_factory, provider, delivery_now)
+
+    first = await _deliver_phone_outbox(session_factory, handler, delivery_now)
 
     db_session.expire_all()
     pending = await db_session.get(OutboxEvent, event_id)
@@ -992,7 +1022,7 @@ async def test_provider_identity_change_compensates_old_id_before_retry_success(
     assert provider.externally_active == set()
 
     current_time = as_utc(pending.next_attempt_at)
-    second = await outbox_delivery_job(ctx)
+    second = await _deliver_phone_outbox(session_factory, handler, delivery_now)
 
     db_session.expire_all()
     stored_event = await db_session.get(OutboxEvent, event_id)
@@ -1035,15 +1065,13 @@ async def test_provider_identity_change_retains_old_id_until_compensation_succee
         phone_id,
     )
     current_time = datetime.now(UTC) + timedelta(seconds=5)
-    ctx = {
-        "session_factory": session_factory,
-        "outbox_handlers": {"phone.enable": deliver_phone_routing},
-        "telephony_provider": provider,
-        "outbox_now": lambda: current_time,
-        "outbox_terminal_failure_metric": lambda *_args: None,
-    }
 
-    first = await outbox_delivery_job(ctx)
+    def delivery_now() -> datetime:
+        return current_time
+
+    handler = _routing_handler(session_factory, provider, delivery_now)
+
+    first = await _deliver_phone_outbox(session_factory, handler, delivery_now)
 
     db_session.expire_all()
     pending = await db_session.get(OutboxEvent, event_id)
@@ -1059,7 +1087,7 @@ async def test_provider_identity_change_retains_old_id_until_compensation_succee
     assert provider.externally_active == {"fake-number-go-live"}
 
     current_time = as_utc(pending.next_attempt_at)
-    second = await outbox_delivery_job(ctx)
+    second = await _deliver_phone_outbox(session_factory, handler, delivery_now)
 
     db_session.expire_all()
     stored_event = await db_session.get(OutboxEvent, event_id)

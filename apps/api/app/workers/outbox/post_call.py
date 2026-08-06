@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from datetime import datetime
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.core.database import AsyncSessionFactory
@@ -16,6 +19,14 @@ from app.workers.outbox.failures import (
     OutboxDeliveryError,
     provider_failure_delivery_error,
 )
+
+
+if TYPE_CHECKING:
+    from app.workers.outbox.recording_reconciliation import ReconciliationResult
+
+
+class _RecordingReconciler(Protocol):
+    async def reconcile(self, operation_id: UUID) -> ReconciliationResult: ...
 
 
 async def deliver_summary_generate(
@@ -90,7 +101,7 @@ def build_recording_reconciler(
     recording_provider: RecordingProvider,
     storage_provider: StorageProvider,
     now: Callable[[], datetime],
-):
+) -> _RecordingReconciler:
     from app.workers.outbox.recording_reconciliation import RecordingReconciler
 
     return RecordingReconciler(
@@ -112,16 +123,32 @@ async def deliver_recording_reconcile(
 ) -> None:
     operation_id = _validated_recording_operation_reference(event)
     try:
-        from app.workers.outbox.recording_reconciliation import (
-            RECORDING_RECONCILIATION_ERROR_CODES,
-        )
-
         reconciler = build_recording_reconciler(
             session_factory=session_factory,
             recording_provider=recording_provider,
             storage_provider=storage_provider,
             now=now,
         )
+    except ProviderFailure as error:
+        raise provider_failure_delivery_error(error) from error
+    await reconcile_recording_operation(
+        operation_id,
+        reconciler=reconciler,
+        observability=observability,
+    )
+
+
+async def reconcile_recording_operation(
+    operation_id: UUID,
+    *,
+    reconciler: _RecordingReconciler,
+    observability: Observability,
+) -> None:
+    try:
+        from app.workers.outbox.recording_reconciliation import (
+            RECORDING_RECONCILIATION_ERROR_CODES,
+        )
+
         result = await reconciler.reconcile(operation_id)
         conflict_category = result.conflict_category
         if conflict_category not in {None, "multiple_exact_match"}:

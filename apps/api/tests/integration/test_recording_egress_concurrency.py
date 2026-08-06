@@ -972,14 +972,12 @@ async def test_schedule_6_two_exact_matches_stay_conflicted_and_signal_once(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await deliver_recording_reconcile(
-            {
-                "session_factory": recording_session_factory,
-                "livekit_recording_provider": provider,
-                "storage_provider": _RecordingStorage(),
-                "recording_reconciliation_now": lambda: STOP_NOW,
-                "observability": observability,
-            },
             event,
+            session_factory=recording_session_factory,
+            recording_provider=provider,
+            storage_provider=_RecordingStorage(),
+            now=lambda: STOP_NOW,
+            observability=observability,
         )
 
     assert exc_info.value.error_code == "recording_identity_conflict"

@@ -15,6 +15,7 @@ from app.composition.lifecycle import RuntimeCleanup
 from app.composition.runtime import (
     BackgroundWorkerRuntime,
     CallLifecycleWorkerRuntime,
+    WorkerRuntimeConfigurationError,
 )
 from app.core.config import Settings
 from app.core.database import (
@@ -32,7 +33,10 @@ from app.core.runtime_validation import (
     validate_background_worker_runtime,
     validate_call_lifecycle_worker_runtime,
 )
-from app.core.dispatch_token import dispatch_token_config
+from app.core.dispatch_token import (
+    DispatchTokenConfigurationError,
+    dispatch_token_config,
+)
 from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
 from app.providers.livekit_dispatch.base import LiveKitDispatchProvider
 from app.providers.livekit_recording.base import RecordingProvider
@@ -129,9 +133,7 @@ async def _unwind_partial_runtime(
         else None
     )
     cleanup_cancellation = (
-        cleanup_failure
-        if isinstance(cleanup_failure, asyncio.CancelledError)
-        else None
+        cleanup_failure if isinstance(cleanup_failure, asyncio.CancelledError) else None
     )
     cancellation = construction_cancellation or cleanup_cancellation
     if cancellation is not None:
@@ -227,6 +229,12 @@ async def build_background_worker_runtime(
     now: Callable[[], datetime] = _utc_now,
 ) -> BackgroundWorkerRuntime:
     validate_background_worker_runtime(settings)
+    try:
+        token_config = dispatch_token_config(settings)
+    except DispatchTokenConfigurationError:
+        raise WorkerRuntimeConfigurationError(
+            "background worker dispatch token configuration is invalid"
+        ) from None
     stack = AsyncExitStack()
     await stack.__aenter__()
     cleanup = RuntimeCleanup(stack)
@@ -299,7 +307,7 @@ async def build_background_worker_runtime(
             recording_provider=recording_provider,
             storage_provider=storage_provider,
             observability=observability,
-            dispatch_token_config=dispatch_token_config(settings),
+            dispatch_token_config=token_config,
             livekit_agent_name=settings.livekit_agent_name,
             activation_flow_enabled=settings.activation_flow_enabled,
             max_call_duration_seconds=settings.max_call_duration_seconds,

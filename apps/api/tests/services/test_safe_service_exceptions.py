@@ -22,16 +22,6 @@ from app.workers.outbox.phone import deliver_phone_provision, deliver_phone_rout
 from app.workers.outbox.post_call import deliver_summary_generate
 
 
-@pytest.fixture(autouse=True)
-def _legacy_routing_flow(monkeypatch: pytest.MonkeyPatch):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
 def _event(call_id, *, topic: str, aggregate_type: str) -> OutboxEvent:
     return OutboxEvent(
         id=uuid4(),
@@ -101,15 +91,13 @@ async def test_typed_summary_provider_failure_is_translated_to_safe_retry(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await deliver_summary_generate(
-            {
-                "session_factory": factory,
-                "summary_provider": SecretBearingProvider(),
-            },
             _event(
                 call.id,
                 topic="summary.generate",
                 aggregate_type="call-summary",
             ),
+            session_factory=factory,
+            summary_provider=SecretBearingProvider(),
         )
 
     assert exc_info.value.error_code == "provider_retryable"
@@ -197,11 +185,11 @@ async def test_phone_routing_preserves_safe_provider_category(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await deliver_phone_routing(
-            {
-                "session_factory": factory,
-                "telephony_provider": CategorizedProvider(),
-            },
             event,
+            session_factory=factory,
+            telephony_provider=CategorizedProvider(),
+            activation_flow_enabled=False,
+            now=lambda: now,
         )
 
     assert exc_info.value.error_code == category
@@ -260,7 +248,13 @@ async def test_phone_provisioning_outbox_preserves_safe_provider_category(
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_phone_provision({"session_factory": factory}, event)
+        await deliver_phone_provision(
+            event,
+            session_factory=factory,
+            telephony_provider=object(),
+            activation_flow_enabled=False,
+            now=lambda: datetime.now(UTC),
+        )
 
     assert exc_info.value.error_code == category
     assert exc_info.value.retryable is retryable
@@ -320,11 +314,11 @@ async def test_malformed_provisioning_result_is_safe_terminal_outbox_failure(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await deliver_phone_provision(
-            {
-                "session_factory": factory,
-                "telephony_provider": MalformedProvisioningProvider(),
-            },
             event,
+            session_factory=factory,
+            telephony_provider=MalformedProvisioningProvider(),
+            activation_flow_enabled=False,
+            now=lambda: datetime.now(UTC),
         )
 
     assert exc_info.value.error_code == "provider_terminal"

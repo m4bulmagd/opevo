@@ -1821,7 +1821,7 @@ async def test_validated_outbox_call_reference_correlates_nested_provider_span(
     from app.core.observability import instrument_provider
     from app.models import Base
     from app.models.outbox_event import OutboxEvent
-    from app.workers.outbox.delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import deliver_outbox_batch
 
     database_path = tmp_path / f"outbox-correlation-{operation}.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
@@ -1843,7 +1843,7 @@ async def test_validated_outbox_call_reference_correlates_nested_provider_span(
     Provider.invoke = instrument_provider(provider_name, operation)(Provider.invoke)
     provider = Provider()
 
-    async def handler(_ctx, _event) -> None:
+    async def handler(_event) -> None:
         await provider.invoke()
 
     try:
@@ -1863,12 +1863,11 @@ async def test_validated_outbox_call_reference_correlates_nested_provider_span(
             )
             await session.commit()
 
-        result = await outbox_delivery_job(
-            {
-                "session_factory": factory,
-                "outbox_handlers": {topic: handler},
-                "observability": telemetry,
-            }
+        result = await deliver_outbox_batch(
+            session_factory=factory,
+            handlers={topic: handler},
+            observability=telemetry,
+            now=lambda: datetime.now(UTC),
         )
         await provider.invoke()
 
@@ -1970,14 +1969,14 @@ def test_reconciliation_metric_records_every_exact_fixed_result() -> None:
 
 
 @pytest.mark.anyio
-async def test_terminal_outbox_metric_runs_once_after_durable_failed_commit(
+async def test_terminal_outbox_metric_runs_once_and_failure_is_durable(
     tmp_path,
 ) -> None:
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from app.models import Base
     from app.models.outbox_event import OutboxEvent
-    from app.workers.outbox.delivery import outbox_delivery_job
+    from app.workers.outbox.delivery import deliver_outbox_batch
     from app.workers.outbox.failures import OutboxDeliveryError
 
     database_path = tmp_path / "terminal-observability.db"
@@ -2002,29 +2001,30 @@ async def test_terminal_outbox_metric_runs_once_after_durable_failed_commit(
             await session.commit()
             event_id = event.id
 
-        async def fail_terminal(_ctx, _event) -> None:
+        async def fail_terminal(_event) -> None:
             raise OutboxDeliveryError("provider_terminal", retryable=False)
 
         observed: list[tuple[str, str]] = []
 
-        async def metric(topic: str, error_code: str) -> None:
-            async with factory() as session:
-                durable = await session.get(OutboxEvent, event_id)
-                assert durable is not None
-                assert durable.status == "failed"
-            observed.append((topic, error_code))
+        class TerminalObservability:
+            def record_outbox_terminal_failure(
+                self, topic: str, error_class: str
+            ) -> None:
+                observed.append((topic, error_class))
 
-        result = await outbox_delivery_job(
-            {
-                "session_factory": factory,
-                "outbox_handlers": {"phone.disable": fail_terminal},
-                "outbox_now": lambda: now,
-                "outbox_terminal_failure_metric": metric,
-            }
+        result = await deliver_outbox_batch(
+            session_factory=factory,
+            handlers={"phone.disable": fail_terminal},
+            observability=TerminalObservability(),
+            now=lambda: now,
         )
 
         assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
-        assert observed == [("phone.disable", "provider_terminal")]
+        assert observed == [("phone.disable", "unknown")]
+        async with factory() as session:
+            durable = await session.get(OutboxEvent, event_id)
+            assert durable is not None
+            assert durable.status == "failed"
     finally:
         await engine.dispose()
 

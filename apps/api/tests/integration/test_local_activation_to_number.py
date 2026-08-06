@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -30,13 +31,76 @@ from app.providers.carrier_lookup.fake import FakeCarrierLookupProvider
 from app.providers.telephony.fake import FakeTelephonyProvider
 from app.routers.activation import get_carrier_lookup_service
 from app.services.carrier_lookup_service import CarrierLookupService
-from app.workers.outbox.delivery import outbox_delivery_job
+from app.workers.outbox.account_deactivation import deliver_account_deactivation
+from app.workers.outbox.delivery import deliver_outbox_batch
+from app.workers.outbox.phone import deliver_phone_provision
 
 
 LOCAL_TOKEN = "presvo-local-development-token"
 # ARCEP reserves the 01 99 00 range for audiovisual fiction and does not
 # assign it to subscribers (national numbering plan, version 2026-01-01).
 ARCEP_FICTIONAL_FIXED_NUMBER = "+33 1 99 00 00 00"
+
+
+class _OutboxObservability:
+    def record_outbox_terminal_failure(self, _topic: str, _error_class: str) -> None:
+        pass
+
+    def record_account_deactivation_completion(self, *_args, **_kwargs) -> None:
+        pass
+
+    def record_account_deactivation_result(self, *_args, **_kwargs) -> None:
+        pass
+
+    def record_account_deactivation_attention(self, *_args, **_kwargs) -> None:
+        pass
+
+
+async def _deliver_phone_provisioning(session_factory) -> dict[str, int]:
+    provider = FakeTelephonyProvider()
+
+    def clock() -> datetime:
+        return datetime.now(UTC)
+
+    async def handler(event: OutboxEvent) -> None:
+        await deliver_phone_provision(
+            event,
+            session_factory=session_factory,
+            telephony_provider=provider,
+            activation_flow_enabled=True,
+            now=clock,
+        )
+
+    return await deliver_outbox_batch(
+        session_factory=session_factory,
+        handlers={"phone.provision": handler},
+        observability=_OutboxObservability(),
+        now=clock,
+    )
+
+
+async def _deliver_account_deactivation(session_factory) -> dict[str, int]:
+    def clock() -> datetime:
+        return datetime.now(UTC)
+
+    observability = _OutboxObservability()
+
+    async def handler(event: OutboxEvent) -> None:
+        await deliver_account_deactivation(
+            event,
+            session_factory=session_factory,
+            telephony_provider=FakeTelephonyProvider(),
+            subscription_provider=FakeSubscriptionProvider(),
+            observability=observability,
+            now=clock,
+        )
+
+    return await deliver_outbox_batch(
+        session_factory=session_factory,
+        handlers={"account.deactivate": handler},
+        observability=observability,
+        now=clock,
+    )
 
 
 def _complete_profile_payload() -> dict[str, object]:
@@ -235,12 +299,7 @@ async def test_provider_free_journey_reaches_forwarding_required(
         assert grant is not None
         assert grant.source_id == f"local_invoice_{local_user.id}_g1"
 
-    delivery = await outbox_delivery_job(
-        {
-            "session_factory": session_factory,
-            "telephony_provider": FakeTelephonyProvider(),
-        }
-    )
+    delivery = await _deliver_phone_provisioning(session_factory)
     assert delivery == {
         "claimed": 1,
         "delivered": 1,
@@ -272,13 +331,7 @@ async def test_provider_free_journey_reaches_forwarding_required(
     assert deactivation.status_code == 202
     assert deactivation.json()["status"] == "deactivating"
 
-    cleanup = await outbox_delivery_job(
-        {
-            "session_factory": session_factory,
-            "subscription_provider": FakeSubscriptionProvider(),
-            "telephony_provider": FakeTelephonyProvider(),
-        }
-    )
+    cleanup = await _deliver_account_deactivation(session_factory)
     assert cleanup == {
         "claimed": 1,
         "delivered": 1,
@@ -349,12 +402,7 @@ async def test_provider_free_journey_reaches_forwarding_required(
         assert second_queued is not None
         assert second_queued.idempotency_key == activation.provisioning_idempotency_key
 
-    second_delivery = await outbox_delivery_job(
-        {
-            "session_factory": session_factory,
-            "telephony_provider": FakeTelephonyProvider(),
-        }
-    )
+    second_delivery = await _deliver_phone_provisioning(session_factory)
     assert second_delivery == {
         "claimed": 1,
         "delivered": 1,

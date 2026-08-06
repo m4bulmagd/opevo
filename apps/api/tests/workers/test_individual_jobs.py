@@ -21,19 +21,20 @@ from app.workers.outbox.phone_provisioning import (
 
 
 async def _provision_phone_number(
-    dependencies: dict,
+    session_factory,
     payload: dict,
     *,
+    telephony_provider,
     provider_operation_key: str | None = None,
 ) -> None:
     await _provision_phone_number_explicit(
         payload,
-        session_factory=dependencies["session_factory"],
-        telephony_provider=dependencies.get(
-            "telephony_provider", FakeTelephonyProvider()
-        ),
+        session_factory=session_factory,
+        telephony_provider=telephony_provider,
         provider_operation_key=provider_operation_key,
     )
+
+
 # ===========================================================================
 # provision_phone_number tests
 # ===========================================================================
@@ -176,7 +177,9 @@ async def test_phone_provision_outbox_missing_provider_identity_is_terminal_befo
         job_called = True
 
     monkeypatch.setattr(phone_outbox, "UserRepository", Users)
-    monkeypatch.setattr(phone_outbox, "PhoneNumberProvisioningRepository", Provisionings)
+    monkeypatch.setattr(
+        phone_outbox, "PhoneNumberProvisioningRepository", Provisionings
+    )
     monkeypatch.setattr(phone_outbox, "provision_phone_number", capture)
     event = SimpleNamespace(
         payload={
@@ -265,7 +268,9 @@ async def test_phone_provision_outbox_uses_durable_provider_key_not_delivery_key
         captured.append((payload, provider_operation_key))
 
     monkeypatch.setattr(phone_outbox, "UserRepository", Users)
-    monkeypatch.setattr(phone_outbox, "PhoneNumberProvisioningRepository", Provisionings)
+    monkeypatch.setattr(
+        phone_outbox, "PhoneNumberProvisioningRepository", Provisionings
+    )
     monkeypatch.setattr(phone_outbox, "PhoneNumberRepository", Phones)
     monkeypatch.setattr(phone_outbox, "provision_phone_number", capture)
     event = SimpleNamespace(
@@ -372,7 +377,9 @@ def install_provision_phone_number_fakes(
         "ProviderCleanupRepository",
         NoProviderCleanupRepository,
     )
-    monkeypatch.setattr(phone_provisioning_module, "TelephonyService", FailingTelephonyService)
+    monkeypatch.setattr(
+        phone_provisioning_module, "TelephonyService", FailingTelephonyService
+    )
     monkeypatch.setattr(
         phone_provisioning_module,
         "NotificationRepository",
@@ -395,25 +402,35 @@ async def test_provision_phone_number_persists_successful_state_and_forces_fr_de
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     await _provision_phone_number(
-        {
-            "telephony_provider": provider,
-            "session_factory": session_factory,
-        },
+        session_factory,
         {
             "user_id": str(active_user.id),
             "lifecycle_generation": active_user.lifecycle_generation,
         },
+        telephony_provider=provider,
         provider_operation_key="activation:phone.provision:evt_123",
     )
 
     provisionings = (
-        await db_session.execute(
-            select(PhoneNumberProvisioning).where(PhoneNumberProvisioning.user_id == active_user.id)
+        (
+            await db_session.execute(
+                select(PhoneNumberProvisioning).where(
+                    PhoneNumberProvisioning.user_id == active_user.id
+                )
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     phone_numbers = (
-        await db_session.execute(select(PhoneNumber).where(PhoneNumber.user_id == active_user.id))
-    ).scalars().all()
+        (
+            await db_session.execute(
+                select(PhoneNumber).where(PhoneNumber.user_id == active_user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     assert provider.country_codes == ["FR"]
     assert provider.operation_keys == ["activation:phone.provision:evt_123"]
@@ -424,8 +441,7 @@ async def test_provision_phone_number_persists_successful_state_and_forces_fr_de
     assert provisionings[0].can_retry is False
     assert provisionings[0].phone_number_id == phone_numbers[0].id
     assert (
-        provisionings[0].provider_operation_key
-        == "activation:phone.provision:evt_123"
+        provisionings[0].provider_operation_key == "activation:phone.provision:evt_123"
     )
 
 
@@ -443,11 +459,12 @@ async def test_provision_phone_number_defaults_to_local_factory_without_credenti
     operation_key = "activation:phone.provision:local-default"
 
     await _provision_phone_number(
-        {"session_factory": session_factory},
+        session_factory,
         {
             "user_id": str(user_id),
             "lifecycle_generation": active_user.lifecycle_generation,
         },
+        telephony_provider=FakeTelephonyProvider(),
         provider_operation_key=operation_key,
     )
 
@@ -505,25 +522,21 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     await _provision_phone_number(
-        {
-            "telephony_provider": provider,
-            "session_factory": session_factory,
-        },
+        session_factory,
         {
             "user_id": str(active_user.id),
             "lifecycle_generation": active_user.lifecycle_generation,
         },
+        telephony_provider=provider,
         provider_operation_key="activation:phone.provision:stable",
     )
     await _provision_phone_number(
-        {
-            "telephony_provider": provider,
-            "session_factory": session_factory,
-        },
+        session_factory,
         {
             "user_id": str(active_user.id),
             "lifecycle_generation": active_user.lifecycle_generation,
         },
+        telephony_provider=provider,
         provider_operation_key="activation:phone.provision:stable",
     )
 
@@ -537,10 +550,7 @@ async def test_phone_provisioning_reuses_first_provider_key_across_customer_retr
         "activation:phone.provision:stable",
         "activation:phone.provision:stable",
     ]
-    assert (
-        provisioning.provider_operation_key
-        == "activation:phone.provision:stable"
-    )
+    assert provisioning.provider_operation_key == "activation:phone.provision:stable"
     assert provisioning.status == "succeeded"
 
 
@@ -612,14 +622,12 @@ async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
 
     with pytest.raises(TelephonyProvisioningPending):
         await _provision_phone_number(
-            {
-                "telephony_provider": provider,
-                "session_factory": session_factory,
-            },
+            session_factory,
             {
                 "user_id": str(active_user.id),
                 "lifecycle_generation": active_user.lifecycle_generation,
             },
+            telephony_provider=provider,
             provider_operation_key="activation:phone.provision:pending",
         )
 
@@ -632,10 +640,7 @@ async def test_phone_provisioning_pending_order_keeps_customer_retry_disabled(
     assert provisioning.status == "running"
     assert provisioning.can_retry is False
     assert provisioning.last_error_reason == "existing_order_pending"
-    assert (
-        provisioning.provider_operation_key
-        == "activation:phone.provision:pending"
-    )
+    assert provisioning.provider_operation_key == "activation:phone.provision:pending"
 
 
 @pytest.mark.anyio
@@ -647,29 +652,43 @@ async def test_provision_phone_number_persists_retryable_failure_state(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     await _provision_phone_number(
-        {
-            "telephony_provider": ReviewRequiredProvisioningProvider(),
-            "session_factory": session_factory,
-        },
+        session_factory,
         {
             "user_id": str(active_user.id),
             "lifecycle_generation": active_user.lifecycle_generation,
         },
+        telephony_provider=ReviewRequiredProvisioningProvider(),
     )
 
     provisionings = (
-        await db_session.execute(
-            select(PhoneNumberProvisioning).where(PhoneNumberProvisioning.user_id == active_user.id)
+        (
+            await db_session.execute(
+                select(PhoneNumberProvisioning).where(
+                    PhoneNumberProvisioning.user_id == active_user.id
+                )
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     notifications = (
-        await db_session.execute(
-            select(Notification).where(Notification.user_id == active_user.id)
+        (
+            await db_session.execute(
+                select(Notification).where(Notification.user_id == active_user.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     phone_numbers = (
-        await db_session.execute(select(PhoneNumber).where(PhoneNumber.user_id == active_user.id))
-    ).scalars().all()
+        (
+            await db_session.execute(
+                select(PhoneNumber).where(PhoneNumber.user_id == active_user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     assert len(provisionings) == 1
     assert provisionings[0].status == "failed"
@@ -677,7 +696,10 @@ async def test_provision_phone_number_persists_retryable_failure_state(
     assert provisionings[0].can_retry is True
     assert provisionings[0].last_error_reason == "no_affordable_number"
     assert not phone_numbers
-    assert notifications[0].notification_type == "phone_number_provisioning_review_required"
+    assert (
+        notifications[0].notification_type
+        == "phone_number_provisioning_review_required"
+    )
 
 
 @pytest.mark.anyio
@@ -698,18 +720,21 @@ async def test_phone_provisioning_review_failure_does_not_log_exception_message(
 
     with caplog.at_level(logging.WARNING):
         await _provision_phone_number(
-            {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+            lambda: FakePhoneProvisioningSessionContext(session),
             {
                 "user_id": "00000000-0000-0000-0000-000000000123",
                 "lifecycle_generation": 1,
             },
+            telephony_provider=FakeTelephonyProvider(),
         )
 
     assert "AUTHORIZATION_SENTINEL_FROM_REVIEW_EXCEPTION" not in caplog.text
     assert "event=phone_provisioning_review_required" in caplog.text
     assert "operation=provision_phone_number" in caplog.text
     assert "error_type=TelephonyProvisioningReviewRequired" in caplog.text
-    assert provisioning_repository.failed_calls[0]["reason"] == "provider_review_required"
+    assert (
+        provisioning_repository.failed_calls[0]["reason"] == "provider_review_required"
+    )
     assert notification_repository.calls
     assert all(record.exc_info is None for record in caplog.records)
 
@@ -721,8 +746,7 @@ async def test_phone_provisioning_unexpected_failure_does_not_log_or_persist_exc
 ) -> None:
 
     error_message = (
-        "PHONE_SENTINEL_+33612345678 "
-        "AUTHORIZATION_SENTINEL_FROM_PROVISIONING_PROVIDER"
+        "PHONE_SENTINEL_+33612345678 AUTHORIZATION_SENTINEL_FROM_PROVISIONING_PROVIDER"
     )
     session, provisioning_repository, _notification_repository = (
         install_provision_phone_number_fakes(
@@ -734,11 +758,12 @@ async def test_phone_provisioning_unexpected_failure_does_not_log_or_persist_exc
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError) as exc_info:
             await _provision_phone_number(
-                {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+                lambda: FakePhoneProvisioningSessionContext(session),
                 {
                     "user_id": "00000000-0000-0000-0000-000000000123",
                     "lifecycle_generation": 1,
                 },
+                telephony_provider=FakeTelephonyProvider(),
             )
 
     assert error_message not in str(exc_info.value)
@@ -777,7 +802,9 @@ async def test_phone_provisioning_preserves_safe_provider_category(
             error=ProviderFailure(
                 provider="telnyx",
                 operation="provision_number",
-                disposition=("retryable" if category == "provider_retryable" else "terminal"),
+                disposition=(
+                    "retryable" if category == "provider_retryable" else "terminal"
+                ),
                 error_class="unavailable",
             ),
         )
@@ -785,11 +812,12 @@ async def test_phone_provisioning_preserves_safe_provider_category(
 
     with pytest.raises(ProviderFailure) as exc_info:
         await _provision_phone_number(
-            {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+            lambda: FakePhoneProvisioningSessionContext(session),
             {
                 "user_id": "00000000-0000-0000-0000-000000000123",
                 "lifecycle_generation": 1,
             },
+            telephony_provider=FakeTelephonyProvider(),
         )
 
     assert exc_info.value.retryable is can_retry
@@ -818,11 +846,12 @@ async def test_phone_provisioning_sanitizes_sensitive_exception_class_name(
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError) as exc_info:
             await _provision_phone_number(
-                {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+                lambda: FakePhoneProvisioningSessionContext(session),
                 {
                     "user_id": "00000000-0000-0000-0000-000000000123",
                     "lifecycle_generation": 1,
                 },
+                telephony_provider=FakeTelephonyProvider(),
             )
 
     assert sensitive_type_sentinel not in str(exc_info.value)
@@ -870,11 +899,12 @@ async def test_phone_provisioning_mark_failed_error_does_not_chain_provider_secr
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError) as exc_info:
             await _provision_phone_number(
-                {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+                lambda: FakePhoneProvisioningSessionContext(session),
                 {
                     "user_id": "00000000-0000-0000-0000-000000000123",
                     "lifecycle_generation": 1,
                 },
+                telephony_provider=FakeTelephonyProvider(),
             )
 
     assert_exception_state_is_sanitized(
@@ -909,11 +939,12 @@ async def test_phone_provisioning_commit_error_does_not_chain_provider_secrets(
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError) as exc_info:
             await _provision_phone_number(
-                {"session_factory": lambda: FakePhoneProvisioningSessionContext(session)},
+                lambda: FakePhoneProvisioningSessionContext(session),
                 {
                     "user_id": "00000000-0000-0000-0000-000000000123",
                     "lifecycle_generation": 1,
                 },
+                telephony_provider=FakeTelephonyProvider(),
             )
 
     assert_exception_state_is_sanitized(

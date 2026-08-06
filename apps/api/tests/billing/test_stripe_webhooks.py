@@ -20,9 +20,24 @@ from app.models.usage_ledger import UsageLedger
 from app.models.webhook_event import WebhookEvent
 from app.providers.subscriptions.fake import FakeSubscriptionProvider
 from app.providers.telephony.fake import FakeTelephonyProvider
-from app.workers.outbox.delivery import outbox_delivery_job
+from app.workers.outbox.account_deactivation import deliver_account_deactivation
+from app.workers.outbox.delivery import deliver_outbox_batch
 
 from tests.fakes import MockArqPool
+
+
+class _OutboxObservability:
+    def record_outbox_terminal_failure(self, _topic: str, _error_class: str) -> None:
+        pass
+
+    def record_account_deactivation_completion(self, *_args, **_kwargs) -> None:
+        pass
+
+    def record_account_deactivation_result(self, *_args, **_kwargs) -> None:
+        pass
+
+    def record_account_deactivation_attention(self, *_args, **_kwargs) -> None:
+        pass
 
 
 async def _post_stripe_event(
@@ -592,12 +607,26 @@ async def test_current_generation_final_cancellation_starts_one_deactivation_ope
 
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    delivery = await outbox_delivery_job(
-        {
-            "session_factory": session_factory,
-            "subscription_provider": FakeSubscriptionProvider(),
-            "telephony_provider": FakeTelephonyProvider(),
-        }
+    observability = _OutboxObservability()
+
+    def delivery_now() -> datetime:
+        return datetime.now(UTC)
+
+    async def handler(event: OutboxEvent) -> None:
+        await deliver_account_deactivation(
+            event,
+            session_factory=session_factory,
+            subscription_provider=FakeSubscriptionProvider(),
+            telephony_provider=FakeTelephonyProvider(),
+            observability=observability,
+            now=delivery_now,
+        )
+
+    delivery = await deliver_outbox_batch(
+        session_factory=session_factory,
+        handlers={"account.deactivate": handler},
+        observability=observability,
+        now=delivery_now,
     )
     async with session_factory() as session:
         reconciled = await session.get(AccountDeactivationOperation, operation.id)

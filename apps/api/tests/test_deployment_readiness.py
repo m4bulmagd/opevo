@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 import re
 import shlex
@@ -1259,14 +1260,34 @@ def test_recording_runtime_has_one_reference_only_outbox_contract() -> None:
         REFERENCE_PAYLOAD_FIELDS,
         SUPPORTED_OUTBOX_TOPICS,
     )
+    from app.core.dispatch_token import DispatchTokenConfig
     from app.workers.outbox.post_call import deliver_recording_reconcile
-    from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
+    from app.workers.outbox.registry import build_outbox_handlers
+
+    handlers = build_outbox_handlers(
+        session_factory=object(),
+        telephony_provider=object(),
+        subscription_provider=object(),
+        livekit_dispatch_provider=object(),
+        summary_provider=object(),
+        recording_provider=object(),
+        storage_provider=object(),
+        observability=object(),
+        dispatch_token_config=DispatchTokenConfig(
+            secret="deployment-readiness-explicit-secret",
+            ttl_seconds=60,
+        ),
+        livekit_agent_name="deployment-readiness-agent",
+        activation_flow_enabled=False,
+        max_call_duration_seconds=60,
+        now=lambda: datetime(2026, 8, 6, tzinfo=UTC),
+    )
 
     assert {
         topic for topic in SUPPORTED_OUTBOX_TOPICS if topic.startswith("recording.")
     } == {"recording.reconcile"}
     assert {
-        topic for topic in DEFAULT_OUTBOX_HANDLERS if topic.startswith("recording.")
+        topic for topic in handlers if topic.startswith("recording.")
     } == {"recording.reconcile"}
     assert {
         topic for topic in _OUTBOX_TOPICS if topic.startswith("recording.")
@@ -1274,10 +1295,7 @@ def test_recording_runtime_has_one_reference_only_outbox_contract() -> None:
     assert REFERENCE_PAYLOAD_FIELDS["recording.reconcile"] == frozenset(
         {"operation_id"}
     )
-    assert (
-        DEFAULT_OUTBOX_HANDLERS["recording.reconcile"]
-        is deliver_recording_reconcile
-    )
+    assert handlers["recording.reconcile"].func is deliver_recording_reconcile
     assert is_safe_provider_operation("livekit", "list_recording_egresses")
     assert callable(LiveKitRecordingProvider.list_room_egresses)
 

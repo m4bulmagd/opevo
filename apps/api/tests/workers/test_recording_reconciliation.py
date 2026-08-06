@@ -28,9 +28,9 @@ from app.services.recording_lifecycle_service import (
     RecordingLifecycleService,
 )
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.outbox import post_call
 from app.workers.outbox.post_call import (
     deliver_recording_reconcile as _deliver_recording_reconcile_explicit,
+    reconcile_recording_operation,
 )
 from app.workers.outbox.recording_reconciliation import (
     ReconciliationResult,
@@ -270,19 +270,11 @@ async def _deliver_recording_reconcile(
     reconciler: _HandlerReconciler,
     observability: _RecordingObservability,
 ) -> None:
-    original_builder = post_call.build_recording_reconciler
-    post_call.build_recording_reconciler = lambda **_kwargs: reconciler
-    try:
-        await _deliver_recording_reconcile_explicit(
-            event,
-            session_factory=object(),
-            recording_provider=object(),
-            storage_provider=object(),
-            observability=observability,
-            now=lambda: NOW,
-        )
-    finally:
-        post_call.build_recording_reconciler = original_builder
+    await reconcile_recording_operation(
+        UUID(event.payload["operation_id"]),
+        reconciler=reconciler,
+        observability=observability,
+    )
 
 
 class TrackingSessionFactory:
@@ -2709,10 +2701,13 @@ async def test_recording_handler_does_not_emit_for_invalid_payload() -> None:
     event = _recording_reconcile_event(operation_id)
     event.payload = {"operation_id": str(uuid4())}
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _deliver_recording_reconcile(
+        await _deliver_recording_reconcile_explicit(
             event,
-            reconciler=reconciler,
+            session_factory=object(),
+            recording_provider=object(),
+            storage_provider=object(),
             observability=observability,
+            now=lambda: NOW,
         )
 
     assert exc_info.value.error_code == "invalid_payload"
