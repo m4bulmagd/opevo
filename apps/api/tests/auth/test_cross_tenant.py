@@ -18,16 +18,6 @@ from app.models.subscription import Subscription
 from app.models.user import User
 
 
-@pytest.fixture(autouse=True)
-def _legacy_agent_config_flow(monkeypatch: pytest.MonkeyPatch):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
 # ---------------------------------------------------------------------------
 # Seed helpers
 # ---------------------------------------------------------------------------

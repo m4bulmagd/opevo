@@ -46,7 +46,7 @@ The recommendations use these agreed priorities:
 | 3 | Authentication boundary | **3A** — validate Clerk authorized parties | Accepted; implemented |
 | 4 | Worker isolation | **4A + 4B** — split critical/background queues and add explicit limits, metrics, and load criteria | Implemented — controlled ten-call local/CI evidence; Issue 16A load, monitoring, and recovery drills remain open |
 | 5 | Outbox structure | **5A** — split the topic god module by cohesive topic family | Accepted; implemented |
-| 6 | Dependency construction | **6A** — explicit, thin composition roots with typed dependencies | Accepted |
+| 6 | Dependency construction | **6A** — explicit, thin composition roots with typed dependencies | Implemented |
 | 7 | Provider failures | **7A** — one typed provider-failure vocabulary; distinguish internal defects | Accepted; implemented |
 | 8 | LiveKit compatibility | **8A** — staged upgrade and removal of private SDK dependencies | Accepted |
 | 9 | Python/test reliability | **9A-1R** — Python 3.13 contract, test-only cancellation-regression stabilization, per-test timeouts | Accepted; implemented |
@@ -457,7 +457,7 @@ same expensive resource at several lifetimes.
 | **6B:** introduce a dependency-injection container/framework | High | Runtime magic, scope mistakes, and learning cost | Broad application structure | High relative to current project size |
 | **6C:** retain mixed globals/factories/direct construction | None | Hidden coupling and weak isolation persist | None | High testing and debugging burden |
 
-### Recorded decision and proposed solution — 6A
+### Recorded decision and implemented solution — 6A
 
 1. Establish an explicit composition root for the API process, ARQ worker
    process, and LiveKit agent worker.
@@ -469,6 +469,33 @@ same expensive resource at several lifetimes.
    patch deep module globals.
 5. Do not introduce a service locator, reflection-based autowiring, or a DI
    framework.
+
+Implemented through the
+[Explicit Runtime Composition Design](../superpowers/specs/2026-08-06-explicit-runtime-composition-design.md)
+and
+[Implementation Plan](../superpowers/plans/2026-08-06-explicit-runtime-composition.md).
+The API, call-lifecycle worker, background worker, and LiveKit agent now each
+have one typed process runtime and one explicit construction boundary.
+Long-lived resources have one owner, partial-startup cleanup is deterministic,
+and request/job/session code receives its dependencies without cached resource
+factories, deep global patching, or application dependency dictionaries.
+
+The reviewed implementation range is `c561877..HEAD`: implementation commits
+start at `0aa4086` and end with the Task 11 completion commit named
+`refactor: complete explicit runtime composition`. Final verification passed
+3,042 API tests with no skips (91.92% line and 80.32% branch coverage), 695
+agent tests with four credential-gated evaluation skips (89.22% line and
+73.62% branch coverage), and 79 cross-runtime integration/import tests. The
+API architecture guard passed seven checks and the agent guard passed three.
+Ruff and mypy passed for both applications, both frozen dependency-lock checks
+passed, and the legacy-factory, settings-boundary, worker-context, and cache
+reference scans were empty.
+
+Worker process isolation remains: call-lifecycle and background workers are
+separate services and runtimes while their source remains under `apps/api`.
+Extracting worker source into another package or repository is deferred until
+deployment or security evidence justifies the additional boundary. Realtime
+decisions 1A and 14A and performance-governance decision 16A are unchanged.
 
 ### Required validation
 

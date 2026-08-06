@@ -7,12 +7,12 @@ import pytest
 import stripe
 
 from app.core.config import Settings
-from app.core.observability import get_observability
 from app.core.provider_failures import ProviderFailure
 from app.providers.subscriptions.factory import build_subscription_provider
 from app.providers.subscriptions.fake import FakeSubscriptionProvider
 from app.providers.subscriptions import stripe as stripe_provider
 from app.providers.subscriptions.stripe import StripeSubscriptionProvider
+from tests.fakes import build_test_observability
 
 
 class FakeSubscriptionAPI:
@@ -399,7 +399,7 @@ async def test_subscription_and_hosted_sessions_reuse_the_stripe_classifier(
             stripe_checkout_success_url="https://app.example.com/success",
             stripe_checkout_cancel_url="https://app.example.com/cancel",
         ),
-        observability=get_observability(),
+        observability=build_test_observability(),
         stripe_module=hosted_client,
     )
 

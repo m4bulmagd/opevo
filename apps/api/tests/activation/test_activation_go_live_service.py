@@ -38,16 +38,6 @@ SOURCE_NUMBER = "+33199000100"
 PRESVO_NUMBER = "+33999000100"
 
 
-@pytest.fixture(autouse=True)
-def _activation_flow_enabled(monkeypatch: pytest.MonkeyPatch):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
 class _Pool:
     def __init__(self) -> None:
         self.jobs: list[tuple[str, dict, dict]] = []

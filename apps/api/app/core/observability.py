@@ -1347,10 +1347,6 @@ def initialize_observability(
         return _instance
 
 
-def get_observability() -> Observability:
-    return _instance or initialize_observability(service_name="presvo-api")
-
-
 def get_request_observability(request) -> Observability:
     return get_api_runtime(request.app).observability
 

@@ -132,6 +132,12 @@ class CaptureTracer:
         return span
 
 
+def build_test_observability():
+    from app.core.observability import Observability
+
+    return Observability(meter=CaptureMeter(), tracer=CaptureTracer())
+
+
 class MockArqPool:
     def __init__(self):
         self.enqueued_jobs = []

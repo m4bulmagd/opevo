@@ -527,7 +527,6 @@ class FakeEntrypointSession(FakeSession):
 
 @pytest.mark.anyio
 async def test_entrypoint_passes_process_settings_and_prewarmed_vad_to_pipeline(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     metadata = make_metadata()
     settings = TEST_SETTINGS.model_copy(
@@ -543,9 +542,7 @@ async def test_entrypoint_passes_process_settings_and_prewarmed_vad_to_pipeline(
         captured.update(kwargs)
         return object(), session
 
-    monkeypatch.setattr(agent_main, "build_agent_runtime", capture_pipeline)
-
-    await entrypoint(context)
+    await entrypoint(context, agent_runtime_factory=capture_pipeline)
 
     assert captured["settings"] is settings
     assert captured["vad"] is vad
@@ -591,12 +588,10 @@ async def test_entrypoint_connects_then_waits_only_for_sip_participant(
         lambda: initialize_calls.append(True),
         raising=False,
     )
-    monkeypatch.setattr(
-        "agent.main.build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
     )
-
-    await entrypoint(context)
 
     assert context.events == ["connect", ("wait_for_participant", 3)]
     assert initialize_calls == []
@@ -615,7 +610,6 @@ async def test_entrypoint_connects_then_waits_only_for_sip_participant(
 
 @pytest.mark.anyio
 async def test_customer_entrypoint_rejects_legacy_metadata_without_job_type(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     metadata = make_metadata()
     context = FakeJobContext(metadata)
@@ -648,10 +642,6 @@ async def test_entrypoint_records_only_fixed_lifecycle_and_provider_boundaries(
         yield
 
     monkeypatch.setattr(
-        "agent.main.build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
-    )
-    monkeypatch.setattr(
         agent_main,
         "agent_lifecycle_span",
         capture_lifecycle,
@@ -664,7 +654,10 @@ async def test_entrypoint_records_only_fixed_lifecycle_and_provider_boundaries(
         raising=False,
     )
 
-    await entrypoint(context)
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+    )
 
     assert spans == [
         (
@@ -706,17 +699,16 @@ async def test_entrypoint_registers_bounded_observability_shutdown(
         shutdown_calls.append(True)
 
     monkeypatch.setattr(
-        "agent.main.build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
-    )
-    monkeypatch.setattr(
         agent_main,
         "shutdown_observability",
         capture_shutdown,
         raising=False,
     )
 
-    await entrypoint(context)
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+    )
     assert len(context.shutdown_callbacks) == 1
     await context.shutdown_callbacks[0]()
 
@@ -762,17 +754,15 @@ async def test_entrypoint_uses_one_shutdown_callback_with_strict_cleanup_order(
 
     monkeypatch.setattr(
         agent_main,
-        "build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
-    )
-    monkeypatch.setattr(agent_main, "SessionRuntime", OrderedSessionRuntime)
-    monkeypatch.setattr(
-        agent_main,
         "shutdown_observability",
         capture_observability_shutdown,
     )
 
-    await entrypoint(context)
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+        session_runtime_factory=OrderedSessionRuntime,
+    )
 
     assert len(context.shutdown_callbacks) == 1
     assert captured == {
@@ -840,15 +830,13 @@ async def test_shutdown_callback_cancellation_joins_the_full_ordered_cleanup(
         publisher=publisher,
     )
     session = FakeEntrypointSession()
-    monkeypatch.setattr(
-        agent_main,
-        "build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
-    )
-    monkeypatch.setattr(agent_main, "SessionRuntime", OrderedSessionRuntime)
     monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
 
-    await entrypoint(context)
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+        session_runtime_factory=OrderedSessionRuntime,
+    )
 
     callback_task = asyncio.create_task(context.shutdown_callbacks[0]())
     await publisher_close_started.wait()
@@ -904,16 +892,14 @@ async def test_cancelled_shutdown_waiter_safely_reports_retained_failure_once(
     session = FakeEntrypointSession()
     monkeypatch.setattr(
         agent_main,
-        "build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
-    )
-    monkeypatch.setattr(
-        agent_main,
         "shutdown_observability",
         fail_observability_shutdown,
     )
 
-    await entrypoint(context)
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+    )
 
     original_shield = asyncio.shield
     shield_calls = 0
@@ -1007,16 +993,14 @@ async def test_uncancelled_shutdown_waiter_propagates_retained_failure(
 
     monkeypatch.setattr(
         agent_main,
-        "build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
-    )
-    monkeypatch.setattr(
-        agent_main,
         "shutdown_observability",
         fail_observability_shutdown,
     )
 
-    await entrypoint(context)
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+    )
 
     with pytest.raises(RuntimeError) as failure_info:
         await context.shutdown_callbacks[0]()
@@ -1074,15 +1058,15 @@ async def test_shutdown_waits_for_customer_entrypoint_setup_before_state_publica
     )
     context.connect = block_connect
     session = FakeEntrypointSession()
-    monkeypatch.setattr(
-        agent_main,
-        "build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
-    )
-    monkeypatch.setattr(agent_main, "SessionRuntime", OrderedSessionRuntime)
     monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
 
-    entrypoint_task = asyncio.create_task(entrypoint(context))
+    entrypoint_task = asyncio.create_task(
+        entrypoint(
+            context,
+            agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+            session_runtime_factory=OrderedSessionRuntime,
+        )
+    )
     await connect_started.wait()
 
     async def invoke_shutdown_callback() -> None:
@@ -1189,11 +1173,10 @@ async def test_entrypoint_shutdown_closes_process_runtime_after_pipeline_setup_f
     async def shutdown_observability() -> None:
         return None
 
-    monkeypatch.setattr(agent_main, "build_agent_runtime", fail_pipeline)
     monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
 
     with pytest.raises(RuntimeError, match="provider setup failed"):
-        await entrypoint(context)
+        await entrypoint(context, agent_runtime_factory=fail_pipeline)
 
     assert len(context.shutdown_callbacks) == 1
     await context.shutdown_callbacks[0]()
@@ -1215,11 +1198,6 @@ async def test_entrypoint_shutdown_finalizes_and_closes_after_session_start_fail
         raise RuntimeError("session start failed")
 
     session.start = fail_start
-    monkeypatch.setattr(
-        agent_main,
-        "build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
-    )
 
     async def shutdown_observability() -> None:
         return None
@@ -1227,7 +1205,10 @@ async def test_entrypoint_shutdown_finalizes_and_closes_after_session_start_fail
     monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
 
     with pytest.raises(RuntimeError, match="session start failed"):
-        await entrypoint(context)
+        await entrypoint(
+            context,
+            agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+        )
 
     assert len(context.shutdown_callbacks) == 1
     await context.shutdown_callbacks[0]()
@@ -1238,7 +1219,6 @@ async def test_entrypoint_shutdown_finalizes_and_closes_after_session_start_fail
 
 @pytest.mark.anyio
 async def test_entrypoint_delivers_disclosure_before_enabling_caller_input(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     metadata = make_metadata()
     context = FakeJobContext(metadata)
@@ -1260,13 +1240,11 @@ async def test_entrypoint_delivers_disclosure_before_enabling_caller_input(
         async def finalize(self, *_args, **_kwargs) -> None:
             return None
 
-    monkeypatch.setattr(
-        "agent.main.build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+        session_runtime_factory=OrderingRuntime,
     )
-    monkeypatch.setattr("agent.main.SessionRuntime", OrderingRuntime)
-
-    await entrypoint(context)
 
     greeting = (
         "Hello, you've reached Owner. I'm Agent, an AI receptionist. "
@@ -1292,7 +1270,6 @@ async def test_entrypoint_delivers_disclosure_before_enabling_caller_input(
 
 @pytest.mark.anyio
 async def test_entrypoint_awaits_immediate_expiry_without_initial_greeting(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     metadata = make_metadata(allowed_duration_seconds=1)
     context = FakeJobContext(metadata)
@@ -1313,13 +1290,11 @@ async def test_entrypoint_awaits_immediate_expiry_without_initial_greeting(
         async def finalize(self, *_args, **_kwargs) -> None:
             return None
 
-    monkeypatch.setattr(
-        "agent.main.build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+        session_runtime_factory=ExpiredRuntime,
     )
-    monkeypatch.setattr("agent.main.SessionRuntime", ExpiredRuntime)
-
-    await entrypoint(context)
     runtime = captured["runtime"]
     if runtime.call_limit_task is not None:
         await runtime.call_limit_task
@@ -1340,7 +1315,6 @@ async def test_entrypoint_awaits_immediate_expiry_without_initial_greeting(
 
 @pytest.mark.anyio
 async def test_entrypoint_injects_job_shutdown_into_session_runtime(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     metadata = make_metadata()
     context = FakeJobContext(metadata)
@@ -1363,14 +1337,12 @@ async def test_entrypoint_injects_job_shutdown_into_session_runtime(
         async def finalize(self, *_args, **_kwargs) -> None:
             return None
 
-    monkeypatch.setattr(
-        "agent.main.build_agent_runtime",
-        lambda *_args, **_kwargs: (object(), session),
+    await entrypoint(
+        context,
+        agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
+        session_runtime_factory=CapturingRuntime,
+        monotonic=lambda: 100.0,
     )
-    monkeypatch.setattr("agent.main.SessionRuntime", CapturingRuntime)
-    monkeypatch.setattr("agent.main.time.monotonic", lambda: 100.0)
-
-    await entrypoint(context)
     captured["fatal_shutdown"]("transcript_buffer_overflow")
 
     assert context.shutdown_reasons == ["transcript_buffer_overflow"]

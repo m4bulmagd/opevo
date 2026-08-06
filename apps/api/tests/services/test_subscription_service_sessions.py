@@ -9,16 +9,6 @@ from app.services.billing_query_service import BillingQueryService
 from app.services.onboarding_service import OnboardingService
 
 
-@pytest.fixture(autouse=True)
-def _legacy_onboarding_flow(monkeypatch: pytest.MonkeyPatch):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
 class SingleSessionGuard:
     def __init__(self) -> None:
         self.active = False

@@ -239,12 +239,14 @@ async def test_entrypoint_parses_exact_shared_dispatch_artifacts(
     monkeypatch.setattr(agent_main, "_initialize_observability_safely", lambda: None)
     monkeypatch.setattr(agent_main, "shutdown_observability", lambda: None)
     monkeypatch.setattr(agent_main, "run_forwarding_verification", capture_verification)
-    monkeypatch.setattr(agent_main, "build_agent_runtime", capture_customer)
-    monkeypatch.setattr(agent_main, "SessionRuntime", FakeRuntime)
     monkeypatch.setattr(agent_main, "agent_lifecycle_span", lambda **_kwargs: nullcontext())
     monkeypatch.setattr(agent_main, "agent_provider_span", lambda **_kwargs: nullcontext())
 
-    await agent_main.entrypoint(context)
+    await agent_main.entrypoint(
+        context,
+        agent_runtime_factory=capture_customer,
+        session_runtime_factory=FakeRuntime,
+    )
 
     assert parsed_payloads == [expected]
 

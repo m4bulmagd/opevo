@@ -20,12 +20,18 @@ from app.services.call_history_service import (
 )
 from app.services.account_access_policy import AccountStateBlockedError
 from app.services.recording_lifecycle_service import RecordingLifecycleService
-from app.services.recording_service import RecordingService, get_recording_service
+from app.services.recording_service import RecordingService
 from app.workers.queueing import enqueue_outbox_wakeup
 
 
 router = APIRouter(prefix="/api/calls", tags=["calls"])
 logger = logging.getLogger(__name__)
+
+
+def get_recording_service(request: Request) -> RecordingService:
+    return RecordingService(
+        provider=get_api_runtime(request.app).storage_provider,
+    )
 
 
 def get_call_history_service(

@@ -1,5 +1,4 @@
 from collections.abc import AsyncIterator
-from functools import lru_cache
 from uuid import UUID
 
 from arq import create_pool
@@ -7,19 +6,12 @@ from arq.connections import ArqRedis
 from arq.connections import RedisSettings
 from redis.asyncio import Redis
 
-from app.core.config import get_settings
 from presvo_contracts import (
     REALTIME_CHANNEL_PREFIX,
     RealtimeEvent,
     dump_contract_json,
     realtime_channel,
 )
-
-
-@lru_cache
-def get_redis_client() -> Redis:
-    settings = get_settings()
-    return Redis.from_url(settings.redis_url, decode_responses=True)
 
 
 async def create_arq_pool(redis_url: str) -> ArqRedis:

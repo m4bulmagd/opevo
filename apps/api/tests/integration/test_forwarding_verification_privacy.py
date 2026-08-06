@@ -45,16 +45,6 @@ DESCRIPTION_SENTINEL = "Privacy Description Sentinel"
 RECEPTIONIST_SENTINEL = "Privacy Receptionist Sentinel"
 
 
-@pytest.fixture(autouse=True)
-def _activation_flow_enabled(monkeypatch: pytest.MonkeyPatch):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
 @dataclass(frozen=True, slots=True)
 class _PrivacyCounts:
     calls: int

@@ -176,6 +176,7 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
             AgentApiClient(
                 base_url="http://testserver",
                 http_client=http_client,
+                timeout=10.0,
                 max_retries=1,
             )
         )

@@ -667,7 +667,7 @@ def test_recording_service_dependency_borrows_runtime_storage(settings) -> None:
     from fastapi import FastAPI
     from starlette.requests import Request
 
-    from app.services.recording_service import get_recording_service
+    from app.routers.calls import get_recording_service
 
     storage_provider = object()
     app = FastAPI()

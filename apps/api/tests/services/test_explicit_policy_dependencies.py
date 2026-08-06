@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.core.config import get_settings
+from app.core.config import Settings
 from app.models.agent_config import AgentConfig
 from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
@@ -100,7 +100,7 @@ async def test_onboarding_nested_readiness_uses_explicit_activation_policy(
     db_session,
     active_user,
 ) -> None:
-    assert get_settings().activation_flow_enabled is False
+    assert Settings().activation_flow_enabled is False
     await _seed_legacy_ready_customer(db_session, active_user)
 
     status = await OnboardingService(
@@ -118,7 +118,7 @@ async def test_account_lifecycle_nested_readiness_uses_explicit_activation_polic
     db_session,
     active_user,
 ) -> None:
-    assert get_settings().activation_flow_enabled is False
+    assert Settings().activation_flow_enabled is False
     await _seed_legacy_ready_customer(db_session, active_user)
 
     account = await AccountLifecycleService(

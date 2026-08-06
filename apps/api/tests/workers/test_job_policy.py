@@ -12,7 +12,6 @@ from sqlalchemy.exc import (
     TimeoutError as SQLAlchemyTimeoutError,
 )
 
-from app.core.observability import get_observability
 from app.workers.job_policy import (
     CALL_FINALIZATION_POLICY,
     CALL_RECONCILIATION_POLICY,
@@ -23,10 +22,11 @@ from app.workers.job_policy import (
     apply_job_policy,
     is_retryable_call_finalization_error,
 )
+from tests.fakes import build_test_observability
 
 
 def _observability_getter(_ctx: dict):
-    return get_observability()
+    return build_test_observability()
 
 
 def test_worker_job_policies_are_immutable_and_bounded() -> None:

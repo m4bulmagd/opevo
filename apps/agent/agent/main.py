@@ -3,6 +3,8 @@ import time
 import logging
 import importlib
 import inspect
+from collections.abc import Callable
+from typing import Any
 
 from livekit import rtc
 from livekit.agents import (
@@ -50,6 +52,8 @@ from agent.verification_runtime import run_forwarding_verification
 logger = logging.getLogger(__name__)
 SIP_PARTICIPANT_KIND = rtc.ParticipantKind.Value("PARTICIPANT_KIND_SIP")
 WORKER_DRAIN_TIMEOUT_SECONDS = 3900
+AgentRuntimeFactory = Callable[..., tuple[Any, Any]]
+SessionRuntimeFactory = Callable[..., SessionRuntime]
 
 
 def _initialize_observability_safely() -> None:
@@ -296,11 +300,17 @@ async def handle_job_request(request: JobRequest) -> None:
     )
 
 
-async def entrypoint(context: JobContext) -> None:
+async def entrypoint(
+    context: JobContext,
+    *,
+    agent_runtime_factory: AgentRuntimeFactory = build_agent_runtime,
+    session_runtime_factory: SessionRuntimeFactory = SessionRuntime,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
     process_runtime = require_agent_process_runtime(context.proc)
     session_runtime: SessionRuntime | None = None
     customer_metadata: CustomerCallDispatch | None = None
-    started_at = time.monotonic()
+    started_at = monotonic()
     entrypoint_use_complete = asyncio.Event()
     shutdown_failure_reported = asyncio.Event()
     shutdown_task: asyncio.Task[None] | None = None
@@ -369,13 +379,13 @@ async def entrypoint(context: JobContext) -> None:
                     kind=SIP_PARTICIPANT_KIND
                 )
 
-            agent, session = build_agent_runtime(
+            agent, session = agent_runtime_factory(
                 metadata_dict,
                 settings=process_runtime.settings,
                 vad=process_runtime.silero_vad,
                 inference_executor=context.inference_executor,
             )
-            session_runtime = SessionRuntime(
+            session_runtime = session_runtime_factory(
                 process_runtime.event_publisher,
                 api_client=process_runtime.api_client,
                 fatal_shutdown=context.shutdown,

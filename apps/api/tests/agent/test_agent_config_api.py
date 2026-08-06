@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
 from app.models.customer_activation import CustomerActivation
@@ -20,16 +20,6 @@ from presvo_contracts import (
     OWNER_CONTEXT_MAX_LENGTH,
     SYSTEM_PROMPT_MAX_LENGTH,
 )
-
-
-@pytest.fixture(autouse=True)
-def _activation_flow_defaults_off_for_legacy_config_tests(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
 
 
 @pytest.fixture

@@ -35,18 +35,6 @@ from app.services.livekit_dispatch_service import LiveKitDispatchService
 from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG
 
 
-@pytest.fixture(autouse=True)
-def _activation_flow_defaults_off_for_legacy_dispatch_tests(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
 class _ForbiddenDirectDispatch:
     def __init__(self) -> None:
         self.calls = 0
@@ -364,56 +352,44 @@ def _sip_join(*, room: str = "room-1", trunk: str | None = "+33999888777") -> di
 @pytest.mark.anyio
 async def test_activation_flow_denies_before_go_live_and_admits_after_provider_success(
     db_session,
-    monkeypatch,
 ) -> None:
-    from app.core.config import get_settings
+    user, phone, config = await _seed_eligible_user(
+        db_session,
+        with_provisioning=True,
+    )
+    _profile, activation = await _seed_verified_activation(
+        db_session,
+        user=user,
+        phone=phone,
+        config=config,
+        active=False,
+    )
+    service = LiveKitDispatchService(
+        db_session,
+        activation_flow_enabled=True,
+        realtime_service=None,
+        recording_service=_Recording(),
+    )
 
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
-    get_settings.cache_clear()
-    try:
-        user, phone, config = await _seed_eligible_user(
-            db_session,
-            with_provisioning=True,
-        )
-        _profile, activation = await _seed_verified_activation(
-            db_session,
-            user=user,
-            phone=phone,
-            config=config,
-            active=False,
-        )
-        service = LiveKitDispatchService(
-            db_session,
-            activation_flow_enabled=True,
-            realtime_service=None,
-            recording_service=_Recording(),
-        )
+    denied = await service.handle_participant_joined(
+        _sip_join(room="room-before-go-live")
+    )
+    assert denied.status == "denied"
+    assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
-        denied = await service.handle_participant_joined(
-            _sip_join(room="room-before-go-live")
-        )
-        assert denied.status == "denied"
-        assert await db_session.scalar(select(func.count()).select_from(Call)) == 0
-        assert (
-            await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
-        )
+    now = datetime.now(UTC)
+    activation.go_live_requested_at = now - timedelta(minutes=2)
+    activation.go_live_approved_at = now - timedelta(minutes=2)
+    activation.activated_at = now - timedelta(minutes=1)
+    await db_session.commit()
+    accepted = await service.handle_participant_joined(
+        _sip_join(room="room-after-go-live")
+    )
 
-        now = datetime.now(UTC)
-        activation.go_live_requested_at = now - timedelta(minutes=2)
-        activation.go_live_approved_at = now - timedelta(minutes=2)
-        activation.activated_at = now - timedelta(minutes=1)
-        await db_session.commit()
-        accepted = await service.handle_participant_joined(
-            _sip_join(room="room-after-go-live")
-        )
-
-        assert accepted.status == "accepted"
-        assert await db_session.scalar(select(func.count()).select_from(Call)) == 1
-        assert (
-            await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
-        )
-    finally:
-        get_settings.cache_clear()
+    assert accepted.status == "accepted"
+    assert await db_session.scalar(select(func.count()).select_from(Call)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 1
 
 
 @pytest.mark.anyio
@@ -473,34 +449,26 @@ async def test_livekit_outbox_rechecks_current_activation_prerequisites(
 @pytest.mark.anyio
 async def test_disabled_activation_flow_preserves_legacy_dispatch(
     db_session,
-    monkeypatch,
 ) -> None:
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "true")
-    get_settings.cache_clear()
-    try:
-        await _seed_eligible_user(db_session)
-        assert (
-            await db_session.scalar(
-                select(func.count()).select_from(PhoneNumberProvisioning)
-            )
-            == 0
+    await _seed_eligible_user(db_session)
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(PhoneNumberProvisioning)
         )
-        service = LiveKitDispatchService(
-            db_session,
-            activation_flow_enabled=False,
-            realtime_service=None,
-            recording_service=_Recording(),
-        )
+        == 0
+    )
+    service = LiveKitDispatchService(
+        db_session,
+        activation_flow_enabled=False,
+        realtime_service=None,
+        recording_service=_Recording(),
+    )
 
-        result = await service.handle_participant_joined(
-            _sip_join(room="room-legacy-activation-off")
-        )
+    result = await service.handle_participant_joined(
+        _sip_join(room="room-legacy-activation-off")
+    )
 
-        assert result.status == "accepted"
-    finally:
-        get_settings.cache_clear()
+    assert result.status == "accepted"
 
 
 def _dispatch_metadata_payload(**overrides) -> dict:

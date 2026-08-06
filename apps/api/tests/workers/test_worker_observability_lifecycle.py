@@ -385,14 +385,14 @@ async def test_worker_job_reference_skips_untrusted_candidates_before_payload_ke
     telemetry = Observability(meter=CaptureMeter(), tracer=tracer)
     observed_contexts: list[dict] = []
 
-    def get_observability(ctx: dict) -> Observability:
+    def observability_getter(ctx: dict) -> Observability:
         observed_contexts.append(ctx)
         return telemetry
 
     @instrument_job(
         "call_finalization",
         queue_class="call_lifecycle",
-        observability_getter=get_observability,
+        observability_getter=observability_getter,
     )
     async def job(_ctx: dict, *_args, payload: dict) -> str:
         return payload["call_id"]

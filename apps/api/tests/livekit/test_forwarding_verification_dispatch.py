@@ -32,16 +32,6 @@ ALTERNATE_SOURCE_NUMBER = "+33199000001"
 ALTERNATE_PRESVO_NUMBER = "+33999000001"
 
 
-@pytest.fixture
-def activation_flow_disabled(monkeypatch: pytest.MonkeyPatch):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
 class _Realtime:
     def __init__(self) -> None:
         self.events: list[dict] = []
@@ -313,7 +303,6 @@ async def test_missing_diversion_is_allowed(db_session, active_user) -> None:
 async def test_no_window_continues_unchanged_normal_dispatch(
     db_session,
     active_user,
-    activation_flow_disabled,
 ) -> None:
     await _seed_normal_dispatch_state(db_session, active_user)
     realtime = _Realtime()
@@ -346,7 +335,6 @@ async def test_no_window_continues_unchanged_normal_dispatch(
 async def test_deactivation_commit_prevents_later_customer_call_admission(
     db_session,
     active_user,
-    activation_flow_disabled,
 ) -> None:
     await _seed_normal_dispatch_state(db_session, active_user)
     active_user.status = "deactivating"

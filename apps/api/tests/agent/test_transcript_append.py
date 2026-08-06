@@ -15,17 +15,17 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.core.database import get_session
 from app.composition.lifecycle import RuntimeCleanup
 from app.composition.runtime import ApiRuntime
-from app.core.config import get_settings
+from app.core.config import Settings
 from app.core.dispatch_token import create_dispatch_token
 from tests.dispatch_token_config import (
     TEST_DISPATCH_TOKEN_CONFIG,
     settings_with_test_dispatch_token,
 )
-from app.core.observability import get_observability
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.call_message import CallMessage
 from app.schemas.agent_identity import AuthenticatedAgentIdentity
+from tests.fakes import build_test_observability
 
 
 FIXTURES = Path(__file__).parents[4] / "libs/shared/tests/fixtures/v1"
@@ -111,11 +111,11 @@ def _runtime_app(db_session, *, queue: CapturingQueue | None = None) -> FastAPI:
     app.include_router(router)
     app.dependency_overrides[get_session] = override_session
     app.state.runtime = ApiRuntime(
-        settings=settings_with_test_dispatch_token(get_settings()),
+        settings=settings_with_test_dispatch_token(Settings()),
         engine=object(),
         session_factory=object(),
         redis_client=object(),
-        observability=get_observability(),
+        observability=build_test_observability(),
         auth_provider=object(),
         readiness_checks=object(),
         storage_provider=object(),

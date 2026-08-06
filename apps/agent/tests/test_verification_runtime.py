@@ -680,15 +680,17 @@ async def test_entrypoint_branches_to_verification_before_normal_call_runtime(
 
     monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
     for name in [
-        "build_agent_runtime",
-        "SessionRuntime",
         "agent_lifecycle_span",
         "agent_provider_span",
         "_send_initial_greeting",
     ]:
         monkeypatch.setattr(agent_main, name, forbidden)
 
-    await agent_main.entrypoint(context)
+    await agent_main.entrypoint(
+        context,
+        agent_runtime_factory=forbidden,
+        session_runtime_factory=forbidden,
+    )
 
     assert parse_calls == 1
     assert calls == [

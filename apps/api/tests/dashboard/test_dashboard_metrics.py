@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.config import get_settings
+from app.core.config import Settings
 from app.models.business_profile import BusinessProfile
 from app.models.call import Call
 from app.models.customer_activation import CustomerActivation
@@ -163,7 +163,7 @@ async def test_dashboard_metrics_resolve_owner_and_return_exact_contract(
         "get_metrics",
         get_metrics_at_configured_time,
     )
-    configured_settings = get_settings().model_copy(
+    configured_settings = Settings().model_copy(
         update={"dashboard_metrics_reference_time": current}
     )
     runtime = test_app.state.runtime

@@ -2155,11 +2155,11 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
             )
 
     from app.core.auth import build_auth_provider
-    from app.core.observability import get_observability
+    from tests.fakes import build_test_observability
 
     auth_provider = build_auth_provider(
         settings=settings,
-        observability=get_observability(),
+        observability=build_test_observability(),
     )
     app = FastAPI()
     install_test_api_runtime(

@@ -3,7 +3,7 @@ from pathlib import Path
 from pydantic import ValidationError
 import pytest
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 
 
 POISONED_DOTENV = """\
@@ -47,7 +47,7 @@ def test_explicit_test_environment_ignores_dotenv(
     assert settings.clerk_jwks_url is None
 
 
-def test_process_test_environment_makes_cached_settings_ignore_dotenv(
+def test_process_test_environment_makes_settings_ignore_dotenv(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -58,12 +58,7 @@ def test_process_test_environment_makes_cached_settings_ignore_dotenv(
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("CLERK_JWT_KEY", "process-static-key")
     monkeypatch.delenv("CLERK_JWKS_URL", raising=False)
-    get_settings.cache_clear()
-
-    try:
-        settings = get_settings()
-    finally:
-        get_settings.cache_clear()
+    settings = Settings()
 
     assert settings.otel_service_name == "presvo-api"
     assert settings.activation_flow_enabled is False

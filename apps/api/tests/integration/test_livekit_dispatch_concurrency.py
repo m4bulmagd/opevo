@@ -27,16 +27,6 @@ from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.recording_lifecycle_service import RecordingLifecycleService
 
 
-@pytest.fixture(autouse=True)
-def _legacy_normal_call_flow(monkeypatch: pytest.MonkeyPatch):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
 @pytest_asyncio.fixture
 async def livekit_session_factory():
     database_url = os.getenv("TEST_DATABASE_URL")

@@ -1,8 +1,5 @@
 from uuid import UUID
 
-from fastapi import Request
-
-from app.composition.runtime import get_api_runtime
 from app.core.observability import bind_call_id
 from app.providers.storage.base import StorageProvider
 
@@ -30,10 +27,3 @@ class RecordingService:
                 )
         except FileNotFoundError:
             return None
-
-def get_recording_service(
-    request: Request,
-) -> RecordingService:
-    return RecordingService(
-        provider=get_api_runtime(request.app).storage_provider,
-    )

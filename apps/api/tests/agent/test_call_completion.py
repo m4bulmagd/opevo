@@ -12,13 +12,12 @@ from sqlalchemy import select
 from app.core.database import get_session
 from app.composition.lifecycle import RuntimeCleanup
 from app.composition.runtime import ApiRuntime
-from app.core.config import get_settings
+from app.core.config import Settings
 from app.core.dispatch_token import create_dispatch_token
 from tests.dispatch_token_config import (
     TEST_DISPATCH_TOKEN_CONFIG,
     settings_with_test_dispatch_token,
 )
-from app.core.observability import get_observability
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.call_message import CallMessage
@@ -27,6 +26,7 @@ from app.models.recording_egress_operation import RecordingEgressOperation
 from app.schemas.agent_identity import AuthenticatedAgentIdentity
 from app.services.call_lifecycle_service import CallLifecycleService
 from app.services.outbox_service import OutboxService
+from tests.fakes import build_test_observability
 
 
 @dataclass
@@ -125,11 +125,6 @@ def _configure_auth(
     else:
         monkeypatch.setenv("AGENT_DISPATCH_JWT_SECRET", dispatch_secret)
 
-    from app.core.config import get_settings
-
-    get_settings.cache_clear()
-
-
 def _build_completion_app(
     fake_queue,
     *,
@@ -146,11 +141,11 @@ def _build_completion_app(
     app = FastAPI()
     app.include_router(agent_router)
     app.state.runtime = ApiRuntime(
-        settings=settings_with_test_dispatch_token(get_settings()),
+        settings=settings_with_test_dispatch_token(Settings()),
         engine=object(),
         session_factory=object(),
         redis_client=object(),
-        observability=get_observability(),
+        observability=build_test_observability(),
         auth_provider=object(),
         readiness_checks=object(),
         storage_provider=object(),

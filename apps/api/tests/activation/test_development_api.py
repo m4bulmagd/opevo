@@ -43,7 +43,7 @@ async def _api_client(
 ) -> AsyncIterator[tuple[httpx.AsyncClient, async_sessionmaker, dict[str, User]]]:
     from app import main as main_module
     from app.core.auth import build_auth_provider
-    from app.core.observability import get_observability
+    from tests.fakes import build_test_observability
 
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'development-api.db'}"
     engine = create_async_engine(database_url, future=True)
@@ -160,7 +160,7 @@ async def _api_client(
     application = main_module.create_app(configured)
     auth_provider = build_auth_provider(
         settings=configured,
-        observability=get_observability(),
+        observability=build_test_observability(),
     )
     install_test_api_runtime(
         application,

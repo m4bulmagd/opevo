@@ -7,7 +7,7 @@ from arq.connections import RedisSettings
 from arq.worker import Worker
 
 from app.core import logging as app_logging
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 from app.workers import arq_worker
 
 
@@ -156,7 +156,6 @@ def test_cron_construction_supplies_explicit_zero_result_retention(
         importlib.reload(arq_worker)
     finally:
         monkeypatch.setattr(cron_module, "cron", real_cron)
-        get_settings.cache_clear()
         importlib.reload(arq_worker)
 
     by_name = {name: kwargs for name, kwargs in constructed}
@@ -228,9 +227,7 @@ def test_both_worker_classes_share_one_captured_boundary_settings_read(
             environment.setenv("APP_ENV", "test")
             environment.setenv("DATABASE_URL", "sqlite+aiosqlite://")
             environment.setenv("REDIS_URL", "redis://localhost:6379/0")
-            original_get_settings.cache_clear()
             importlib.reload(arq_worker)
-            original_get_settings.cache_clear()
 
 
 class _Redis:

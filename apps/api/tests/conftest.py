@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from opentelemetry import metrics, trace
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Base
@@ -46,15 +47,19 @@ def install_test_api_runtime(
 ):
     from app.composition.lifecycle import RuntimeCleanup
     from app.composition.runtime import ApiRuntime
-    from app.core.config import get_settings
-    from app.core.observability import get_observability
+    from app.core.config import Settings
+    from app.core.observability import Observability
 
     runtime = ApiRuntime(
-        settings=settings or get_settings(),
+        settings=settings or Settings(),
         engine=object(),
         session_factory=object(),
         redis_client=object(),
-        observability=observability or get_observability(),
+        observability=observability
+        or Observability(
+            meter=metrics.get_meter("presvo-tests"),
+            tracer=trace.get_tracer("presvo-tests"),
+        ),
         auth_provider=auth_provider or object(),
         readiness_checks=readiness_checks or object(),
         storage_provider=object(),
@@ -152,15 +157,13 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, clerk_key_material: dict[str, 
         monkeypatch=monkeypatch,
     )
 
-    from app.core.config import Settings, get_settings
+    from app.core.config import Settings
     from app.core.rate_limit import configure_rate_limiter, limiter
 
     previous_limiter_enabled = limiter.enabled
-    get_settings.cache_clear()
     configure_rate_limiter(Settings())
     yield
     limiter.enabled = previous_limiter_enabled
-    get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -168,6 +171,16 @@ def settings():
     from app.core.config import Settings
 
     return Settings()
+
+
+@pytest.fixture
+def observability():
+    from app.core.observability import Observability
+
+    return Observability(
+        meter=metrics.get_meter("presvo-tests"),
+        tracer=trace.get_tracer("presvo-tests"),
+    )
 
 
 @pytest_asyncio.fixture

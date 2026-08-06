@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from app.core.observability import get_observability
 from app.providers.storage.s3 import S3Storage
 from app.providers.storage import s3 as s3_module
+from tests.fakes import build_test_observability
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
@@ -25,25 +25,7 @@ class DeletionInspectingClient:
         self.remove_calls.append((bucket_name, object_key))
 
 
-def test_explicit_storage_construction_does_not_read_global_configuration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def forbidden_global_read() -> None:
-        raise AssertionError("explicit S3 construction read global configuration")
-
-    monkeypatch.setattr(
-        s3_module,
-        "get_settings",
-        forbidden_global_read,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        s3_module,
-        "get_observability",
-        forbidden_global_read,
-        raising=False,
-    )
-
+def test_explicit_storage_construction_preserves_supplied_configuration() -> None:
     storage = S3Storage(
         bucket_name="runtime-recordings",
         endpoint_url="https://storage.example.com",
@@ -71,7 +53,7 @@ async def test_storage_provider_deletes_recording_object() -> None:
         secret_key="minioadmin",
         region="us-east-1",
         client=client,
-        observability=get_observability(),
+        observability=build_test_observability(),
     )
 
     await storage.delete_object(object_key="calls/user/call.mp3")

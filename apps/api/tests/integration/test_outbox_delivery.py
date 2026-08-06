@@ -1166,7 +1166,7 @@ async def test_livekit_dispatch_configuration_errors_are_durable_terminal_failur
     dispatch_kind: str,
     provider_operation: str,
 ) -> None:
-    from app.core.observability import get_observability
+    from tests.fakes import build_test_observability
     from app.providers.livekit_dispatch.livekit import (
         LiveKitDispatchAPIProvider,
         LiveKitDispatchConfigurationError,
@@ -1199,7 +1199,7 @@ async def test_livekit_dispatch_configuration_errors_are_durable_terminal_failur
         livekit_api=SimpleNamespace(
             agent_dispatch=ConfigurationFailingDispatchService()
         ),
-        observability=get_observability(),
+        observability=build_test_observability(),
     )
     if provider_operation == "create_dispatch":
 

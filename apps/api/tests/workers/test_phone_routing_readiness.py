@@ -17,18 +17,6 @@ from app.services.outbox_service import OutboxService
 from app.workers.outbox.failures import OutboxDeliveryError
 
 
-@pytest.fixture(autouse=True)
-def _activation_flow_defaults_off_for_legacy_routing_tests(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ACTIVATION_FLOW_ENABLED", "false")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("period_start", "period_end", "balance"),

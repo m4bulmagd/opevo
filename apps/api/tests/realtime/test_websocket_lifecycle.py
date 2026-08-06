@@ -128,7 +128,7 @@ def ws_app_factory(
     conflicts with Starlette's TestClient.
     """
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-    from app.core.config import get_settings
+    from app.core.config import Settings
     from app.main import create_app
 
     apps: list[object] = []
@@ -138,7 +138,7 @@ def ws_app_factory(
         auth_provider: AuthProvider | None = None,
         websocket_manager: WebSocketManager | None = None,
     ) -> tuple[object, WebSocketManager]:
-        configured_settings = get_settings().model_copy(
+        configured_settings = Settings().model_copy(
             update={"realtime_enabled": True}
         )
         app = create_app(configured_settings)
@@ -178,10 +178,10 @@ def ws_app(ws_app_factory) -> tuple[object, WebSocketManager]:
 
 
 def test_disabled_app_does_not_register_or_accept_websocket(settings_env) -> None:
-    from app.core.config import get_settings
+    from app.core.config import Settings
     from app.main import create_app
 
-    configured_settings = get_settings().model_copy(
+    configured_settings = Settings().model_copy(
         update={"realtime_enabled": False}
     )
     app = create_app(configured_settings)
@@ -204,7 +204,7 @@ def test_disabled_app_lifespan_does_not_construct_realtime_redis(
     settings_env,
 ) -> None:
     from app.composition.api import build_api_runtime
-    from app.core.config import get_settings
+    from app.core.config import Settings
     from app import main as main_module
 
     class ForbiddenRealtimeDependency:
@@ -235,7 +235,7 @@ def test_disabled_app_lifespan_does_not_construct_realtime_redis(
         )
 
     app = main_module.create_app(
-        get_settings().model_copy(update={"realtime_enabled": False}),
+        Settings().model_copy(update={"realtime_enabled": False}),
         runtime_builder=runtime_builder,
     )
 
