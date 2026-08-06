@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 import httpx
 
+from app.core.logging import report_safe_exception
 from app.core.observability import Observability, instrument_provider
 from app.core.provider_failures import ProviderFailure, provider_failure_from_http_status
 from app.providers.summaries.base import StructuredSummary, SummaryProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 class _MalformedGeminiResponse(Exception):
@@ -77,7 +82,25 @@ class GeminiSummaryProvider(SummaryProvider):
                 return
             close_task = asyncio.create_task(self._close_owned_client(client))
             self._close_task = close_task
+            close_task.add_done_callback(self._observe_close_task)
         await asyncio.shield(close_task)
+
+    @staticmethod
+    def _observe_close_task(task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is None:
+            return
+        report_safe_exception(
+            logger,
+            event="gemini_client_close_failed",
+            operation="close_gemini_client",
+            error=error,
+            status="failed",
+            provider="gemini",
+            level=logging.WARNING,
+        )
 
     async def _close_owned_client(self, client) -> None:
         async_client = getattr(client, "aio", None)

@@ -1,6 +1,8 @@
 import asyncio
 import builtins
 import json
+import logging
+import traceback
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
 
@@ -553,6 +555,106 @@ async def test_gemini_cancelled_waiter_does_not_cancel_owned_cleanup_and_second_
     assert finished.is_set()
     assert client.aio.close_calls == 1
     assert client.aio.was_cancelled is False
+
+
+@pytest.mark.anyio
+async def test_gemini_failed_close_after_sole_waiter_cancellation_is_safely_observed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    close_error = RuntimeError("GEMINI_CLOSE_PRIVATE_SENTINEL")
+    loop_contexts: list[dict[str, object]] = []
+
+    class AsyncClient:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            started.set()
+            try:
+                await release.wait()
+                raise close_error
+            finally:
+                finished.set()
+
+    client = SimpleNamespace(aio=AsyncClient())
+    provider = GeminiSummaryProvider(
+        api_key="test-key",
+        model="gemini-test",
+        observability=object(),
+    )
+    provider.client = client
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: loop_contexts.append(context))
+    try:
+        with caplog.at_level(logging.WARNING):
+            first = asyncio.create_task(provider.aclose())
+            await asyncio.wait_for(started.wait(), timeout=0.5)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+
+            release.set()
+            await asyncio.wait_for(finished.wait(), timeout=0.5)
+            await asyncio.sleep(0)
+
+            with pytest.raises(RuntimeError) as caught:
+                await provider.aclose()
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    formatted_diagnostics = caplog.text + "\n".join(
+        "".join(traceback.format_exception(error))
+        if isinstance((error := context.get("exception")), BaseException)
+        else repr(context)
+        for context in loop_contexts
+    )
+    assert caught.value is close_error
+    assert client.aio.close_calls == 1
+    assert loop_contexts == []
+    assert "event=gemini_client_close_failed" in caplog.text
+    assert "GEMINI_CLOSE_PRIVATE_SENTINEL" not in formatted_diagnostics
+
+
+@pytest.mark.anyio
+async def test_gemini_cancelled_close_task_is_observed_without_callback_failure() -> None:
+    loop_contexts: list[dict[str, object]] = []
+
+    class AsyncClient:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            raise asyncio.CancelledError("owned-close-cancelled")
+
+    client = SimpleNamespace(aio=AsyncClient())
+    provider = GeminiSummaryProvider(
+        api_key="test-key",
+        model="gemini-test",
+        observability=object(),
+    )
+    provider.client = client
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: loop_contexts.append(context))
+    try:
+        with pytest.raises(asyncio.CancelledError) as first:
+            await provider.aclose()
+        await asyncio.sleep(0)
+        with pytest.raises(asyncio.CancelledError) as second:
+            await provider.aclose()
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert isinstance(first.value, asyncio.CancelledError)
+    assert isinstance(second.value, asyncio.CancelledError)
+    assert client.aio.close_calls == 1
+    assert loop_contexts == []
 
 
 @pytest.mark.anyio

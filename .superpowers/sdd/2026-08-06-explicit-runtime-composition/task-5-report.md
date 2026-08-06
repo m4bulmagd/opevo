@@ -299,3 +299,125 @@ The forbidden fallback sweep and `git diff --check` both exit 0.
   generated contract, or protected CI/deployment path changed.
 
 No open Fix Round 1 concern.
+
+## Fix round 2/5
+
+### Findings addressed
+
+- Added immediate, sanitized observation of the retained Gemini close task.
+  Ordinary close failures are retrieved by a done callback and reported through
+  `report_safe_exception` without the provider message. A cancelled close task
+  is detected before reading its exception, so the callback cannot itself fail
+  on `CancelledError`.
+- Kept the failed Gemini close task retained and joinable. Cancelling the sole
+  waiter does not cancel the SDK transport close; a later `aclose()` performs no
+  retry, joins the same completed task, and raises the exact original failure.
+- Replaced cancellation booleans in the operation-owned resource scope with the
+  actual cancellation instances. Precedence is explicit: body-originated
+  cancellation, then the first outer cancellation caught while shielding
+  cleanup, then cleanup-task cancellation.
+- Re-raised the selected cancellation with its original identity and arguments,
+  a cleared traceback, and suppressed exception context. Cancellation arriving
+  during cleanup still waits for every resource to close in reverse order and
+  overrides an ordinary body failure only after cleanup completes.
+
+### RED and mutation evidence
+
+The new focused tests initially produced `5 failed, 55 passed`:
+
+- a Gemini close failure completing after sole-waiter cancellation had no safe
+  observation event;
+- a body cancellation and a closer-originated cancellation were both replaced
+  with fresh, argument-less `CancelledError` instances;
+- outer cancellation during cleanup lost its message; and
+- cancelled-task callback safety was not yet exercised because no observer was
+  registered.
+
+After the implementation and explicit body-versus-closer and repeated outer
+cancellation coverage, the restored focused suite passed `61 passed in 4.18s`.
+
+Deliberate mutations proved ownership of each new behavior:
+
+- Removing the Gemini done callback failed the sanitized observation assertion
+  (`1 failed`).
+- Removing the callback's `task.cancelled()` guard produced an event-loop
+  callback exception and failed the no-loop-diagnostics assertion (`1 failed`).
+- Replacing first-cancellation retention with latest-cancellation retention
+  changed the observed arguments to the second cancellation and failed
+  (`1 failed`).
+- Removing traceback clearing and `from None` exposed the ordinary body sentinel
+  in `traceback.format_exception` and failed (`1 failed`).
+- Giving cleanup-task cancellation precedence over body cancellation replaced
+  the body cancellation identity and failed (`1 failed`).
+
+Every mutation was restored before the verification gates.
+
+### Verification
+
+Focused provider/service gate:
+
+```text
+uv run --frozen --no-sync python -m pytest -q \
+  tests/providers tests/billing/test_stripe_webhooks.py \
+  tests/services/test_livekit_recording_service.py \
+  tests/services/test_summary_service.py \
+  tests/services/test_safe_service_exceptions.py
+# 536 passed in 39.15s
+```
+
+Focused worker/lifecycle/composition gate:
+
+```text
+uv run --frozen --no-sync python -m pytest -q \
+  tests/workers/test_owned_resources.py \
+  tests/workers/test_livekit_dispatch_outbox.py \
+  tests/workers/test_forwarding_verification_dispatch_outbox.py \
+  tests/workers/test_post_call_outbox_handlers.py \
+  tests/workers/test_recording_reconciliation.py \
+  tests/composition/test_api_composition.py \
+  tests/integration/test_outbox_delivery.py
+# 190 passed, 52 skipped in 22.13s
+```
+
+Final complete API phase gate:
+
+```text
+uv run --frozen --no-sync ruff check app tests
+# All checks passed!
+
+uv run --frozen --no-sync mypy app
+# Success: no issues found in 189 source files
+
+uv run --frozen --no-sync python -m pytest -q \
+  --cov=app --cov-branch --cov-report=term-missing
+# 2822 passed, 133 skipped, 1 warning in 326.51s
+# TOTAL 12872 statements, 3364 branches, 87.97% combined coverage
+```
+
+Coverage remains above the recorded `87.70%` baseline. The sole warning is the
+pre-existing Starlette/httpx deprecation warning. The forbidden fallback sweep
+returned no matches, and `git diff --check` exited successfully.
+
+### Fix-round self-review
+
+- Calling `task.exception()` in the done callback marks the retained Gemini task
+  observed but does not consume its result: later awaits still raise the same
+  exception object. The task is published before callback registration and
+  before shielding, so concurrent callers always join one close attempt.
+- The observer checks task cancellation before reading the exception and reports
+  ordinary failures only through safe structured fields. Neither captured loop
+  diagnostics nor logs contain the raw close sentinel.
+- The cleanup scope retains and joins one cleanup task through repeated outer
+  cancellation. It keeps the first outer cancellation instance; a second
+  cancellation cannot overwrite its identity or message.
+- A cancellation originating from the cleanup task is collected from
+  `cleanup_task.result()` instead of the argument-losing shield exception. Body
+  cancellation wins over it by identity. Outer cancellation wins over ordinary
+  body and cleanup errors only after all reverse-order cleanup finishes.
+- Clearing the selected cancellation's old traceback and raising it `from None`
+  keeps formatted diagnostics free of body and cleanup exception messages while
+  preserving the cancellation object and arguments.
+- No Task 6–8 worker-runtime composition, dependency, lockfile, migration,
+  schema, frontend, generated contract, or protected CI/deployment path changed.
+
+No open Fix Round 2 concern.

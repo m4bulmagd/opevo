@@ -29,30 +29,32 @@ async def operation_owned_resources(
         body_error = error
 
     cleanup_task = asyncio.create_task(_close_all(resources, operation=operation))
-    cancelled_during_cleanup = False
+    outer_cancellation: asyncio.CancelledError | None = None
     while not cleanup_task.done():
         try:
             await asyncio.shield(cleanup_task)
-        except asyncio.CancelledError:
-            cancelled_during_cleanup = True
+        except asyncio.CancelledError as error:
+            if not cleanup_task.cancelled() and outer_cancellation is None:
+                outer_cancellation = error
         except Exception:
             pass
 
     cleanup_error: Exception | None = None
-    cleanup_cancelled = False
+    cleanup_cancellation: asyncio.CancelledError | None = None
     try:
         cleanup_task.result()
-    except asyncio.CancelledError:
-        cleanup_cancelled = True
+    except asyncio.CancelledError as error:
+        cleanup_cancellation = error
     except Exception as error:
         cleanup_error = error
 
-    if (
-        isinstance(body_error, asyncio.CancelledError)
-        or cancelled_during_cleanup
-        or cleanup_cancelled
-    ):
-        raise asyncio.CancelledError
+    body_cancellation = (
+        body_error if isinstance(body_error, asyncio.CancelledError) else None
+    )
+    cancellation = body_cancellation or outer_cancellation or cleanup_cancellation
+    if cancellation is not None:
+        cancellation.__traceback__ = None
+        raise cancellation from None
     if body_error is not None:
         raise body_error
     if cleanup_error is not None:

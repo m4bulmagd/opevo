@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import traceback
 
 import pytest
 
@@ -112,15 +113,44 @@ async def test_cleanup_error_never_replaces_existing_body_error(
 
 
 @pytest.mark.anyio
-async def test_body_cancellation_stays_cancellation_after_cleanup() -> None:
+async def test_body_cancellation_preserves_identity_after_cleanup() -> None:
     order: list[str] = []
+    cancellation = asyncio.CancelledError("body-cancelled")
+    close_error = RuntimeError("CLEANUP_PRIVATE_SENTINEL")
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError) as caught:
         async with operation_owned_resources(operation="test_body_cancel") as own:
-            own(_Resource("only", order))
-            raise asyncio.CancelledError
+            own(_Resource("only", order, error=close_error))
+            raise cancellation
 
     assert order == ["only:start", "only:end"]
+    assert caught.value is cancellation
+    assert caught.value.args == ("body-cancelled",)
+    assert "CLEANUP_PRIVATE_SENTINEL" not in "".join(
+        traceback.format_exception(caught.value)
+    )
+
+
+@pytest.mark.anyio
+async def test_body_cancellation_precedes_closer_cancellation() -> None:
+    order: list[str] = []
+    body_cancellation = asyncio.CancelledError("body-cancelled-first")
+    cleanup_cancellation = asyncio.CancelledError("cleanup-cancelled-second")
+
+    class CancelledResource:
+        async def aclose(self) -> None:
+            order.append("cancelled:start")
+            raise cleanup_cancellation
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        async with operation_owned_resources(operation="test_cancel_precedence") as own:
+            own(_Resource("first", order))
+            own(CancelledResource())
+            raise body_cancellation
+
+    assert caught.value is body_cancellation
+    assert caught.value.args == ("body-cancelled-first",)
+    assert order == ["cancelled:start", "first:start", "first:end"]
 
 
 @pytest.mark.anyio
@@ -129,17 +159,25 @@ async def test_cancelled_closer_is_not_logged_and_remaining_resources_close(
 ) -> None:
     order: list[str] = []
 
+    cancellation = asyncio.CancelledError("cleanup-cancelled")
+
     class CancelledResource:
         async def aclose(self) -> None:
             order.append("cancelled:start")
-            raise asyncio.CancelledError
+            raise cancellation
 
-    with caplog.at_level(logging.WARNING), pytest.raises(asyncio.CancelledError):
+    with caplog.at_level(logging.WARNING), pytest.raises(asyncio.CancelledError) as caught:
         async with operation_owned_resources(operation="test_cancelled_closer") as own:
             own(_Resource("first", order))
             own(CancelledResource())
+            raise ValueError("BODY_PRIVATE_SENTINEL")
 
     assert order == ["cancelled:start", "first:start", "first:end"]
+    assert caught.value is cancellation
+    assert caught.value.args == ("cleanup-cancelled",)
+    assert "BODY_PRIVATE_SENTINEL" not in "".join(
+        traceback.format_exception(caught.value)
+    )
     assert "operation_resource_close_failed" not in caplog.text
 
 
@@ -159,11 +197,14 @@ async def test_cancellation_during_cleanup_waits_for_all_reverse_order_cleanup(
     task = asyncio.create_task(run_scope())
     await asyncio.wait_for(started.wait(), timeout=0.5)
     with caplog.at_level(logging.WARNING):
-        task.cancel()
+        task.cancel("first-cleanup-cancellation")
+        await asyncio.sleep(0)
+        assert not task.done()
+        task.cancel("second-cleanup-cancellation")
         await asyncio.sleep(0)
         assert not task.done()
         release.set()
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError) as caught:
             await task
 
     assert order == [
@@ -172,6 +213,7 @@ async def test_cancellation_during_cleanup_waits_for_all_reverse_order_cleanup(
         "first:start",
         "first:end",
     ]
+    assert caught.value.args == ("first-cleanup-cancellation",)
     assert "operation_resource_close_failed" not in caplog.text
 
 
@@ -184,28 +226,35 @@ async def test_cancellation_during_failing_cleanup_overrides_body_error(
     release = asyncio.Event()
     close_error = RuntimeError("CLEANUP_SECRET_SENTINEL")
 
+    cancellation_seen_by_scope: asyncio.CancelledError | None = None
+
     async def run_scope() -> None:
-        async with operation_owned_resources(operation="test_error_cancel") as own:
-            own(_Resource("first", order))
-            own(
-                _Resource(
-                    "failing",
-                    order,
-                    started=started,
-                    release=release,
-                    error=close_error,
+        nonlocal cancellation_seen_by_scope
+        try:
+            async with operation_owned_resources(operation="test_error_cancel") as own:
+                own(_Resource("first", order))
+                own(
+                    _Resource(
+                        "failing",
+                        order,
+                        started=started,
+                        release=release,
+                        error=close_error,
+                    )
                 )
-            )
-            raise ValueError("BODY_SECRET_SENTINEL")
+                raise ValueError("BODY_SECRET_SENTINEL")
+        except asyncio.CancelledError as error:
+            cancellation_seen_by_scope = error
+            raise
 
     task = asyncio.create_task(run_scope())
     await asyncio.wait_for(started.wait(), timeout=0.5)
     with caplog.at_level(logging.WARNING):
-        task.cancel()
+        task.cancel("outer-cleanup-cancelled")
         await asyncio.sleep(0)
         assert not task.done()
         release.set()
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError) as caught:
             await task
 
     assert order == [
@@ -217,3 +266,8 @@ async def test_cancellation_during_failing_cleanup_overrides_body_error(
     assert "event=operation_resource_close_failed" in caplog.text
     assert "BODY_SECRET_SENTINEL" not in caplog.text
     assert "CLEANUP_SECRET_SENTINEL" not in caplog.text
+    assert caught.value is cancellation_seen_by_scope
+    assert caught.value.args == ("outer-cleanup-cancelled",)
+    formatted = "".join(traceback.format_exception(caught.value))
+    assert "BODY_SECRET_SENTINEL" not in formatted
+    assert "CLEANUP_SECRET_SENTINEL" not in formatted
