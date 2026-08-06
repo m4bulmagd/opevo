@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from app.core.config import Settings
 from app.models import Base
 from app.models.billing_checkout_attempt import BillingCheckoutAttempt
 from app.models.subscription import Subscription
@@ -165,7 +166,7 @@ async def test_stale_identity_map_cannot_regress_locked_subscription(
             current.last_stripe_event_created_at = newer_watermark
             await newer_session.commit()
 
-        service = BillingService(stale_session)
+        service = BillingService(stale_session, settings=Settings())
         await service._handle_subscription_event(
             {
                 "id": "sub_concurrent_ordering",

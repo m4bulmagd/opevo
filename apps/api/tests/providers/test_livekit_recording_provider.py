@@ -231,7 +231,7 @@ def build_provider(
         access_key="key",
         secret_key="secret",
         region="us-east-1",
-        observability=observability,
+        observability=observability or _Telemetry(),
     )
 
 
@@ -726,6 +726,7 @@ async def test_start_room_recording_uses_aws_native_s3_shape() -> None:
         access_key="aws-key",
         secret_key="aws-secret",
         region="eu-west-3",
+        observability=_Telemetry(),
     )
 
     await provider.start_room_recording(

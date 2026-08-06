@@ -62,6 +62,7 @@ async def deliver_account_deactivation(
         lambda: datetime.now(UTC),
     )
     telemetry = ctx.get("observability") or get_observability()
+    settings = get_settings()
 
     operation = await _begin_attempt(
         session_factory,
@@ -77,6 +78,7 @@ async def deliver_account_deactivation(
         operation=operation,
         now_provider=now_provider,
         telemetry=telemetry,
+        settings=settings,
     )
     await _cancel_subscription(
         ctx,
@@ -84,6 +86,7 @@ async def deliver_account_deactivation(
         operation=operation,
         now_provider=now_provider,
         telemetry=telemetry,
+        settings=settings,
     )
     await _drain_active_call(
         session_factory=session_factory,
@@ -97,6 +100,7 @@ async def deliver_account_deactivation(
         operation=operation,
         now_provider=now_provider,
         telemetry=telemetry,
+        settings=settings,
     )
     completed_at = await _reset_activation(
         session_factory=session_factory,
@@ -176,6 +180,7 @@ async def _disable_routing(
     operation: _OperationSnapshot,
     now_provider: Callable[[], datetime],
     telemetry,
+    settings,
 ) -> None:
     provider_number_id = await _pending_private_identity(
         session_factory,
@@ -188,7 +193,10 @@ async def _disable_routing(
     if provider_number_id is not None:
         provider = ctx.get("telephony_provider")
         if provider is None:
-            provider = create_telephony_provider(get_settings())
+            provider = create_telephony_provider(
+                settings,
+                observability=telemetry,
+            )
         try:
             await provider.disable_number(provider_number_id=provider_number_id)
         except ProviderFailure as error:
@@ -222,6 +230,7 @@ async def _cancel_subscription(
     operation: _OperationSnapshot,
     now_provider: Callable[[], datetime],
     telemetry,
+    settings,
 ) -> None:
     async with session_factory() as session:
         stored = await AccountDeactivationRepository(session).get_by_id_for_update(
@@ -315,7 +324,7 @@ async def _cancel_subscription(
 
     provider = ctx.get("subscription_provider")
     if provider is None:
-        provider = build_subscription_provider(get_settings())
+        provider = build_subscription_provider(settings)
     try:
         await provider.cancel_immediately(stored_subscription_id)
     except ProviderFailure as error:
@@ -426,6 +435,7 @@ async def _release_number(
     operation: _OperationSnapshot,
     now_provider: Callable[[], datetime],
     telemetry,
+    settings,
 ) -> None:
     if await _has_active_call(
         session_factory,
@@ -448,7 +458,10 @@ async def _release_number(
     if provider_number_id is not None:
         provider = ctx.get("telephony_provider")
         if provider is None:
-            provider = create_telephony_provider(get_settings())
+            provider = create_telephony_provider(
+                settings,
+                observability=telemetry,
+            )
         try:
             await provider.release_number(provider_number_id=provider_number_id)
         except ProviderFailure as error:

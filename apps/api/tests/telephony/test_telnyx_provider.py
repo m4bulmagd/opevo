@@ -15,7 +15,7 @@ from app.providers.telephony.base import (
     TelephonyProvisioningPending,
     TelephonyProvisioningReviewRequired,
 )
-from app.providers.telephony.telnyx import TelephonyTelnyx
+from app.providers.telephony.telnyx import TelephonyTelnyx as _TelephonyTelnyx
 from app.services.telephony_service import TelephonyService
 
 
@@ -32,6 +32,15 @@ class _ProviderTelemetry:
             raise
         else:
             self.calls.append((provider, operation, "success"))
+
+
+def TelephonyTelnyx(**kwargs) -> _TelephonyTelnyx:
+    kwargs.setdefault("api_key", "test-key")
+    kwargs.setdefault("active_connection_id", "active")
+    kwargs.setdefault("disabled_connection_id", "disabled")
+    kwargs.setdefault("ordering_enabled", False)
+    kwargs.setdefault("observability", _ProviderTelemetry())
+    return _TelephonyTelnyx(**kwargs)
 
 
 class _TelnyxReleaseHTTPClient:

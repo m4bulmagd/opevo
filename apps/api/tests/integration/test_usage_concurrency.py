@@ -9,6 +9,7 @@ import pytest_asyncio
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core.config import Settings
 from app.models import Base
 from app.models.call import Call
 from app.models.subscription import Subscription
@@ -600,7 +601,7 @@ async def test_billing_acquires_invoice_lock_before_user_scope(
             billing_pid = await billing_session.scalar(
                 select(func.pg_backend_pid())
             )
-            billing_service = BillingService(billing_session)
+            billing_service = BillingService(billing_session, settings=Settings())
             billing_task = asyncio.create_task(
                 billing_service._handle_invoice_paid(
                     event_object,

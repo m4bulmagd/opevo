@@ -435,7 +435,8 @@ async def test_telnyx_api_error_persists_failure_and_returns_secret_free_fallbac
                         session,
                         provider=TelnyxCarrierLookupProvider(
                             api_key="test-key",
-                            number_lookup_resource=APIErrorNumberLookupResource,
+                            observability=object(),
+                            http_client=APIErrorNumberLookupResource,
                         ),
                     )
                     return await service.lookup_for_user(user_id)

@@ -6,6 +6,7 @@ from uuid import UUID
 from app.core.database import get_session_factory
 from app.core.config import get_settings
 from app.core.logging import report_safe_exception
+from app.core.observability import get_observability
 from app.core.provider_failures import ProviderFailure
 from app.core.redaction import safe_log_label
 from app.providers.telephony.base import (
@@ -326,6 +327,8 @@ async def provision_phone_number(
         raise ValueError("Invalid lifecycle generation")
 
     session_factory = ctx.get("session_factory") or get_session_factory()
+    settings = get_settings()
+    observability = get_observability()
 
     async with session_factory() as session:
         user_repo = UserRepository(session)
@@ -354,7 +357,10 @@ async def provision_phone_number(
 
         provider = ctx.get("telephony_provider")
         if provider is None:
-            provider = create_telephony_provider(get_settings())
+            provider = create_telephony_provider(
+                settings,
+                observability=observability,
+            )
         telephony_service = TelephonyService(session, provider=provider)
         recovery_lifecycle_error: (
             AccountStateBlockedError | AccountLifecycleGenerationMismatchError | None

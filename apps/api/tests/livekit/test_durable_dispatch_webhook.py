@@ -339,7 +339,6 @@ def _forbid_provider_and_storage_io(monkeypatch: pytest.MonkeyPatch) -> dict:
             raise AssertionError("egress webhook constructed storage provider")
 
     from app.providers.storage import s3 as storage_module
-    from app.services import livekit_recording_service as recording_service_module
     from livekit import api as livekit_api_module
 
     monkeypatch.setattr(
@@ -351,11 +350,6 @@ def _forbid_provider_and_storage_io(monkeypatch: pytest.MonkeyPatch) -> dict:
         storage_module,
         "S3Storage",
         ForbiddenStorageProvider,
-    )
-    monkeypatch.setattr(
-        recording_service_module,
-        "LiveKitRecordingProvider",
-        ForbiddenRecordingService,
     )
     monkeypatch.setattr(
         livekit_api_module,

@@ -5,7 +5,7 @@ from typing import Any
 
 import telnyx
 
-from app.core.config import get_settings
+from app.core.observability import Observability
 from app.core.provider_failures import (
     ProviderFailure,
 )
@@ -29,14 +29,25 @@ class TelnyxCarrierLookupProvider:
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        number_lookup_resource=telnyx.NumberLookup,
+        api_key: str | None,
+        observability: Observability,
+        http_client=None,
     ) -> None:
-        self.api_key = api_key or get_settings().telnyx_api_key
-        self.number_lookup_resource = number_lookup_resource
+        self.api_key = api_key
+        self.observability = observability
+        self.number_lookup_resource = (
+            telnyx.NumberLookup if http_client is None else http_client
+        )
 
     async def lookup(self, e164: str) -> CarrierLookupResult:
         normalized = normalize_french_number(e164)
+        if not self.api_key:
+            raise ProviderFailure(
+                provider="telnyx",
+                operation="lookup_carrier",
+                disposition="terminal",
+                error_class="authentication",
+            )
         try:
             response = await asyncio.to_thread(
                 self.number_lookup_resource.retrieve,

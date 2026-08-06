@@ -6,7 +6,7 @@ from arq.connections import ArqRedis
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
+from app.core.config import Settings
 from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
 )
@@ -70,10 +70,12 @@ class BillingService:
     def __init__(
         self,
         session: AsyncSession,
+        *,
+        settings: Settings,
         arq_pool: ArqRedis | None = None,
     ) -> None:
         self.session = session
-        self.settings = get_settings()
+        self.settings = settings
         self.user_repository = UserRepository(session)
         self.account_deactivation_repository = AccountDeactivationRepository(session)
         self.subscription_repository = SubscriptionRepository(session)

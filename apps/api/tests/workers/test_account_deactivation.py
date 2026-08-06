@@ -116,6 +116,10 @@ class RecordingObservability:
         self.attention: list[tuple[str, str, str]] = []
         self.completions: list[tuple[str, float]] = []
 
+    @asynccontextmanager
+    async def provider_operation(self, *_args, **_kwargs):
+        yield
+
     def record_account_deactivation_result(
         self,
         trigger: str,
@@ -481,7 +485,10 @@ async def test_exact_telnyx_disable_404_continues_release_and_reset(
     phone_number_resource.return_value = phone_number
     telephony_provider = TelephonyTelnyx(
         api_key="KEY",
+        active_connection_id="active",
         disabled_connection_id="disabled",
+        ordering_enabled=False,
+        observability=RecordingObservability(),
         phone_number_resource=phone_number_resource,
     )
     tracking_factory = TrackingSessionFactory(deactivation_session_factory)

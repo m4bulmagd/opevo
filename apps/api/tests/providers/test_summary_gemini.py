@@ -10,7 +10,7 @@ from google.genai import errors as genai_errors
 
 from app.core.provider_failures import ProviderFailure
 from app.providers.summaries.gemini import (
-    GeminiSummaryProvider,
+    GeminiSummaryProvider as _GeminiSummaryProvider,
     _MalformedGeminiResponse,
 )
 
@@ -28,6 +28,23 @@ class _Telemetry:
             raise
         else:
             self.calls.append((provider, operation, "success"))
+
+
+class GeminiSummaryProvider(_GeminiSummaryProvider):
+    def __init__(
+        self,
+        *,
+        api_key: str | None = "test-key",
+        model: str = "gemini-test",
+        observability=None,
+        client=None,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            observability=observability or _Telemetry(),
+            client=client,
+        )
 
 
 def test_extract_json_accepts_markdown_fenced_payload() -> None:
@@ -403,3 +420,48 @@ async def test_gemini_propagates_cancellation_unchanged() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await provider.generate_summary([{"speaker": "CALLER", "text": "Hello"}])
+
+
+@pytest.mark.anyio
+async def test_gemini_closes_an_internally_created_client_once_concurrently() -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    client = Client()
+    provider = GeminiSummaryProvider(
+        api_key="test-key",
+        model="gemini-test",
+        observability=object(),
+    )
+    provider.client = client
+
+    await asyncio.gather(provider.aclose(), provider.aclose())
+    await provider.aclose()
+
+    assert client.close_calls == 1
+
+
+@pytest.mark.anyio
+async def test_gemini_never_closes_an_injected_client() -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    client = Client()
+    provider = GeminiSummaryProvider(
+        api_key=None,
+        model="gemini-test",
+        observability=object(),
+        client=client,
+    )
+
+    await provider.aclose()
+
+    assert client.close_calls == 0

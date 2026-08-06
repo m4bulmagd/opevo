@@ -363,6 +363,53 @@ async def test_build_api_runtime_unwinds_every_open_resource_on_late_failure(
 
 
 @pytest.mark.anyio
+async def test_recording_factory_can_register_transport_before_later_failure(
+    settings,
+) -> None:
+    from app.composition.api import build_api_runtime
+
+    configured_settings = settings.model_copy(
+        update={
+            "app_env": "test",
+            "realtime_enabled": False,
+            "livekit_url": "wss://livekit.example.com",
+            "livekit_api_key": "livekit-key",
+            "livekit_api_secret": "livekit-secret",
+        }
+    )
+    closed_resources: list[str] = []
+    recording_transport = _OwnedResource("recording_transport", closed_resources)
+
+    def fail_after_transport(
+        *, settings, observability, register_owned_resource
+    ) -> object:
+        del settings, observability
+        register_owned_resource(recording_transport)
+        raise RuntimeError("recording provider construction failed")
+
+    with pytest.raises(RuntimeError, match="recording provider construction failed"):
+        await build_api_runtime(
+            configured_settings,
+            engine_factory=lambda _url: _Engine("engine", closed_resources),
+            redis_factory=lambda _url: _OwnedResource("redis", closed_resources),
+            observability_factory=lambda **_kwargs: _OwnedResource(
+                "observability", closed_resources
+            ),
+            auth_factory=lambda **_kwargs: _OwnedResource("auth", closed_resources),
+            readiness_factory=lambda **_kwargs: object(),
+            storage_factory=lambda **_kwargs: _OwnedResource(
+                "storage", closed_resources
+            ),
+            realtime_service_factory=_forbidden_factory("realtime service"),
+            webhook_receiver_factory=lambda **_kwargs: object(),
+            recording_service_factory=fail_after_transport,
+        )
+
+    assert recording_transport.close_calls == 1
+    assert closed_resources[0] == "recording_transport"
+
+
+@pytest.mark.anyio
 async def test_runtime_close_attempts_every_resource_and_reports_close_failure(
     settings,
 ) -> None:

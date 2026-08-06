@@ -20,6 +20,7 @@ from app.core.observability import (
 from app.core.redis import RedisEventBus, create_arq_pool
 from app.core.runtime_validation import validate_api_runtime
 from app.providers.storage.base import StorageProvider
+from app.providers.livekit_recording.livekit import LiveKitRecordingProvider
 from app.providers.storage.s3 import S3Storage
 from app.routers.readiness import ReadinessChecks
 from app.services.livekit_recording_service import LiveKitRecordingService
@@ -63,10 +64,29 @@ def _create_livekit_webhook_receiver(
 
 
 def _create_livekit_recording_service(
-    *, settings: Settings, observability: Observability
+    *,
+    settings: Settings,
+    observability: Observability,
+    register_owned_resource: Callable[[object], None],
 ) -> LiveKitRecordingService:
-    del settings, observability
-    return LiveKitRecordingService()
+    from livekit import api as livekit_api_module
+
+    livekit_api = livekit_api_module.LiveKitAPI(
+        url=settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+    )
+    register_owned_resource(livekit_api)
+    provider = LiveKitRecordingProvider(
+        egress_client=livekit_api.egress,
+        bucket_name=settings.storage_bucket_name,
+        endpoint_url=settings.s3_endpoint_url or "http://minio:9000",
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        region=settings.s3_region,
+        observability=observability,
+    )
+    return LiveKitRecordingService(provider)
 
 
 async def _close_resource(
@@ -231,9 +251,19 @@ async def build_api_runtime(
                 settings=settings,
                 observability=observability,
             )
+
+            def register_recording_resource(resource: object) -> None:
+                stack.push_async_callback(
+                    _close_resource,
+                    resource,
+                    event="livekit_recording_resource_close_failed",
+                    operation="close_livekit_recording_resource",
+                )
+
             livekit_recording_service = recording_service_factory(
                 settings=settings,
                 observability=observability,
+                register_owned_resource=register_recording_resource,
             )
 
         return ApiRuntime(

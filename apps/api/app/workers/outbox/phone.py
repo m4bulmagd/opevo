@@ -5,6 +5,7 @@ from uuid import UUID
 
 from app.core.config import get_settings
 from app.core.database import get_session_factory
+from app.core.observability import get_observability
 from app.core.provider_failures import ProviderFailure
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
@@ -227,6 +228,8 @@ async def deliver_phone_routing(
         else None
     )
     session_factory = ctx.get("session_factory") or get_session_factory()
+    settings = get_settings()
+    observability = get_observability()
     if lifecycle_generation is not None:
         await _require_current_worker_account(
             session_factory,
@@ -235,12 +238,20 @@ async def deliver_phone_routing(
         )
     provider = ctx.get("telephony_provider")
     if provider is None:
-        provider = create_telephony_provider(get_settings())
+        provider = create_telephony_provider(
+            settings,
+            observability=observability,
+        )
     routing_target = event.routing_target_provider_number_id
 
     try:
         async with session_factory() as session:
-            snapshot = await _routing_snapshot(session, user_id, event=event)
+            snapshot = await _routing_snapshot(
+                session,
+                user_id,
+                event=event,
+                activation_flow_enabled=settings.activation_flow_enabled,
+            )
             await session.commit()
     except OutboxDeliveryError:
         if routing_target is not None:
@@ -288,7 +299,12 @@ async def deliver_phone_routing(
             reconciled_connection_name = "app-disabled"
         else:
             async with session_factory() as session:
-                snapshot = await _routing_snapshot(session, user_id, event=event)
+                snapshot = await _routing_snapshot(
+                    session,
+                    user_id,
+                    event=event,
+                    activation_flow_enabled=settings.activation_flow_enabled,
+                )
                 await session.commit()
 
     if snapshot is None:
@@ -343,7 +359,12 @@ async def deliver_phone_routing(
 
     try:
         async with session_factory() as session:
-            current = await _routing_snapshot(session, user_id, event=event)
+            current = await _routing_snapshot(
+                session,
+                user_id,
+                event=event,
+                activation_flow_enabled=settings.activation_flow_enabled,
+            )
             stable_projection = bool(
                 current is not None
                 and current.phone_number.id == snapshot.phone_number.id
@@ -366,7 +387,7 @@ async def deliver_phone_routing(
                     agent_config=current.agent_config,
                     business_profile=current.business_profile,
                     activation=current.activation,
-                    activation_required=get_settings().activation_flow_enabled,
+                    activation_required=settings.activation_flow_enabled,
                     go_live_activated_override=(
                         True if current.current_go_live_attempt else None
                     ),
@@ -456,7 +477,12 @@ async def deliver_phone_routing(
         )
 
     async with session_factory() as session:
-        current = await _routing_snapshot(session, user_id, event=event)
+        current = await _routing_snapshot(
+            session,
+            user_id,
+            event=event,
+            activation_flow_enabled=settings.activation_flow_enabled,
+        )
         if current is None or current.phone_number.id != snapshot.phone_number.id:
             await session.commit()
             return
@@ -559,11 +585,11 @@ async def _routing_snapshot(
     user_id: UUID,
     *,
     event: OutboxEvent | None = None,
+    activation_flow_enabled: bool,
 ) -> _RoutingSnapshot | None:
     user = await UserRepository(session).get_by_id_for_update(user_id)
     if user is None:
         return None
-    activation_flow_enabled = get_settings().activation_flow_enabled
     activation = None
     business_profile = None
     if activation_flow_enabled:

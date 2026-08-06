@@ -5,8 +5,7 @@ import json
 
 import httpx
 
-from app.core.config import get_settings
-from app.core.observability import get_observability, instrument_provider
+from app.core.observability import Observability, instrument_provider
 from app.core.provider_failures import ProviderFailure, provider_failure_from_http_status
 from app.providers.summaries.base import StructuredSummary, SummaryProvider
 
@@ -30,16 +29,16 @@ class GeminiSummaryProvider(SummaryProvider):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        model: str | None = None,
+        api_key: str | None,
+        model: str,
+        observability: Observability,
         client=None,
-        observability=None,
     ) -> None:
-        settings = get_settings()
-        self.api_key = api_key if api_key is not None else settings.gemini_api_key
-        self.model = model or settings.summary_model
+        self.api_key = api_key
+        self.model = model
         self.client = client
-        self.observability = observability or get_observability()
+        self._owns_client = client is None
+        self.observability = observability
 
     def _get_client(self):
         if self.client is not None:
@@ -65,6 +64,22 @@ class GeminiSummaryProvider(SummaryProvider):
 
         self.client = genai.Client(api_key=self.api_key)
         return self.client
+
+    async def aclose(self) -> None:
+        if not self._owns_client:
+            return
+        self._owns_client = False
+        client = self.client
+        self.client = None
+        if client is None:
+            return
+        close = getattr(client, "aclose", None)
+        if callable(close):
+            await close()
+            return
+        close = getattr(client, "close", None)
+        if callable(close):
+            await asyncio.to_thread(close)
 
     @instrument_provider("gemini", "generate_summary")
     async def generate_summary(self, transcript: list[dict]) -> StructuredSummary:

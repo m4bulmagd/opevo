@@ -1,11 +1,9 @@
 from dataclasses import dataclass
 import logging
 
-from app.core.config import get_settings
 from app.core.logging import report_safe_exception
 from app.core.provider_failures import ProviderFailure
 from app.providers.summaries.base import StructuredSummary, SummaryProvider
-from app.providers.summaries.gemini import GeminiSummaryProvider
 
 
 logger = logging.getLogger(__name__)
@@ -92,10 +90,3 @@ class SummaryService:
         ):
             return None
         return data
-
-    @staticmethod
-    def _build_default_provider() -> SummaryProvider:
-        settings = get_settings()
-        if settings.summary_provider == "gemini":
-            return GeminiSummaryProvider()
-        raise ValueError(f"Unsupported summary provider: {settings.summary_provider}")

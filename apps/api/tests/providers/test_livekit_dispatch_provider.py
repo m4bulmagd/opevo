@@ -6,11 +6,7 @@ import pytest
 from livekit import api
 
 from app.core.provider_failures import ProviderFailure
-from app.providers.livekit_dispatch import livekit as livekit_dispatch_module
-from app.providers.livekit_dispatch.livekit import (
-    LiveKitDispatchAPIProvider,
-    LiveKitDispatchConfigurationError,
-)
+from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
 
 
 class _Telemetry:
@@ -76,56 +72,6 @@ _TWIRP_FAILURE_CASES = (
     ("canceled", "terminal", "unknown"),
     ("dataloss", "terminal", "unknown"),
 )
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("operation", ["list", "create"])
-@pytest.mark.parametrize(
-    "missing_field",
-    ["livekit_url", "livekit_api_key", "livekit_api_secret"],
-)
-async def test_livekit_dispatch_missing_settings_raise_bounded_configuration_error(
-    monkeypatch: pytest.MonkeyPatch,
-    operation: str,
-    missing_field: str,
-) -> None:
-    settings = {
-        "livekit_url": "LIVEKIT_URL_PRIVATE_SENTINEL",
-        "livekit_api_key": "LIVEKIT_KEY_PRIVATE_SENTINEL",
-        "livekit_api_secret": "LIVEKIT_SECRET_PRIVATE_SENTINEL",
-    }
-    settings[missing_field] = None
-    monkeypatch.setattr(
-        livekit_dispatch_module,
-        "get_settings",
-        lambda: SimpleNamespace(**settings),
-    )
-    provider = LiveKitDispatchAPIProvider(observability=_Telemetry())
-
-    if operation == "list":
-
-        async def invoke() -> object:
-            return await provider.list_dispatches(room_name="room-owned")
-
-    else:
-
-        async def invoke() -> object:
-            return await provider.create_dispatch(
-                agent_name="Ava",
-                room_name="room-owned",
-                metadata='{"call_id":"call-owned"}',
-            )
-
-    with pytest.raises(LiveKitDispatchConfigurationError) as exc_info:
-        await invoke()
-
-    assert type(exc_info.value) is LiveKitDispatchConfigurationError
-    assert exc_info.value.args == ("LiveKit dispatch settings are not configured",)
-    assert exc_info.value.__cause__ is None
-    rendered = f"{exc_info.value!s} {exc_info.value!r}"
-    assert "LIVEKIT_URL_PRIVATE_SENTINEL" not in rendered
-    assert "LIVEKIT_KEY_PRIVATE_SENTINEL" not in rendered
-    assert "LIVEKIT_SECRET_PRIVATE_SENTINEL" not in rendered
 
 
 @pytest.mark.anyio

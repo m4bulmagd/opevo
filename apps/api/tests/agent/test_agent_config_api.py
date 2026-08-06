@@ -795,21 +795,13 @@ async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes
         client_database_url, clerk_user_id="user_agent_cfg", status="succeeded"
     )
 
-    from app.main import app
-    from app.providers.telephony.telnyx import get_telephony_provider
-
-    fake_provider = FakeTelephonyProvider()
-    app.dependency_overrides[get_telephony_provider] = lambda: fake_provider
-    try:
-        response = await async_client.patch(
-            "/api/agent/config",
-            headers={
-                "authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"
-            },
-            json={"is_enabled": True},
-        )
-    finally:
-        app.dependency_overrides.pop(get_telephony_provider, None)
+    response = await async_client.patch(
+        "/api/agent/config",
+        headers={
+            "authorization": f"Bearer {rs256_clerk_token_for('user_agent_cfg')}"
+        },
+        json={"is_enabled": True},
+    )
 
     config = await fetch_agent_config(
         client_database_url, clerk_user_id="user_agent_cfg"
@@ -821,7 +813,6 @@ async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes
     assert response.status_code == 200
     assert response.json()["is_enabled"] is True
     event = await fetch_outbox_event(client_database_url)
-    assert fake_provider.enabled_provider_number_ids == []
     assert config.is_enabled is True
     assert phone_number.is_active is False
     assert phone_number.provider_connection_name == "app-disabled"

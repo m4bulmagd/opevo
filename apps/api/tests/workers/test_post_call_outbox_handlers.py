@@ -22,9 +22,11 @@ from app.workers.outbox.delivery import outbox_delivery_job
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.outbox import post_call
 from app.workers.outbox.post_call import (
+    build_recording_reconciler,
     deliver_recording_reconcile,
     deliver_summary_generate,
 )
+from app.workers.outbox._owned_resources import operation_owned_resources
 from app.workers.outbox.recording_reconciliation import ReconciliationResult
 from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
 
@@ -82,6 +84,113 @@ class FakeRecordingReconciler:
     async def reconcile(self, operation_id):
         self.calls.append(operation_id)
         return self.result
+
+
+@pytest.mark.anyio
+async def test_recording_fallback_closes_s3_then_livekit_once(
+    settings,
+    monkeypatch,
+) -> None:
+    close_order: list[str] = []
+
+    class LiveKitApi:
+        def __init__(self, **_kwargs) -> None:
+            self.egress = object()
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            close_order.append("livekit")
+
+    class Storage:
+        def __init__(self, **_kwargs) -> None:
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            close_order.append("s3")
+
+    from livekit import api as livekit_api_module
+
+    livekit_clients: list[LiveKitApi] = []
+
+    def build_livekit(**kwargs) -> LiveKitApi:
+        client = LiveKitApi(**kwargs)
+        livekit_clients.append(client)
+        return client
+
+    storages: list[Storage] = []
+
+    def build_storage(**kwargs) -> Storage:
+        storage = Storage(**kwargs)
+        storages.append(storage)
+        return storage
+
+    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", build_livekit)
+    monkeypatch.setattr(post_call, "S3Storage", build_storage)
+
+    async with operation_owned_resources(operation="test_recording") as own:
+        build_recording_reconciler(
+            {"session_factory": object()},
+            settings=settings.model_copy(
+                update={
+                    "livekit_url": "wss://livekit.example.com",
+                    "livekit_api_key": "key",
+                    "livekit_api_secret": "secret",
+                }
+            ),
+            observability=object(),
+            own=own,
+        )
+
+    assert close_order == ["s3", "livekit"]
+    assert livekit_clients[0].close_calls == 1
+    assert storages[0].close_calls == 1
+
+
+@pytest.mark.anyio
+async def test_recording_partial_construction_closes_livekit(
+    settings,
+    monkeypatch,
+    caplog,
+) -> None:
+    class LiveKitApi:
+        def __init__(self, **_kwargs) -> None:
+            self.egress = object()
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            raise RuntimeError("LIVEKIT_PARTIAL_CLOSE_SECRET")
+
+    from livekit import api as livekit_api_module
+
+    client = LiveKitApi()
+    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", lambda **_kwargs: client)
+    monkeypatch.setattr(
+        post_call,
+        "S3Storage",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("storage build failed")),
+    )
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(RuntimeError, match="storage build failed"):
+            async with operation_owned_resources(operation="test_recording") as own:
+                build_recording_reconciler(
+                    {"session_factory": object()},
+                    settings=settings.model_copy(
+                        update={
+                            "livekit_url": "wss://livekit.example.com",
+                            "livekit_api_key": "key",
+                            "livekit_api_secret": "secret",
+                        }
+                    ),
+                    observability=object(),
+                    own=own,
+                )
+
+    assert client.close_calls == 1
+    assert "LIVEKIT_PARTIAL_CLOSE_SECRET" not in caplog.text
 
 
 def event(*, call_id, topic: str, aggregate_type: str) -> OutboxEvent:
@@ -163,6 +272,56 @@ async def test_summary_handler_snapshots_then_persists_in_fresh_transaction(
     stored = await db_session.get(Call, call_id)
     assert stored.summary_text == "A durable summary"
     assert stored.summary_data["follow_up_required"] is True
+
+
+@pytest.mark.anyio
+async def test_summary_handler_closes_only_its_operation_owned_provider(
+    db_session,
+    active_user,
+    monkeypatch,
+) -> None:
+    call = Call(user_id=active_user.id, status="completed", duration_seconds=1)
+    db_session.add(call)
+    await db_session.flush()
+    db_session.add(
+        CallMessage(
+            call_id=call.id,
+            sequence_number=1,
+            speaker="CALLER",
+            text="Hello",
+        )
+    )
+    await db_session.commit()
+    factory = TrackingSessionFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+
+    class OwnedProvider(FakeSummaryProvider):
+        def __init__(self, *, api_key, model, observability) -> None:
+            assert model
+            assert observability is not None
+            super().__init__(factory)
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    providers: list[OwnedProvider] = []
+
+    def build_provider(**kwargs) -> OwnedProvider:
+        provider = OwnedProvider(**kwargs)
+        providers.append(provider)
+        return provider
+
+    monkeypatch.setattr(post_call, "GeminiSummaryProvider", build_provider)
+
+    await deliver_summary_generate(
+        {"session_factory": factory},
+        event(call_id=call.id, topic="summary.generate", aggregate_type="call-summary"),
+    )
+
+    assert len(providers) == 1
+    assert providers[0].close_calls == 1
 
 
 @pytest.mark.anyio
@@ -644,7 +803,7 @@ async def test_recording_reconcile_unexpected_failures_escape_the_outbox_wrapper
             raise RuntimeError("DATABASE_CREDENTIAL_SENTINEL")
 
     if failure_site == "builder":
-        def explode(_ctx):
+        def explode(_ctx, **_kwargs):
             raise RuntimeError("BUILDER_CREDENTIAL_SENTINEL")
 
         monkeypatch.setattr(post_call, "build_recording_reconciler", explode)

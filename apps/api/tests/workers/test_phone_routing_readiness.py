@@ -103,7 +103,11 @@ async def test_routing_stays_disabled_without_current_financial_access(
     )
     await db_session.commit()
 
-    snapshot = await _routing_snapshot(db_session, active_user.id)
+    snapshot = await _routing_snapshot(
+        db_session,
+        active_user.id,
+        activation_flow_enabled=False,
+    )
 
     assert snapshot is not None
     assert snapshot.should_enable is False

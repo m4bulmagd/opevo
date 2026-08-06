@@ -2,7 +2,6 @@ import asyncio
 import logging
 from typing import Any
 
-from app.core.config import get_settings
 from app.core.provider_failures import (
     ProviderFailure,
     ProviderOperation,
@@ -127,11 +126,11 @@ class StripeSubscriptionProvider(SubscriptionProvider):
     def __init__(
         self,
         *,
+        secret_key: str | None,
         stripe_client: object | None = None,
-        secret_key: str | None = None,
     ) -> None:
         self._stripe_client = stripe_client
-        self.secret_key = secret_key or get_settings().stripe_secret_key
+        self.secret_key = secret_key
 
     async def cancel_immediately(self, subscription_id: str) -> None:
         if not isinstance(subscription_id, str) or not subscription_id.strip():

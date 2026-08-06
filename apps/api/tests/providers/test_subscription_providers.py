@@ -7,6 +7,7 @@ import pytest
 import stripe
 
 from app.core.config import Settings
+from app.core.observability import get_observability
 from app.core.provider_failures import ProviderFailure
 from app.providers.subscriptions.factory import build_subscription_provider
 from app.providers.subscriptions.fake import FakeSubscriptionProvider
@@ -391,10 +392,15 @@ async def test_subscription_and_hosted_sessions_reuse_the_stripe_classifier(
         secret_key="sk_test_value",
     )
     service = BillingSessionService(
-        stripe_client=hosted_client,
-        price_starter="price_starter_123",
-        checkout_success_url="https://app.example.com/success",
-        checkout_cancel_url="https://app.example.com/cancel",
+        settings=Settings(
+            database_url="sqlite+aiosqlite://",
+            redis_url="redis://localhost:6379/0",
+            stripe_price_starter="price_starter_123",
+            stripe_checkout_success_url="https://app.example.com/success",
+            stripe_checkout_cancel_url="https://app.example.com/cancel",
+        ),
+        observability=get_observability(),
+        stripe_module=hosted_client,
     )
 
     with pytest.raises(ProviderFailure):

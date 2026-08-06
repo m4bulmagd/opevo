@@ -4,10 +4,10 @@ import asyncio
 from dataclasses import dataclass
 from typing import NoReturn
 
-from app.core.config import get_settings
+from app.core.config import Settings
 from app.core.http_origin import parse_http_origin
 from app.core.observability import (
-    get_observability,
+    Observability,
     instrument_provider,
 )
 from app.core.provider_failures import ProviderFailure, ProviderOperation
@@ -32,33 +32,20 @@ class BillingSessionService:
     def __init__(
         self,
         *,
-        stripe_client=None,
-        secret_key: str | None = None,
-        price_starter: str | None = None,
-        checkout_success_url: str | None = None,
-        checkout_cancel_url: str | None = None,
-        billing_portal_return_url: str | None = None,
-        billing_portal_configuration_id: str | None = None,
-        observability=None,
+        settings: Settings,
+        observability: Observability,
+        stripe_module=None,
     ) -> None:
-        settings = get_settings()
-        self._stripe_client = stripe_client
-        self.secret_key = secret_key or settings.stripe_secret_key
-        self.price_starter = price_starter or settings.stripe_price_starter
-        self.checkout_success_url = (
-            checkout_success_url or settings.stripe_checkout_success_url
-        )
-        self.checkout_cancel_url = (
-            checkout_cancel_url or settings.stripe_checkout_cancel_url
-        )
-        self.billing_portal_return_url = (
-            billing_portal_return_url or settings.stripe_billing_portal_return_url
-        )
+        self._stripe_client = stripe_module
+        self.secret_key = settings.stripe_secret_key
+        self.price_starter = settings.stripe_price_starter
+        self.checkout_success_url = settings.stripe_checkout_success_url
+        self.checkout_cancel_url = settings.stripe_checkout_cancel_url
+        self.billing_portal_return_url = settings.stripe_billing_portal_return_url
         self.billing_portal_configuration_id = (
-            billing_portal_configuration_id
-            or settings.stripe_billing_portal_configuration_id
+            settings.stripe_billing_portal_configuration_id
         )
-        self.observability = observability or get_observability()
+        self.observability = observability
 
     @instrument_provider("stripe", "create_checkout_session")
     async def create_checkout_session(

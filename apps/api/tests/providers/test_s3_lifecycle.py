@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -112,7 +113,7 @@ async def test_storage_closes_its_owned_http_pool_once(
     )
 
     storage._get_client()
-    await storage.aclose()
+    await asyncio.gather(storage.aclose(), storage.aclose())
     await storage.aclose()
 
     assert observed == {
@@ -120,6 +121,32 @@ async def test_storage_closes_its_owned_http_pool_once(
         "http_client": pool,
     }
     assert pool.clear_calls == 1
+
+
+@pytest.mark.anyio
+async def test_storage_never_closes_an_injected_client_pool() -> None:
+    class BorrowedClient(DeletionInspectingClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.clear_calls = 0
+
+        def clear(self) -> None:
+            self.clear_calls += 1
+
+    client = BorrowedClient()
+    storage = S3Storage(
+        bucket_name="recordings",
+        endpoint_url="https://storage.example.com",
+        access_key="access-key",
+        secret_key="secret-key",
+        region="eu-west-3",
+        observability=object(),
+        client=client,
+    )
+
+    await storage.aclose()
+
+    assert client.clear_calls == 0
 
 
 def test_local_stack_has_no_automatic_expiration_and_keeps_recordings_private() -> None:

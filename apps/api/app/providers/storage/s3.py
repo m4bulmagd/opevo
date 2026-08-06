@@ -1,6 +1,5 @@
 import asyncio
 import io
-from functools import lru_cache
 from urllib.parse import urlparse
 
 from minio.error import InvalidResponseError, MinioException, S3Error, ServerError
@@ -8,8 +7,7 @@ from urllib3 import PoolManager
 from urllib3.exceptions import HTTPError, TimeoutError as Urllib3TimeoutError
 from urllib3.util import Retry, Timeout
 
-from app.core.config import get_settings
-from app.core.observability import Observability, get_observability, instrument_provider
+from app.core.observability import Observability, instrument_provider
 from app.core.provider_failures import (
     ProviderFailure,
     ProviderFailureClass,
@@ -34,7 +32,7 @@ class S3Storage(StorageProvider):
         endpoint_url: str,
         access_key: str | None,
         secret_key: str | None,
-        region: str | None,
+        region: str,
         observability: Observability,
         client=None,
     ) -> None:
@@ -373,16 +371,3 @@ class S3Storage(StorageProvider):
             client.get_bucket_lifecycle,
             self.bucket_name,
         )
-
-
-@lru_cache()
-def get_s3_storage() -> S3Storage:
-    settings = get_settings()
-    return S3Storage(
-        bucket_name=settings.storage_bucket_name,
-        endpoint_url=settings.s3_endpoint_url or "http://minio:9000",
-        access_key=settings.s3_access_key,
-        secret_key=settings.s3_secret_key,
-        region=settings.s3_region,
-        observability=get_observability(),
-    )

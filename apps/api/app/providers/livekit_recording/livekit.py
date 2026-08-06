@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from livekit import api
 
 from app.core.observability import (
-    get_observability,
+    Observability,
     instrument_provider,
 )
 from app.core.provider_failures import ProviderFailure, ProviderFailureClass
@@ -573,7 +573,7 @@ class LiveKitRecordingProvider(RecordingProvider):
         access_key: str | None,
         secret_key: str | None,
         region: str,
-        observability=None,
+        observability: Observability,
     ) -> None:
         self.egress_client = egress_client
         self.bucket_name = bucket_name
@@ -581,7 +581,7 @@ class LiveKitRecordingProvider(RecordingProvider):
         self.access_key = access_key or ""
         self.secret_key = secret_key or ""
         self.region = region
-        self.observability = observability or get_observability()
+        self.observability = observability
 
     def _is_aws_endpoint(self) -> bool:
         return "amazonaws.com" in self.endpoint_url

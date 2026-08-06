@@ -27,10 +27,11 @@ async def handle_stripe_webhook(
     telemetry = get_request_observability(request)
     try:
         payload = await request.body()
-        arq_pool = get_api_runtime(request.app).arq_pool
+        runtime = get_api_runtime(request.app)
         billing_service = BillingService(
             session,
-            arq_pool=arq_pool,
+            settings=runtime.settings,
+            arq_pool=runtime.arq_pool,
         )
         billing_service.verify_signature(
             payload,

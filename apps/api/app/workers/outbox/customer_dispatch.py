@@ -11,6 +11,7 @@ from presvo_contracts import (
 )
 
 from app.core.config import Settings, get_settings
+from app.core.observability import get_observability
 from app.core.database import get_session_factory
 from app.core.dispatch_token import (
     DispatchTokenConfig,
@@ -42,6 +43,7 @@ from app.services.livekit_dispatch_service import (
     expected_agent_identity,
 )
 from app.workers.outbox._account_lifecycle import _require_current_worker_account
+from app.workers.outbox._owned_resources import operation_owned_resources
 from app.workers.outbox._livekit_delivery import ensure_livekit_dispatch
 from app.workers.outbox.failures import OutboxDeliveryError
 
@@ -64,6 +66,7 @@ async def deliver_livekit_dispatch(
     call_id, lifecycle_generation = _validated_dispatch_reference(event)
     session_factory = ctx.get("session_factory") or get_session_factory()
     settings = get_settings()
+    observability = get_observability()
     try:
         token_config = dispatch_token_config(settings)
     except DispatchTokenConfigurationError:
@@ -72,43 +75,56 @@ async def deliver_livekit_dispatch(
             retryable=False,
         ) from None
 
-    async with livekit_dispatch_lock(session_factory, call_id):
-        snapshot = await _dispatch_snapshot(
-            session_factory,
-            call_id,
-            settings=settings,
-            token_config=token_config,
-        )
-        provider = ctx.get("livekit_dispatch_provider")
-        if provider is None:
-            provider = LiveKitDispatchAPIProvider()
-
-        async def revalidate_account() -> None:
-            await _require_current_worker_account(
+    async with operation_owned_resources(operation="deliver_livekit_dispatch") as own:
+        async with livekit_dispatch_lock(session_factory, call_id):
+            snapshot = await _dispatch_snapshot(
                 session_factory,
-                snapshot.user_id,
-                lifecycle_generation=lifecycle_generation,
+                call_id,
+                settings=settings,
+                token_config=token_config,
             )
+            provider = ctx.get("livekit_dispatch_provider")
+            if provider is None:
+                from livekit import api
 
-        def reconcile(
-            dispatches: list[LiveKitDispatch],
-        ) -> LiveKitDispatch | None:
-            return _reconcile_dispatches(snapshot, dispatches)
+                livekit_api = own(
+                    api.LiveKitAPI(
+                        url=settings.livekit_url,
+                        api_key=settings.livekit_api_key,
+                        api_secret=settings.livekit_api_secret,
+                    )
+                )
+                provider = LiveKitDispatchAPIProvider(
+                    livekit_api=livekit_api,
+                    observability=observability,
+                )
 
-        dispatch = await ensure_livekit_dispatch(
-            provider=provider,
-            room_name=snapshot.room_name,
-            worker_name=snapshot.worker_name,
-            metadata=snapshot.metadata,
-            persisted_dispatch_id=snapshot.persisted_dispatch_id,
-            revalidate_account=revalidate_account,
-            reconcile=reconcile,
-        )
-        await _persist_dispatch_identity(
-            session_factory,
-            call_id=call_id,
-            dispatch_id=dispatch.id,
-        )
+            async def revalidate_account() -> None:
+                await _require_current_worker_account(
+                    session_factory,
+                    snapshot.user_id,
+                    lifecycle_generation=lifecycle_generation,
+                )
+
+            def reconcile(
+                dispatches: list[LiveKitDispatch],
+            ) -> LiveKitDispatch | None:
+                return _reconcile_dispatches(snapshot, dispatches)
+
+            dispatch = await ensure_livekit_dispatch(
+                provider=provider,
+                room_name=snapshot.room_name,
+                worker_name=snapshot.worker_name,
+                metadata=snapshot.metadata,
+                persisted_dispatch_id=snapshot.persisted_dispatch_id,
+                revalidate_account=revalidate_account,
+                reconcile=reconcile,
+            )
+            await _persist_dispatch_identity(
+                session_factory,
+                call_id=call_id,
+                dispatch_id=dispatch.id,
+            )
 
 
 def _validated_dispatch_reference(event: OutboxEvent) -> tuple[UUID, int]:

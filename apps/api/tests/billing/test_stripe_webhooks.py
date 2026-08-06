@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.config import Settings
 from app.models.account_deactivation_operation import AccountDeactivationOperation
 from app.models.notification import Notification
 from app.models.outbox_event import OutboxEvent
@@ -1655,24 +1656,14 @@ async def test_stripe_webhook_has_no_telnyx_provider_dependency(
         await session.commit()
     await engine.dispose()
 
-    from app.main import app
-    from app.providers.telephony.telnyx import get_telephony_provider
-
-    def fail_if_telnyx_is_resolved() -> None:
-        raise AssertionError("Stripe webhook must not resolve a Telnyx provider")
-
-    app.dependency_overrides[get_telephony_provider] = fail_if_telnyx_is_resolved
-    try:
-        response = await async_client.post(
-            "/webhooks/stripe",
-            content=json.dumps(
-                stripe_subscription_created_payload,
-                separators=(",", ":"),
-            ).encode("utf-8"),
-            headers=signed_stripe_headers_factory(stripe_subscription_created_payload),
-        )
-    finally:
-        app.dependency_overrides.pop(get_telephony_provider, None)
+    response = await async_client.post(
+        "/webhooks/stripe",
+        content=json.dumps(
+            stripe_subscription_created_payload,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+        headers=signed_stripe_headers_factory(stripe_subscription_created_payload),
+    )
 
     assert response.status_code == 202
 
@@ -2259,7 +2250,7 @@ async def test_subscription_event_rejects_unsupported_lookup_key(
 
     assert PLAN_MINUTES == {"starter": 60}
     with pytest.raises(UnsupportedStripeLifecycleError):
-        await BillingService(db_session).handle_event(payload)
+        await BillingService(db_session, settings=Settings()).handle_event(payload)
 
     await db_session.rollback()
     assert await db_session.scalar(select(Subscription)) is None

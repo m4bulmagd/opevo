@@ -88,10 +88,13 @@ def get_carrier_lookup_service(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> CarrierLookupService:
-    settings = get_api_runtime(request.app).settings
+    runtime = get_api_runtime(request.app)
     return CarrierLookupService(
         session,
-        provider=build_carrier_lookup_provider(settings=settings),
+        provider=build_carrier_lookup_provider(
+            runtime.settings,
+            observability=runtime.observability,
+        ),
     )
 
 

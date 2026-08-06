@@ -6,6 +6,7 @@ from uuid import UUID
 
 from app.core.config import get_settings
 from app.core.database import get_session_factory
+from app.core.observability import get_observability
 from app.core.provider_failures import ProviderFailure
 from app.models.outbox_event import OutboxEvent
 from app.models.provider_cleanup_operation import ProviderCleanupOperation
@@ -34,6 +35,8 @@ async def deliver_provider_cleanup(
 ) -> None:
     operation_id = _validated_operation_id(event)
     session_factory = ctx.get("session_factory") or get_session_factory()
+    settings = get_settings()
+    observability = get_observability()
     now_provider: Callable[[], datetime] = ctx.get(
         "provider_cleanup_now",
         lambda: datetime.now(UTC),
@@ -49,7 +52,10 @@ async def deliver_provider_cleanup(
         if snapshot.resource_type == "phone_number":
             provider = ctx.get("telephony_provider")
             if provider is None:
-                provider = create_telephony_provider(get_settings())
+                provider = create_telephony_provider(
+                    settings,
+                    observability=observability,
+                )
             if not snapshot.routing_disabled:
                 try:
                     provider_guard.assert_transaction_free()
@@ -98,7 +104,7 @@ async def deliver_provider_cleanup(
         else:
             provider = ctx.get("subscription_provider")
             if provider is None:
-                provider = build_subscription_provider(get_settings())
+                provider = build_subscription_provider(settings)
             try:
                 provider_guard.assert_transaction_free()
                 await provider.cancel_immediately(snapshot.provider_resource_id)

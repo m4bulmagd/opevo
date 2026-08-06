@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core.config import Settings
 from app.models import Base
 from app.models.account_deactivation_operation import AccountDeactivationOperation
 from app.models.agent_config import AgentConfig
@@ -781,7 +782,10 @@ async def test_owner_request_and_terminal_stripe_event_converge_on_one_operation
     async def stripe_event() -> None:
         async with account_session_factory() as session:
             competing_started.set()
-            assert await BillingService(session).handle_event(envelope) is True
+            assert (
+                await BillingService(session, settings=Settings()).handle_event(envelope)
+                is True
+            )
 
     async with account_session_factory() as first_session:
         locked_user = await UserRepository(first_session).get_by_id_for_update(
@@ -803,7 +807,13 @@ async def test_owner_request_and_terminal_stripe_event_converge_on_one_operation
             assert operation is not None
             await first_session.commit()
         else:
-            assert await BillingService(first_session).handle_event(envelope) is True
+            assert (
+                await BillingService(
+                    first_session,
+                    settings=Settings(),
+                ).handle_event(envelope)
+                is True
+            )
         await asyncio.wait_for(competing, timeout=2)
 
     async with account_session_factory() as session:
@@ -1273,7 +1283,10 @@ async def test_stale_enable_provision_invoice_and_go_live_work_is_provider_free(
                 }
             },
         }
-        assert await BillingService(session).handle_event(invoice) is True
+        assert (
+            await BillingService(session, settings=Settings()).handle_event(invoice)
+            is True
+        )
 
     assert telephony.calls == []
     async with account_session_factory() as session:

@@ -10,6 +10,7 @@ from app.core.provider_failures import ProviderFailure
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
 from app.core.database import get_session
+from app.composition.runtime import get_api_runtime
 from app.repositories.user_repository import UserRepository
 from app.schemas.billing_api import (
     CheckoutSessionRequest,
@@ -36,8 +37,12 @@ def get_billing_query_service(
     return BillingQueryService(session)
 
 
-def get_billing_session_service() -> BillingSessionService:
-    return BillingSessionService()
+def get_billing_session_service(request: Request) -> BillingSessionService:
+    runtime = get_api_runtime(request.app)
+    return BillingSessionService(
+        settings=runtime.settings,
+        observability=runtime.observability,
+    )
 
 
 async def get_current_user(

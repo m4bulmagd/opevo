@@ -143,7 +143,8 @@ def test_telephony_factory_defaults_to_fake_for_local_settings() -> None:
         redis_url="redis://localhost:6379/0",
     )
 
-    provider = create_telephony_provider(settings)
+    observability = object()
+    provider = create_telephony_provider(settings, observability=observability)
 
     assert settings.telephony_mode == "fake"
     assert settings.billing_mode == "fake"
@@ -172,7 +173,8 @@ def test_telephony_factory_builds_telnyx_from_selected_settings(
         telnyx_ordering_enabled=True,
     )
 
-    provider = create_telephony_provider(settings)
+    observability = object()
+    provider = create_telephony_provider(settings, observability=observability)
 
     assert isinstance(provider, StubTelnyx)
     assert observed == {
@@ -180,4 +182,5 @@ def test_telephony_factory_builds_telnyx_from_selected_settings(
         "active_connection_id": "active-connection",
         "disabled_connection_id": "disabled-connection",
         "ordering_enabled": True,
+        "observability": observability,
     }

@@ -984,7 +984,7 @@ async def test_dispatch_provider_failure_retains_provider_exhausted_call_code(
         ("verification", "create_dispatch"),
     ],
 )
-async def test_missing_livekit_dispatch_settings_are_durable_configuration_failures(
+async def test_livekit_dispatch_configuration_errors_are_durable_terminal_failures(
     outbox_session_factory: async_sessionmaker[AsyncSession],
     activation_flow_disabled,
     monkeypatch: pytest.MonkeyPatch,
@@ -992,7 +992,11 @@ async def test_missing_livekit_dispatch_settings_are_durable_configuration_failu
     dispatch_kind: str,
     provider_operation: str,
 ) -> None:
-    from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
+    from app.core.observability import get_observability
+    from app.providers.livekit_dispatch.livekit import (
+        LiveKitDispatchAPIProvider,
+        LiveKitDispatchConfigurationError,
+    )
     from app.workers.outbox.delivery import outbox_delivery_job
 
     verification_now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
@@ -1004,7 +1008,25 @@ async def test_missing_livekit_dispatch_settings_are_durable_configuration_failu
             now=verification_now,
         )
     )
-    provider = LiveKitDispatchAPIProvider()
+    class ConfigurationFailingDispatchService:
+        async def list_dispatch(self, _room_name: str) -> list:
+            if provider_operation == "list_dispatches":
+                raise LiveKitDispatchConfigurationError(
+                    "LiveKit dispatch settings are not configured"
+                )
+            return []
+
+        async def create_dispatch(self, _request: object) -> object:
+            raise LiveKitDispatchConfigurationError(
+                "LiveKit dispatch settings are not configured"
+            )
+
+    provider = LiveKitDispatchAPIProvider(
+        livekit_api=SimpleNamespace(
+            agent_dispatch=ConfigurationFailingDispatchService()
+        ),
+        observability=get_observability(),
+    )
     if provider_operation == "create_dispatch":
 
         async def no_existing_dispatches(*, room_name: str) -> list:
@@ -1012,14 +1034,6 @@ async def test_missing_livekit_dispatch_settings_are_durable_configuration_failu
             return []
 
         monkeypatch.setattr(provider, "list_dispatches", no_existing_dispatches)
-    monkeypatch.setattr(
-        "app.providers.livekit_dispatch.livekit.get_settings",
-        lambda: SimpleNamespace(
-            livekit_url=None,
-            livekit_api_key=None,
-            livekit_api_secret=None,
-        ),
-    )
     monkeypatch.setattr(
         "app.workers.outbox.customer_dispatch.create_dispatch_token",
         lambda **_kwargs: "dispatch-jwt",

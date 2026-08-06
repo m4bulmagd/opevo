@@ -1,9 +1,11 @@
 import json
 import logging
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from livekit import api as livekit_api_module
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -88,6 +90,133 @@ class _Provider:
                 error_class="timeout",
             )
         return created
+
+
+class _BorrowedProvider(_Provider):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+
+
+class _AgentDispatchClient:
+    def __init__(self, *, fail_create: bool = False) -> None:
+        self.dispatches: list[object] = []
+        self.fail_create = fail_create
+
+    async def list_dispatch(self, room_name: str) -> list[object]:
+        return [
+            dispatch
+            for dispatch in self.dispatches
+            if getattr(dispatch, "room", None) == room_name
+        ]
+
+    async def create_dispatch(self, request) -> object:
+        if self.fail_create:
+            raise TimeoutError("LIVEKIT_OPERATION_SECRET")
+        dispatch = SimpleNamespace(
+            id="owned-dispatch",
+            agent_name=request.agent_name,
+            room=request.room,
+            metadata=request.metadata,
+            state="active",
+        )
+        self.dispatches.append(dispatch)
+        return dispatch
+
+
+class _OwnedLiveKitApi:
+    instances: list["_OwnedLiveKitApi"] = []
+    fail_create = False
+    fail_close = False
+
+    def __init__(self, **_kwargs) -> None:
+        self.agent_dispatch = _AgentDispatchClient(fail_create=self.fail_create)
+        self.close_calls = 0
+        self.instances.append(self)
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        if self.fail_close:
+            raise RuntimeError("LIVEKIT_CLOSE_SECRET")
+
+
+@pytest.mark.anyio
+async def test_dispatch_handler_closes_its_operation_owned_livekit_client_once(
+    db_session,
+    monkeypatch,
+) -> None:
+    _call, event, _subscription = await _seed_dispatch(db_session)
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    _OwnedLiveKitApi.instances = []
+    _OwnedLiveKitApi.fail_create = False
+    _OwnedLiveKitApi.fail_close = False
+    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", _OwnedLiveKitApi)
+    monkeypatch.setattr(
+        customer_dispatch,
+        "create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+
+    await deliver_livekit_dispatch({"session_factory": session_factory}, event)
+
+    assert len(_OwnedLiveKitApi.instances) == 1
+    assert _OwnedLiveKitApi.instances[0].close_calls == 1
+
+
+@pytest.mark.anyio
+async def test_dispatch_handler_preserves_operation_error_when_owned_close_fails(
+    db_session,
+    monkeypatch,
+    caplog,
+) -> None:
+    _call, event, _subscription = await _seed_dispatch(db_session)
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    _OwnedLiveKitApi.instances = []
+    _OwnedLiveKitApi.fail_create = True
+    _OwnedLiveKitApi.fail_close = True
+    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", _OwnedLiveKitApi)
+    monkeypatch.setattr(
+        customer_dispatch,
+        "create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+
+    with caplog.at_level("WARNING"), pytest.raises(OutboxDeliveryError) as exc_info:
+        await deliver_livekit_dispatch({"session_factory": session_factory}, event)
+
+    assert exc_info.value.error_code == "provider_retryable"
+    assert len(_OwnedLiveKitApi.instances) == 1
+    assert _OwnedLiveKitApi.instances[0].close_calls == 1
+    assert "LIVEKIT_CLOSE_SECRET" not in caplog.text
+    assert "LIVEKIT_OPERATION_SECRET" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_dispatch_handler_never_closes_an_injected_provider(
+    db_session,
+    monkeypatch,
+) -> None:
+    _call, event, _subscription = await _seed_dispatch(db_session)
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    provider = _BorrowedProvider()
+    monkeypatch.setattr(
+        customer_dispatch,
+        "create_dispatch_token",
+        lambda **_kwargs: "dispatch-jwt",
+    )
+
+    await deliver_livekit_dispatch(
+        {
+            "session_factory": session_factory,
+            "livekit_dispatch_provider": provider,
+        },
+        event,
+    )
+
+    assert provider.close_calls == 0
 
 
 class _ForeignCreateProvider(_Provider):

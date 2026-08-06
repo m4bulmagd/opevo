@@ -10,11 +10,7 @@ import telnyx
 import telnyx.util as telnyx_util  # type: ignore[import-untyped]
 from telnyx.http_client import new_default_http_client
 
-from app.core.config import get_settings
-from app.core.observability import (
-    get_observability,
-    instrument_provider,
-)
+from app.core.observability import Observability, instrument_provider
 from app.core.provider_failures import (
     ProviderFailure,
     ProviderFailureClass,
@@ -101,33 +97,24 @@ class TelephonyTelnyx(TelephonyProvider):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        active_connection_id: str | None = None,
-        disabled_connection_id: str | None = None,
-        ordering_enabled: bool | None = None,
+        api_key: str | None,
+        active_connection_id: str | None,
+        disabled_connection_id: str | None,
+        ordering_enabled: bool,
+        observability: Observability,
         available_phone_number_resource=telnyx.AvailablePhoneNumber,
         phone_number_order_resource=telnyx.NumberOrder,
         phone_number_resource=telnyx.PhoneNumber,
-        observability=None,
     ) -> None:
         _configure_telnyx_network_policy()
-        settings = get_settings()
-        self.api_key = api_key or settings.telnyx_api_key
-        self.active_connection_id = (
-            active_connection_id or settings.telnyx_active_connection_id
-        )
-        self.disabled_connection_id = (
-            disabled_connection_id or settings.telnyx_disabled_connection_id
-        )
-        self.ordering_enabled = (
-            settings.telnyx_ordering_enabled
-            if ordering_enabled is None
-            else ordering_enabled
-        )
+        self.api_key = api_key
+        self.active_connection_id = active_connection_id
+        self.disabled_connection_id = disabled_connection_id
+        self.ordering_enabled = ordering_enabled
         self.available_phone_number_resource = available_phone_number_resource
         self.phone_number_order_resource = phone_number_order_resource
         self.phone_number_resource = phone_number_resource
-        self.observability = observability or get_observability()
+        self.observability = observability
 
     @instrument_provider("telnyx", "provision_number")
     async def provision_number(
@@ -603,7 +590,3 @@ class TelephonyTelnyx(TelephonyProvider):
                 "monthly_cost",
             )
         }
-
-
-def get_telephony_provider() -> TelephonyProvider:
-    return TelephonyTelnyx()

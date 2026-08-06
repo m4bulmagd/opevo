@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -11,7 +12,23 @@ from app.providers.carrier_lookup.base import (
 )
 from app.providers.carrier_lookup.factory import build_carrier_lookup_provider
 from app.providers.carrier_lookup.fake import FakeCarrierLookupProvider
-from app.providers.carrier_lookup.telnyx import TelnyxCarrierLookupProvider
+from app.providers.carrier_lookup.telnyx import (
+    TelnyxCarrierLookupProvider as _TelnyxCarrierLookupProvider,
+)
+
+
+class _Telemetry:
+    @asynccontextmanager
+    async def provider_operation(self, *_args, **_kwargs):
+        yield
+
+
+def TelnyxCarrierLookupProvider(**kwargs) -> _TelnyxCarrierLookupProvider:
+    kwargs.setdefault("api_key", "test-key")
+    kwargs.setdefault("observability", _Telemetry())
+    if "number_lookup_resource" in kwargs:
+        kwargs["http_client"] = kwargs.pop("number_lookup_resource")
+    return _TelnyxCarrierLookupProvider(**kwargs)
 
 
 @pytest.mark.parametrize(
@@ -58,7 +75,7 @@ async def test_fake_lookup_is_french_deterministic_and_provider_free(
 
 
 def test_factory_defaults_to_deterministic_fake(settings) -> None:
-    provider = build_carrier_lookup_provider(settings=settings)
+    provider = build_carrier_lookup_provider(settings, observability=_Telemetry())
 
     assert isinstance(provider, FakeCarrierLookupProvider)
 

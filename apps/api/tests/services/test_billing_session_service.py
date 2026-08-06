@@ -7,7 +7,11 @@ from contextlib import asynccontextmanager
 import pytest
 import stripe
 
+from app.core.config import Settings
 from app.core.provider_failures import ProviderFailure
+from app.services.billing_session_service import (
+    BillingSessionService as _BillingSessionService,
+)
 
 
 class _Telemetry:
@@ -23,6 +27,34 @@ class _Telemetry:
             raise
         else:
             self.calls.append((provider, operation, "success"))
+
+
+def BillingSessionService(
+    *,
+    stripe_client=None,
+    secret_key: str | None = None,
+    price_starter: str | None = None,
+    checkout_success_url: str | None = None,
+    checkout_cancel_url: str | None = None,
+    billing_portal_return_url: str | None = None,
+    billing_portal_configuration_id: str | None = None,
+    observability=None,
+) -> _BillingSessionService:
+    settings = Settings(
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+        stripe_secret_key=secret_key,
+        stripe_price_starter=price_starter,
+        stripe_checkout_success_url=checkout_success_url,
+        stripe_checkout_cancel_url=checkout_cancel_url,
+        stripe_billing_portal_return_url=billing_portal_return_url,
+        stripe_billing_portal_configuration_id=billing_portal_configuration_id,
+    )
+    return _BillingSessionService(
+        settings=settings,
+        observability=observability or _Telemetry(),
+        stripe_module=stripe_client,
+    )
 
 
 class FakeCheckoutSessionAPI:
@@ -143,7 +175,6 @@ def _deny_stripe_import(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.anyio
 async def test_create_checkout_session_uses_price_mapping() -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     client = FakeStripeClient()
     telemetry = _Telemetry()
@@ -191,7 +222,6 @@ async def test_injected_hosted_client_logs_are_filtered_without_hiding_unrelated
     caller: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     service = BillingSessionService(
         stripe_client=RawLoggingStripeClient(),
@@ -232,7 +262,6 @@ async def test_non_injected_hosted_client_missing_sdk_is_safe_provider_failure(
     operation: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     _deny_stripe_import(monkeypatch)
     service = BillingSessionService(
@@ -272,7 +301,6 @@ async def test_injected_hosted_client_works_and_redacts_logs_without_sdk(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     _deny_stripe_import(monkeypatch)
     service = BillingSessionService(
@@ -310,7 +338,6 @@ async def test_injected_hosted_defect_propagates_unchanged_without_sdk(
     defect: Exception,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     _deny_stripe_import(monkeypatch)
     service = BillingSessionService(
@@ -339,7 +366,6 @@ async def test_injected_hosted_defect_propagates_unchanged_without_sdk(
 
 @pytest.mark.anyio
 async def test_reactivation_checkout_reuses_customer_and_durable_idempotency() -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     client = FakeStripeClient()
     service = BillingSessionService(
@@ -368,7 +394,6 @@ async def test_reactivation_checkout_reuses_customer_and_durable_idempotency() -
 
 @pytest.mark.anyio
 async def test_create_checkout_session_rejects_standard_plan() -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     service = BillingSessionService(
         stripe_client=FakeStripeClient(),
@@ -392,7 +417,6 @@ async def test_create_checkout_session_rejects_standard_plan() -> None:
 
 @pytest.mark.anyio
 async def test_create_portal_session_requires_customer_id() -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     service = BillingSessionService(
         stripe_client=FakeStripeClient(),
@@ -412,7 +436,6 @@ async def test_create_portal_session_requires_customer_id() -> None:
 
 @pytest.mark.anyio
 async def test_create_portal_session_always_uses_server_owned_return_url() -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     client = FakeStripeClient()
     service = BillingSessionService(
@@ -442,7 +465,6 @@ async def test_create_portal_session_always_uses_server_owned_return_url() -> No
 
 @pytest.mark.anyio
 async def test_create_portal_session_accepts_omitted_caller_return_url() -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     client = FakeStripeClient()
     service = BillingSessionService(
@@ -476,10 +498,7 @@ async def test_create_portal_session_accepts_omitted_caller_return_url() -> None
 async def test_create_portal_session_rejects_unsafe_caller_return_url(
     caller_return_url: str,
 ) -> None:
-    from app.services.billing_session_service import (
-        BillingPortalReturnUrlError,
-        BillingSessionService,
-    )
+    from app.services.billing_session_service import BillingPortalReturnUrlError
 
     service = BillingSessionService(
         stripe_client=FakeStripeClient(),
@@ -496,10 +515,7 @@ async def test_create_portal_session_rejects_unsafe_caller_return_url(
 
 @pytest.mark.anyio
 async def test_stripe_call_does_not_block_the_event_loop() -> None:
-    service = __import__(
-        "app.services.billing_session_service",
-        fromlist=["BillingSessionService"],
-    ).BillingSessionService(
+    service = BillingSessionService(
         stripe_client=BlockingStripeClient(),
         price_starter="price_starter_123",
         checkout_success_url="https://app.example.com/success",
@@ -522,7 +538,6 @@ async def test_stripe_call_does_not_block_the_event_loop() -> None:
 def test_stripe_sdk_uses_bounded_network_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     monkeypatch.setattr(stripe, "default_http_client", None)
     monkeypatch.setattr(stripe, "max_network_retries", 0)
@@ -619,7 +634,6 @@ async def test_hosted_session_errors_match_shared_stripe_contract(
     caller: str,
     operation: str,
 ) -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     service = BillingSessionService(
         stripe_client=FailingStripeClient(provider_error, caller=caller),
@@ -658,7 +672,6 @@ async def test_hosted_session_arbitrary_defects_propagate_unchanged(
     defect: Exception,
     caller: str,
 ) -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     service = BillingSessionService(
         stripe_client=FailingStripeClient(defect, caller=caller),
@@ -686,7 +699,6 @@ async def test_hosted_session_arbitrary_defects_propagate_unchanged(
 
 @pytest.mark.anyio
 async def test_hosted_session_cancellation_propagates_unchanged() -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     service = BillingSessionService(
         stripe_client=FailingStripeClient(asyncio.CancelledError()),
@@ -708,7 +720,6 @@ async def test_hosted_session_cancellation_propagates_unchanged() -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("caller", ["checkout", "portal"])
 async def test_malformed_hosted_session_response_is_terminal_validation(caller: str) -> None:
-    from app.services.billing_session_service import BillingSessionService
 
     client = FakeStripeClient()
     malformed_api = type("MalformedSessionAPI", (), {"create": lambda self, **_kwargs: object()})()
