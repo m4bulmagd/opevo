@@ -28,13 +28,19 @@ async def operation_owned_resources(
     except BaseException as error:
         body_error = error
 
+    parent_task = asyncio.current_task()
+    cancellation_baseline = parent_task.cancelling() if parent_task is not None else 0
     cleanup_task = asyncio.create_task(_close_all(resources, operation=operation))
     outer_cancellation: asyncio.CancelledError | None = None
     while not cleanup_task.done():
         try:
             await asyncio.shield(cleanup_task)
         except asyncio.CancelledError as error:
-            if not cleanup_task.cancelled() and outer_cancellation is None:
+            parent_cancelled_during_cleanup = (
+                parent_task is not None
+                and parent_task.cancelling() > cancellation_baseline
+            )
+            if parent_cancelled_during_cleanup and outer_cancellation is None:
                 outer_cancellation = error
         except Exception:
             pass

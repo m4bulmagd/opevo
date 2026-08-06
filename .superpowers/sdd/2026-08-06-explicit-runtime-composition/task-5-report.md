@@ -421,3 +421,107 @@ returned no matches, and `git diff --check` exited successfully.
   schema, frontend, generated contract, or protected CI/deployment path changed.
 
 No open Fix Round 2 concern.
+
+## Fix round 3/5
+
+### Finding addressed
+
+The Fix Round 2 shield classification used `cleanup_task.cancelled()` to decide
+whether a caught `CancelledError` came from the parent task or the cleanup task.
+When a blocked closer was released and the parent was cancelled in the same
+event-loop turn, both cancellations were ready before the parent resumed. The
+cleanup task was therefore already cancelled when the parent catch ran, and the
+guard discarded the real parent cancellation. Cleanup cancellation incorrectly
+won over outer cancellation and replaced its identity and arguments.
+
+The resource scope now captures the parent task's `cancelling()` count after the
+body exits and before cleanup starts. A cancellation caught while shielding is
+classified as outer only when that count increased beyond the baseline.
+Cleanup-only cancellation does not change the parent count and is still
+recovered by exact identity from `cleanup_task.result()`. The first accepted
+outer cancellation remains retained across repeated requests, and the existing
+body, outer, cleanup precedence is unchanged.
+
+### RED, GREEN, and mutation evidence
+
+The deterministic regression releases a closer that raises
+`CancelledError("CLEANUP_CANCEL_PRIVATE_SENTINEL")` and immediately calls
+`task.cancel("outer-origin")` in the same turn. Before the fix it failed because
+the final cancellation was exactly the cleanup cancellation. After the minimal
+count-delta change, the scope and awaiting caller observe the same outer
+cancellation with `("outer-origin",)` arguments, both resources finish in
+reverse order, and formatted diagnostics contain neither the ordinary body nor
+cleanup cancellation sentinel.
+
+The complete owned-resource matrix passed `10 passed in 0.82s`. Supplying that
+test file ten times with pytest duplicate collection enabled then exercised all
+ten cases ten times in one event loop/process gate: `100 passed in 5.58s`.
+
+A deliberate `>` to `>=` mutation made an unchanged parent count look like an
+outer cancellation. The cleanup-only control then failed because the empty
+shield cancellation replaced the exact cleanup cancellation (`1 failed`). The
+strict delta was restored before broader verification.
+
+### Verification
+
+Focused provider/service gate:
+
+```text
+uv run --frozen --no-sync python -m pytest -q \
+  tests/providers tests/billing/test_stripe_webhooks.py \
+  tests/services/test_livekit_recording_service.py \
+  tests/services/test_summary_service.py \
+  tests/services/test_safe_service_exceptions.py
+# 536 passed in 38.95s
+```
+
+Focused worker/lifecycle/composition gate:
+
+```text
+uv run --frozen --no-sync python -m pytest -q \
+  tests/workers/test_owned_resources.py \
+  tests/workers/test_livekit_dispatch_outbox.py \
+  tests/workers/test_forwarding_verification_dispatch_outbox.py \
+  tests/workers/test_post_call_outbox_handlers.py \
+  tests/workers/test_recording_reconciliation.py \
+  tests/composition/test_api_composition.py \
+  tests/integration/test_outbox_delivery.py
+# 191 passed, 52 skipped in 21.66s
+```
+
+Static gates:
+
+```text
+uv run --frozen --no-sync ruff check app tests
+# All checks passed!
+
+uv run --frozen --no-sync mypy app
+# Success: no issues found in 189 source files
+```
+
+A second full API coverage run was intentionally not repeated for this
+proportional fix round. Fix Round 2 had just completed the stable-tree gate with
+`2822 passed, 133 skipped` and `87.97%` branch coverage. This round changes only
+the cancellation-source predicate in the already-covered owned-resource helper;
+the full helper matrix, 100-case stress gate, and complete affected provider and
+worker gates all pass.
+
+### Fix-round self-review
+
+- The baseline is captured after body exit, so an existing body-originated task
+  cancellation is already accounted for. Only a newly accepted cleanup-time
+  parent cancellation creates a positive delta.
+- Same-turn parent and cleanup cancellation selects the actual outer exception;
+  cleanup-only cancellation leaves the parent count unchanged and preserves the
+  exact closer exception. Body cancellation still has final precedence over
+  both.
+- The first caught outer cancellation remains stable when `Task.cancel()` is
+  called repeatedly. The retained cleanup task stays shielded and joined until
+  every resource has been attempted in reverse order, so there is no orphan.
+- Traceback clearing and `from None` suppression are unchanged; body and cleanup
+  sentinels remain absent from formatted outer-cancellation diagnostics.
+- No Gemini behavior, Task 6–8 worker-runtime composition, dependency, lockfile,
+  migration, schema, frontend, generated contract, or protected CI/deployment
+  path changed.
+
+No open Fix Round 3 concern.

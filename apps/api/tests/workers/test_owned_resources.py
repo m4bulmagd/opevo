@@ -271,3 +271,54 @@ async def test_cancellation_during_failing_cleanup_overrides_body_error(
     formatted = "".join(traceback.format_exception(caught.value))
     assert "BODY_SECRET_SENTINEL" not in formatted
     assert "CLEANUP_SECRET_SENTINEL" not in formatted
+
+
+@pytest.mark.anyio
+async def test_same_turn_outer_cancellation_precedes_cleanup_cancellation() -> None:
+    order: list[str] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+    cleanup_cancellation = asyncio.CancelledError(
+        "CLEANUP_CANCEL_PRIVATE_SENTINEL"
+    )
+    cancellation_seen_by_scope: asyncio.CancelledError | None = None
+
+    class CancelledResource:
+        async def aclose(self) -> None:
+            order.append("cancelled:start")
+            started.set()
+            await release.wait()
+            order.append("cancelled:end")
+            raise cleanup_cancellation
+
+    async def run_scope() -> None:
+        nonlocal cancellation_seen_by_scope
+        try:
+            async with operation_owned_resources(operation="test_same_turn_cancel") as own:
+                own(_Resource("first", order))
+                own(CancelledResource())
+                raise ValueError("BODY_PRIVATE_SENTINEL")
+        except asyncio.CancelledError as error:
+            cancellation_seen_by_scope = error
+            raise
+
+    task = asyncio.create_task(run_scope())
+    await asyncio.wait_for(started.wait(), timeout=0.5)
+    release.set()
+    assert task.cancel("outer-origin") is True
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+
+    assert caught.value is cancellation_seen_by_scope
+    assert caught.value is not cleanup_cancellation
+    assert caught.value.args == ("outer-origin",)
+    assert order == [
+        "cancelled:start",
+        "cancelled:end",
+        "first:start",
+        "first:end",
+    ]
+    formatted = "".join(traceback.format_exception(caught.value))
+    assert "BODY_PRIVATE_SENTINEL" not in formatted
+    assert "CLEANUP_CANCEL_PRIVATE_SENTINEL" not in formatted
