@@ -123,6 +123,52 @@ BACKGROUND_ONLY_SENSITIVE_SETTINGS = frozenset(
         "S3_SECRET_KEY",
     }
 )
+CONVENTIONAL_SENSITIVE_SETTING_MARKERS = (
+    "SECRET",
+    "KEY",
+    "TOKEN",
+    "CREDENTIALS",
+    "CONNECTION_ID",
+    "PASSWORD",
+)
+
+
+def conventionally_sensitive_setting(setting_name: str) -> bool:
+    boundary_padded_name = f"_{setting_name}_"
+    return any(
+        f"_{marker}_" in boundary_padded_name
+        for marker in CONVENTIONAL_SENSITIVE_SETTING_MARKERS
+    )
+
+
+@pytest.mark.parametrize(
+    ("setting_name", "expected"),
+    [
+        ("PASSWORD", True),
+        ("SECRET", True),
+        ("TOKEN", True),
+        ("CREDENTIALS", True),
+        ("KEY", True),
+        ("CONNECTION_ID", True),
+        ("DATABASE_PASSWORD", True),
+        ("CLERK_WEBHOOK_SECRET", True),
+        ("LOCAL_AUTH_TOKEN", True),
+        ("FIREBASE_CREDENTIALS_JSON", True),
+        ("LIVEKIT_API_KEY", True),
+        ("TELNYX_ACTIVE_CONNECTION_ID", True),
+        ("PASSWORDLESS", False),
+        ("SECRETARY", False),
+        ("TOKENIZER", False),
+        ("CREDENTIALSTORE", False),
+        ("MONKEY", False),
+        ("CONNECTION_IDENTIFIER", False),
+    ],
+)
+def test_sensitive_schema_setting_detection_is_boundary_aware(
+    setting_name: str,
+    expected: bool,
+) -> None:
+    assert conventionally_sensitive_setting(setting_name) is expected
 
 
 def render_compose(
@@ -1336,17 +1382,7 @@ def test_development_workers_filter_resolved_api_env_by_process_ownership(
     sensitive_example_keys = {
         setting
         for setting in example_keys
-        if any(
-            marker in setting
-            for marker in (
-                "_SECRET",
-                "_KEY",
-                "_TOKEN",
-                "_CREDENTIALS",
-                "_CONNECTION_ID",
-                "_PASSWORD",
-            )
-        )
+        if conventionally_sensitive_setting(setting)
     }
     assert sensitive_example_keys <= (
         API_ONLY_WORKER_SENSITIVE_SETTINGS

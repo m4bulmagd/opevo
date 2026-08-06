@@ -552,3 +552,76 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
   full-suite observation was not applied because this fix round explicitly
   requested focused checks and stated that no full suite was needed.
 - No open concern remains for this least-privilege finding.
+
+## Fix Round 4/5 — boundary-aware sensitive schema guard
+
+### Minor finding addressed
+
+- Extracted the test-only conventional-sensitive-setting predicate from the
+  resolved Compose readiness test.
+- Made matching boundary-aware by padding setting names and requiring complete
+  underscore-delimited marker tokens. Exact `PASSWORD`, `SECRET`, `TOKEN`,
+  `CREDENTIALS`, `KEY`, and `CONNECTION_ID` names now classify alongside names
+  such as `CLERK_WEBHOOK_SECRET`, `FIREBASE_CREDENTIALS_JSON`, and
+  `TELNYX_ACTIVE_CONNECTION_ID`.
+- Added an explicit matrix covering all exact configured markers, representative
+  bounded names, and near misses such as `PASSWORDLESS`, `SECRETARY`,
+  `TOKENIZER`, and `MONKEY`.
+
+### RED and mutation evidence
+
+The new boundary matrix was added before the predicate was extracted, producing
+an expected structural RED of `18 failed` because the named classifier did not
+yet exist. The existing leading-underscore behavior was then extracted
+unchanged to isolate the reviewer mutation:
+
+```text
+6 failed, 12 passed in 1.65s
+```
+
+Only the six exact marker names failed. All representative underscore-bounded
+names and all near misses behaved as expected, proving the correction targets
+the reported boundary rather than broadening to arbitrary substrings.
+
+### Verification
+
+Boundary matrix plus resolved synthetic Compose ownership test:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_deployment_readiness.py::test_sensitive_schema_setting_detection_is_boundary_aware \
+  tests/test_deployment_readiness.py::test_development_workers_filter_resolved_api_env_by_process_ownership
+# 19 passed in 1.98s
+```
+
+Focused deployment/composition gate, run outside the restricted sandbox for
+the existing subprocess lifespan check:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_deployment_readiness.py \
+  tests/composition/test_worker_composition.py
+# 208 passed in 21.01s
+```
+
+Static checks:
+
+```text
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check \
+  tests/test_deployment_readiness.py
+# All checks passed!
+
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
+# Success: no issues found in 190 source files
+```
+
+### Fix-round self-review and concerns
+
+- Only the deployment-readiness test and this report changed.
+- Runtime, Compose, queue, cron, validator, timeout, concurrency, health, and
+  shutdown behavior are byte-for-byte unchanged from Fix Round 3.
+- The predicate recognizes marker tokens at exact underscore boundaries and
+  deliberately rejects partial-word matches.
+- No real `.env` was read, and the existing synthetic/no-resolution guarantees
+  remain covered by the focused gate.
+- No open concern remains for this Minor finding.
