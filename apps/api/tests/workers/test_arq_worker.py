@@ -1,7 +1,5 @@
-import asyncio
 import importlib
 import logging
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -9,7 +7,7 @@ from arq.connections import RedisSettings
 from arq.worker import Worker
 
 from app.core import logging as app_logging
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.workers import arq_worker
 
 
@@ -189,12 +187,33 @@ async def test_effective_lifecycle_registry_uses_one_reconciliation_contract() -
     assert worker.functions["call_reconciliation_job"].keep_result_s == 0
 
 
-def test_worker_settings_use_configured_redis_url(monkeypatch) -> None:
-    with monkeypatch.context() as environment:
-        environment.setenv("REDIS_URL", "redis://redis:6379/7")
-        get_settings.cache_clear()
-        module = importlib.reload(arq_worker)
+def test_both_worker_classes_share_one_captured_boundary_settings_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core import config as config_module
 
+    configured = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://redis:6379/7",
+        worker_lifecycle_max_jobs=17,
+        worker_background_max_jobs=9,
+    )
+    calls: list[None] = []
+    original_get_settings = config_module.get_settings
+
+    def capture_settings() -> Settings:
+        calls.append(None)
+        return configured
+
+    monkeypatch.setattr(config_module, "get_settings", capture_settings)
+    try:
+        module = importlib.reload(arq_worker)
+        assert calls == [None]
+        assert module._WORKER_SETTINGS is configured
+        assert module.CallLifecycleWorkerSettings.max_jobs == 17
+        assert module.BackgroundWorkerSettings.max_jobs == 9
         for worker_settings in (
             module.CallLifecycleWorkerSettings,
             module.BackgroundWorkerSettings,
@@ -203,41 +222,15 @@ def test_worker_settings_use_configured_redis_url(monkeypatch) -> None:
             assert worker_settings.redis_settings.host == "redis"
             assert worker_settings.redis_settings.port == 6379
             assert worker_settings.redis_settings.database == 7
-
-    get_settings.cache_clear()
-    importlib.reload(arq_worker)
-
-
-def test_worker_concurrency_defaults_are_consumed_by_the_correct_class(
-    monkeypatch,
-) -> None:
-    with monkeypatch.context() as environment:
-        environment.delenv("WORKER_LIFECYCLE_MAX_JOBS", raising=False)
-        environment.delenv("WORKER_BACKGROUND_MAX_JOBS", raising=False)
-        get_settings.cache_clear()
-        module = importlib.reload(arq_worker)
-
-        assert module.CallLifecycleWorkerSettings.max_jobs == 10
-        assert module.BackgroundWorkerSettings.max_jobs == 4
-
-    get_settings.cache_clear()
-    importlib.reload(arq_worker)
-
-
-def test_worker_concurrency_overrides_are_consumed_by_the_correct_class(
-    monkeypatch,
-) -> None:
-    with monkeypatch.context() as environment:
-        environment.setenv("WORKER_LIFECYCLE_MAX_JOBS", "17")
-        environment.setenv("WORKER_BACKGROUND_MAX_JOBS", "9")
-        get_settings.cache_clear()
-        module = importlib.reload(arq_worker)
-
-        assert module.CallLifecycleWorkerSettings.max_jobs == 17
-        assert module.BackgroundWorkerSettings.max_jobs == 9
-
-    get_settings.cache_clear()
-    importlib.reload(arq_worker)
+    finally:
+        monkeypatch.setattr(config_module, "get_settings", original_get_settings)
+        with monkeypatch.context() as environment:
+            environment.setenv("APP_ENV", "test")
+            environment.setenv("DATABASE_URL", "sqlite+aiosqlite://")
+            environment.setenv("REDIS_URL", "redis://localhost:6379/0")
+            original_get_settings.cache_clear()
+            importlib.reload(arq_worker)
+            original_get_settings.cache_clear()
 
 
 class _Redis:
@@ -252,28 +245,46 @@ class _Redis:
         self.aclose_calls += 1
 
 
-class _Observer:
+class _Cleanup:
     def __init__(self, events: list[str]) -> None:
-        self._events = events
-        self.start_calls = 0
+        self.events = events
         self.close_calls = 0
-
-    def start(self) -> None:
-        self.start_calls += 1
-        self._events.append("observer.start")
 
     async def aclose(self) -> None:
         self.close_calls += 1
-        self._events.append("observer.close")
+        self.events.append("runtime.close")
 
 
-def _patch_startup_dependencies(monkeypatch, *, expected_service_name: str):
+def _worker_runtime(runtime_type, events: list[str]):
+    from app.composition.runtime import (
+        BackgroundWorkerRuntime,
+        CallLifecycleWorkerRuntime,
+    )
+
+    values = {
+        "settings": arq_worker._WORKER_SETTINGS,
+        "session_factory": object(),
+        "arq_pool": object(),
+        "observability": object(),
+        "queue_observer": object(),
+        "now": lambda: None,
+        "_cleanup": _Cleanup(events),
+    }
+    if runtime_type is BackgroundWorkerRuntime:
+        return BackgroundWorkerRuntime(outbox_handlers={}, **values)
+    return CallLifecycleWorkerRuntime(**values)
+
+
+def _patch_startup_builder(monkeypatch, *, background: bool):
+    from app.composition.runtime import (
+        BackgroundWorkerRuntime,
+        CallLifecycleWorkerRuntime,
+    )
+
     events: list[str] = []
-    settings = SimpleNamespace(otel_exporter_otlp_endpoint="https://otel.example")
-    telemetry = object()
-    handlers = {"topic": object()}
-    observer = _Observer(events)
-    observer_arguments: dict[str, Any] = {}
+    runtime_type = BackgroundWorkerRuntime if background else CallLifecycleWorkerRuntime
+    runtime = _worker_runtime(runtime_type, events)
+    captured: dict[str, object] = {}
 
     monkeypatch.setattr(arq_worker, "setup_logging", lambda: events.append("logging"))
     monkeypatch.setattr(
@@ -281,209 +292,128 @@ def _patch_startup_dependencies(monkeypatch, *, expected_service_name: str):
         "install_arq_worker_log_sanitizer",
         lambda: events.append("arq.logging"),
     )
-    monkeypatch.setattr(arq_worker, "get_settings", lambda: settings)
 
-    def validate(actual_settings) -> None:
-        assert actual_settings is settings
-        events.append("validation")
+    async def build(settings, *, arq_redis):
+        captured.update(settings=settings, arq_redis=arq_redis)
+        events.append("runtime.build")
+        return runtime
 
-    monkeypatch.setattr(arq_worker, "validate_worker_runtime", validate)
-
-    def initialize(*, service_name: str, endpoint: str | None):
-        assert service_name == expected_service_name
-        assert endpoint == "https://otel.example"
-        events.append("telemetry")
-        return telemetry
-
-    monkeypatch.setattr(arq_worker, "initialize_observability", initialize)
-
-    def get_handlers():
-        events.append("handlers")
-        return handlers
-
-    monkeypatch.setattr(arq_worker, "get_default_outbox_handlers", get_handlers)
-
-    def construct_observer(redis, actual_telemetry, **kwargs):
-        observer_arguments.update(
-            redis=redis,
-            telemetry=actual_telemetry,
-            **kwargs,
-        )
-        events.append("observer")
-        return observer
-
-    monkeypatch.setattr(arq_worker, "QueueObserver", construct_observer)
-
-    async def reject_second_pool(*_args, **_kwargs):
-        raise AssertionError("startup must use ARQ's existing Redis pool")
-
-    monkeypatch.setattr(arq_worker, "create_pool", reject_second_pool, raising=False)
-    return events, telemetry, handlers, observer, observer_arguments
+    builder_name = (
+        "build_background_worker_runtime"
+        if background
+        else "build_call_lifecycle_worker_runtime"
+    )
+    monkeypatch.setattr(arq_worker, builder_name, build)
+    return events, runtime, captured
 
 
 @pytest.mark.anyio
 async def test_call_lifecycle_startup_uses_only_arq_owned_resources(
     monkeypatch,
 ) -> None:
+    from app.composition.runtime import WORKER_RUNTIME_KEY
+
     redis = _Redis()
-    events, telemetry, _handlers, observer, observer_arguments = (
-        _patch_startup_dependencies(
-            monkeypatch,
-            expected_service_name="presvo-worker-call-lifecycle",
-        )
-    )
-    ctx = {"redis": redis}
+    events, runtime, captured = _patch_startup_builder(monkeypatch, background=False)
+    enqueue_time = object()
+    ctx = {"redis": redis, "job_try": 2, "enqueue_time": enqueue_time}
 
     await arq_worker.on_call_lifecycle_startup(ctx)
 
-    assert events == [
-        "logging",
-        "arq.logging",
-        "validation",
-        "telemetry",
-        "observer",
-        "observer.start",
-    ]
-    assert ctx["arq_pool"] is redis
-    assert ctx["observability"] is telemetry
-    assert ctx["queue_observer"] is observer
-    assert "outbox_handlers" not in ctx
-    assert observer_arguments == {
+    assert events == ["logging", "arq.logging", "runtime.build"]
+    assert ctx == {
         "redis": redis,
-        "telemetry": telemetry,
-        "queue_name": "arq:queue",
-        "queue_class": "call_lifecycle",
+        "job_try": 2,
+        "enqueue_time": enqueue_time,
+        WORKER_RUNTIME_KEY: runtime,
+    }
+    assert captured == {
+        "settings": arq_worker._WORKER_SETTINGS,
+        "arq_redis": redis,
     }
 
 
 @pytest.mark.anyio
-async def test_background_startup_constructs_handlers_after_telemetry(
+async def test_background_startup_stores_only_the_typed_application_runtime(
     monkeypatch,
 ) -> None:
+    from app.composition.runtime import WORKER_RUNTIME_KEY
+
     redis = _Redis()
-    events, telemetry, handlers, observer, observer_arguments = (
-        _patch_startup_dependencies(
-            monkeypatch,
-            expected_service_name="presvo-worker-background",
-        )
-    )
+    events, runtime, captured = _patch_startup_builder(monkeypatch, background=True)
     ctx = {"redis": redis}
 
     await arq_worker.on_background_startup(ctx)
 
-    assert events == [
-        "logging",
-        "arq.logging",
-        "validation",
-        "telemetry",
-        "handlers",
-        "observer",
-        "observer.start",
-    ]
-    assert ctx["arq_pool"] is redis
-    assert ctx["observability"] is telemetry
-    assert ctx["outbox_handlers"] is handlers
-    assert ctx["queue_observer"] is observer
-    assert observer_arguments == {
-        "redis": redis,
-        "telemetry": telemetry,
-        "queue_name": "arq:queue:background",
-        "queue_class": "background",
+    assert events == ["logging", "arq.logging", "runtime.build"]
+    assert ctx == {"redis": redis, WORKER_RUNTIME_KEY: runtime}
+    assert captured == {
+        "settings": arq_worker._WORKER_SETTINGS,
+        "arq_redis": redis,
     }
 
 
 @pytest.mark.anyio
-async def test_shutdown_closes_owned_resources_once_in_order(monkeypatch) -> None:
+async def test_shutdown_pops_and_closes_the_typed_runtime_once() -> None:
+    from app.composition.runtime import WORKER_RUNTIME_KEY, CallLifecycleWorkerRuntime
+
     events: list[str] = []
     redis = _Redis()
-    observer = _Observer(events)
-    telemetry = object()
-
-    async def shutdown(actual_telemetry) -> None:
-        assert actual_telemetry is telemetry
-        events.append("telemetry.shutdown")
-
-    monkeypatch.setattr(arq_worker, "shutdown_observability", shutdown)
-    ctx = {
-        "redis": redis,
-        "arq_pool": redis,
-        "queue_observer": observer,
-        "observability": telemetry,
-    }
+    runtime = _worker_runtime(CallLifecycleWorkerRuntime, events)
+    ctx = {"redis": redis, WORKER_RUNTIME_KEY: runtime}
 
     await arq_worker.on_shutdown(ctx)
     await arq_worker.on_shutdown(ctx)
 
-    assert events == ["observer.close", "telemetry.shutdown"]
-    assert observer.close_calls == 1
+    assert events == ["runtime.close"]
+    assert runtime._cleanup.close_calls == 1
+    assert ctx == {"redis": redis}
     assert redis.close_calls == 0
     assert redis.aclose_calls == 0
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "error", [asyncio.CancelledError(), RuntimeError("observer failed")]
-)
-async def test_shutdown_propagates_observer_failure_after_telemetry_cleanup(
-    monkeypatch,
-    error: BaseException,
-) -> None:
-    events: list[str] = []
-    telemetry = object()
+async def test_shutdown_rejects_and_removes_an_invalid_runtime_type() -> None:
+    from app.composition.runtime import (
+        WORKER_RUNTIME_KEY,
+        WorkerRuntimeConfigurationError,
+    )
 
-    class FailingObserver:
-        async def aclose(self) -> None:
-            events.append("observer.close")
-            raise error
+    ctx = {"redis": object(), WORKER_RUNTIME_KEY: object()}
 
-    async def shutdown(actual_telemetry) -> None:
-        assert actual_telemetry is telemetry
-        events.append("telemetry.shutdown")
-
-    monkeypatch.setattr(arq_worker, "shutdown_observability", shutdown)
-    ctx = {
-        "queue_observer": FailingObserver(),
-        "observability": telemetry,
-    }
-
-    with pytest.raises(type(error)) as captured:
+    with pytest.raises(WorkerRuntimeConfigurationError, match="invalid type"):
         await arq_worker.on_shutdown(ctx)
 
-    assert captured.value is error
-    assert events == ["observer.close", "telemetry.shutdown"]
-    await arq_worker.on_shutdown(ctx)
-    assert events == ["observer.close", "telemetry.shutdown"]
+    assert ctx == {"redis": ctx["redis"]}
 
 
 @pytest.mark.anyio
 async def test_worker_startup_rejects_unsafe_runtime_before_resources(
     monkeypatch,
 ) -> None:
+    from app.composition.runtime import WORKER_RUNTIME_KEY
+
     events: list[str] = []
-    settings = SimpleNamespace(otel_exporter_otlp_endpoint=None)
     monkeypatch.setattr(arq_worker, "setup_logging", lambda: events.append("logging"))
     monkeypatch.setattr(
         arq_worker,
         "install_arq_worker_log_sanitizer",
         lambda: events.append("arq.logging"),
     )
-    monkeypatch.setattr(arq_worker, "get_settings", lambda: settings)
-
-    def reject_runtime(actual_settings) -> None:
-        assert actual_settings is settings
-        events.append("validation")
+    async def reject_runtime(settings, *, arq_redis) -> None:
+        assert settings is arq_worker._WORKER_SETTINGS
+        assert arq_redis is ctx["redis"]
+        events.append("runtime.build")
         raise RuntimeError("TELNYX_ORDERING_ENABLED")
 
-    monkeypatch.setattr(arq_worker, "validate_worker_runtime", reject_runtime)
+    monkeypatch.setattr(arq_worker, "build_background_worker_runtime", reject_runtime)
     ctx = {"redis": object()}
 
     with pytest.raises(RuntimeError, match="TELNYX_ORDERING_ENABLED"):
         await arq_worker.on_background_startup(ctx)
 
-    assert events == ["logging", "arq.logging", "validation"]
-    assert "observability" not in ctx
-    assert "outbox_handlers" not in ctx
-    assert "queue_observer" not in ctx
+    assert events == ["logging", "arq.logging", "runtime.build"]
+    assert WORKER_RUNTIME_KEY not in ctx
 
 
 @pytest.mark.parametrize(

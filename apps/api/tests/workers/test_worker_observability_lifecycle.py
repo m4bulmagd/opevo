@@ -383,17 +383,26 @@ async def test_worker_job_reference_skips_untrusted_candidates_before_payload_ke
     call_id = str(uuid4())
     tracer = CaptureTracer()
     telemetry = Observability(meter=CaptureMeter(), tracer=tracer)
+    observed_contexts: list[dict] = []
 
-    @instrument_job("call_finalization", queue_class="call_lifecycle")
+    def get_observability(ctx: dict) -> Observability:
+        observed_contexts.append(ctx)
+        return telemetry
+
+    @instrument_job(
+        "call_finalization",
+        queue_class="call_lifecycle",
+        observability_getter=get_observability,
+    )
     async def job(_ctx: dict, *_args, payload: dict) -> str:
         return payload["call_id"]
 
+    ctx = {
+        "enqueue_time": datetime.now(UTC),
+        "job_try": 1,
+    }
     result = await job(
-        {
-            "observability": telemetry,
-            "enqueue_time": datetime.now(UTC),
-            "job_try": 1,
-        },
+        ctx,
         object(),
         {"not_call_id": "PRIVATE_FIELD"},
         {"call_id": "PRIVATE_INVALID_CALL_ID"},
@@ -401,6 +410,7 @@ async def test_worker_job_reference_skips_untrusted_candidates_before_payload_ke
     )
 
     assert result == call_id
+    assert observed_contexts == [ctx]
     assert tracer.spans[0].attributes["presvo.call.id"] == call_id
     assert "PRIVATE_INVALID_CALL_ID" not in repr(tracer.spans[0].attributes)
 

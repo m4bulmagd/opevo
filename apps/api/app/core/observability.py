@@ -1406,14 +1406,19 @@ def install_http_observability(app) -> None:
                 )
 
 
-def instrument_job(job_name: str, *, queue_class: str):
+def instrument_job(
+    job_name: str,
+    *,
+    queue_class: str,
+    observability_getter: Callable[[dict[str, Any]], Observability],
+):
     job_name = _safe_label(job_name, _JOB_NAMES)
     queue_class = _safe_label(queue_class, _WORKER_QUEUE_CLASSES)
 
     def decorator(function):
         @wraps(function)
-        async def wrapped(ctx: dict, *args, **kwargs):
-            telemetry = ctx.get("observability") or get_observability()
+        async def wrapped(ctx: dict[str, Any], *args, **kwargs):
+            telemetry = observability_getter(ctx)
             attempt = _safe_worker_attempt(ctx.get("job_try"))
             enqueue_time = ctx.get("enqueue_time")
             if isinstance(enqueue_time, datetime):

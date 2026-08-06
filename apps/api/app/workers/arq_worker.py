@@ -5,17 +5,22 @@ from arq.cron import cron
 from arq.typing import WorkerCoroutine
 from arq.worker import func
 
+from app.composition.runtime import (
+    WORKER_RUNTIME_KEY,
+    BackgroundWorkerRuntime,
+    CallLifecycleWorkerRuntime,
+    WorkerRuntimeConfigurationError,
+    require_worker_observability,
+)
+from app.composition.workers import (
+    build_background_worker_runtime,
+    build_call_lifecycle_worker_runtime,
+)
 from app.core.config import get_settings
 from app.core.logging import install_arq_worker_log_sanitizer, setup_logging
-from app.core.observability import (
-    initialize_observability,
-    shutdown_observability,
-)
-from app.core.runtime_validation import validate_worker_runtime
 from app.workers.jobs.call_finalization import call_finalization_job
 from app.workers.jobs.call_reconciliation import call_reconciliation_job
 from app.workers.outbox.delivery import (
-    get_default_outbox_handlers,
     outbox_delivery_job,
     outbox_reconciliation_job,
 )
@@ -28,7 +33,6 @@ from app.workers.job_policy import (
     VERIFICATION_EXPIRY_POLICY,
     apply_job_policy,
 )
-from app.workers.queue_observer import QueueObserver
 from app.workers.queueing import (
     BACKGROUND_QUEUE_NAME,
     CALL_LIFECYCLE_QUEUE_NAME,
@@ -37,66 +41,40 @@ from app.workers.queueing import (
 )
 
 
-async def _on_startup(
-    ctx: dict[str, Any],
-    *,
-    service_name: str,
-    queue_name: str,
-    queue_class: str,
-    include_outbox_handlers: bool,
-) -> None:
-    setup_logging()
-    install_arq_worker_log_sanitizer()
-    settings = get_settings()
-    validate_worker_runtime(settings)
-    redis = ctx["redis"]
-    ctx["arq_pool"] = redis
-    telemetry = initialize_observability(
-        service_name=service_name,
-        endpoint=settings.otel_exporter_otlp_endpoint,
-    )
-    ctx["observability"] = telemetry
-    if include_outbox_handlers:
-        ctx["outbox_handlers"] = get_default_outbox_handlers()
-    observer = QueueObserver(
-        redis,
-        telemetry,
-        queue_name=queue_name,
-        queue_class=queue_class,
-    )
-    ctx["queue_observer"] = observer
-    observer.start()
+_WORKER_SETTINGS = get_settings()
 
 
 async def on_call_lifecycle_startup(ctx: dict[str, Any]) -> None:
-    await _on_startup(
-        ctx,
-        service_name="presvo-worker-call-lifecycle",
-        queue_name=CALL_LIFECYCLE_QUEUE_NAME,
-        queue_class=QUEUE_CLASS_CALL_LIFECYCLE,
-        include_outbox_handlers=False,
+    setup_logging()
+    install_arq_worker_log_sanitizer()
+    runtime = await build_call_lifecycle_worker_runtime(
+        _WORKER_SETTINGS,
+        arq_redis=ctx["redis"],
     )
+    ctx[WORKER_RUNTIME_KEY] = runtime
 
 
 async def on_background_startup(ctx: dict[str, Any]) -> None:
-    await _on_startup(
-        ctx,
-        service_name="presvo-worker-background",
-        queue_name=BACKGROUND_QUEUE_NAME,
-        queue_class=QUEUE_CLASS_BACKGROUND,
-        include_outbox_handlers=True,
+    setup_logging()
+    install_arq_worker_log_sanitizer()
+    runtime = await build_background_worker_runtime(
+        _WORKER_SETTINGS,
+        arq_redis=ctx["redis"],
     )
+    ctx[WORKER_RUNTIME_KEY] = runtime
 
 
 async def on_shutdown(ctx: dict[str, Any]) -> None:
-    observer = ctx.pop("queue_observer", None)
-    telemetry = ctx.pop("observability", None)
-    try:
-        if observer is not None:
-            await observer.aclose()
-    finally:
-        if telemetry is not None:
-            await shutdown_observability(telemetry)
+    runtime = ctx.pop(WORKER_RUNTIME_KEY, None)
+    if runtime is None:
+        return
+    if isinstance(runtime, CallLifecycleWorkerRuntime):
+        await runtime.aclose()
+        return
+    if isinstance(runtime, BackgroundWorkerRuntime):
+        await runtime.aclose()
+        return
+    raise WorkerRuntimeConfigurationError("worker runtime has an invalid type")
 
 
 policy_call_finalization_job = cast(
@@ -105,6 +83,7 @@ policy_call_finalization_job = cast(
         call_finalization_job,
         policy=CALL_FINALIZATION_POLICY,
         queue_class=QUEUE_CLASS_CALL_LIFECYCLE,
+        observability_getter=require_worker_observability,
     ),
 )
 policy_outbox_delivery_job = cast(
@@ -113,6 +92,7 @@ policy_outbox_delivery_job = cast(
         outbox_delivery_job,
         policy=OUTBOX_DELIVERY_POLICY,
         queue_class=QUEUE_CLASS_BACKGROUND,
+        observability_getter=require_worker_observability,
     ),
 )
 policy_outbox_reconciliation_job = cast(
@@ -121,6 +101,7 @@ policy_outbox_reconciliation_job = cast(
         outbox_reconciliation_job,
         policy=OUTBOX_RECONCILIATION_POLICY,
         queue_class=QUEUE_CLASS_BACKGROUND,
+        observability_getter=require_worker_observability,
     ),
 )
 policy_call_reconciliation_job = cast(
@@ -129,6 +110,7 @@ policy_call_reconciliation_job = cast(
         call_reconciliation_job,
         policy=CALL_RECONCILIATION_POLICY,
         queue_class=QUEUE_CLASS_CALL_LIFECYCLE,
+        observability_getter=require_worker_observability,
     ),
 )
 policy_verification_expiry_job = cast(
@@ -137,16 +119,17 @@ policy_verification_expiry_job = cast(
         verification_expiry_job,
         policy=VERIFICATION_EXPIRY_POLICY,
         queue_class=QUEUE_CLASS_BACKGROUND,
+        observability_getter=require_worker_observability,
     ),
 )
 
 
 class CallLifecycleWorkerSettings:
-    redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
+    redis_settings = RedisSettings.from_dsn(_WORKER_SETTINGS.redis_url)
     on_startup = on_call_lifecycle_startup
     on_shutdown = on_shutdown
     queue_name = CALL_LIFECYCLE_QUEUE_NAME
-    max_jobs = get_settings().worker_lifecycle_max_jobs
+    max_jobs = _WORKER_SETTINGS.worker_lifecycle_max_jobs
     poll_delay = 0.5
     job_completion_wait = 60
     health_check_interval = 15
@@ -179,11 +162,11 @@ class CallLifecycleWorkerSettings:
 
 
 class BackgroundWorkerSettings:
-    redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
+    redis_settings = RedisSettings.from_dsn(_WORKER_SETTINGS.redis_url)
     on_startup = on_background_startup
     on_shutdown = on_shutdown
     queue_name = BACKGROUND_QUEUE_NAME
-    max_jobs = get_settings().worker_background_max_jobs
+    max_jobs = _WORKER_SETTINGS.worker_background_max_jobs
     poll_delay = 0.5
     job_completion_wait = 30
     health_check_interval = 15

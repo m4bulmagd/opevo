@@ -36,15 +36,10 @@ PRODUCTION_REQUIRED_SETTINGS = (
     "agent_dispatch_jwt_secret",
 )
 
-WORKER_PRODUCTION_REQUIRED_SETTINGS = (
-    "database_url",
-    "redis_url",
+BACKGROUND_WORKER_REQUIRED_SETTINGS = (
     "livekit_url",
     "livekit_api_key",
     "livekit_api_secret",
-    "telnyx_api_key",
-    "telnyx_active_connection_id",
-    "telnyx_disabled_connection_id",
     "storage_bucket_name",
     "s3_endpoint_url",
     "s3_access_key",
@@ -147,47 +142,62 @@ def validate_api_runtime(settings: Settings) -> None:
         )
 
 
-def validate_worker_runtime(settings: Settings) -> None:
+def validate_call_lifecycle_worker_runtime(settings: Settings) -> None:
+    missing = _require(settings, ("database_url", "redis_url"))
+    if missing:
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: " + ", ".join(missing)
+        )
+
+
+def validate_background_worker_runtime(settings: Settings) -> None:
     environment = settings.app_env.strip().lower()
+    missing = _require(settings, ("database_url", "redis_url"))
+
     if settings.billing_mode == "stripe":
-        missing_billing_settings = _require(settings, ("stripe_secret_key",))
-        if missing_billing_settings:
-            raise RuntimeError(
-                "Missing or invalid required runtime settings: "
-                f"{', '.join(missing_billing_settings)}"
+        missing.extend(_require(settings, ("stripe_secret_key",)))
+
+    if settings.telephony_mode == "telnyx":
+        missing.extend(
+            _require(
+                settings,
+                (
+                    "telnyx_api_key",
+                    "telnyx_active_connection_id",
+                    "telnyx_disabled_connection_id",
+                ),
             )
+        )
 
-    if environment == "development":
+    invalid_modes: list[str] = []
+    if environment == "production":
+        if settings.billing_mode != "stripe":
+            invalid_modes.append("BILLING_MODE")
+        if settings.telephony_mode != "telnyx":
+            invalid_modes.append("TELEPHONY_MODE")
+        if not settings.telnyx_ordering_enabled:
+            missing.append("TELNYX_ORDERING_ENABLED")
+
+    if invalid_modes or missing:
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: "
+            + ", ".join([*invalid_modes, *missing])
+        )
+
+    if environment == "test":
         return
-
-    if settings.auth_mode != "clerk":
-        raise RuntimeError(
-            "Missing or invalid required runtime settings: AUTH_MODE"
-        )
-
-    if environment == "production" and settings.telephony_mode != "telnyx":
-        raise RuntimeError(
-            "Missing or invalid required runtime settings: TELEPHONY_MODE"
-        )
 
     _validate_dispatch_secret(settings)
-
-    if environment != "production":
-        return
-
-    missing = _require(settings, WORKER_PRODUCTION_REQUIRED_SETTINGS)
-    if not settings.telnyx_ordering_enabled:
-        missing.append("TELNYX_ORDERING_ENABLED")
-
-    if not _is_missing(settings.summary_provider):
-        if settings.summary_provider == "gemini":
-            missing.extend(_require(settings, ("gemini_api_key",)))
-        else:
+    missing = _require(settings, BACKGROUND_WORKER_REQUIRED_SETTINGS)
+    if _is_missing(settings.summary_provider) or settings.summary_provider != "gemini":
+        if "SUMMARY_PROVIDER" not in missing:
             missing.append("SUMMARY_PROVIDER")
+    else:
+        missing.extend(_require(settings, ("gemini_api_key",)))
 
     if missing:
         raise RuntimeError(
-            f"Missing or invalid required production settings: {', '.join(missing)}"
+            f"Missing or invalid required runtime settings: {', '.join(missing)}"
         )
 
 

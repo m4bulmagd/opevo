@@ -6,7 +6,6 @@ import os
 import time
 from collections.abc import Awaitable
 from dataclasses import replace
-from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
@@ -391,34 +390,24 @@ async def test_real_worker_job_logs_are_fixed_and_payload_blind(
             RuntimeError(driver_sentinel),
         )
 
-    class NoopObserver:
-        def start(self) -> None:
-            pass
-
+    class NoopCleanup:
         async def aclose(self) -> None:
             pass
 
-    monkeypatch.setattr(
-        arq_worker,
-        "get_settings",
-        lambda: SimpleNamespace(otel_exporter_otlp_endpoint=None),
-    )
-    monkeypatch.setattr(arq_worker, "validate_worker_runtime", lambda _settings: None)
-    monkeypatch.setattr(
-        arq_worker,
-        "initialize_observability",
-        lambda **_kwargs: object(),
-    )
-    monkeypatch.setattr(arq_worker, "QueueObserver", lambda *_args, **_kwargs: NoopObserver())
+    async def build_runtime(settings, *, arq_redis):
+        from app.composition.runtime import CallLifecycleWorkerRuntime
 
-    async def shutdown_observability(_telemetry: object) -> None:
-        pass
+        return CallLifecycleWorkerRuntime(
+            settings=settings,
+            session_factory=object(),
+            arq_pool=arq_redis,
+            observability=object(),
+            queue_observer=object(),
+            now=lambda: None,
+            _cleanup=NoopCleanup(),
+        )
 
-    monkeypatch.setattr(
-        arq_worker,
-        "shutdown_observability",
-        shutdown_observability,
-    )
+    monkeypatch.setattr(arq_worker, "build_call_lifecycle_worker_runtime", build_runtime)
 
     control_pool: ArqRedis | None = None
     worker_pool: ArqRedis | None = None

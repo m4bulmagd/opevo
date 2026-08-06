@@ -12,6 +12,7 @@ from sqlalchemy.exc import (
     TimeoutError as SQLAlchemyTimeoutError,
 )
 
+from app.core.observability import get_observability
 from app.workers.job_policy import (
     CALL_FINALIZATION_POLICY,
     CALL_RECONCILIATION_POLICY,
@@ -22,6 +23,10 @@ from app.workers.job_policy import (
     apply_job_policy,
     is_retryable_call_finalization_error,
 )
+
+
+def _observability_getter(_ctx: dict):
+    return get_observability()
 
 
 def test_worker_job_policies_are_immutable_and_bounded() -> None:
@@ -97,6 +102,7 @@ async def test_retryable_finalization_failures_use_bounded_backoff(
         fail,
         policy=CALL_FINALIZATION_POLICY,
         queue_class="call_lifecycle",
+        observability_getter=_observability_getter,
     )
 
     with pytest.raises(Retry) as captured:
@@ -116,6 +122,7 @@ async def test_third_retryable_finalization_failure_raises_original_error() -> N
         fail,
         policy=CALL_FINALIZATION_POLICY,
         queue_class="call_lifecycle",
+        observability_getter=_observability_getter,
     )
 
     with pytest.raises(OperationalError) as captured:
@@ -136,6 +143,7 @@ async def test_non_retryable_finalization_failures_are_unchanged(
         fail,
         policy=CALL_FINALIZATION_POLICY,
         queue_class="call_lifecycle",
+        observability_getter=_observability_getter,
     )
 
     with pytest.raises(type(error)) as captured:
@@ -160,6 +168,7 @@ async def test_invalidated_programming_error_is_not_converted_to_retry() -> None
         fail,
         policy=CALL_FINALIZATION_POLICY,
         queue_class="call_lifecycle",
+        observability_getter=_observability_getter,
     )
 
     with pytest.raises(ProgrammingError) as captured:
@@ -180,6 +189,7 @@ async def test_blocked_job_becomes_timeout_error_at_semantic_bound() -> None:
         wait_forever,
         policy=policy,
         queue_class="background",
+        observability_getter=_observability_getter,
     )
 
     with pytest.raises(TimeoutError):

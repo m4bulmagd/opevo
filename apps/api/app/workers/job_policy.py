@@ -14,7 +14,7 @@ from sqlalchemy.exc import (
     TimeoutError as SQLAlchemyTimeoutError,
 )
 
-from app.core.observability import instrument_job
+from app.core.observability import Observability, instrument_job
 
 
 ResultT = TypeVar("ResultT")
@@ -69,6 +69,7 @@ def apply_job_policy(
     *,
     policy: JobPolicy,
     queue_class: str,
+    observability_getter: Callable[[dict[str, Any]], Observability],
 ) -> JobFunction[ResultT]:
     @wraps(function)
     async def enforce_semantic_timeout(
@@ -82,6 +83,7 @@ def apply_job_policy(
     observed_function = instrument_job(
         policy.job_name,
         queue_class=queue_class,
+        observability_getter=observability_getter,
     )(enforce_semantic_timeout)
 
     @wraps(function)

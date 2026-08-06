@@ -1,7 +1,11 @@
 import logging
+from contextlib import AsyncExitStack
+from datetime import UTC, datetime
 
 import pytest
 
+from app.composition.lifecycle import RuntimeCleanup
+from app.composition.runtime import WORKER_RUNTIME_KEY, CallLifecycleWorkerRuntime
 from app.core.config import Settings
 from app.services.call_reconciliation_service import ReconciliationResult
 from app.workers.jobs import call_reconciliation as job_module
@@ -16,6 +20,28 @@ class _Pool:
         self.jobs.append((name, payload, kwargs))
         if self.fail:
             raise RuntimeError("redis unavailable")
+
+
+class _Telemetry:
+    def record_reconciliation_outcomes(self, _value: dict[str, int]) -> None:
+        pass
+
+
+def _runtime(pool: object, telemetry: object | None = None) -> CallLifecycleWorkerRuntime:
+    return CallLifecycleWorkerRuntime(
+        settings=Settings(
+            _env_file=None,
+            app_env="test",
+            database_url="sqlite+aiosqlite://",
+            redis_url="redis://worker.invalid/0",
+        ),
+        session_factory=object(),
+        arq_pool=pool,
+        observability=telemetry or _Telemetry(),
+        queue_observer=object(),
+        now=lambda: datetime(2026, 8, 6, tzinfo=UTC),
+        _cleanup=RuntimeCleanup(AsyncExitStack()),
+    )
 
 
 @pytest.mark.anyio
@@ -44,7 +70,7 @@ async def test_recovered_calls_wake_outbox_after_reconciliation_without_affectin
     result = await job_module.call_reconciliation_job(
         {
             "session_factory": object(),
-            "arq_pool": pool,
+            WORKER_RUNTIME_KEY: _runtime(pool),
         }
     )
 
@@ -85,7 +111,7 @@ async def test_any_scanned_stale_work_wakes_possible_recording_intent(
     await job_module.call_reconciliation_job(
         {
             "session_factory": object(),
-            "arq_pool": pool,
+            WORKER_RUNTIME_KEY: _runtime(pool),
         }
     )
 
@@ -130,7 +156,7 @@ async def test_call_reconciliation_snapshot_is_observed_without_changing_result(
                 raise RuntimeError("PRIVATE_SNAPSHOT_DETAIL")
             return snapshot
 
-    class _Telemetry:
+    class _SnapshotTelemetry:
         def record_reconciliation_outcomes(self, _value: dict[str, int]) -> None:
             pass
 
@@ -146,10 +172,11 @@ async def test_call_reconciliation_snapshot_is_observed_without_changing_result(
     monkeypatch.setattr(job_module, "get_settings", lambda: explicit_settings)
 
     with caplog.at_level(logging.WARNING, logger=job_module.logger.name):
+        telemetry = _SnapshotTelemetry()
         response = await job_module.call_reconciliation_job(
             {
                 "session_factory": _SessionContext,
-                "observability": _Telemetry(),
+                WORKER_RUNTIME_KEY: _runtime(object(), telemetry),
             }
         )
 

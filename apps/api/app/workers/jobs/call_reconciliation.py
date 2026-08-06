@@ -1,6 +1,7 @@
 import logging
 from datetime import UTC, datetime
 
+from app.composition.runtime import require_call_lifecycle_runtime
 from app.core.database import get_session_factory
 from app.core.config import get_settings
 from app.core.logging import report_safe_exception
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 async def call_reconciliation_job(ctx: dict) -> dict[str, int]:
+    runtime = require_call_lifecycle_runtime(ctx)
     session_factory = ctx.get("session_factory") or get_session_factory()
     settings = get_settings()
     now_provider = ctx.get("call_reconciliation_now") or (lambda: datetime.now(UTC))
@@ -24,7 +26,7 @@ async def call_reconciliation_job(ctx: dict) -> dict[str, int]:
         now,
         limit=100,
     )
-    arq_pool = ctx.get("arq_pool")
+    arq_pool = runtime.arq_pool
     if result.scanned and arq_pool is not None:
         try:
             await enqueue_outbox_wakeup(arq_pool)
@@ -55,24 +57,23 @@ async def call_reconciliation_job(ctx: dict) -> dict[str, int]:
         "failed": result.failed,
         "deferred": result.deferred,
     }
-    telemetry = ctx.get("observability")
-    if telemetry is not None:
-        telemetry.record_reconciliation_outcomes(response)
-        if hasattr(telemetry, "record_call_snapshot"):
-            try:
-                async with session_factory() as session:
-                    snapshot = await CallRepository(session).observability_snapshot(
-                        now,
-                        settings,
-                    )
-                telemetry.record_call_snapshot(snapshot)
-            except Exception as error:
-                report_safe_exception(
-                    logger,
-                    event="observability_snapshot_failed",
-                    operation="collect_call_snapshot",
-                    error=error,
-                    status="failed",
-                    level=logging.WARNING,
+    telemetry = runtime.observability
+    telemetry.record_reconciliation_outcomes(response)
+    if hasattr(telemetry, "record_call_snapshot"):
+        try:
+            async with session_factory() as session:
+                snapshot = await CallRepository(session).observability_snapshot(
+                    now,
+                    settings,
                 )
+            telemetry.record_call_snapshot(snapshot)
+        except Exception as error:
+            report_safe_exception(
+                logger,
+                event="observability_snapshot_failed",
+                operation="collect_call_snapshot",
+                error=error,
+                status="failed",
+                level=logging.WARNING,
+            )
     return response

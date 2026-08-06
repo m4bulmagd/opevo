@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from app.composition.lifecycle import RuntimeCleanup
 from app.core.config import Settings
@@ -20,6 +22,11 @@ if TYPE_CHECKING:
     from app.services.livekit_recording_service import LiveKitRecordingService
     from app.services.realtime_service import RealtimeService
     from app.workers.call_finalization_queue import CallFinalizationQueue
+    from app.workers.outbox.delivery import OutboxHandler
+    from app.workers.queue_observer import QueueObserver
+
+
+WORKER_RUNTIME_KEY = "application_runtime"
 
 
 @dataclass(slots=True)
@@ -43,7 +50,40 @@ class ApiRuntime:
         await self._cleanup.aclose()
 
 
+@dataclass(slots=True)
+class CallLifecycleWorkerRuntime:
+    settings: Settings
+    session_factory: AsyncSessionFactory
+    arq_pool: ArqRedis
+    observability: Observability
+    queue_observer: QueueObserver
+    now: Callable[[], datetime]
+    _cleanup: RuntimeCleanup
+
+    async def aclose(self) -> None:
+        await self._cleanup.aclose()
+
+
+@dataclass(slots=True)
+class BackgroundWorkerRuntime:
+    settings: Settings
+    session_factory: AsyncSessionFactory
+    arq_pool: ArqRedis
+    observability: Observability
+    queue_observer: QueueObserver
+    outbox_handlers: Mapping[str, OutboxHandler]
+    now: Callable[[], datetime]
+    _cleanup: RuntimeCleanup
+
+    async def aclose(self) -> None:
+        await self._cleanup.aclose()
+
+
 class ApiRuntimeUnavailable(RuntimeError):
+    pass
+
+
+class WorkerRuntimeConfigurationError(RuntimeError):
     pass
 
 
@@ -53,3 +93,32 @@ def get_api_runtime(app: object) -> ApiRuntime:
     if not isinstance(runtime, ApiRuntime):
         raise ApiRuntimeUnavailable("API runtime is not initialized")
     return runtime
+
+
+def require_call_lifecycle_runtime(
+    ctx: dict[str, Any],
+) -> CallLifecycleWorkerRuntime:
+    runtime = ctx.get(WORKER_RUNTIME_KEY)
+    if not isinstance(runtime, CallLifecycleWorkerRuntime):
+        raise WorkerRuntimeConfigurationError(
+            "call-lifecycle worker runtime is not initialized"
+        )
+    return runtime
+
+
+def require_background_runtime(ctx: dict[str, Any]) -> BackgroundWorkerRuntime:
+    runtime = ctx.get(WORKER_RUNTIME_KEY)
+    if not isinstance(runtime, BackgroundWorkerRuntime):
+        raise WorkerRuntimeConfigurationError(
+            "background worker runtime is not initialized"
+        )
+    return runtime
+
+
+def require_worker_observability(ctx: dict[str, Any]) -> Observability:
+    runtime = ctx.get(WORKER_RUNTIME_KEY)
+    if isinstance(runtime, CallLifecycleWorkerRuntime):
+        return runtime.observability
+    if isinstance(runtime, BackgroundWorkerRuntime):
+        return runtime.observability
+    raise WorkerRuntimeConfigurationError("worker runtime is not initialized")

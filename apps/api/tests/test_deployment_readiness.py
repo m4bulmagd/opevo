@@ -12,7 +12,10 @@ from alembic.script import ScriptDirectory
 import pytest
 
 from app.core.config import Settings
-from app.core.runtime_validation import validate_api_runtime, validate_worker_runtime
+from app.core.runtime_validation import (
+    validate_api_runtime,
+    validate_background_worker_runtime,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -495,14 +498,8 @@ def test_settings_validation_hides_arbitrary_invalid_mode_values(
 
 
 @pytest.mark.parametrize("app_env", ["test", "staging"])
-@pytest.mark.parametrize(
-    "validator",
-    (validate_api_runtime, validate_worker_runtime),
-    ids=("api", "worker"),
-)
 def test_every_non_development_environment_rejects_local_auth(
     app_env: str,
-    validator,
 ) -> None:
     settings = Settings(
         app_env=app_env,
@@ -514,7 +511,7 @@ def test_every_non_development_environment_rejects_local_auth(
     )
 
     with pytest.raises(RuntimeError, match="AUTH_MODE") as error:
-        validator(settings)
+        validate_api_runtime(settings)
 
     assert "local-token-sentinel-that-must-not-be-reported" not in str(error.value)
 
@@ -1051,7 +1048,7 @@ def test_production_worker_runtime_accepts_least_privilege_settings() -> None:
         stripe_secret_key="stripe-secret-key",
     )
 
-    validate_worker_runtime(settings)
+    validate_background_worker_runtime(settings)
 
 
 @pytest.mark.parametrize(
@@ -1075,7 +1072,7 @@ def test_production_worker_requires_recording_provider_and_private_storage(
     settings = base_settings.model_copy(update={field_name: ""})
 
     with pytest.raises(RuntimeError, match=environment_name):
-        validate_worker_runtime(settings)
+        validate_background_worker_runtime(settings)
 
 
 def test_worker_rejects_stripe_mode_without_stripe_secret_key(
@@ -1084,7 +1081,7 @@ def test_worker_rejects_stripe_mode_without_stripe_secret_key(
     settings = base_settings.model_copy(update={"stripe_secret_key": ""})
 
     with pytest.raises(RuntimeError, match="STRIPE_SECRET_KEY"):
-        validate_worker_runtime(settings)
+        validate_background_worker_runtime(settings)
 
 
 @pytest.mark.parametrize("app_env", ["development", "test", "staging"])
@@ -1103,29 +1100,29 @@ def test_non_production_worker_rejects_stripe_mode_without_stripe_secret_key(
     )
 
     with pytest.raises(RuntimeError, match="STRIPE_SECRET_KEY"):
-        validate_worker_runtime(settings)
+        validate_background_worker_runtime(settings)
 
 
-def test_development_worker_accepts_fake_billing_without_stripe_secret_key() -> None:
+def test_test_worker_accepts_fake_billing_without_stripe_secret_key() -> None:
     settings = Settings(
-        app_env="development",
+        app_env="test",
         database_url="sqlite+aiosqlite://",
         redis_url="redis://localhost:6379/0",
         billing_mode="fake",
     )
 
-    validate_worker_runtime(settings)
+    validate_background_worker_runtime(settings)
 
 
 def test_recording_runtime_does_not_require_an_agent_evaluation_model() -> None:
     from app.core.runtime_validation import (
         PRODUCTION_REQUIRED_SETTINGS,
-        WORKER_PRODUCTION_REQUIRED_SETTINGS,
+        BACKGROUND_WORKER_REQUIRED_SETTINGS,
     )
 
     assert "livekit_eval_model" not in Settings.model_fields
     assert "livekit_eval_model" not in PRODUCTION_REQUIRED_SETTINGS
-    assert "livekit_eval_model" not in WORKER_PRODUCTION_REQUIRED_SETTINGS
+    assert "livekit_eval_model" not in BACKGROUND_WORKER_REQUIRED_SETTINGS
     assert "LIVEKIT_EVAL_MODEL" not in (REPO_ROOT / "compose.yaml").read_text()
 
 

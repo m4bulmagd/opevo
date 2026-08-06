@@ -669,7 +669,11 @@ async def test_http_and_job_tracer_start_failures_do_not_change_outcomes() -> No
     with TestClient(app) as client:
         assert client.get("/ok").json() == {"status": "ok"}
 
-    @instrument_job("call_finalization", queue_class="call_lifecycle")
+    @instrument_job(
+        "call_finalization",
+        queue_class="call_lifecycle",
+        observability_getter=lambda ctx: ctx["observability"],
+    )
     async def job(_ctx: dict) -> str:
         return "ok"
 
@@ -1322,7 +1326,11 @@ async def test_internal_provider_and_worker_spans_use_semantic_kinds() -> None:
     async with telemetry.provider_operation("gemini", "generate_summary"):
         pass
 
-    @instrument_job("call_finalization", queue_class="call_lifecycle")
+    @instrument_job(
+        "call_finalization",
+        queue_class="call_lifecycle",
+        observability_getter=lambda ctx: ctx["observability"],
+    )
     async def job(_ctx: dict) -> None:
         return None
 
@@ -1581,7 +1589,11 @@ async def test_instrumented_job_records_queue_delay_duration_and_no_job_id() -> 
     meter = _Meter()
     telemetry = _observability(meter=meter)
 
-    @instrument_job("call_finalization", queue_class="call_lifecycle")
+    @instrument_job(
+        "call_finalization",
+        queue_class="call_lifecycle",
+        observability_getter=lambda ctx: ctx["observability"],
+    )
     async def job(ctx: dict) -> str:
         return "ok"
 
@@ -1630,7 +1642,11 @@ async def test_instrumented_job_records_bounded_failure_outcomes(
     meter = _Meter()
     telemetry = _observability(meter=meter)
 
-    @instrument_job("call_finalization", queue_class="call_lifecycle")
+    @instrument_job(
+        "call_finalization",
+        queue_class="call_lifecycle",
+        observability_getter=lambda ctx: ctx["observability"],
+    )
     async def job(_ctx: dict) -> None:
         raise error
 
@@ -1657,7 +1673,11 @@ async def test_worker_observability_collapses_unbounded_attributes() -> None:
     tracer = _Tracer()
     telemetry = _observability(meter=meter, tracer=tracer)
 
-    @instrument_job(job_sentinel, queue_class=queue_sentinel)
+    @instrument_job(
+        job_sentinel,
+        queue_class=queue_sentinel,
+        observability_getter=lambda ctx: ctx["observability"],
+    )
     async def job(_ctx: dict) -> None:
         return None
 
@@ -1734,7 +1754,11 @@ async def test_worker_observability_accepts_fixed_job_names(job_name: str) -> No
     meter = _Meter()
     telemetry = _observability(meter=meter)
 
-    @instrument_job(job_name, queue_class="background")
+    @instrument_job(
+        job_name,
+        queue_class="background",
+        observability_getter=lambda ctx: ctx["observability"],
+    )
     async def job(_ctx: dict) -> None:
         return None
 
@@ -1752,7 +1776,11 @@ async def test_call_finalization_instrumentation_extracts_only_valid_call_refere
     telemetry = _observability(tracer=tracer)
     call_id = str(uuid4())
 
-    @instrument_job("call_finalization", queue_class="call_lifecycle")
+    @instrument_job(
+        "call_finalization",
+        queue_class="call_lifecycle",
+        observability_getter=lambda ctx: ctx["observability"],
+    )
     async def job(_ctx: dict, payload: dict) -> str:
         return payload["call_id"]
 
@@ -2028,10 +2056,15 @@ async def test_call_reconciliation_job_emits_exact_result_outcomes(
             )
 
     monkeypatch.setattr(job_module, "CallReconciliationService", Service)
+    runtime = SimpleNamespace(arq_pool=None, observability=Telemetry())
+    monkeypatch.setattr(
+        job_module,
+        "require_call_lifecycle_runtime",
+        lambda _ctx: runtime,
+    )
     result = await job_module.call_reconciliation_job(
         {
             "session_factory": object(),
-            "observability": Telemetry(),
         }
     )
 
