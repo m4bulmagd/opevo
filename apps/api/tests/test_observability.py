@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from conftest import install_test_api_runtime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from tests.fakes import (
@@ -558,7 +559,7 @@ def test_http_metric_uses_route_template_not_raw_path_or_query() -> None:
     meter = _Meter()
     telemetry = _observability(meter=meter)
     app = FastAPI()
-    app.state.observability = telemetry
+    install_test_api_runtime(app, observability=telemetry)
     install_http_observability(app)
 
     @app.get("/items/{item_id}")
@@ -596,7 +597,7 @@ def test_http_span_extracts_only_w3c_parent_and_uses_route_template() -> None:
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     telemetry = _observability(tracer=provider.get_tracer("test"))
     app = FastAPI()
-    app.state.observability = telemetry
+    install_test_api_runtime(app, observability=telemetry)
     install_http_observability(app)
 
     @app.get("/calls/{call_id}")
@@ -658,7 +659,7 @@ async def test_http_and_job_tracer_start_failures_do_not_change_outcomes() -> No
     tracer = FailingTracer()
     telemetry = _observability(tracer=tracer)
     app = FastAPI()
-    app.state.observability = telemetry
+    install_test_api_runtime(app, observability=telemetry)
     install_http_observability(app)
 
     @app.get("/ok")
@@ -1367,9 +1368,8 @@ class _WebhookRequest:
             "stripe-signature": "signed",
             "authorization": "Bearer signed",
         }
-        self.app = SimpleNamespace(
-            state=SimpleNamespace(observability=telemetry, arq_pool=None)
-        )
+        self.app = SimpleNamespace(state=SimpleNamespace())
+        install_test_api_runtime(self.app, observability=telemetry)
 
     async def body(self) -> bytes:
         return self._body

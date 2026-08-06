@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.schemas.activation import ActivationSnapshotResponse
 from app.schemas.onboarding import OnboardingStatusResponse
@@ -36,7 +37,7 @@ async def retry_provisioning(
     try:
         return await service.retry_provisioning(
             identity.internal_user_id,
-            arq_pool=getattr(request.app.state, "arq_pool", None),
+            arq_pool=get_api_runtime(request.app).arq_pool,
         )
     except OnboardingRetryNotAllowedError as error:
         raise HTTPException(

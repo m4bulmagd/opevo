@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from conftest import install_test_api_runtime
 from fastapi import FastAPI
 from presvo_contracts import CustomerCallDispatch, create_contract
 from sqlalchemy import select
@@ -138,7 +139,10 @@ async def test_real_agent_runtime_acknowledged_rows_and_recovery_tail_form_full_
     app.include_router(router)
     app.dependency_overrides[get_session] = override_session
     finalization_queue = CapturingFinalizationQueue()
-    app.state.call_finalization_queue = finalization_queue
+    install_test_api_runtime(
+        app,
+        call_finalization_queue=finalization_queue,
+    )
     transport = httpx.ASGITransport(app=app)
     token = create_dispatch_token(
         call_id=str(call.id),

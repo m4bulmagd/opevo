@@ -28,14 +28,18 @@ does not exist on ``UserIdentity``; it has been corrected to
 
 import asyncio
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from pathlib import Path
 import threading
 
 import pytest
+from conftest import install_test_api_runtime
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect as StarletteWebSocketDisconnect
 
 from app.core.auth import AuthProvider, UserIdentity
+from app.composition.lifecycle import RuntimeCleanup
+from app.composition.runtime import ApiRuntime
 from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
 from app.core.database import get_session
 from app.services.realtime_service import RealtimeService
@@ -74,6 +78,25 @@ class FakeEventBus:
 class FakeObservability:
     def record_invalid_contract(self, **_attributes: str) -> None:
         pass
+
+
+def _runtime_with_realtime(settings, realtime_service) -> ApiRuntime:
+    return ApiRuntime(
+        settings=settings,
+        engine=object(),
+        session_factory=object(),
+        redis_client=object(),
+        observability=object(),
+        auth_provider=realtime_service.auth_provider,
+        readiness_checks=object(),
+        storage_provider=object(),
+        arq_pool=None,
+        call_finalization_queue=None,
+        realtime_service=realtime_service,
+        livekit_webhook_receiver=None,
+        livekit_recording_service=None,
+        _cleanup=RuntimeCleanup(AsyncExitStack()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -115,9 +138,10 @@ def ws_app_factory(
         auth_provider: AuthProvider | None = None,
         websocket_manager: WebSocketManager | None = None,
     ) -> tuple[object, WebSocketManager]:
-        app = create_app(
-            get_settings().model_copy(update={"realtime_enabled": True})
+        configured_settings = get_settings().model_copy(
+            update={"realtime_enabled": True}
         )
+        app = create_app(configured_settings)
         db_path = tmp_path / f"ws_test_{len(apps)}.db"
         db_url = f"sqlite+aiosqlite:///{db_path}"
 
@@ -130,11 +154,14 @@ def ws_app_factory(
 
         app.dependency_overrides[get_session] = _override_get_session
         manager = websocket_manager or WebSocketManager()
-        app.state.realtime_service = RealtimeService(
+        realtime_service = RealtimeService(
             auth_provider=auth_provider or FakeAuthProvider(),
             event_bus=FakeEventBus(),
             websocket_manager=manager,
             observability=FakeObservability(),
+        )
+        app.state.runtime = _runtime_with_realtime(
+            configured_settings, realtime_service
         )
         apps.append(app)
         return app, manager
@@ -154,9 +181,11 @@ def test_disabled_app_does_not_register_or_accept_websocket(settings_env) -> Non
     from app.core.config import get_settings
     from app.main import create_app
 
-    app = create_app(
-        get_settings().model_copy(update={"realtime_enabled": False})
+    configured_settings = get_settings().model_copy(
+        update={"realtime_enabled": False}
     )
+    app = create_app(configured_settings)
+    install_test_api_runtime(app, settings=configured_settings)
     websocket_paths = {
         route.path
         for route in app.routes
@@ -173,8 +202,8 @@ def test_disabled_app_does_not_register_or_accept_websocket(settings_env) -> Non
 
 def test_disabled_app_lifespan_does_not_construct_realtime_redis(
     settings_env,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.composition.api import build_api_runtime
     from app.core.config import get_settings
     from app import main as main_module
 
@@ -182,14 +211,36 @@ def test_disabled_app_lifespan_does_not_construct_realtime_redis(
         def __init__(self, *_args, **_kwargs) -> None:
             raise AssertionError("disabled realtime must not construct Redis or service")
 
-    monkeypatch.setattr(main_module, "RedisEventBus", ForbiddenRealtimeDependency)
-    monkeypatch.setattr(main_module, "RealtimeService", ForbiddenRealtimeDependency)
+    class Engine:
+        async def dispose(self) -> None:
+            return None
+
+    class Resource:
+        async def aclose(self) -> None:
+            return None
+
+    async def runtime_builder(settings):
+        return await build_api_runtime(
+            settings,
+            engine_factory=lambda _url: Engine(),
+            redis_factory=lambda _url: Resource(),
+            observability_factory=lambda **_kwargs: Resource(),
+            auth_factory=lambda **_kwargs: Resource(),
+            readiness_factory=lambda **_kwargs: object(),
+            storage_factory=lambda **_kwargs: Resource(),
+            arq_pool_factory=lambda _url: None,
+            realtime_service_factory=ForbiddenRealtimeDependency,
+            webhook_receiver_factory=lambda **_kwargs: object(),
+            recording_service_factory=lambda **_kwargs: object(),
+        )
+
     app = main_module.create_app(
-        get_settings().model_copy(update={"realtime_enabled": False})
+        get_settings().model_copy(update={"realtime_enabled": False}),
+        runtime_builder=runtime_builder,
     )
 
     with TestClient(app, raise_server_exceptions=True):
-        assert app.state.realtime_service is None
+        assert app.state.runtime.realtime_service is None
 
 
 # ---------------------------------------------------------------------------

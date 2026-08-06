@@ -165,7 +165,7 @@ async def test_subscription_activation_provisions_usage_ledger(
     from app.main import app
 
     pool = MockArqPool()
-    app.state.arq_pool = pool
+    app.state.runtime.arq_pool = pool
 
     response = await async_client.post(
         "/webhooks/stripe",
@@ -1728,7 +1728,7 @@ async def test_first_paid_invoice_grants_minutes_without_ordering_number(
     from app.main import app
 
     pool = MockArqPool()
-    app.state.arq_pool = pool
+    app.state.runtime.arq_pool = pool
 
     response = await async_client.post(
         "/webhooks/stripe",
@@ -1894,7 +1894,7 @@ async def test_invoice_paid_bootstraps_subscription_without_ordering_number(
     from app.main import app
 
     pool = MockArqPool()
-    app.state.arq_pool = pool
+    app.state.runtime.arq_pool = pool
 
     response = await async_client.post(
         "/webhooks/stripe",
@@ -1945,7 +1945,7 @@ async def test_distinct_webhook_events_grant_one_invoice_without_ordering_number
     from app.main import app
 
     pool = MockArqPool()
-    app.state.arq_pool = pool
+    app.state.runtime.arq_pool = pool
 
     first_response = await _post_stripe_event(
         async_client,
@@ -2061,7 +2061,7 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe_without_pro
     from app.main import app
 
     pool = MockArqPool()
-    app.state.arq_pool = pool
+    app.state.runtime.arq_pool = pool
 
     first = await async_client.post(
         "/webhooks/stripe",
@@ -2163,7 +2163,7 @@ async def test_invoice_payment_does_not_enable_phone_or_require_redis_wakeup(
     }
     from app.main import app
 
-    app.state.arq_pool = FailingPool()
+    app.state.runtime.arq_pool = FailingPool()
     response = await _post_stripe_event(
         async_client,
         signed_stripe_headers_factory,

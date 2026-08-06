@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
+from app.composition.runtime import get_api_runtime
 from app.core.observability import get_request_observability
 from app.schemas.billing import StripeWebhookEnvelope
 from app.services.billing_service import (
@@ -26,7 +27,7 @@ async def handle_stripe_webhook(
     telemetry = get_request_observability(request)
     try:
         payload = await request.body()
-        arq_pool = getattr(request.app.state, "arq_pool", None)
+        arq_pool = get_api_runtime(request.app).arq_pool
         billing_service = BillingService(
             session,
             arq_pool=arq_pool,

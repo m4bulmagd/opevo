@@ -34,8 +34,6 @@ PRODUCTION_REQUIRED_SETTINGS = (
     "s3_secret_key",
     "s3_region",
     "agent_dispatch_jwt_secret",
-    "summary_provider",
-    "summary_model",
 )
 
 WORKER_PRODUCTION_REQUIRED_SETTINGS = (
@@ -135,12 +133,6 @@ def validate_api_runtime(settings: Settings) -> None:
 
     if not settings.telnyx_ordering_enabled:
         missing.append("TELNYX_ORDERING_ENABLED")
-
-    if not _is_missing(settings.summary_provider):
-        if settings.summary_provider == "gemini":
-            missing.extend(_require(settings, ("gemini_api_key",)))
-        else:
-            missing.append("SUMMARY_PROVIDER")
 
     portal_return_url = settings.stripe_billing_portal_return_url
     if isinstance(portal_return_url, str) and portal_return_url.strip():

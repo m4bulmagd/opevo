@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from conftest import install_test_api_runtime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -990,10 +991,10 @@ async def test_confirm_provisioning_route_uses_authenticated_owner_and_arq_wake(
             return canonical_snapshot
 
     commands = Commands()
+    app = SimpleNamespace(state=SimpleNamespace())
+    install_test_api_runtime(app, arq_pool=pool)
     result = await confirm_provisioning(
-        request=SimpleNamespace(
-            app=SimpleNamespace(state=SimpleNamespace(arq_pool=pool))
-        ),
+        request=SimpleNamespace(app=app),
         identity=UserIdentity(
             clerk_user_id="authenticated_owner",
             internal_user_id=user_id,

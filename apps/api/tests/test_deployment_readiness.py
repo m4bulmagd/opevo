@@ -261,8 +261,6 @@ def base_settings() -> Settings:
         ("s3_secret_key", "S3_SECRET_KEY"),
         ("s3_region", "S3_REGION"),
         ("agent_dispatch_jwt_secret", "AGENT_DISPATCH_JWT_SECRET"),
-        ("summary_provider", "SUMMARY_PROVIDER"),
-        ("summary_model", "SUMMARY_MODEL"),
     ],
 )
 def test_production_rejects_missing_required_api_setting(
@@ -355,13 +353,18 @@ def test_production_accepts_either_clerk_verification_source(
     validate_api_runtime(settings)
 
 
-def test_production_requires_gemini_credentials_for_gemini_summaries(
+def test_production_api_does_not_require_background_summary_settings(
     base_settings: Settings,
 ) -> None:
-    settings = base_settings.model_copy(update={"gemini_api_key": ""})
+    settings = base_settings.model_copy(
+        update={
+            "summary_provider": "",
+            "summary_model": "",
+            "gemini_api_key": "",
+        }
+    )
 
-    with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
-        validate_api_runtime(settings)
+    validate_api_runtime(settings)
 
 
 def test_settings_do_not_expose_a_standard_stripe_price() -> None:
@@ -398,22 +401,6 @@ def test_production_rejects_invalid_billing_portal_return_url(
 
     with pytest.raises(RuntimeError, match="STRIPE_BILLING_PORTAL_RETURN_URL"):
         validate_api_runtime(settings)
-
-
-@pytest.mark.parametrize(
-    "provider_value",
-    ["Gemini", " gemini", "gemini ", "private-provider-value"],
-)
-def test_production_requires_exact_summary_provider_without_echoing_value(
-    base_settings: Settings,
-    provider_value: str,
-) -> None:
-    settings = base_settings.model_copy(update={"summary_provider": provider_value})
-
-    with pytest.raises(RuntimeError, match="SUMMARY_PROVIDER") as exc_info:
-        validate_api_runtime(settings)
-
-    assert provider_value not in str(exc_info.value)
 
 
 def test_production_reports_every_missing_api_setting(base_settings: Settings) -> None:
@@ -572,7 +559,7 @@ def test_non_development_runtime_accepts_strong_dispatch_secret_only(
     validate_api_runtime(settings)
 
 
-def test_api_import_rejects_invalid_production_settings_before_startup() -> None:
+def test_api_lifespan_rejects_invalid_production_settings_before_serving() -> None:
     environment = {
         **os.environ,
         "APP_ENV": "production",
@@ -584,7 +571,15 @@ def test_api_import_rejects_invalid_production_settings_before_startup() -> None
     }
 
     result = subprocess.run(
-        [sys.executable, "-c", "import app.main"],
+        [
+            sys.executable,
+            "-c",
+            (
+                "from starlette.testclient import TestClient; "
+                "from app.main import app; "
+                "TestClient(app).__enter__()"
+            ),
+        ],
         capture_output=True,
         check=False,
         env=environment,

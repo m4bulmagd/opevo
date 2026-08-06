@@ -1,5 +1,6 @@
 import logging
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +11,8 @@ from fastapi import FastAPI
 from starlette.requests import Request
 
 from app.core.auth import get_auth_provider
+from app.composition.lifecycle import RuntimeCleanup
+from app.composition.runtime import ApiRuntime
 from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
 from app.core.dispatch_token import create_dispatch_token, verify_dispatch_token
 
@@ -63,7 +66,22 @@ async def test_rejected_clerk_token_logs_only_safe_fixed_fields(
 def test_request_auth_provider_returns_exact_app_scoped_instance() -> None:
     provider = object()
     app = FastAPI()
-    app.state.auth_provider = provider
+    app.state.runtime = ApiRuntime(
+        settings=object(),
+        engine=object(),
+        session_factory=object(),
+        redis_client=object(),
+        observability=object(),
+        auth_provider=provider,
+        readiness_checks=object(),
+        storage_provider=object(),
+        arq_pool=None,
+        call_finalization_queue=None,
+        realtime_service=None,
+        livekit_webhook_receiver=None,
+        livekit_recording_service=None,
+        _cleanup=RuntimeCleanup(AsyncExitStack()),
+    )
     request = Request({"type": "http", "app": app})
 
     assert get_auth_provider(request) is provider
@@ -135,15 +153,15 @@ async def test_rest_maps_missing_or_unusable_credentials_to_generic_401(
 
 @pytest.mark.anyio
 async def test_rest_maps_rejected_token_to_generic_401(test_app) -> None:
-    original_provider = test_app.state.auth_provider
+    original_provider = test_app.state.runtime.auth_provider
     try:
-        test_app.state.auth_provider = RejectingProvider(
+        test_app.state.runtime.auth_provider = RejectingProvider(
             TokenRejected("authorized_party")
         )
 
         response = await request_protected_route(test_app, token="TOKEN_SENTINEL")
     finally:
-        test_app.state.auth_provider = original_provider
+        test_app.state.runtime.auth_provider = original_provider
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Invalid token"}
@@ -152,15 +170,15 @@ async def test_rest_maps_rejected_token_to_generic_401(test_app) -> None:
 
 @pytest.mark.anyio
 async def test_rest_maps_provider_outage_to_generic_503(test_app) -> None:
-    original_provider = test_app.state.auth_provider
+    original_provider = test_app.state.runtime.auth_provider
     try:
-        test_app.state.auth_provider = RejectingProvider(
+        test_app.state.runtime.auth_provider = RejectingProvider(
             AuthenticationUnavailable("jwks_timeout")
         )
 
         response = await request_protected_route(test_app, token="TOKEN_SENTINEL")
     finally:
-        test_app.state.auth_provider = original_provider
+        test_app.state.runtime.auth_provider = original_provider
 
     assert response.status_code == 503
     assert response.json() == {

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from conftest import install_test_api_runtime
 from fastapi import HTTPException
 
 from app.core.auth import UserIdentity
@@ -13,7 +14,9 @@ from app.services.customer_readiness_policy import (
 
 
 def _fake_request_with_pool(pool):
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(arq_pool=pool)))
+    app = SimpleNamespace(state=SimpleNamespace())
+    install_test_api_runtime(app, arq_pool=pool)
+    return SimpleNamespace(app=app)
 
 
 class FakeArqPool:

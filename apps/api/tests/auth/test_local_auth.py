@@ -89,6 +89,7 @@ async def local_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, str]]:
     from app import main as main_module
+    from app.composition.api import build_api_runtime
 
     class NoopPool:
         async def aclose(self) -> None:
@@ -98,7 +99,11 @@ async def local_client(
         del redis_url
         return NoopPool()
 
-    monkeypatch.setattr(main_module, "create_arq_pool", create_pool)
+    async def runtime_builder(settings: Settings):
+        return await build_api_runtime(
+            settings,
+            arq_pool_factory=create_pool,
+        )
 
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'local_auth.db'}"
     engine = create_async_engine(database_url, future=True)
@@ -106,7 +111,10 @@ async def local_client(
         await connection.run_sync(Base.metadata.create_all)
     await engine.dispose()
 
-    application = main_module.create_app(local_settings)
+    application = main_module.create_app(
+        local_settings,
+        runtime_builder=runtime_builder,
+    )
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
         request_engine = create_async_engine(database_url, future=True)

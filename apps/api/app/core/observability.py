@@ -19,6 +19,7 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from opentelemetry.sdk.metrics.export import MetricExporter, MetricExportResult
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
+from app.composition.runtime import get_api_runtime
 from app.core.logging import report_safe_exception
 from app.core.provider_failures import (
     SAFE_PROVIDER_NAMES,
@@ -1351,10 +1352,7 @@ def get_observability() -> Observability:
 
 
 def get_request_observability(request) -> Observability:
-    app = getattr(request, "app", None)
-    state = getattr(app, "state", None)
-    telemetry = getattr(state, "observability", None)
-    return telemetry if telemetry is not None else get_observability()
+    return get_api_runtime(request.app).observability
 
 
 def reset_observability_for_tests() -> None:

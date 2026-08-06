@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.core.dispatch_token import DispatchTokenError, verify_dispatch_token
 from app.core.contract_http import contract_request_openapi, parse_contract_request
@@ -50,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _best_effort_outbox_wakeup(request: Request) -> None:
-    arq_pool = getattr(request.app.state, "arq_pool", None)
+    arq_pool = get_api_runtime(request.app).arq_pool
     if arq_pool is None:
         return
     try:
@@ -109,7 +110,7 @@ async def require_agent_auth(
 
 
 def get_call_finalization_queue(request: Request) -> CallFinalizationQueue:
-    queue = getattr(request.app.state, "call_finalization_queue", None)
+    queue = get_api_runtime(request.app).call_finalization_queue
     if queue is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -126,7 +127,7 @@ def get_agent_config_service(
         session,
         agent_config_repository=AgentConfigRepository(session),
         readiness_service=CustomerReadinessService(session),
-        arq_pool=getattr(request.app.state, "arq_pool", None),
+        arq_pool=get_api_runtime(request.app).arq_pool,
     )
 
 

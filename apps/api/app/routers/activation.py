@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.core.dispatch_token import DispatchTokenConfigurationError
 from app.core.contract_http import contract_request_openapi, parse_contract_request
@@ -182,7 +183,7 @@ async def confirm_provisioning(
     try:
         return await service.confirm(
             identity.internal_user_id,
-            arq_pool=getattr(request.app.state, "arq_pool", None),
+            arq_pool=get_api_runtime(request.app).arq_pool,
         )
     except AccountStateBlockedError as error:
         raise _account_state_blocked_error(error) from None
@@ -205,7 +206,7 @@ async def retry_provisioning(
     try:
         return await service.retry(
             identity.internal_user_id,
-            arq_pool=getattr(request.app.state, "arq_pool", None),
+            arq_pool=get_api_runtime(request.app).arq_pool,
         )
     except AccountStateBlockedError as error:
         raise _account_state_blocked_error(error) from None
@@ -251,7 +252,7 @@ async def go_live(
     try:
         return await service.go_live(
             identity.internal_user_id,
-            arq_pool=getattr(request.app.state, "arq_pool", None),
+            arq_pool=get_api_runtime(request.app).arq_pool,
         )
     except AccountStateBlockedError as error:
         raise _account_state_blocked_error(error) from None

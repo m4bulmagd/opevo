@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import AsyncExitStack
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -12,7 +13,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.database import get_session
+from app.composition.lifecycle import RuntimeCleanup
+from app.composition.runtime import ApiRuntime
 from app.core.dispatch_token import create_dispatch_token
+from app.core.observability import get_observability
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.call_message import CallMessage
@@ -100,8 +104,22 @@ def _runtime_app(db_session, *, queue: CapturingQueue | None = None) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_session] = override_session
-    if queue is not None:
-        app.state.call_finalization_queue = queue
+    app.state.runtime = ApiRuntime(
+        settings=object(),
+        engine=object(),
+        session_factory=object(),
+        redis_client=object(),
+        observability=get_observability(),
+        auth_provider=object(),
+        readiness_checks=object(),
+        storage_provider=object(),
+        arq_pool=None,
+        call_finalization_queue=queue,
+        realtime_service=None,
+        livekit_webhook_receiver=None,
+        livekit_recording_service=None,
+        _cleanup=RuntimeCleanup(AsyncExitStack()),
+    )
     return app
 
 

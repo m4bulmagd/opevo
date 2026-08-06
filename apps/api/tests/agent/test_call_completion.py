@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from contextlib import AsyncExitStack
 from types import SimpleNamespace
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -9,7 +10,10 @@ from fastapi import FastAPI
 from sqlalchemy import select
 
 from app.core.database import get_session
+from app.composition.lifecycle import RuntimeCleanup
+from app.composition.runtime import ApiRuntime
 from app.core.dispatch_token import create_dispatch_token
+from app.core.observability import get_observability
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
 from app.models.call_message import CallMessage
@@ -136,8 +140,22 @@ def _build_completion_app(
 
     app = FastAPI()
     app.include_router(agent_router)
-    app.state.call_finalization_queue = fake_queue
-    app.state.arq_pool = arq_pool
+    app.state.runtime = ApiRuntime(
+        settings=object(),
+        engine=object(),
+        session_factory=object(),
+        redis_client=object(),
+        observability=get_observability(),
+        auth_provider=object(),
+        readiness_checks=object(),
+        storage_provider=object(),
+        arq_pool=arq_pool,
+        call_finalization_queue=fake_queue,
+        realtime_service=None,
+        livekit_webhook_receiver=None,
+        livekit_recording_service=None,
+        _cleanup=RuntimeCleanup(AsyncExitStack()),
+    )
     app.dependency_overrides[get_call_finalization_queue] = (
         override_get_call_finalization_queue
     )

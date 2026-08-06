@@ -1,8 +1,10 @@
 import json
 import logging
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
+from conftest import install_test_api_runtime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -94,6 +96,10 @@ class FakeRealtimeService:
 class FakeWebhookRequest:
     headers = {"authorization": "Bearer test"}
 
+    def __init__(self) -> None:
+        self.app = SimpleNamespace(state=SimpleNamespace())
+        install_test_api_runtime(self.app)
+
     async def body(self) -> bytes:
         return b"{}"
 
@@ -146,6 +152,7 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
     client_database_url,
     caplog,
     receiver_type,
+    configured_livekit_recording_runtime,
 ) -> None:
     async def seed() -> None:
         engine = create_async_engine(client_database_url, future=True)
@@ -247,6 +254,7 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
 async def test_participant_left_routes_to_leave_handler(
     async_client,
     monkeypatch,
+    configured_livekit_recording_runtime,
 ) -> None:
     from app.main import app
     from app.webhooks.livekit import get_realtime_service, get_webhook_receiver
@@ -300,6 +308,7 @@ async def test_participant_left_routes_to_leave_handler(
 async def test_disabled_app_webhook_injects_no_realtime_service(
     async_client,
     monkeypatch,
+    configured_livekit_recording_runtime,
 ) -> None:
     from app.main import app
     from app.webhooks.livekit import get_webhook_receiver

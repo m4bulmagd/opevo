@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.core.rate_limit import limiter
 from app.schemas.account import AccountDeactivateRequest, AccountStatusResponse
@@ -17,7 +18,7 @@ def get_account_lifecycle_service(
 ) -> AccountLifecycleService:
     return AccountLifecycleService(
         session,
-        arq_pool=getattr(request.app.state, "arq_pool", None),
+        arq_pool=get_api_runtime(request.app).arq_pool,
     )
 
 

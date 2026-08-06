@@ -4,10 +4,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
+from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.core.observability import get_request_observability
 from app.repositories.agent_config_repository import AgentConfigRepository
@@ -89,18 +89,21 @@ def _field(value: object, *names: str) -> object:
 
 
 def get_realtime_service(request: Request) -> RealtimeService | None:
-    return getattr(request.app.state, "realtime_service", None)
+    return get_api_runtime(request.app).realtime_service
 
 
 def get_webhook_receiver(request: Request):
-    receiver = getattr(request.app.state, "livekit_webhook_receiver", None)
-    if receiver is not None:
-        return receiver
-    from livekit import api
+    return get_api_runtime(request.app).livekit_webhook_receiver
 
-    settings = getattr(request.app.state, "settings", None) or get_settings()
-    verifier = api.TokenVerifier(settings.livekit_api_key, settings.livekit_api_secret)
-    return api.WebhookReceiver(verifier)
+
+def get_recording_service(request: Request) -> LiveKitRecordingService:
+    recording_service = get_api_runtime(request.app).livekit_recording_service
+    if recording_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LiveKit recording service is not initialized",
+        )
+    return recording_service
 
 
 def _normalized_webhook_egress_object_key_evidence(
@@ -240,8 +243,7 @@ async def handle_livekit_webhook(
     try:
         body = (await request.body()).decode("utf-8")
         event = webhook_receiver.receive(body, request.headers.get("authorization"))
-        request_state = getattr(getattr(request, "app", None), "state", None)
-        settings = getattr(request_state, "settings", None) or get_settings()
+        settings = get_api_runtime(request.app).settings
         converted = _convert_livekit_event(
             event,
             bucket_name=settings.storage_bucket_name,
@@ -316,8 +318,8 @@ async def handle_livekit_webhook(
                 usage_repository=UsageRepository(session),
                 subscription_repository=SubscriptionRepository(session),
                 realtime_service=realtime_service,
-                recording_service=LiveKitRecordingService(),
-                arq_pool=getattr(request.app.state, "arq_pool", None),
+                recording_service=get_recording_service(request),
+                arq_pool=get_api_runtime(request.app).arq_pool,
             )
             if event_type == "participant_joined":
                 await service.handle_participant_joined(event_payload)
@@ -352,7 +354,7 @@ def _safe_event_type(value: object) -> str:
 
 
 async def _best_effort_outbox_wakeup(request: Request) -> None:
-    arq_pool = getattr(request.app.state, "arq_pool", None)
+    arq_pool = get_api_runtime(request.app).arq_pool
     if arq_pool is None:
         return
     try:

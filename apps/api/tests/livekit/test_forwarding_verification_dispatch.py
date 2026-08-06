@@ -484,6 +484,7 @@ async def test_duplicate_webhook_id_claims_and_dispatches_exactly_once(
     async_client,
     test_app,
     client_database_url: str,
+    configured_livekit_recording_runtime,
 ) -> None:
     now = datetime.now(UTC)
     engine = create_async_engine(client_database_url, future=True)

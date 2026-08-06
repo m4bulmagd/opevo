@@ -6,7 +6,8 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
+from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository, CallTransitionError
@@ -56,7 +57,7 @@ def get_development_forwarding_verification_service(
 
 
 def _request_settings(request: Request) -> Settings:
-    return getattr(request.app.state, "settings", None) or get_settings()
+    return get_api_runtime(request.app).settings
 
 
 def _require_fake_telephony(request: Request) -> None:

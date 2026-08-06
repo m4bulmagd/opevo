@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from conftest import install_test_api_runtime
 import pytest_asyncio
 from fastapi import FastAPI
 from sqlalchemy import func, select, text
@@ -2077,7 +2078,11 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         observability=get_observability(),
     )
     app = FastAPI()
-    app.state.auth_provider = auth_provider
+    install_test_api_runtime(
+        app,
+        settings=settings,
+        auth_provider=auth_provider,
+    )
     app.include_router(calls_router)
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_call_history_service] = override_history_service

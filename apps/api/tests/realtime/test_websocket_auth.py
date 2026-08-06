@@ -31,13 +31,17 @@ class FakeAuthProvider(AuthProvider):
         return UserIdentity(clerk_user_id="user_ws_test")
 
 
+class FakeRedis:
+    pass
+
+
 @pytest.mark.anyio
 async def test_websocket_requires_auth_message_before_events() -> None:
     websocket = FakeWebSocket()
 
     service = RealtimeService(
         auth_provider=FakeAuthProvider(),
-        event_bus=RedisEventBus(),
+        event_bus=RedisEventBus(FakeRedis()),
         websocket_manager=WebSocketManager(),
         observability=FakeObservability(),
     )

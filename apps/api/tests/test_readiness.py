@@ -1,12 +1,14 @@
 import asyncio
 import time
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.routers.health import router as health_router
+from app.composition.lifecycle import RuntimeCleanup
+from app.composition.runtime import ApiRuntime
 
 
 class _Checks:
@@ -38,7 +40,22 @@ def _readiness_app(checks: _Checks) -> FastAPI:
     except ModuleNotFoundError as error:
         pytest.fail(f"readiness router is required: {error}")
     app = FastAPI()
-    app.state.readiness_checks = checks
+    app.state.runtime = ApiRuntime(
+        settings=object(),
+        engine=object(),
+        session_factory=object(),
+        redis_client=object(),
+        observability=object(),
+        auth_provider=object(),
+        readiness_checks=checks,
+        storage_provider=object(),
+        arq_pool=None,
+        call_finalization_queue=None,
+        realtime_service=None,
+        livekit_webhook_receiver=None,
+        livekit_recording_service=None,
+        _cleanup=RuntimeCleanup(AsyncExitStack()),
+    )
     app.include_router(health_router)
     app.include_router(readiness_router)
     return app
@@ -238,80 +255,34 @@ async def test_readiness_caller_cancellation_cancels_every_dependency_check() ->
 
 
 @pytest.mark.anyio
-async def test_readiness_uses_app_settings_and_closes_after_partial_startup(
-    settings,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app import main as main_module
-
-    configured = settings.model_copy(
-        update={
-            "app_env": "development",
-            "database_url": "postgresql+asyncpg://captured-db/app",
-            "redis_url": "redis://captured-redis/4",
-        }
-    )
-    observed: dict[str, object] = {}
-
-    class Resource:
-        async def aclose(self) -> None:
-            observed["closed"] = True
-
-    async def create_checks(settings_arg):
-        observed["settings"] = settings_arg
-        return Resource()
-
-    async def fail_after_readiness(_redis_url):
-        raise RuntimeError("later startup failure")
-
-    monkeypatch.setattr(
-        main_module,
-        "create_readiness_checks",
-        create_checks,
-        raising=False,
-    )
-    monkeypatch.setattr(main_module, "create_arq_pool", fail_after_readiness)
-
-    app = main_module.create_app(configured)
-    with pytest.raises(RuntimeError, match="later startup failure"):
-        async with app.router.lifespan_context(app):
-            pass
-
-    assert observed["settings"] is configured
-    assert observed["closed"] is True
-
-
-@pytest.mark.anyio
-async def test_readiness_factory_disposes_engine_when_redis_construction_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.routers import readiness as readiness_module
-
-    observed: dict[str, bool] = {}
+async def test_readiness_checks_borrow_runtime_resources_without_closing_them() -> None:
+    from app.routers.readiness import ReadinessChecks
 
     class Engine:
+        def __init__(self) -> None:
+            self.dispose_calls = 0
+
         async def dispose(self) -> None:
-            observed["engine_disposed"] = True
+            self.dispose_calls += 1
 
-    def fail_redis(_url):
-        raise RuntimeError("redis construction failed")
+    class Redis:
+        def __init__(self) -> None:
+            self.close_calls = 0
 
-    monkeypatch.setattr(
-        readiness_module,
-        "create_async_engine",
-        lambda *_args, **_kwargs: Engine(),
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    engine = Engine()
+    redis = Redis()
+    checks = ReadinessChecks(
+        engine=engine,
+        redis=redis,
+        observability=object(),
     )
-    monkeypatch.setattr(readiness_module.Redis, "from_url", fail_redis)
-    settings = type(
-        "Settings",
-        (),
-        {"database_url": "sqlite+aiosqlite://", "redis_url": "redis://invalid"},
-    )()
 
-    with pytest.raises(RuntimeError, match="redis construction failed"):
-        await readiness_module.create_readiness_checks(settings)
-
-    assert observed == {"engine_disposed": True}
+    assert not hasattr(checks, "aclose")
+    assert engine.dispose_calls == 0
+    assert redis.close_calls == 0
 
 
 def test_production_app_healthz_bypasses_observability_middleware(

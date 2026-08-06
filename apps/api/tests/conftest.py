@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 import httpx
@@ -29,6 +30,43 @@ TEST_CLERK_WEBHOOK_SECRET = "whsec_" + base64.b64encode(
     TEST_CLERK_WEBHOOK_SECRET_BYTES
 ).decode("utf-8")
 TEST_DISPATCH_JWT_SECRET = "shared-test-dispatch-secret-with-at-least-32-bytes"
+
+
+def install_test_api_runtime(
+    application,
+    *,
+    settings=None,
+    auth_provider=None,
+    readiness_checks=None,
+    observability=None,
+    arq_pool=None,
+    call_finalization_queue=None,
+    realtime_service=None,
+    livekit_webhook_receiver=None,
+):
+    from app.composition.lifecycle import RuntimeCleanup
+    from app.composition.runtime import ApiRuntime
+    from app.core.config import get_settings
+    from app.core.observability import get_observability
+
+    runtime = ApiRuntime(
+        settings=settings or get_settings(),
+        engine=object(),
+        session_factory=object(),
+        redis_client=object(),
+        observability=observability or get_observability(),
+        auth_provider=auth_provider or object(),
+        readiness_checks=readiness_checks or object(),
+        storage_provider=object(),
+        arq_pool=arq_pool,
+        call_finalization_queue=call_finalization_queue,
+        realtime_service=realtime_service,
+        livekit_webhook_receiver=livekit_webhook_receiver,
+        livekit_recording_service=None,
+        _cleanup=RuntimeCleanup(AsyncExitStack()),
+    )
+    application.state.runtime = runtime
+    return runtime
 
 
 def _construction_settings_environment() -> dict[str, str]:
@@ -211,6 +249,20 @@ async def test_app(tmp_path: Path):
         main_module.app = original_app
         if engine is not None:
             await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def configured_livekit_recording_runtime(test_app):
+    class RecordingServiceFake:
+        pass
+
+    runtime = test_app.state.runtime
+    previous = runtime.livekit_recording_service
+    runtime.livekit_recording_service = RecordingServiceFake()
+    try:
+        yield runtime.livekit_recording_service
+    finally:
+        runtime.livekit_recording_service = previous
 
 
 @pytest_asyncio.fixture

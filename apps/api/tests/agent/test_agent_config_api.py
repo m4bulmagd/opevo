@@ -1196,8 +1196,8 @@ async def test_patch_agent_config_commit_survives_redis_wakeup_failure(
 
     from app.main import app
 
-    original_pool = getattr(app.state, "arq_pool", None)
-    app.state.arq_pool = FailingPool()
+    original_pool = app.state.runtime.arq_pool
+    app.state.runtime.arq_pool = FailingPool()
     try:
         response = await async_client.patch(
             "/api/agent/config",
@@ -1207,7 +1207,7 @@ async def test_patch_agent_config_commit_survives_redis_wakeup_failure(
             json={"is_enabled": True},
         )
     finally:
-        app.state.arq_pool = original_pool
+        app.state.runtime.arq_pool = original_pool
 
     config = await fetch_agent_config(
         client_database_url, clerk_user_id="user_agent_cfg"

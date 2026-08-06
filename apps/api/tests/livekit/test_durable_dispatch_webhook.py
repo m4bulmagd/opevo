@@ -3,6 +3,7 @@ from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 
 import pytest
+from conftest import install_test_api_runtime
 from livekit import api
 from opentelemetry import metrics, trace
 from sqlalchemy import func, select
@@ -36,12 +37,12 @@ class _Request:
         settings=None,
         observability=None,
     ) -> None:
-        self.app = SimpleNamespace(
-            state=SimpleNamespace(
-                arq_pool=arq_pool,
-                settings=settings,
-                observability=observability,
-            )
+        self.app = SimpleNamespace(state=SimpleNamespace())
+        install_test_api_runtime(
+            self.app,
+            settings=settings,
+            arq_pool=arq_pool,
+            observability=observability,
         )
 
     async def body(self) -> bytes:
@@ -427,41 +428,25 @@ def _protobuf_empty_path_egress_info(shape: str, *, status: int) -> api.EgressIn
     )
 
 
-def test_webhook_receiver_fallback_uses_app_bound_settings(
-    settings,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from livekit import api as livekit_api_module
-
+def test_webhook_receiver_uses_runtime_instance(settings) -> None:
     configured = settings.model_copy(
         update={
             "livekit_api_key": "captured-livekit-key",
             "livekit_api_secret": "captured-livekit-secret",
         }
     )
-    observed: dict[str, object] = {}
-
-    class Verifier:
-        def __init__(self, key: str, secret: str) -> None:
-            observed["credentials"] = (key, secret)
-
-    class Receiver:
-        def __init__(self, verifier) -> None:
-            observed["verifier"] = verifier
-
-    monkeypatch.setattr(livekit_api_module, "TokenVerifier", Verifier)
-    monkeypatch.setattr(livekit_api_module, "WebhookReceiver", Receiver)
-    request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(settings=configured))
+    runtime_receiver = object()
+    app = SimpleNamespace(state=SimpleNamespace())
+    install_test_api_runtime(
+        app,
+        settings=configured,
+        livekit_webhook_receiver=runtime_receiver,
     )
+    request = SimpleNamespace(app=app)
 
     receiver = get_webhook_receiver(request)
 
-    assert isinstance(receiver, Receiver)
-    assert observed["credentials"] == (
-        "captured-livekit-key",
-        "captured-livekit-secret",
-    )
+    assert receiver is runtime_receiver
 
 
 def test_convert_dict_preserves_signed_event_id_and_normalizes_numeric_kind() -> None:

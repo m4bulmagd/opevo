@@ -1,16 +1,17 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.composition.runtime import get_api_runtime
 from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
-from app.services.realtime_service import RealtimeService
-
-
 router = APIRouter(tags=["websocket"])
 
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
-    realtime_service: RealtimeService = websocket.app.state.realtime_service
+    realtime_service = get_api_runtime(websocket.app).realtime_service
+    if realtime_service is None:
+        await websocket.close(code=1013)
+        return
     user_id = None
     try:
         user_id = await realtime_service.authenticate(websocket)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from conftest import install_test_api_runtime
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
@@ -13,6 +14,7 @@ def _app() -> FastAPI:
     from app.core.contract_http import contract_request_openapi, parse_contract_request
 
     app = FastAPI()
+    install_test_api_runtime(app)
 
     @app.post("/contract", openapi_extra=contract_request_openapi(TranscriptAppendRequest))
     async def contract(request: Request):
@@ -138,7 +140,7 @@ async def test_parser_records_only_bounded_fields_and_suppresses_sensitive_chain
 
     telemetry = _CapturingTelemetry()
     app = FastAPI()
-    app.state.observability = telemetry
+    install_test_api_runtime(app, observability=telemetry)
     consumed = False
 
     async def receive():

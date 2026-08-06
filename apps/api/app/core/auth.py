@@ -16,6 +16,7 @@ from app.core.auth_failures import (
     TokenRejected,
     TokenRejectionReason,
 )
+from app.composition.runtime import ApiRuntimeUnavailable, get_api_runtime
 from app.core.clerk_jwks import (
     JwksSigningKeyResolver,
     SigningKeyResolver,
@@ -202,13 +203,13 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_auth_provider(request: Request) -> AuthProvider:
-    auth_provider = getattr(request.app.state, "auth_provider", None)
-    if auth_provider is None:
+    try:
+        return get_api_runtime(request.app).auth_provider
+    except ApiRuntimeUnavailable:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication provider not initialized",
-        )
-    return auth_provider
+        ) from None
 
 
 def build_auth_provider(

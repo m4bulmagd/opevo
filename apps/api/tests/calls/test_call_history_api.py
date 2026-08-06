@@ -1257,7 +1257,7 @@ async def test_delete_call_outbox_wake_failure_does_not_change_provider_free_204
             raise RuntimeError("redis unavailable")
 
     pool = FailingPool()
-    test_app.state.arq_pool = pool
+    test_app.state.runtime.arq_pool = pool
     call_id = await seed_call_with_recording(
         client_database_url,
         clerk_user_id="user_calls",

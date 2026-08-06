@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.rate_limit import limiter
 
 from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.schemas.calls import CallDetailResponse, CallHistoryListResponse
 from app.services.call_history_service import (
@@ -119,7 +120,7 @@ async def delete_call(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": exc.code},
         ) from None
-    arq_pool = getattr(request.app.state, "arq_pool", None)
+    arq_pool = get_api_runtime(request.app).arq_pool
     if arq_pool is not None:
         try:
             await enqueue_outbox_wakeup(arq_pool)

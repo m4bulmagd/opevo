@@ -19,9 +19,8 @@ class _Pool:
 @pytest.mark.anyio
 async def test_app_runtime_dependencies_use_captured_settings(
     settings,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app import main as main_module
+    from app.composition.api import build_api_runtime
 
     configured = settings.model_copy(
         update={
@@ -48,14 +47,26 @@ async def test_app_runtime_dependencies_use_captured_settings(
         observed["auth_observability"] = observability
         return provider
 
-    class CapturingBus:
-        def __init__(self, *, redis_url=None) -> None:
-            observed["redis_url"] = redis_url
-            self.closed = 0
+    class Engine:
+        async def dispose(self) -> None:
+            observed.setdefault("shutdown_order", []).append("engine")
 
+    class RedisClient:
         async def aclose(self) -> None:
-            self.closed += 1
-            observed["bus_closed"] = self.closed
+            observed.setdefault("shutdown_order", []).append("redis")
+
+    class Storage:
+        async def aclose(self) -> None:
+            observed.setdefault("shutdown_order", []).append("storage")
+
+    class Observability:
+        async def aclose(self) -> None:
+            observed.setdefault("shutdown_order", []).append("observability")
+
+    engine = Engine()
+    redis_client = RedisClient()
+    storage = Storage()
+    observability = Observability()
 
     class WaitingRealtimeService:
         def __init__(self, auth_provider, *, event_bus, websocket_manager, observability) -> None:
@@ -66,71 +77,65 @@ async def test_app_runtime_dependencies_use_captured_settings(
         async def fanout_forever(self) -> None:
             await asyncio.Event().wait()
 
-    async def create_pool(redis_url=None):
+    async def create_pool(redis_url: str):
         observed["arq_redis_url"] = redis_url
         return pool
 
-    async def shutdown_observability(observability) -> None:
-        observed["shutdown_observability"] = observability
-        observed.setdefault("shutdown_order", []).append("observability")
+    def create_redis(redis_url: str):
+        observed["redis_url"] = redis_url
+        return redis_client
 
-    monkeypatch.setattr(main_module, "build_auth_provider", build_auth_provider)
-    monkeypatch.setattr(main_module, "RedisEventBus", CapturingBus)
-    monkeypatch.setattr(main_module, "RealtimeService", WaitingRealtimeService)
-    monkeypatch.setattr(main_module, "create_arq_pool", create_pool)
-    monkeypatch.setattr(main_module, "shutdown_observability", shutdown_observability)
+    runtime = await build_api_runtime(
+        configured,
+        engine_factory=lambda _url: engine,
+        redis_factory=create_redis,
+        observability_factory=lambda **_kwargs: observability,
+        auth_factory=build_auth_provider,
+        readiness_factory=lambda **_kwargs: object(),
+        storage_factory=lambda **_kwargs: storage,
+        arq_pool_factory=create_pool,
+        realtime_service_factory=WaitingRealtimeService,
+        webhook_receiver_factory=lambda **_kwargs: object(),
+        recording_service_factory=lambda **_kwargs: object(),
+    )
+    assert runtime.settings is configured
+    assert observed["auth_provider"] is provider
+    assert observed["auth_observability"] is observability
+    assert observed["event_bus"].redis_client is redis_client
 
-    app = main_module.create_app(configured)
-    async with app.router.lifespan_context(app):
-        assert app.state.settings is configured
-        assert app.state.auth_provider is provider
-        assert observed["auth_provider"] is provider
-        assert observed["auth_observability"] is app.state.observability
+    await runtime.aclose()
 
     assert observed["auth_settings"] is configured
     assert observed["redis_url"] == configured.redis_url
     assert observed["arq_redis_url"] == configured.redis_url
-    assert observed["bus_closed"] == 1
     assert pool.closed == 1
     assert provider.closed == 1
-    assert observed["shutdown_order"] == ["auth_provider", "observability"]
+    assert observed["shutdown_order"] == [
+        "storage",
+        "auth_provider",
+        "redis",
+        "engine",
+        "observability",
+    ]
 
 
 @pytest.mark.anyio
-async def test_explicit_redis_url_creates_and_closes_owned_event_bus_client(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_event_bus_borrows_explicit_runtime_client_without_closing_it() -> None:
     from app.core import redis as redis_module
 
-    observed: dict[str, object] = {}
-
     class Client:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
         async def aclose(self) -> None:
-            observed["closed"] = True
+            self.close_calls += 1
 
     client = Client()
-
-    class RedisFactory:
-        @staticmethod
-        def from_url(redis_url: str, *, decode_responses: bool):
-            observed["redis_url"] = redis_url
-            observed["decode_responses"] = decode_responses
-            return client
-
-    monkeypatch.setattr(redis_module, "Redis", RedisFactory)
-    try:
-        bus = redis_module.RedisEventBus(redis_url="redis://captured.example/9")
-    except TypeError as error:
-        pytest.fail(f"RedisEventBus must accept an explicit redis_url: {error}")
-
-    await bus.aclose()
+    bus = redis_module.RedisEventBus(client)
 
     assert bus.redis_client is client
-    assert observed == {
-        "redis_url": "redis://captured.example/9",
-        "decode_responses": True,
-        "closed": True,
-    }
+    assert not hasattr(bus, "aclose")
+    assert client.close_calls == 0
 
 
 @pytest.mark.anyio
@@ -167,11 +172,8 @@ async def test_explicit_arq_url_is_used_without_global_settings(
 @pytest.mark.anyio
 async def test_lifespan_closes_arq_pool_when_later_startup_fails(
     settings,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from livekit import api as livekit_api_module
-
-    from app import main as main_module
+    from app.composition.api import build_api_runtime
 
     configured = settings.model_copy(
         update={
@@ -199,40 +201,60 @@ async def test_lifespan_closes_arq_pool_when_later_startup_fails(
         del settings, observability
         return provider
 
-    async def create_pool(redis_url=None):
+    async def create_pool(redis_url: str):
+        del redis_url
         return pool
 
-    class FailingVerifier:
-        def __init__(self, *_args, **_kwargs) -> None:
-            raise RuntimeError("STARTUP_PROVIDER_SECRET transcript")
+    class Engine:
+        async def dispose(self) -> None:
+            shutdown_order.append("engine")
 
-    async def shutdown_observability(observability) -> None:
-        del observability
-        shutdown_order.append("observability")
+    class RedisClient:
+        async def aclose(self) -> None:
+            shutdown_order.append("redis")
 
-    monkeypatch.setattr(main_module, "build_auth_provider", build_auth_provider)
-    monkeypatch.setattr(main_module, "create_arq_pool", create_pool)
-    monkeypatch.setattr(main_module, "shutdown_observability", shutdown_observability)
-    monkeypatch.setattr(livekit_api_module, "TokenVerifier", FailingVerifier)
+    class Resource:
+        def __init__(self, name: str) -> None:
+            self.name = name
 
-    app = main_module.create_app(configured)
+        async def aclose(self) -> None:
+            shutdown_order.append(self.name)
+
+    def fail_webhook_receiver(**_kwargs):
+        raise RuntimeError("STARTUP_PROVIDER_SECRET transcript")
+
     with pytest.raises(RuntimeError, match="STARTUP_PROVIDER_SECRET"):
-        async with app.router.lifespan_context(app):
-            pass
+        await build_api_runtime(
+            configured,
+            engine_factory=lambda _url: Engine(),
+            redis_factory=lambda _url: RedisClient(),
+            observability_factory=lambda **_kwargs: Resource("observability"),
+            auth_factory=build_auth_provider,
+            readiness_factory=lambda **_kwargs: object(),
+            storage_factory=lambda **_kwargs: Resource("storage"),
+            arq_pool_factory=create_pool,
+            realtime_service_factory=lambda *_args, **_kwargs: object(),
+            webhook_receiver_factory=fail_webhook_receiver,
+            recording_service_factory=lambda **_kwargs: object(),
+        )
 
     assert pool.closed == 1
-    assert app.state.auth_provider is provider
     assert provider.closed == 1
-    assert shutdown_order == ["auth_provider", "observability"]
+    assert shutdown_order == [
+        "storage",
+        "auth_provider",
+        "redis",
+        "engine",
+        "observability",
+    ]
 
 
 @pytest.mark.anyio
 async def test_lifespan_safely_reports_relay_and_cleanup_failures(
     settings,
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from app import main as main_module
+    from app.composition.api import build_api_runtime
 
     configured = settings.model_copy(
         update={
@@ -242,14 +264,11 @@ async def test_lifespan_safely_reports_relay_and_cleanup_failures(
         }
     )
     pool = _Pool(close_error=RuntimeError("ARQ_PROVIDER_SECRET customer text"))
-    observed = SimpleNamespace(bus_close_calls=0)
+    observed = SimpleNamespace(redis_close_calls=0)
 
-    class ClosingBus:
-        def __init__(self, *, redis_url=None) -> None:
-            self.redis_url = redis_url
-
+    class ClosingRedis:
         async def aclose(self) -> None:
-            observed.bus_close_calls += 1
+            observed.redis_close_calls += 1
             raise RuntimeError("REDIS_PROVIDER_SECRET customer text")
 
     class FailingRealtimeService:
@@ -259,22 +278,39 @@ async def test_lifespan_safely_reports_relay_and_cleanup_failures(
         async def fanout_forever(self) -> None:
             raise RuntimeError("RELAY_PROVIDER_SECRET customer text")
 
-    async def create_pool(redis_url=None):
+    async def create_pool(redis_url: str):
+        del redis_url
         return pool
 
-    monkeypatch.setattr(main_module, "RedisEventBus", ClosingBus)
-    monkeypatch.setattr(main_module, "RealtimeService", FailingRealtimeService)
-    monkeypatch.setattr(main_module, "create_arq_pool", create_pool)
+    class Engine:
+        async def dispose(self) -> None:
+            return None
 
-    app = main_module.create_app(configured)
+    class Resource:
+        async def aclose(self) -> None:
+            return None
+
     with caplog.at_level(logging.WARNING):
-        async with app.router.lifespan_context(app):
-            await asyncio.sleep(0)
+        runtime = await build_api_runtime(
+            configured,
+            engine_factory=lambda _url: Engine(),
+            redis_factory=lambda _url: ClosingRedis(),
+            observability_factory=lambda **_kwargs: Resource(),
+            auth_factory=lambda **_kwargs: Resource(),
+            readiness_factory=lambda **_kwargs: object(),
+            storage_factory=lambda **_kwargs: Resource(),
+            arq_pool_factory=create_pool,
+            realtime_service_factory=FailingRealtimeService,
+            webhook_receiver_factory=lambda **_kwargs: object(),
+            recording_service_factory=lambda **_kwargs: object(),
+        )
+        await asyncio.sleep(0)
+        await runtime.aclose()
 
-    assert observed.bus_close_calls == 1
+    assert observed.redis_close_calls == 1
     assert pool.closed == 1
     assert "event=realtime_fanout_failed" in caplog.text
-    assert "event=realtime_bus_close_failed" in caplog.text
+    assert "event=redis_client_close_failed" in caplog.text
     assert "event=arq_pool_close_failed" in caplog.text
     for secret in (
         "RELAY_PROVIDER_SECRET",

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import install_test_api_runtime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -161,7 +162,11 @@ async def _api_client(
         settings=configured,
         observability=get_observability(),
     )
-    application.state.auth_provider = auth_provider
+    install_test_api_runtime(
+        application,
+        settings=configured,
+        auth_provider=auth_provider,
+    )
 
     async def override_get_session():
         async with session_factory() as session:
@@ -445,14 +450,14 @@ async def test_development_router_is_absent_outside_development(
 ) -> None:
     from app import main as main_module
 
-    application = main_module.create_app(
-        settings.model_copy(
-            update={
-                "app_env": app_env,
-                "billing_mode": "fake",
-            }
-        )
+    configured = settings.model_copy(
+        update={
+            "app_env": app_env,
+            "billing_mode": "fake",
+        }
     )
+    application = main_module.create_app(configured)
+    install_test_api_runtime(application, settings=configured)
     transport = httpx.ASGITransport(app=application)
     async with httpx.AsyncClient(
         transport=transport,

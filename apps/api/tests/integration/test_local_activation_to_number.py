@@ -5,6 +5,7 @@ from uuid import UUID
 import httpx
 import pytest
 import pytest_asyncio
+from conftest import install_test_api_runtime
 from fastapi import Depends, FastAPI
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import (
@@ -87,6 +88,7 @@ async def local_client(
     tuple[httpx.AsyncClient, async_sessionmaker[AsyncSession], FastAPI]
 ]:
     from app import main as main_module
+    from app.composition.api import build_api_runtime
 
     class NoopPool:
         async def aclose(self) -> None:
@@ -96,7 +98,11 @@ async def local_client(
         del redis_url
         return NoopPool()
 
-    monkeypatch.setattr(main_module, "create_arq_pool", create_pool)
+    async def runtime_builder(settings: Settings):
+        return await build_api_runtime(
+            settings,
+            arq_pool_factory=create_pool,
+        )
 
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'local-activation.db'}"
     engine = create_async_engine(database_url, future=True)
@@ -115,7 +121,10 @@ async def local_client(
         carrier_lookup_mode="fake",
         telephony_mode="fake",
     )
-    application = main_module.create_app(settings)
+    application = main_module.create_app(
+        settings,
+        runtime_builder=runtime_builder,
+    )
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -466,7 +475,7 @@ async def test_call_drain_fixture_rejects_non_fake_telephony(
     ],
 ) -> None:
     client, _session_factory, application = local_client
-    application.state.settings.telephony_mode = "telnyx"
+    application.state.runtime.settings.telephony_mode = "telnyx"
 
     response = await client.post(
         "/api/development/call-drain-fixture/start",
@@ -506,7 +515,7 @@ async def test_call_drain_fixture_rejects_clerk_auth_before_mutation(
     def clerk_auth_provider() -> AuthProvider:
         return AuthenticatedClerkProvider()
 
-    application.state.settings.auth_mode = "clerk"
+    application.state.runtime.settings.auth_mode = "clerk"
     application.dependency_overrides[get_auth_provider] = clerk_auth_provider
     clerk_headers = {
         "Authorization": "Bearer authenticated-clerk-fixture-test-token"
@@ -535,7 +544,7 @@ async def test_call_drain_fixture_rejects_clerk_auth_before_mutation(
         )
     finally:
         application.dependency_overrides.pop(get_auth_provider, None)
-        application.state.settings.auth_mode = "local"
+        application.state.runtime.settings.auth_mode = "local"
 
     unavailable = {"detail": {"code": "local_telephony_disabled"}}
     assert started.status_code == 409
@@ -604,17 +613,17 @@ async def test_call_drain_fixture_routes_are_absent_outside_development(
 ) -> None:
     from app.main import create_app
 
-    application = create_app(
-        Settings(
-            app_env="test",
-            database_url=(
-                f"sqlite+aiosqlite:///{tmp_path / 'non-development.db'}"
-            ),
-            redis_url="redis://localhost:6379/0",
-            auth_mode="clerk",
-            agent_dispatch_jwt_secret="a" * 32,
-        )
+    settings = Settings(
+        app_env="test",
+        database_url=(
+            f"sqlite+aiosqlite:///{tmp_path / 'non-development.db'}"
+        ),
+        redis_url="redis://localhost:6379/0",
+        auth_mode="clerk",
+        agent_dispatch_jwt_secret="a" * 32,
     )
+    application = create_app(settings)
+    install_test_api_runtime(application, settings=settings)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),

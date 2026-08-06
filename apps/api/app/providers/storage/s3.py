@@ -47,6 +47,8 @@ class S3Storage(StorageProvider):
         self.secret_key = secret_key or settings.s3_secret_key
         self.region = region or settings.s3_region
         self.client = client
+        self._owns_client = client is None
+        self._http_client: PoolManager | None = None
         self._bucket_verified = False
         self.observability = observability or get_observability()
 
@@ -67,6 +69,7 @@ class S3Storage(StorageProvider):
                 backoff_factor=0.2,
             ),
         )
+        self._http_client = http_client
         return Minio(
             endpoint,
             access_key=self.access_key,
@@ -80,6 +83,15 @@ class S3Storage(StorageProvider):
         if self.client is None:
             self.client = self._build_client()
         return self.client
+
+    async def aclose(self) -> None:
+        http_client = self._http_client
+        if http_client is None:
+            return
+        self._http_client = None
+        if self._owns_client:
+            self.client = None
+        await asyncio.to_thread(http_client.clear)
 
     def _ensure_bucket_exists(self, client) -> None:
         if self._bucket_verified:
