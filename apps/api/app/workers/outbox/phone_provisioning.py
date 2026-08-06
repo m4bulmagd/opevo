@@ -3,17 +3,15 @@ from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
 
-from app.core.database import get_session_factory
-from app.core.config import get_settings
+from app.core.database import AsyncSessionFactory
 from app.core.logging import report_safe_exception
-from app.core.observability import get_observability
 from app.core.provider_failures import ProviderFailure
 from app.core.redaction import safe_log_label
 from app.providers.telephony.base import (
     TelephonyProvisioningPending,
     TelephonyProvisioningReviewRequired,
+    TelephonyProvider,
 )
-from app.providers.telephony.factory import create_telephony_provider
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.repositories.phone_number_provisioning_repository import (
@@ -295,7 +293,9 @@ async def _run_provider_attempt(
         if secondary_error_type is None:
             if provider_failure is not None:
                 raise provider_failure
-            raise RuntimeError("phone_provisioning_internal_defect") from unexpected_error
+            raise RuntimeError(
+                "phone_provisioning_internal_defect"
+            ) from unexpected_error
 
     report_safe_exception(
         logger,
@@ -311,9 +311,10 @@ async def _run_provider_attempt(
 
 
 async def provision_phone_number(
-    ctx: dict[str, Any],
     payload: dict[str, Any],
     *,
+    session_factory: AsyncSessionFactory,
+    telephony_provider: TelephonyProvider,
     provider_operation_key: str | None = None,
 ) -> None:
     user_id_str = payload.get("user_id")
@@ -325,10 +326,6 @@ async def provision_phone_number(
     lifecycle_generation = payload.get("lifecycle_generation")
     if type(lifecycle_generation) is not int or lifecycle_generation < 1:
         raise ValueError("Invalid lifecycle generation")
-
-    session_factory = ctx.get("session_factory") or get_session_factory()
-    settings = get_settings()
-    observability = get_observability()
 
     async with session_factory() as session:
         user_repo = UserRepository(session)
@@ -355,13 +352,7 @@ async def provision_phone_number(
             )
             return
 
-        provider = ctx.get("telephony_provider")
-        if provider is None:
-            provider = create_telephony_provider(
-                settings,
-                observability=observability,
-            )
-        telephony_service = TelephonyService(session, provider=provider)
+        telephony_service = TelephonyService(session, provider=telephony_provider)
         recovery_lifecycle_error: (
             AccountStateBlockedError | AccountLifecycleGenerationMismatchError | None
         ) = None

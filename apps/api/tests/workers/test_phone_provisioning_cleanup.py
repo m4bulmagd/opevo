@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -15,12 +16,12 @@ from app.services.outbox_service import OutboxService
 from app.services.provider_work_policy import UnresolvedProviderWorkError
 from app.workers.outbox.delivery import (
     OUTBOX_RETRY_DELAYS,
-    outbox_delivery_job,
+    deliver_outbox_batch,
 )
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.outbox.phone import deliver_phone_provision
-from app.workers.outbox.phone_provisioning import provision_phone_number
-from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
+from app.workers.outbox.phone import deliver_phone_provision as _deliver_phone_provision_explicit
+from app.workers.outbox.phone_provisioning import provision_phone_number as _provision_phone_number_explicit
+from app.workers.outbox.provider_cleanup import deliver_provider_cleanup as _deliver_provider_cleanup_explicit
 
 
 class LateProvisioningProvider:
@@ -68,6 +69,51 @@ class LateProvisioningProvider:
 
 class SimulatedWorkerCrash(BaseException):
     pass
+
+
+async def _provision_phone_number(
+    dependencies: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    provider_operation_key: str | None = None,
+) -> None:
+    await _provision_phone_number_explicit(
+        payload,
+        session_factory=dependencies["session_factory"],
+        telephony_provider=dependencies["telephony_provider"],
+        provider_operation_key=provider_operation_key,
+    )
+
+
+async def _deliver_phone_provision(
+    dependencies: dict[str, Any],
+    event: OutboxEvent,
+) -> None:
+    await _deliver_phone_provision_explicit(
+        event,
+        session_factory=dependencies["session_factory"],
+        telephony_provider=dependencies["telephony_provider"],
+        activation_flow_enabled=False,
+        now=dependencies.get("routing_now", lambda: datetime.now(UTC)),
+    )
+
+
+class _UnusedSubscriptions:
+    async def cancel_immediately(self, subscription_id: str) -> None:
+        raise AssertionError(f"unexpected subscription cleanup: {subscription_id}")
+
+
+async def _deliver_provider_cleanup(
+    dependencies: dict[str, Any],
+    event: OutboxEvent,
+) -> None:
+    await _deliver_provider_cleanup_explicit(
+        event,
+        session_factory=dependencies["session_factory"],
+        telephony_provider=dependencies["telephony_provider"],
+        subscription_provider=_UnusedSubscriptions(),
+        now=dependencies.get("provider_cleanup_now", lambda: datetime.now(UTC)),
+    )
 
 
 class AcceptedThenRecoverableProvider:
@@ -136,7 +182,7 @@ async def test_phone_provisioning_admission_waits_for_prior_provider_cleanup(
 
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     with pytest.raises(UnresolvedProviderWorkError) as raised:
-        await provision_phone_number(
+        await _provision_phone_number(
             {
                 "session_factory": session_factory,
                 "telephony_provider": ForbiddenProvider(),
@@ -170,7 +216,7 @@ async def test_late_provisioning_adopts_exact_identity_for_durable_cleanup(
     provider = LateProvisioningProvider(session_factory, user_id)
 
     with pytest.raises(AccountStateBlockedError):
-        await provision_phone_number(
+        await _provision_phone_number(
             {
                 "session_factory": session_factory,
                 "telephony_provider": provider,
@@ -236,7 +282,7 @@ async def test_crash_before_cleanup_adoption_recovers_same_provider_order(
     }
 
     with pytest.raises(RuntimeError, match="simulated crash"):
-        await provision_phone_number(
+        await _provision_phone_number(
             ctx,
             payload,
             provider_operation_key="activation:phone.provision:crash-boundary",
@@ -249,7 +295,7 @@ async def test_crash_before_cleanup_adoption_recovers_same_provider_order(
     )
 
     with pytest.raises(AccountStateBlockedError):
-        await provision_phone_number(
+        await _provision_phone_number(
             ctx,
             payload,
             provider_operation_key="activation:phone.provision:crash-boundary",
@@ -297,14 +343,14 @@ async def test_delivery_wrapper_recovers_exact_crashed_order_after_deactivation(
     }
 
     with pytest.raises(SimulatedWorkerCrash):
-        await deliver_phone_provision(ctx, event)
+        await _deliver_phone_provision(ctx, event)
 
     await db_session.refresh(active_user)
     active_user.status = "inactive"
     active_user.lifecycle_generation = 2
     await db_session.commit()
 
-    await deliver_phone_provision(ctx, event)
+    await _deliver_phone_provision(ctx, event)
 
     assert provider.provision_keys == [operation_key]
     assert provider.recovery_keys == [operation_key]
@@ -328,7 +374,7 @@ async def test_delivery_wrapper_recovers_exact_crashed_order_after_deactivation(
     )
     assert cleanup_event is not None
 
-    await deliver_provider_cleanup(ctx, cleanup_event)
+    await _deliver_provider_cleanup(ctx, cleanup_event)
 
     await db_session.refresh(cleanup)
     assert cleanup.status == "completed"
@@ -398,8 +444,24 @@ async def test_missing_stale_order_lookup_retries_outbox_without_ordering_again(
         "outbox_now": lambda: current_time,
     }
     results: list[dict[str, int]] = []
+    terminal_metrics: list[tuple[str, str]] = []
+
+    class Observability:
+        def record_outbox_terminal_failure(self, topic: str, code: str) -> None:
+            terminal_metrics.append((topic, code))
+
+    async def handler(claimed_event: OutboxEvent) -> None:
+        await _deliver_phone_provision(ctx, claimed_event)
+
     for _ in range(len(OUTBOX_RETRY_DELAYS) + 1):
-        results.append(await outbox_delivery_job(ctx))
+        results.append(
+            await deliver_outbox_batch(
+                session_factory=session_factory,
+                handlers={"phone.provision": handler},
+                observability=Observability(),
+                now=lambda: current_time,
+            )
+        )
         async with session_factory() as session:
             stored_event = await session.get(OutboxEvent, event.id)
             assert stored_event is not None
@@ -493,7 +555,7 @@ async def test_stale_delivery_only_admits_matching_running_attempt(
 
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     with pytest.raises(OutboxDeliveryError) as raised:
-        await deliver_phone_provision(
+        await _deliver_phone_provision(
             {
                 "session_factory": session_factory,
                 "telephony_provider": ForbiddenProvider(),

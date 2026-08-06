@@ -1,11 +1,9 @@
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from livekit import api as livekit_api_module
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -31,10 +29,38 @@ from presvo_contracts import (
 )
 from app.services.outbox_service import OutboxService
 from app.services.recording_lifecycle_service import RecordingLifecycleService
-from app.workers.outbox.delivery import outbox_delivery_job
+from app.workers.outbox.delivery import deliver_outbox_batch
+from app.core.dispatch_token import DispatchTokenError
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.outbox import customer_dispatch
-from app.workers.outbox.customer_dispatch import deliver_livekit_dispatch
+from app.workers.outbox.customer_dispatch import deliver_livekit_dispatch as _deliver_livekit_dispatch_explicit
+from app.core.config import get_settings
+from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG
+
+
+async def _deliver_livekit_dispatch(
+    dependencies: dict[str, object],
+    event: OutboxEvent,
+) -> None:
+    settings = get_settings()
+    await _deliver_livekit_dispatch_explicit(
+        event,
+        session_factory=dependencies["session_factory"],
+        provider=dependencies["livekit_dispatch_provider"],
+        token_config=TEST_DISPATCH_TOKEN_CONFIG,
+        livekit_agent_name=settings.livekit_agent_name,
+        activation_flow_enabled=settings.activation_flow_enabled,
+        max_call_duration_seconds=settings.max_call_duration_seconds,
+        now=dependencies.get("outbox_now", lambda: datetime.now(UTC)),
+    )
+
+
+class _Observability:
+    def __init__(self, metrics: list[tuple[str, str]] | None = None) -> None:
+        self.metrics = metrics if metrics is not None else []
+
+    def record_outbox_terminal_failure(self, topic: str, code: str) -> None:
+        self.metrics.append((topic, code))
 
 
 @pytest.fixture(autouse=True)
@@ -101,177 +127,6 @@ class _BorrowedProvider(_Provider):
         self.close_calls += 1
 
 
-class _AgentDispatchClient:
-    def __init__(self, *, fail_create: bool = False) -> None:
-        self.dispatches: list[object] = []
-        self.fail_create = fail_create
-
-    async def list_dispatch(self, room_name: str) -> list[object]:
-        return [
-            dispatch
-            for dispatch in self.dispatches
-            if getattr(dispatch, "room", None) == room_name
-        ]
-
-    async def create_dispatch(self, request) -> object:
-        if self.fail_create:
-            raise TimeoutError("LIVEKIT_OPERATION_SECRET")
-        dispatch = SimpleNamespace(
-            id="owned-dispatch",
-            agent_name=request.agent_name,
-            room=request.room,
-            metadata=request.metadata,
-            state="active",
-        )
-        self.dispatches.append(dispatch)
-        return dispatch
-
-
-class _OwnedLiveKitApi:
-    instances: list["_OwnedLiveKitApi"] = []
-    fail_create = False
-    fail_close = False
-
-    def __init__(self, **_kwargs) -> None:
-        self.agent_dispatch = _AgentDispatchClient(fail_create=self.fail_create)
-        self.close_calls = 0
-        self.instances.append(self)
-
-    async def aclose(self) -> None:
-        self.close_calls += 1
-        if self.fail_close:
-            raise RuntimeError("LIVEKIT_CLOSE_SECRET")
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    "missing_field",
-    ["livekit_url", "livekit_api_key", "livekit_api_secret"],
-)
-async def test_uninjected_dispatch_rejects_missing_livekit_config_before_lock_or_sdk(
-    db_session,
-    settings,
-    monkeypatch: pytest.MonkeyPatch,
-    missing_field: str,
-) -> None:
-    _call, event, _subscription = await _seed_dispatch(db_session)
-    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    explicit_settings = settings.model_copy(
-        update={
-            "livekit_url": "wss://explicit.example.com",
-            "livekit_api_key": "explicit-key",
-            "livekit_api_secret": "explicit-secret",
-            missing_field: None,
-        }
-    )
-    for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
-        monkeypatch.setenv(name, f"PROCESS_ENV_{name}_SENTINEL")
-    monkeypatch.setattr(customer_dispatch, "get_settings", lambda: explicit_settings)
-
-    class ForbiddenLock:
-        async def __aenter__(self):
-            raise AssertionError("missing config reached dispatch lock")
-
-        async def __aexit__(self, *_args) -> None:
-            return None
-
-    monkeypatch.setattr(
-        customer_dispatch,
-        "livekit_dispatch_lock",
-        lambda *_args, **_kwargs: ForbiddenLock(),
-    )
-    sdk_calls = 0
-
-    def forbidden_livekit_api(**_kwargs):
-        nonlocal sdk_calls
-        sdk_calls += 1
-        raise AssertionError("missing config reached LiveKit SDK")
-
-    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", forbidden_livekit_api)
-
-    with pytest.raises(OutboxDeliveryError) as caught:
-        await deliver_livekit_dispatch({"session_factory": session_factory}, event)
-
-    assert caught.value.error_code == "dispatch_configuration"
-    assert caught.value.retryable is False
-    assert sdk_calls == 0
-
-
-@pytest.mark.anyio
-async def test_dispatch_handler_closes_its_operation_owned_livekit_client_once(
-    db_session,
-    settings,
-    monkeypatch,
-) -> None:
-    _call, event, _subscription = await _seed_dispatch(db_session)
-    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    _OwnedLiveKitApi.instances = []
-    _OwnedLiveKitApi.fail_create = False
-    _OwnedLiveKitApi.fail_close = False
-    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", _OwnedLiveKitApi)
-    monkeypatch.setattr(
-        customer_dispatch,
-        "get_settings",
-        lambda: settings.model_copy(
-            update={
-                "livekit_url": "wss://livekit.example.com",
-                "livekit_api_key": "livekit-key",
-                "livekit_api_secret": "livekit-secret",
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        customer_dispatch,
-        "create_dispatch_token",
-        lambda **_kwargs: "dispatch-jwt",
-    )
-
-    await deliver_livekit_dispatch({"session_factory": session_factory}, event)
-
-    assert len(_OwnedLiveKitApi.instances) == 1
-    assert _OwnedLiveKitApi.instances[0].close_calls == 1
-
-
-@pytest.mark.anyio
-async def test_dispatch_handler_preserves_operation_error_when_owned_close_fails(
-    db_session,
-    settings,
-    monkeypatch,
-    caplog,
-) -> None:
-    _call, event, _subscription = await _seed_dispatch(db_session)
-    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    _OwnedLiveKitApi.instances = []
-    _OwnedLiveKitApi.fail_create = True
-    _OwnedLiveKitApi.fail_close = True
-    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", _OwnedLiveKitApi)
-    monkeypatch.setattr(
-        customer_dispatch,
-        "get_settings",
-        lambda: settings.model_copy(
-            update={
-                "livekit_url": "wss://livekit.example.com",
-                "livekit_api_key": "livekit-key",
-                "livekit_api_secret": "livekit-secret",
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        customer_dispatch,
-        "create_dispatch_token",
-        lambda **_kwargs: "dispatch-jwt",
-    )
-
-    with caplog.at_level("WARNING"), pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_livekit_dispatch({"session_factory": session_factory}, event)
-
-    assert exc_info.value.error_code == "provider_retryable"
-    assert len(_OwnedLiveKitApi.instances) == 1
-    assert _OwnedLiveKitApi.instances[0].close_calls == 1
-    assert "LIVEKIT_CLOSE_SECRET" not in caplog.text
-    assert "LIVEKIT_OPERATION_SECRET" not in caplog.text
-
-
 @pytest.mark.anyio
 async def test_dispatch_handler_never_closes_an_injected_provider(
     db_session,
@@ -286,7 +141,7 @@ async def test_dispatch_handler_never_closes_an_injected_provider(
         lambda **_kwargs: "dispatch-jwt",
     )
 
-    await deliver_livekit_dispatch(
+    await _deliver_livekit_dispatch(
         {
             "session_factory": session_factory,
             "livekit_dispatch_provider": provider,
@@ -468,7 +323,7 @@ async def test_customer_reconciliation_never_persists_foreign_agent_identity(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with caplog.at_level("INFO"), pytest.raises(OutboxDeliveryError) as caught:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {"session_factory": session_factory, "livekit_dispatch_provider": provider},
             event,
         )
@@ -520,7 +375,7 @@ async def test_customer_empty_provider_dispatch_id_is_conflict_without_creation_
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as caught:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {"session_factory": session_factory, "livekit_dispatch_provider": provider},
             event,
         )
@@ -703,7 +558,7 @@ async def test_dispatch_handler_creates_and_persists_provider_identity(
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await deliver_livekit_dispatch(
+    await _deliver_livekit_dispatch(
         {"session_factory": session_factory, "livekit_dispatch_provider": provider},
         event,
     )
@@ -769,7 +624,7 @@ async def test_dispatch_greeting_uses_projected_business_name_and_bounds_owner_c
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await deliver_livekit_dispatch(
+    await _deliver_livekit_dispatch(
         {"session_factory": session_factory, "livekit_dispatch_provider": provider},
         event,
     )
@@ -848,7 +703,7 @@ async def test_activation_flow_missing_business_name_fails_dispatch_closed(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     try:
         with pytest.raises(OutboxDeliveryError) as exc_info:
-            await deliver_livekit_dispatch(
+            await _deliver_livekit_dispatch(
                 {
                     "session_factory": session_factory,
                     "livekit_dispatch_provider": provider,
@@ -929,7 +784,7 @@ async def test_default_guided_projection_serializes_through_dispatch_contract(
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     try:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": provider,
@@ -970,7 +825,7 @@ async def test_unnamed_automatic_dispatch_does_not_block_named_dispatch(
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await deliver_livekit_dispatch(
+    await _deliver_livekit_dispatch(
         {"session_factory": session_factory, "livekit_dispatch_provider": provider},
         event,
     )
@@ -993,7 +848,7 @@ async def test_create_then_timeout_reconciles_to_one_effective_dispatch(
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await deliver_livekit_dispatch(
+    await _deliver_livekit_dispatch(
         {"session_factory": session_factory, "livekit_dispatch_provider": provider},
         event,
     )
@@ -1041,7 +896,7 @@ async def test_terminal_create_failure_bypasses_dispatch_reconciliation(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {"session_factory": session_factory, "livekit_dispatch_provider": provider},
             event,
         )
@@ -1073,7 +928,7 @@ async def test_stale_account_generation_never_dispatches_customer_call(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {"session_factory": session_factory, "livekit_dispatch_provider": provider},
             event,
         )
@@ -1113,7 +968,7 @@ async def test_deactivation_during_customer_dispatch_reconciliation_prevents_cre
     )
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {"session_factory": session_factory, "livekit_dispatch_provider": provider},
             event,
         )
@@ -1187,7 +1042,7 @@ async def test_stale_readiness_never_calls_provider(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {"session_factory": session_factory, "livekit_dispatch_provider": provider},
             event,
         )
@@ -1212,7 +1067,7 @@ async def test_disagreeing_phone_projection_never_calls_dispatch_provider(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {"session_factory": session_factory, "livekit_dispatch_provider": provider},
             event,
         )
@@ -1242,7 +1097,7 @@ async def test_foreign_dispatch_is_a_terminal_conflict(db_session, monkeypatch) 
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {"session_factory": session_factory, "livekit_dispatch_provider": provider},
             event,
         )
@@ -1266,7 +1121,7 @@ async def test_successful_create_response_must_match_requested_dispatch(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {"session_factory": session_factory, "livekit_dispatch_provider": provider},
             event,
         )
@@ -1283,7 +1138,7 @@ async def test_malformed_foreign_aggregate_is_terminal(db_session) -> None:
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_livekit_dispatch(
+        await _deliver_livekit_dispatch(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": _Provider(),
@@ -1321,16 +1176,24 @@ async def test_sixth_provider_failure_atomically_fails_call(
         "outbox_now": lambda: current_time,
     }
 
-    async def complete_recording_reconcile(_ctx, _event) -> None:
+    async def dispatch_handler(claimed_event: OutboxEvent) -> None:
+        await _deliver_livekit_dispatch(ctx, claimed_event)
+
+    async def complete_recording_reconcile(_event: OutboxEvent) -> None:
         return None
 
-    ctx["outbox_handlers"] = {
-        "livekit.dispatch": deliver_livekit_dispatch,
+    handlers = {
+        "livekit.dispatch": dispatch_handler,
         "recording.reconcile": complete_recording_reconcile,
     }
 
     for _attempt in range(6):
-        await outbox_delivery_job(ctx)
+        await deliver_outbox_batch(
+            session_factory=session_factory,
+            handlers=handlers,
+            observability=_Observability(),
+            now=lambda: current_time,
+        )
         async with session_factory() as session:
             stored = await session.get(type(event), event.id)
             assert stored is not None
@@ -1389,14 +1252,20 @@ async def test_terminal_dispatch_failure_rolls_back_when_recording_stop_fails(
         fail_request_stop,
     )
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    dependencies = {
+        "session_factory": session_factory,
+        "livekit_dispatch_provider": provider,
+    }
+
+    async def dispatch_handler(claimed_event: OutboxEvent) -> None:
+        await _deliver_livekit_dispatch(dependencies, claimed_event)
 
     with pytest.raises(RuntimeError, match="forced recording stop failure"):
-        await outbox_delivery_job(
-            {
-                "session_factory": session_factory,
-                "livekit_dispatch_provider": provider,
-                "outbox_now": lambda: event.next_attempt_at + timedelta(seconds=1),
-            }
+        await deliver_outbox_batch(
+            session_factory=session_factory,
+            handlers={"livekit.dispatch": dispatch_handler},
+            observability=_Observability(),
+            now=lambda: event.next_attempt_at + timedelta(seconds=1),
         )
 
     db_session.expire_all()
@@ -1437,15 +1306,14 @@ async def test_terminal_invalid_payload_releases_authoritative_aggregate_call(
     await db_session.commit()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    async def terminal(_ctx, _event) -> None:
+    async def terminal(_event: OutboxEvent) -> None:
         raise OutboxDeliveryError("dispatch_configuration", retryable=False)
 
-    result = await outbox_delivery_job(
-        {
-            "session_factory": session_factory,
-            "outbox_handlers": {"livekit.dispatch": terminal},
-            "outbox_now": lambda: event.next_attempt_at + timedelta(seconds=1),
-        }
+    result = await deliver_outbox_batch(
+        session_factory=session_factory,
+        handlers={"livekit.dispatch": terminal},
+        observability=_Observability(),
+        now=lambda: event.next_attempt_at + timedelta(seconds=1),
     )
 
     await db_session.refresh(call)
@@ -1458,33 +1326,38 @@ async def test_terminal_invalid_payload_releases_authoritative_aggregate_call(
 
 
 @pytest.mark.anyio
-async def test_unsafe_dispatch_token_settings_fail_as_dispatch_configuration(
+async def test_dispatch_token_creation_error_fails_as_dispatch_configuration(
     db_session,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from app.core.config import get_settings
-
     call, event, _subscription = await _seed_dispatch(db_session)
     call_id = call.id
     event_id = event.id
     provider = _Provider()
     metrics: list[tuple[str, str]] = []
-    monkeypatch.setenv("AGENT_DISPATCH_JWT_SECRET", "too-short")
-    get_settings.cache_clear()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    monkeypatch.setattr(
+        customer_dispatch,
+        "create_dispatch_token",
+        lambda **_kwargs: (_ for _ in ()).throw(DispatchTokenError("invalid")),
+    )
 
-    with caplog.at_level(logging.CRITICAL):
-        result = await outbox_delivery_job(
+    async def invalid_token_handler(claimed_event: OutboxEvent) -> None:
+        await _deliver_livekit_dispatch(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": provider,
-                "outbox_handlers": {"livekit.dispatch": deliver_livekit_dispatch},
-                "outbox_now": lambda: event.next_attempt_at + timedelta(seconds=1),
-                "outbox_terminal_failure_metric": (
-                    lambda topic, code: metrics.append((topic, code))
-                ),
-            }
+            },
+            claimed_event,
+        )
+
+    with caplog.at_level(logging.CRITICAL):
+        result = await deliver_outbox_batch(
+            session_factory=session_factory,
+            handlers={"livekit.dispatch": invalid_token_handler},
+            observability=_Observability(metrics),
+            now=lambda: event.next_attempt_at + timedelta(seconds=1),
         )
 
     db_session.expire_all()
@@ -1497,7 +1370,7 @@ async def test_unsafe_dispatch_token_settings_fail_as_dispatch_configuration(
     assert stored_event is not None
     assert stored_event.status == "failed"
     assert stored_event.last_error_code == "dispatch_configuration"
-    assert metrics == [("livekit.dispatch", "dispatch_configuration")]
+    assert metrics == [("livekit.dispatch", "validation")]
     assert provider.list_calls == []
     assert provider.create_calls == []
     assert "event=outbox_internal_defect" not in caplog.text
@@ -1512,15 +1385,14 @@ async def test_terminal_dispatch_failure_never_overturns_connected_call(
     await db_session.commit()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    async def terminal(_ctx, _event) -> None:
+    async def terminal(_event: OutboxEvent) -> None:
         raise OutboxDeliveryError("dispatch_ineligible", retryable=False)
 
-    result = await outbox_delivery_job(
-        {
-            "session_factory": session_factory,
-            "outbox_handlers": {"livekit.dispatch": terminal},
-            "outbox_now": lambda: event.next_attempt_at + timedelta(seconds=1),
-        }
+    result = await deliver_outbox_batch(
+        session_factory=session_factory,
+        handlers={"livekit.dispatch": terminal},
+        observability=_Observability(),
+        now=lambda: event.next_attempt_at + timedelta(seconds=1),
     )
 
     await db_session.refresh(call)

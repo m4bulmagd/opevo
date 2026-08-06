@@ -18,17 +18,14 @@ from app.services.outbox_service import (
     OutboxService,
     SUPPORTED_OUTBOX_TOPICS,
 )
-from app.workers.outbox.delivery import outbox_delivery_job
+from app.workers.outbox.delivery import deliver_outbox_batch
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.outbox import post_call
 from app.workers.outbox.post_call import (
-    build_recording_reconciler,
-    deliver_recording_reconcile,
-    deliver_summary_generate,
+    deliver_recording_reconcile as _deliver_recording_reconcile_explicit,
+    deliver_summary_generate as _deliver_summary_generate_explicit,
 )
-from app.workers.outbox._owned_resources import operation_owned_resources
 from app.workers.outbox.recording_reconciliation import ReconciliationResult
-from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
 
 
 class ExplodingNotificationProvider:
@@ -86,163 +83,59 @@ class FakeRecordingReconciler:
         return self.result
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    "missing_field",
-    ["livekit_url", "livekit_api_key", "livekit_api_secret"],
-)
-async def test_uninjected_recording_reconcile_maps_missing_livekit_config_terminally(
-    settings,
-    monkeypatch: pytest.MonkeyPatch,
-    missing_field: str,
+class _UnusedSummaryProvider:
+    async def generate_summary(self, transcript: list[dict]):
+        raise AssertionError(f"unexpected summary generation: {transcript!r}")
+
+
+class _RecordingObservability:
+    def __init__(self) -> None:
+        self.results: list[str] = []
+        self.conflicts = 0
+
+    def record_recording_reconciliation_result(self, result: str) -> None:
+        self.results.append(result)
+
+    def record_multiple_exact_match_conflict(self) -> None:
+        self.conflicts += 1
+
+    def record_outbox_terminal_failure(self, _topic: str, _error_class: str) -> None:
+        pass
+
+
+async def _deliver_summary_generate(
+    dependencies: dict[str, object],
+    event: OutboxEvent,
 ) -> None:
-    explicit_settings = settings.model_copy(
-        update={
-            "livekit_url": "wss://explicit.example.com",
-            "livekit_api_key": "explicit-key",
-            "livekit_api_secret": "explicit-secret",
-            missing_field: None,
-        }
+    await _deliver_summary_generate_explicit(
+        event,
+        session_factory=dependencies.get("session_factory", object()),
+        summary_provider=dependencies.get("summary_provider", _UnusedSummaryProvider()),
     )
-    for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
-        monkeypatch.setenv(name, f"PROCESS_ENV_{name}_SENTINEL")
-    monkeypatch.setattr(post_call, "get_settings", lambda: explicit_settings)
-
-    from livekit import api as livekit_api_module
-
-    sdk_calls = 0
-    storage_calls = 0
-
-    def forbidden_livekit_api(**_kwargs):
-        nonlocal sdk_calls
-        sdk_calls += 1
-        raise AssertionError("missing config reached LiveKit SDK")
-
-    def forbidden_storage(**_kwargs):
-        nonlocal storage_calls
-        storage_calls += 1
-        raise AssertionError("missing LiveKit config reached S3 construction")
-
-    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", forbidden_livekit_api)
-    monkeypatch.setattr(post_call, "S3Storage", forbidden_storage)
-
-    with pytest.raises(OutboxDeliveryError) as caught:
-        await deliver_recording_reconcile(
-            {"session_factory": object(), "observability": object()},
-            recording_event(uuid4()),
-        )
-
-    assert caught.value.error_code == "provider_terminal"
-    assert caught.value.retryable is False
-    assert sdk_calls == 0
-    assert storage_calls == 0
 
 
-@pytest.mark.anyio
-async def test_recording_fallback_closes_s3_then_livekit_once(
-    settings,
-    monkeypatch,
+async def _deliver_recording_reconcile(
+    dependencies: dict[str, object],
+    event: OutboxEvent,
 ) -> None:
-    close_order: list[str] = []
-
-    class LiveKitApi:
-        def __init__(self, **_kwargs) -> None:
-            self.egress = object()
-            self.close_calls = 0
-
-        async def aclose(self) -> None:
-            self.close_calls += 1
-            close_order.append("livekit")
-
-    class Storage:
-        def __init__(self, **_kwargs) -> None:
-            self.close_calls = 0
-
-        async def aclose(self) -> None:
-            self.close_calls += 1
-            close_order.append("s3")
-
-    from livekit import api as livekit_api_module
-
-    livekit_clients: list[LiveKitApi] = []
-
-    def build_livekit(**kwargs) -> LiveKitApi:
-        client = LiveKitApi(**kwargs)
-        livekit_clients.append(client)
-        return client
-
-    storages: list[Storage] = []
-
-    def build_storage(**kwargs) -> Storage:
-        storage = Storage(**kwargs)
-        storages.append(storage)
-        return storage
-
-    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", build_livekit)
-    monkeypatch.setattr(post_call, "S3Storage", build_storage)
-
-    async with operation_owned_resources(operation="test_recording") as own:
-        build_recording_reconciler(
-            {"session_factory": object()},
-            settings=settings.model_copy(
-                update={
-                    "livekit_url": "wss://livekit.example.com",
-                    "livekit_api_key": "key",
-                    "livekit_api_secret": "secret",
-                }
+    original_builder = post_call.build_recording_reconciler
+    if "recording_reconciler" in dependencies:
+        post_call.build_recording_reconciler = lambda **_kwargs: dependencies[
+            "recording_reconciler"
+        ]
+    try:
+        await _deliver_recording_reconcile_explicit(
+            event,
+            session_factory=dependencies.get("session_factory", object()),
+            recording_provider=dependencies.get("recording_provider", object()),
+            storage_provider=dependencies.get("storage_provider", object()),
+            observability=dependencies.get("observability", _RecordingObservability()),
+            now=dependencies.get(
+                "recording_reconciliation_now", lambda: datetime.now(UTC)
             ),
-            observability=object(),
-            own=own,
         )
-
-    assert close_order == ["s3", "livekit"]
-    assert livekit_clients[0].close_calls == 1
-    assert storages[0].close_calls == 1
-
-
-@pytest.mark.anyio
-async def test_recording_partial_construction_closes_livekit(
-    settings,
-    monkeypatch,
-    caplog,
-) -> None:
-    class LiveKitApi:
-        def __init__(self, **_kwargs) -> None:
-            self.egress = object()
-            self.close_calls = 0
-
-        async def aclose(self) -> None:
-            self.close_calls += 1
-            raise RuntimeError("LIVEKIT_PARTIAL_CLOSE_SECRET")
-
-    from livekit import api as livekit_api_module
-
-    client = LiveKitApi()
-    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", lambda **_kwargs: client)
-    monkeypatch.setattr(
-        post_call,
-        "S3Storage",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("storage build failed")),
-    )
-
-    with caplog.at_level("WARNING"):
-        with pytest.raises(RuntimeError, match="storage build failed"):
-            async with operation_owned_resources(operation="test_recording") as own:
-                build_recording_reconciler(
-                    {"session_factory": object()},
-                    settings=settings.model_copy(
-                        update={
-                            "livekit_url": "wss://livekit.example.com",
-                            "livekit_api_key": "key",
-                            "livekit_api_secret": "secret",
-                        }
-                    ),
-                    observability=object(),
-                    own=own,
-                )
-
-    assert client.close_calls == 1
-    assert "LIVEKIT_PARTIAL_CLOSE_SECRET" not in caplog.text
+    finally:
+        post_call.build_recording_reconciler = original_builder
 
 
 def event(*, call_id, topic: str, aggregate_type: str) -> OutboxEvent:
@@ -305,7 +198,7 @@ async def test_summary_handler_snapshots_then_persists_in_fresh_transaction(
     )
     provider = FakeSummaryProvider(factory)
 
-    await deliver_summary_generate(
+    await _deliver_summary_generate(
         {
             "session_factory": factory,
             "summary_provider": provider,
@@ -324,56 +217,6 @@ async def test_summary_handler_snapshots_then_persists_in_fresh_transaction(
     stored = await db_session.get(Call, call_id)
     assert stored.summary_text == "A durable summary"
     assert stored.summary_data["follow_up_required"] is True
-
-
-@pytest.mark.anyio
-async def test_summary_handler_closes_only_its_operation_owned_provider(
-    db_session,
-    active_user,
-    monkeypatch,
-) -> None:
-    call = Call(user_id=active_user.id, status="completed", duration_seconds=1)
-    db_session.add(call)
-    await db_session.flush()
-    db_session.add(
-        CallMessage(
-            call_id=call.id,
-            sequence_number=1,
-            speaker="CALLER",
-            text="Hello",
-        )
-    )
-    await db_session.commit()
-    factory = TrackingSessionFactory(
-        async_sessionmaker(db_session.bind, expire_on_commit=False)
-    )
-
-    class OwnedProvider(FakeSummaryProvider):
-        def __init__(self, *, api_key, model, observability) -> None:
-            assert model
-            assert observability is not None
-            super().__init__(factory)
-            self.close_calls = 0
-
-        async def aclose(self) -> None:
-            self.close_calls += 1
-
-    providers: list[OwnedProvider] = []
-
-    def build_provider(**kwargs) -> OwnedProvider:
-        provider = OwnedProvider(**kwargs)
-        providers.append(provider)
-        return provider
-
-    monkeypatch.setattr(post_call, "GeminiSummaryProvider", build_provider)
-
-    await deliver_summary_generate(
-        {"session_factory": factory},
-        event(call_id=call.id, topic="summary.generate", aggregate_type="call-summary"),
-    )
-
-    assert len(providers) == 1
-    assert providers[0].close_calls == 1
 
 
 @pytest.mark.anyio
@@ -396,7 +239,7 @@ async def test_existing_summary_is_idempotent_without_provider_call(
     )
     provider = FakeSummaryProvider(factory)
 
-    await deliver_summary_generate(
+    await _deliver_summary_generate(
         {"session_factory": factory, "summary_provider": provider},
         event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
     )
@@ -437,7 +280,7 @@ async def test_existing_summary_regenerates_when_it_does_not_cover_current_trans
     )
     provider = FakeSummaryProvider(factory)
 
-    await deliver_summary_generate(
+    await _deliver_summary_generate(
         {"session_factory": factory, "summary_provider": provider},
         event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
     )
@@ -479,12 +322,14 @@ async def test_fresh_lock_race_preserves_first_persisted_summary(
             async with self.factory.base_factory() as session:
                 racing_call = await session.get(Call, call_id, with_for_update=True)
                 racing_call.summary_text = "Winner from another worker"
-                racing_call.summary_data = {"summary_text": "Winner from another worker"}
+                racing_call.summary_data = {
+                    "summary_text": "Winner from another worker"
+                }
                 racing_call.summary_transcript_max_sequence = 1
                 await session.commit()
             return result
 
-    await deliver_summary_generate(
+    await _deliver_summary_generate(
         {
             "session_factory": factory,
             "summary_provider": RacingProvider(factory),
@@ -535,7 +380,7 @@ async def test_summary_handler_retries_when_transcript_changes_during_provider_i
             return result
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_summary_generate(
+        await _deliver_summary_generate(
             {
                 "session_factory": factory,
                 "summary_provider": LateTranscriptProvider(factory),
@@ -568,7 +413,7 @@ async def test_summary_handler_empty_transcript_is_successful_noop(
     )
     provider = FakeSummaryProvider(factory)
 
-    await deliver_summary_generate(
+    await _deliver_summary_generate(
         {"session_factory": factory, "summary_provider": provider},
         event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
     )
@@ -589,7 +434,7 @@ async def test_summary_handler_empty_transcript_is_successful_noop(
         )
         await session.commit()
 
-    await deliver_summary_generate(
+    await _deliver_summary_generate(
         {"session_factory": factory, "summary_provider": provider},
         event(call_id=call_id, topic="summary.generate", aggregate_type="call-summary"),
     )
@@ -617,7 +462,7 @@ async def test_summary_handler_rejects_deleted_call_without_recreating_metadata(
     )
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_summary_generate(
+        await _deliver_summary_generate(
             {"session_factory": factory},
             event(
                 call_id=call_id,
@@ -661,7 +506,7 @@ async def test_summary_handler_provider_failure_is_retryable(
     )
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_summary_generate(
+        await _deliver_summary_generate(
             {
                 "session_factory": factory,
                 "summary_provider": FakeSummaryProvider(factory, fail=True),
@@ -702,8 +547,11 @@ async def test_summary_handler_marks_malformed_provider_summary_terminal(
             return {"summary_text": "missing schema"}
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_summary_generate(
-            {"session_factory": factory, "summary_provider": MalformedSummaryProvider()},
+        await _deliver_summary_generate(
+            {
+                "session_factory": factory,
+                "summary_provider": MalformedSummaryProvider(),
+            },
             event(
                 call_id=call.id,
                 topic="summary.generate",
@@ -741,8 +589,11 @@ async def test_summary_handler_propagates_injected_defects(
             raise RuntimeError("SUMMARY_DEFECT_SENTINEL")
 
     with pytest.raises(RuntimeError, match="SUMMARY_DEFECT_SENTINEL"):
-        await deliver_summary_generate(
-            {"session_factory": factory, "summary_provider": DefectiveSummaryProvider()},
+        await _deliver_summary_generate(
+            {
+                "session_factory": factory,
+                "summary_provider": DefectiveSummaryProvider(),
+            },
             event(
                 call_id=call.id,
                 topic="summary.generate",
@@ -755,9 +606,9 @@ async def test_summary_handler_propagates_injected_defects(
 @pytest.mark.parametrize(
     ("handler", "topic", "aggregate_type"),
     [
-        (deliver_summary_generate, "summary.generate", "call-summary"),
+        (_deliver_summary_generate, "summary.generate", "call-summary"),
         (
-            deliver_recording_reconcile,
+            _deliver_recording_reconcile,
             "recording.reconcile",
             "recording-egress-operation",
         ),
@@ -796,7 +647,7 @@ async def test_recording_reconcile_validates_reference_before_building_dependenc
     malformed.payload = {"operation_id": str(uuid4())}
     built = False
 
-    def build(_ctx):
+    def build(**_kwargs):
         nonlocal built
         built = True
         raise AssertionError("builder must not run for invalid input")
@@ -804,7 +655,7 @@ async def test_recording_reconcile_validates_reference_before_building_dependenc
     monkeypatch.setattr(post_call, "build_recording_reconciler", build)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_recording_reconcile({}, malformed)
+        await _deliver_recording_reconcile({}, malformed)
 
     assert exc_info.value.error_code == "invalid_payload"
     assert exc_info.value.retryable is False
@@ -816,7 +667,7 @@ async def test_recording_reconcile_invokes_reconciler_with_operation_identity() 
     operation_id = uuid4()
     reconciler = FakeRecordingReconciler(ReconciliationResult("complete"))
 
-    await deliver_recording_reconcile(
+    await _deliver_recording_reconcile(
         {"recording_reconciler": reconciler},
         recording_event(operation_id),
     )
@@ -832,7 +683,7 @@ async def test_recording_reconcile_retry_is_bounded_and_non_exhausting() -> None
     )
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_recording_reconcile(
+        await _deliver_recording_reconcile(
             {"recording_reconciler": reconciler},
             recording_event(operation_id),
         )
@@ -855,7 +706,8 @@ async def test_recording_reconcile_unexpected_failures_escape_the_outbox_wrapper
             raise RuntimeError("DATABASE_CREDENTIAL_SENTINEL")
 
     if failure_site == "builder":
-        def explode(_ctx, **_kwargs):
+
+        def explode(**_kwargs):
             raise RuntimeError("BUILDER_CREDENTIAL_SENTINEL")
 
         monkeypatch.setattr(post_call, "build_recording_reconciler", explode)
@@ -864,7 +716,7 @@ async def test_recording_reconcile_unexpected_failures_escape_the_outbox_wrapper
         ctx = {"recording_reconciler": ExplodingReconciler()}
 
     with pytest.raises(RuntimeError) as exc_info:
-        await deliver_recording_reconcile(ctx, recording_event(operation_id))
+        await _deliver_recording_reconcile(ctx, recording_event(operation_id))
 
     assert "SENTINEL" in str(exc_info.value)
 
@@ -891,7 +743,7 @@ async def test_recording_reconcile_malformed_results_escape_the_outbox_wrapper(
     operation_id = uuid4()
 
     with pytest.raises((ValueError, AttributeError)):
-        await deliver_recording_reconcile(
+        await _deliver_recording_reconcile(
             {"recording_reconciler": FakeRecordingReconciler(malformed_result)},
             recording_event(operation_id),
         )
@@ -912,7 +764,6 @@ def test_default_handlers_exactly_match_supported_topics_without_placeholders() 
 
     assert set(SUPPORTED_OUTBOX_TOPICS) == expected_topics
     assert set(REFERENCE_PAYLOAD_FIELDS) == expected_topics
-    assert set(DEFAULT_OUTBOX_HANDLERS) == expected_topics
 
 
 @pytest.mark.anyio
@@ -934,17 +785,20 @@ async def test_recording_reconcile_holding_handler_remains_pending_after_exhaust
     await db_session.commit()
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    result = await outbox_delivery_job(
-        {
-            "session_factory": factory,
-            "recording_reconciler": FakeRecordingReconciler(
-                ReconciliationResult("retry", "recording_unresolved")
-            ),
-            "outbox_handlers": {
-                "recording.reconcile": deliver_recording_reconcile,
-            },
-            "outbox_now": lambda: now,
-        }
+    reconciler = FakeRecordingReconciler(
+        ReconciliationResult("retry", "recording_unresolved")
+    )
+
+    async def handler(claimed: OutboxEvent) -> None:
+        await _deliver_recording_reconcile(
+            {"recording_reconciler": reconciler}, claimed
+        )
+
+    result = await deliver_outbox_batch(
+        session_factory=factory,
+        handlers={"recording.reconcile": handler},
+        observability=_RecordingObservability(),
+        now=lambda: now,
     )
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 1, "failed": 0}
@@ -986,21 +840,20 @@ async def test_retrying_summary_does_not_block_recording_operation_aggregate(
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     delivered: list[str] = []
 
-    async def failing_summary(_ctx, _event):
+    async def failing_summary(_event):
         raise OutboxDeliveryError("provider_retryable", retryable=True)
 
-    async def successful_recording(_ctx, _event):
+    async def successful_recording(_event):
         delivered.append("recording.reconcile")
 
-    result = await outbox_delivery_job(
-        {
-            "session_factory": factory,
-            "outbox_handlers": {
-                "summary.generate": failing_summary,
-                "recording.reconcile": successful_recording,
-            },
-            "outbox_now": lambda: datetime.now(UTC),
-        }
+    result = await deliver_outbox_batch(
+        session_factory=factory,
+        handlers={
+            "summary.generate": failing_summary,
+            "recording.reconcile": successful_recording,
+        },
+        observability=_RecordingObservability(),
+        now=lambda: datetime.now(UTC),
     )
 
     assert result == {"claimed": 2, "delivered": 1, "retried": 1, "failed": 0}

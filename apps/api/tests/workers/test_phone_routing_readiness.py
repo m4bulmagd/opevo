@@ -114,12 +114,14 @@ async def test_routing_stays_disabled_without_current_financial_access(
 
 
 @pytest.mark.anyio
-async def test_routing_uses_local_factory_without_injected_provider(
+async def test_routing_uses_explicit_fake_provider(
     db_session,
     active_user,
 ) -> None:
     from app.services.outbox_service import OutboxService
-    from app.workers.outbox.delivery import outbox_delivery_job
+    from app.providers.telephony.fake import FakeTelephonyProvider
+    from app.workers.outbox.delivery import deliver_outbox_batch
+    from app.workers.outbox.phone import deliver_phone_routing
 
     user_id = active_user.id
     now = datetime.now(UTC)
@@ -176,7 +178,21 @@ async def test_routing_uses_local_factory_without_injected_provider(
     await db_session.commit()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    result = await outbox_delivery_job({"session_factory": session_factory})
+    async def handler(event: OutboxEvent) -> None:
+        await deliver_phone_routing(
+            event,
+            session_factory=session_factory,
+            telephony_provider=FakeTelephonyProvider(),
+            activation_flow_enabled=False,
+            now=lambda: datetime.now(UTC),
+        )
+
+    result = await deliver_outbox_batch(
+        session_factory=session_factory,
+        handlers={"phone.enable": handler},
+        observability=object(),
+        now=lambda: datetime.now(UTC),
+    )
 
     db_session.expire_all()
     phone_number = await db_session.scalar(
@@ -229,17 +245,15 @@ async def test_claimed_phone_provision_rechecks_account_before_provider_io(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(AccountStateBlockedError) as raised:
-        await phone_provisioning.provision_phone_number(
-            {
-                "session_factory": session_factory,
-                "telephony_provider": Provider(),
-            },
-            {
-                "user_id": str(user_id),
-                "lifecycle_generation": active_user.lifecycle_generation,
-            },
-            provider_operation_key=operation_key,
-        )
+            await phone_provisioning.provision_phone_number(
+                {
+                    "user_id": str(user_id),
+                    "lifecycle_generation": active_user.lifecycle_generation,
+                },
+                session_factory=session_factory,
+                telephony_provider=Provider(),
+                provider_operation_key=operation_key,
+            )
 
     assert raised.value.code == "account_deactivating"
     assert provider_calls == []
@@ -286,11 +300,11 @@ async def test_stale_account_generation_never_provisions_phone(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await phone_outbox.deliver_phone_provision(
-            {
-                "session_factory": session_factory,
-                "telephony_provider": Provider(),
-            },
             event,
+            session_factory=session_factory,
+            telephony_provider=Provider(),
+            activation_flow_enabled=False,
+            now=lambda: datetime.now(UTC),
         )
 
     assert exc_info.value.error_code == "dispatch_ineligible"
@@ -388,11 +402,11 @@ async def test_claimed_phone_enable_rechecks_account_before_provider_io(
 
     with pytest.raises(OutboxDeliveryError) as raised:
         await phone_outbox.deliver_phone_routing(
-            {
-                "session_factory": session_factory,
-                "telephony_provider": Provider(),
-            },
             event,
+            session_factory=session_factory,
+            telephony_provider=Provider(),
+            activation_flow_enabled=False,
+            now=lambda: datetime.now(UTC),
         )
 
     assert raised.value.error_code == "dispatch_ineligible"
@@ -481,11 +495,11 @@ async def test_stale_account_generation_never_enables_phone(
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
         await phone_outbox.deliver_phone_routing(
-            {
-                "session_factory": session_factory,
-                "telephony_provider": Provider(),
-            },
             event,
+            session_factory=session_factory,
+            telephony_provider=Provider(),
+            activation_flow_enabled=False,
+            now=lambda: datetime.now(UTC),
         )
 
     assert exc_info.value.error_code == "dispatch_ineligible"

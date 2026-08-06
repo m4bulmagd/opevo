@@ -1,11 +1,9 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from collections.abc import Callable
+from datetime import datetime
 from uuid import UUID
 
-from app.core.config import get_settings
-from app.core.database import get_session_factory
-from app.core.observability import get_observability
+from app.core.database import AsyncSessionFactory
 from app.core.provider_failures import ProviderFailure
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
@@ -15,8 +13,7 @@ from app.models.phone_number import PhoneNumber
 from app.models.phone_number_provisioning import PhoneNumberProvisioning
 from app.models.subscription import Subscription
 from app.models.user import User
-from app.providers.telephony.base import TelephonyProvisioningPending
-from app.providers.telephony.factory import create_telephony_provider
+from app.providers.telephony.base import TelephonyProvider, TelephonyProvisioningPending
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.business_profile_repository import BusinessProfileRepository
 from app.repositories.customer_activation_repository import CustomerActivationRepository
@@ -76,12 +73,15 @@ class _PhoneProvisionAdmission:
 
 
 async def deliver_phone_provision(
-    ctx: dict[str, Any],
     event: OutboxEvent,
+    *,
+    session_factory: AsyncSessionFactory,
+    telephony_provider: TelephonyProvider,
+    activation_flow_enabled: bool,
+    now: Callable[[], datetime],
 ) -> None:
     user_id = UUID(event.payload["user_id"])
     lifecycle_generation = _validated_lifecycle_generation(event)
-    session_factory = ctx.get("session_factory") or get_session_factory()
     admission = await _phone_provision_admission(
         session_factory,
         user_id,
@@ -93,8 +93,9 @@ async def deliver_phone_provision(
         raise OutboxDeliveryError("provider_terminal", retryable=False)
     try:
         await provision_phone_number(
-            ctx,
             dict(event.payload),
+            session_factory=session_factory,
+            telephony_provider=telephony_provider,
             provider_operation_key=provider_operation_key,
         )
     except (AccountStateBlockedError, AccountLifecycleGenerationMismatchError):
@@ -136,7 +137,13 @@ async def deliver_phone_provision(
             "provider_retryable" if retryable else "provider_terminal",
             retryable=retryable,
         )
-    await deliver_phone_routing(ctx, event)
+    await deliver_phone_routing(
+        event,
+        session_factory=session_factory,
+        telephony_provider=telephony_provider,
+        activation_flow_enabled=activation_flow_enabled,
+        now=now,
+    )
 
 
 async def _phone_provision_admission(
@@ -217,9 +224,14 @@ def _event_matches_provider_operation(
         and int(attempt) >= 1
     )
 
+
 async def deliver_phone_routing(
-    ctx: dict[str, Any],
     event: OutboxEvent,
+    *,
+    session_factory: AsyncSessionFactory,
+    telephony_provider: TelephonyProvider,
+    activation_flow_enabled: bool,
+    now: Callable[[], datetime],
 ) -> None:
     user_id = UUID(event.payload["user_id"])
     lifecycle_generation = (
@@ -227,21 +239,13 @@ async def deliver_phone_routing(
         if event.topic in {"phone.provision", "phone.enable"}
         else None
     )
-    session_factory = ctx.get("session_factory") or get_session_factory()
-    settings = get_settings()
-    observability = get_observability()
     if lifecycle_generation is not None:
         await _require_current_worker_account(
             session_factory,
             user_id,
             lifecycle_generation=lifecycle_generation,
         )
-    provider = ctx.get("telephony_provider")
-    if provider is None:
-        provider = create_telephony_provider(
-            settings,
-            observability=observability,
-        )
+    provider = telephony_provider
     routing_target = event.routing_target_provider_number_id
 
     try:
@@ -250,7 +254,7 @@ async def deliver_phone_routing(
                 session,
                 user_id,
                 event=event,
-                activation_flow_enabled=settings.activation_flow_enabled,
+                activation_flow_enabled=activation_flow_enabled,
             )
             await session.commit()
     except OutboxDeliveryError:
@@ -303,7 +307,7 @@ async def deliver_phone_routing(
                     session,
                     user_id,
                     event=event,
-                    activation_flow_enabled=settings.activation_flow_enabled,
+                    activation_flow_enabled=activation_flow_enabled,
                 )
                 await session.commit()
 
@@ -363,7 +367,7 @@ async def deliver_phone_routing(
                 session,
                 user_id,
                 event=event,
-                activation_flow_enabled=settings.activation_flow_enabled,
+                activation_flow_enabled=activation_flow_enabled,
             )
             stable_projection = bool(
                 current is not None
@@ -387,7 +391,7 @@ async def deliver_phone_routing(
                     agent_config=current.agent_config,
                     business_profile=current.business_profile,
                     activation=current.activation,
-                    activation_required=settings.activation_flow_enabled,
+                    activation_required=activation_flow_enabled,
                     go_live_activated_override=(
                         True if current.current_go_live_attempt else None
                     ),
@@ -398,12 +402,11 @@ async def deliver_phone_routing(
                     and current.activation is not None
                     and readiness.can_route
                 ):
-                    now_provider = ctx.get("routing_now") or (lambda: datetime.now(UTC))
                     await mark_current_go_live_succeeded(
                         session,
                         event=event,
                         activation=current.activation,
-                        succeeded_at=now_provider(),
+                        succeeded_at=now(),
                     )
                 terminal_after_projection = current.terminal_after_projection
                 await session.commit()
@@ -481,7 +484,7 @@ async def deliver_phone_routing(
             session,
             user_id,
             event=event,
-            activation_flow_enabled=settings.activation_flow_enabled,
+            activation_flow_enabled=activation_flow_enabled,
         )
         if current is None or current.phone_number.id != snapshot.phone_number.id:
             await session.commit()

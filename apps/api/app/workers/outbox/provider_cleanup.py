@@ -1,17 +1,14 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from datetime import datetime
 from uuid import UUID
 
-from app.core.config import get_settings
-from app.core.database import get_session_factory
-from app.core.observability import get_observability
+from app.core.database import AsyncSessionFactory
 from app.core.provider_failures import ProviderFailure
 from app.models.outbox_event import OutboxEvent
 from app.models.provider_cleanup_operation import ProviderCleanupOperation
-from app.providers.subscriptions.factory import build_subscription_provider
-from app.providers.telephony.factory import create_telephony_provider
+from app.providers.subscriptions.base import SubscriptionProvider
+from app.providers.telephony.base import TelephonyProvider
 from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.repositories.phone_number_provisioning_repository import (
     PhoneNumberProvisioningRepository,
@@ -30,17 +27,15 @@ class _CleanupSnapshot:
 
 
 async def deliver_provider_cleanup(
-    ctx: dict[str, Any],
     event: OutboxEvent,
+    *,
+    session_factory: AsyncSessionFactory,
+    telephony_provider: TelephonyProvider,
+    subscription_provider: SubscriptionProvider,
+    now: Callable[[], datetime],
 ) -> None:
     operation_id = _validated_operation_id(event)
-    session_factory = ctx.get("session_factory") or get_session_factory()
-    settings = get_settings()
-    observability = get_observability()
-    now_provider: Callable[[], datetime] = ctx.get(
-        "provider_cleanup_now",
-        lambda: datetime.now(UTC),
-    )
+    now_provider = now
     async with provider_single_flight(
         session_factory,
         f"provider.cleanup:{operation_id}",
@@ -50,16 +45,10 @@ async def deliver_provider_cleanup(
             return
 
         if snapshot.resource_type == "phone_number":
-            provider = ctx.get("telephony_provider")
-            if provider is None:
-                provider = create_telephony_provider(
-                    settings,
-                    observability=observability,
-                )
             if not snapshot.routing_disabled:
                 try:
                     provider_guard.assert_transaction_free()
-                    result = await provider.disable_number(
+                    result = await telephony_provider.disable_number(
                         provider_number_id=snapshot.provider_resource_id
                     )
                     if result != "app-disabled":
@@ -73,10 +62,14 @@ async def deliver_provider_cleanup(
                     await _record_failure(
                         session_factory,
                         operation_id,
-                        "provider_retryable" if error.retryable else "provider_terminal",
+                        "provider_retryable"
+                        if error.retryable
+                        else "provider_terminal",
                     )
                     raise OutboxDeliveryError(
-                        "provider_retryable" if error.retryable else "provider_terminal",
+                        "provider_retryable"
+                        if error.retryable
+                        else "provider_terminal",
                         retryable=error.retryable,
                         exhaustible=not error.retryable,
                     ) from None
@@ -87,7 +80,7 @@ async def deliver_provider_cleanup(
                 )
             try:
                 provider_guard.assert_transaction_free()
-                await provider.release_number(
+                await telephony_provider.release_number(
                     provider_number_id=snapshot.provider_resource_id
                 )
             except ProviderFailure as error:
@@ -102,12 +95,11 @@ async def deliver_provider_cleanup(
                     exhaustible=not error.retryable,
                 ) from None
         else:
-            provider = ctx.get("subscription_provider")
-            if provider is None:
-                provider = build_subscription_provider(settings)
             try:
                 provider_guard.assert_transaction_free()
-                await provider.cancel_immediately(snapshot.provider_resource_id)
+                await subscription_provider.cancel_immediately(
+                    snapshot.provider_resource_id
+                )
             except ProviderFailure as error:
                 error_code = (
                     "provider_retryable" if error.retryable else "provider_terminal"

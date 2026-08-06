@@ -29,7 +29,9 @@ from app.services.recording_lifecycle_service import (
 )
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.outbox import post_call
-from app.workers.outbox.post_call import deliver_recording_reconcile
+from app.workers.outbox.post_call import (
+    deliver_recording_reconcile as _deliver_recording_reconcile_explicit,
+)
 from app.workers.outbox.recording_reconciliation import (
     ReconciliationResult,
     RecordingReconciler,
@@ -260,6 +262,27 @@ def _recording_reconcile_event(operation_id: UUID) -> OutboxEvent:
         attempt_count=1,
         next_attempt_at=NOW,
     )
+
+
+async def _deliver_recording_reconcile(
+    event: OutboxEvent,
+    *,
+    reconciler: _HandlerReconciler,
+    observability: _RecordingObservability,
+) -> None:
+    original_builder = post_call.build_recording_reconciler
+    post_call.build_recording_reconciler = lambda **_kwargs: reconciler
+    try:
+        await _deliver_recording_reconcile_explicit(
+            event,
+            session_factory=object(),
+            recording_provider=object(),
+            storage_provider=object(),
+            observability=observability,
+            now=lambda: NOW,
+        )
+    finally:
+        post_call.build_recording_reconciler = original_builder
 
 
 class TrackingSessionFactory:
@@ -626,10 +649,13 @@ class RemovedOperationDuringListingProvider(ConflictObservingProvider):
         ).reconcile(self.operation_id)
         assert cleanup_result == ReconciliationResult("complete")
         async with self.session_factory() as session:
-            assert await session.get(
-                RecordingEgressOperation,
-                self.operation_id,
-            ) is None
+            assert (
+                await session.get(
+                    RecordingEgressOperation,
+                    self.operation_id,
+                )
+                is None
+            )
         return self.snapshots
 
 
@@ -1768,10 +1794,7 @@ async def test_restored_authority_recovers_later_owner_deletion_intent(
     assert restored.stop_requested_at is not None
     assert restored.stop_requested_at.replace(tzinfo=UTC) == earlier_stop_requested_at
     assert restored.delete_requested_at is not None
-    assert (
-        restored.delete_requested_at.replace(tzinfo=UTC)
-        == later_delete_requested_at
-    )
+    assert restored.delete_requested_at.replace(tzinfo=UTC) == later_delete_requested_at
     assert restored.last_error_code == "recording_identity_conflict"
     call = await db_session.get(Call, call_id)
     assert call is not None
@@ -1862,10 +1885,7 @@ async def test_missing_conflict_merge_recovers_tombstone_delete_intent(
     assert merged.start_state == "started"
     assert merged.provider_egress_id == "EG_concurrent"
     assert merged.stop_requested_at is not None
-    assert (
-        merged.stop_requested_at.replace(tzinfo=UTC)
-        == current_stop_requested_at
-    )
+    assert merged.stop_requested_at.replace(tzinfo=UTC) == current_stop_requested_at
     assert merged.delete_requested_at is not None
     assert merged.delete_requested_at.replace(tzinfo=UTC) == tombstone_at
     assert merged.last_error_code == "recording_identity_conflict"
@@ -2122,9 +2142,7 @@ async def test_two_stale_restorers_merge_one_operation_and_recovery_event(
         storage,
         now_provider=lambda: NOW + timedelta(seconds=3),
     )
-    stale_snapshot = await first_reconciler._load_and_recover_stale_start(
-        operation_id
-    )
+    stale_snapshot = await first_reconciler._load_and_recover_stale_start(operation_id)
     assert stale_snapshot is not None
     async with base_factory() as session:
         changed = await RecordingLifecycleService(
@@ -2161,8 +2179,8 @@ async def test_two_stale_restorers_merge_one_operation_and_recovery_event(
         stale_snapshot,
         exact_a,
     )
-    second_status, second_snapshot = (
-        await second_reconciler._attach_exact_identity(stale_snapshot, exact_b)
+    second_status, second_snapshot = await second_reconciler._attach_exact_identity(
+        stale_snapshot, exact_b
     )
 
     assert (first_status, second_status) == ("conflict", "conflict")
@@ -2662,21 +2680,17 @@ async def test_recording_handler_emits_one_bounded_result_per_valid_invocation(
     observability = _RecordingObservability()
 
     if result.outcome == "complete":
-        await deliver_recording_reconcile(
-            {
-                "recording_reconciler": reconciler,
-                "observability": observability,
-            },
+        await _deliver_recording_reconcile(
             _recording_reconcile_event(operation_id),
+            reconciler=reconciler,
+            observability=observability,
         )
     else:
         with pytest.raises(OutboxDeliveryError) as exc_info:
-            await deliver_recording_reconcile(
-                {
-                    "recording_reconciler": reconciler,
-                    "observability": observability,
-                },
+            await _deliver_recording_reconcile(
                 _recording_reconcile_event(operation_id),
+                reconciler=reconciler,
+                observability=observability,
             )
         assert exc_info.value.error_code == expected_metric
         assert exc_info.value.retryable is True
@@ -2688,32 +2702,21 @@ async def test_recording_handler_emits_one_bounded_result_per_valid_invocation(
 
 
 @pytest.mark.anyio
-async def test_recording_handler_does_not_emit_for_invalid_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_recording_handler_does_not_emit_for_invalid_payload() -> None:
     operation_id = uuid4()
     reconciler = _HandlerReconciler(ReconciliationResult("complete"))
     observability = _RecordingObservability()
     event = _recording_reconcile_event(operation_id)
     event.payload = {"operation_id": str(uuid4())}
-    observability_gets = 0
-
-    def get_observability() -> _RecordingObservability:
-        nonlocal observability_gets
-        observability_gets += 1
-        return observability
-
-    monkeypatch.setattr(post_call, "get_observability", get_observability)
-
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_recording_reconcile(
-            {"recording_reconciler": reconciler},
+        await _deliver_recording_reconcile(
             event,
+            reconciler=reconciler,
+            observability=observability,
         )
 
     assert exc_info.value.error_code == "invalid_payload"
     assert reconciler.calls == []
-    assert observability_gets == 0
     assert observability.results == []
     assert observability.multiple_exact_count == 0
 
@@ -2748,12 +2751,10 @@ async def test_recording_handler_propagates_defects_and_invalid_result_shapes(
     observability = _RecordingObservability()
 
     with pytest.raises((RuntimeError, ValueError, AttributeError)):
-        await deliver_recording_reconcile(
-            {
-                "recording_reconciler": _HandlerReconciler(result),
-                "observability": observability,
-            },
+        await _deliver_recording_reconcile(
             _recording_reconcile_event(operation_id),
+            reconciler=_HandlerReconciler(result),
+            observability=observability,
         )
 
     assert observability.results == []
@@ -2761,7 +2762,9 @@ async def test_recording_handler_propagates_defects_and_invalid_result_shapes(
 
 
 @pytest.mark.anyio
-async def test_recording_handler_maps_typed_provider_failure_without_private_cause() -> None:
+async def test_recording_handler_maps_typed_provider_failure_without_private_cause() -> (
+    None
+):
     operation_id = uuid4()
     observability = _RecordingObservability()
     private_cause = RuntimeError("PRIVATE_RECONCILER_FAILURE")
@@ -2774,12 +2777,10 @@ async def test_recording_handler_maps_typed_provider_failure_without_private_cau
         ) from private_cause
     except ProviderFailure as failure:
         with pytest.raises(OutboxDeliveryError) as exc_info:
-            await deliver_recording_reconcile(
-                {
-                    "recording_reconciler": _HandlerReconciler(failure),
-                    "observability": observability,
-                },
+            await _deliver_recording_reconcile(
                 _recording_reconcile_event(operation_id),
+                reconciler=_HandlerReconciler(failure),
+                observability=observability,
             )
 
     assert exc_info.value.error_code == "provider_retryable"
@@ -2794,18 +2795,16 @@ async def test_recording_handler_counts_multiple_exact_before_conflict_retry() -
     observability = _RecordingObservability()
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_recording_reconcile(
-            {
-                "recording_reconciler": _HandlerReconciler(
-                    SimpleNamespace(
-                        outcome="retry",
-                        error_code="recording_identity_conflict",
-                        conflict_category="multiple_exact_match",
-                    )
-                ),
-                "observability": observability,
-            },
+        await _deliver_recording_reconcile(
             _recording_reconcile_event(operation_id),
+            reconciler=_HandlerReconciler(
+                SimpleNamespace(
+                    outcome="retry",
+                    error_code="recording_identity_conflict",
+                    conflict_category="multiple_exact_match",
+                )
+            ),
+            observability=observability,
         )
 
     assert exc_info.value.error_code == "recording_identity_conflict"
@@ -2814,24 +2813,3 @@ async def test_recording_handler_counts_multiple_exact_before_conflict_retry() -
         "multiple_exact_match",
     ]
     assert observability.multiple_exact_count == 1
-
-
-@pytest.mark.anyio
-async def test_recording_handler_uses_default_observability_for_valid_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    operation_id = uuid4()
-    observability = _RecordingObservability()
-    monkeypatch.setattr(
-        post_call,
-        "get_observability",
-        lambda: observability,
-        raising=False,
-    )
-
-    await deliver_recording_reconcile(
-        {"recording_reconciler": _HandlerReconciler(ReconciliationResult("complete"))},
-        _recording_reconcile_event(operation_id),
-    )
-
-    assert observability.results == ["complete"]

@@ -5,7 +5,7 @@ from app.providers.livekit_recording.base import (
 )
 
 
-class LiveKitRecordingService:
+class LiveKitRecordingService(RecordingProvider):
     def __init__(self, provider: RecordingProvider) -> None:
         self.provider = provider
 

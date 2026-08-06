@@ -27,9 +27,8 @@ from app.services.outbox_service import OutboxService, SUPPORTED_OUTBOX_TOPICS
 from app.workers.outbox.delivery import _validated_event_call_id
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.outbox import verification_dispatch
-from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
 from app.workers.outbox.verification_dispatch import (
-    deliver_livekit_verification_dispatch,
+    deliver_livekit_verification_dispatch as _deliver_livekit_verification_dispatch_explicit,
 )
 
 
@@ -37,68 +36,18 @@ FIXED_NOW = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
 SUCCESS_MESSAGE = VERIFICATION_MESSAGE
 
 
-def _handler():
-    return deliver_livekit_verification_dispatch
+async def _handler(dependencies: dict[str, object], event) -> None:
+    from app.core.config import get_settings
 
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    "missing_field",
-    ["livekit_url", "livekit_api_key", "livekit_api_secret"],
-)
-async def test_uninjected_verification_rejects_missing_livekit_config_before_lock_or_sdk(
-    db_session,
-    settings,
-    monkeypatch: pytest.MonkeyPatch,
-    missing_field: str,
-) -> None:
-    _user, _activation, event = await _seed_verification_dispatch(db_session)
-    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    explicit_settings = settings.model_copy(
-        update={
-            "livekit_url": "wss://explicit.example.com",
-            "livekit_api_key": "explicit-key",
-            "livekit_api_secret": "explicit-secret",
-            missing_field: None,
-        }
+    settings = get_settings()
+    await _deliver_livekit_verification_dispatch_explicit(
+        event,
+        session_factory=dependencies["session_factory"],
+        provider=dependencies["livekit_dispatch_provider"],
+        token_config=TEST_DISPATCH_TOKEN_CONFIG,
+        livekit_agent_name=settings.livekit_agent_name,
+        now=dependencies.get("verification_now", lambda: FIXED_NOW),
     )
-    for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
-        monkeypatch.setenv(name, f"PROCESS_ENV_{name}_SENTINEL")
-    monkeypatch.setattr(
-        verification_dispatch,
-        "get_settings",
-        lambda: explicit_settings,
-    )
-
-    class ForbiddenLock:
-        async def __aenter__(self):
-            raise AssertionError("missing config reached verification lock")
-
-        async def __aexit__(self, *_args) -> None:
-            return None
-
-    monkeypatch.setattr(
-        verification_dispatch,
-        "verification_dispatch_lock",
-        lambda *_args, **_kwargs: ForbiddenLock(),
-    )
-    from livekit import api as livekit_api_module
-
-    sdk_calls = 0
-
-    def forbidden_livekit_api(**_kwargs):
-        nonlocal sdk_calls
-        sdk_calls += 1
-        raise AssertionError("missing config reached LiveKit SDK")
-
-    monkeypatch.setattr(livekit_api_module, "LiveKitAPI", forbidden_livekit_api)
-
-    with pytest.raises(OutboxDeliveryError) as caught:
-        await _handler()({"session_factory": session_factory}, event)
-
-    assert caught.value.error_code == "dispatch_configuration"
-    assert caught.value.retryable is False
-    assert sdk_calls == 0
 
 
 def _reconciliation_snapshot(*, persisted_dispatch_id: str | None = None):
@@ -247,7 +196,7 @@ async def test_verification_reconciliation_never_persists_foreign_agent_identity
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with caplog.at_level("INFO"), pytest.raises(OutboxDeliveryError) as caught:
-        await _handler()(
+        await _handler(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": provider,
@@ -297,7 +246,7 @@ async def test_verification_empty_provider_dispatch_id_is_conflict_without_creat
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as caught:
-        await _handler()(
+        await _handler(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": provider,
@@ -507,7 +456,7 @@ async def test_handler_creates_exact_verification_job_and_persists_identity(
     get_settings.cache_clear()
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await _handler()(
+    await _handler(
         {
             "session_factory": session_factory,
             "livekit_dispatch_provider": provider,
@@ -581,7 +530,7 @@ async def test_matching_provider_dispatch_reconciles_without_create(db_session) 
         )
     )
 
-    await _handler()(
+    await _handler(
         {
             "session_factory": session_factory,
             "livekit_dispatch_provider": provider,
@@ -606,7 +555,7 @@ async def test_create_timeout_reconciles_to_one_verification_dispatch(
     provider = _Provider(timeout_after_create=True)
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
-    await _handler()(
+    await _handler(
         {
             "session_factory": session_factory,
             "livekit_dispatch_provider": provider,
@@ -645,8 +594,8 @@ async def test_success_before_persist_reconciles_on_retry_without_second_create(
     }
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _handler()(ctx, event)
-    await _handler()(ctx, event)
+        await _handler(ctx, event)
+    await _handler(ctx, event)
 
     assert exc_info.value.error_code == "provider_retryable"
     assert exc_info.value.retryable is True
@@ -668,7 +617,7 @@ async def test_completion_race_persists_dispatch_only_for_the_same_session(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     provider = _CompletingProvider(session_factory, activation_id)
 
-    await _handler()(
+    await _handler(
         {
             "session_factory": session_factory,
             "livekit_dispatch_provider": provider,
@@ -724,7 +673,7 @@ async def test_foreign_duplicate_and_persisted_dispatch_conflicts_are_terminal(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _handler()(
+        await _handler(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": provider,
@@ -759,7 +708,7 @@ async def test_handler_rejects_mismatched_event_identity_without_provider_io(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _handler()(
+        await _handler(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": provider,
@@ -793,7 +742,7 @@ async def test_stale_verification_state_never_calls_provider(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _handler()(
+        await _handler(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": provider,
@@ -834,7 +783,7 @@ async def test_claimed_verification_dispatch_rechecks_account_before_provider_io
     )
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _handler()(
+        await _handler(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": provider,
@@ -861,7 +810,7 @@ async def test_stale_account_generation_never_dispatches_verification(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _handler()(
+        await _handler(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": provider,
@@ -900,7 +849,7 @@ async def test_deactivation_during_verification_reconciliation_prevents_create(
     provider = _DeactivatingListProvider()
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await _handler()(
+        await _handler(
             {
                 "session_factory": session_factory,
                 "livekit_dispatch_provider": provider,
@@ -922,5 +871,4 @@ async def test_verification_topic_is_registered_but_never_classified_as_call(
     _user, _activation, event = await _seed_verification_dispatch(db_session)
 
     assert "livekit.verification_dispatch" in SUPPORTED_OUTBOX_TOPICS
-    assert DEFAULT_OUTBOX_HANDLERS["livekit.verification_dispatch"] is _handler()
     assert _validated_event_call_id(event) is None

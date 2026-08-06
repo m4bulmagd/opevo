@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 import logging
+from typing import TYPE_CHECKING, Protocol
 
 from arq.connections import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -30,7 +32,20 @@ from app.core.runtime_validation import (
     validate_background_worker_runtime,
     validate_call_lifecycle_worker_runtime,
 )
-from app.workers.outbox.delivery import OutboxHandler, get_default_outbox_handlers
+from app.core.dispatch_token import dispatch_token_config
+from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
+from app.providers.livekit_dispatch.base import LiveKitDispatchProvider
+from app.providers.livekit_recording.base import RecordingProvider
+from app.providers.livekit_recording.livekit import LiveKitRecordingProvider
+from app.providers.storage.base import StorageProvider
+from app.providers.storage.s3 import S3Storage
+from app.providers.subscriptions.base import SubscriptionProvider
+from app.providers.subscriptions.factory import build_subscription_provider
+from app.providers.summaries.base import SummaryProvider
+from app.providers.summaries.gemini import GeminiSummaryProvider
+from app.providers.telephony.base import TelephonyProvider
+from app.providers.telephony.factory import create_telephony_provider
+from app.services.livekit_recording_service import LiveKitRecordingService
 from app.workers.queue_observer import QueueObserver
 from app.workers.queueing import (
     BACKGROUND_QUEUE_NAME,
@@ -41,6 +56,14 @@ from app.workers.queueing import (
 
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.workers.outbox.registry import OutboxHandler
+
+
+class _LiveKitAPIResource(Protocol):
+    @property
+    def egress(self) -> object: ...
 
 
 def _utc_now() -> datetime:
@@ -57,6 +80,18 @@ async def _close_observability(observability: Observability) -> None:
 
 async def _dispose_engine(engine: AsyncEngine) -> None:
     await engine.dispose()
+
+
+async def _close_resource(resource: object) -> None:
+    close = getattr(resource, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(resource, "close", None)
+    if callable(close):
+        result = close()
+        if inspect.isawaitable(result):
+            await result
 
 
 async def _wait_for_cleanup(stack: AsyncExitStack) -> BaseException | None:
@@ -173,9 +208,22 @@ async def build_background_worker_runtime(
     ] = create_session_factory,
     observability_factory: Callable[..., Observability] = initialize_observability,
     observer_factory: Callable[..., QueueObserver] = QueueObserver,
-    outbox_handlers_factory: Callable[
-        [], Mapping[str, OutboxHandler]
-    ] = get_default_outbox_handlers,
+    telephony_provider_factory: Callable[
+        ..., TelephonyProvider
+    ] = create_telephony_provider,
+    subscription_provider_factory: Callable[
+        [Settings], SubscriptionProvider
+    ] = build_subscription_provider,
+    livekit_api_factory: Callable[..., _LiveKitAPIResource] | None = None,
+    livekit_dispatch_provider_factory: Callable[
+        ..., LiveKitDispatchProvider
+    ] = LiveKitDispatchAPIProvider,
+    summary_provider_factory: Callable[..., SummaryProvider] = GeminiSummaryProvider,
+    storage_provider_factory: Callable[..., StorageProvider] = S3Storage,
+    recording_provider_factory: Callable[
+        ..., RecordingProvider
+    ] = LiveKitRecordingProvider,
+    outbox_handlers_factory: Callable[..., Mapping[str, OutboxHandler]] | None = None,
     now: Callable[[], datetime] = _utc_now,
 ) -> BackgroundWorkerRuntime:
     validate_background_worker_runtime(settings)
@@ -192,7 +240,71 @@ async def build_background_worker_runtime(
         engine = engine_factory(settings.database_url)
         stack.push_async_callback(_dispose_engine, engine)
         session_factory = session_factory_factory(engine)
-        outbox_handlers = outbox_handlers_factory()
+
+        telephony_provider = telephony_provider_factory(
+            settings, observability=observability
+        )
+        subscription_provider = subscription_provider_factory(settings)
+        livekit_api: _LiveKitAPIResource
+        if livekit_api_factory is None:
+            from livekit import api
+
+            livekit_api = api.LiveKitAPI(
+                url=settings.livekit_url,
+                api_key=settings.livekit_api_key,
+                api_secret=settings.livekit_api_secret,
+            )
+        else:
+            livekit_api = livekit_api_factory(settings=settings)
+        stack.push_async_callback(_close_resource, livekit_api)
+        livekit_dispatch_provider = livekit_dispatch_provider_factory(
+            livekit_api=livekit_api, observability=observability
+        )
+        summary_provider = summary_provider_factory(
+            api_key=settings.gemini_api_key,
+            model=settings.summary_model,
+            observability=observability,
+        )
+        stack.push_async_callback(_close_resource, summary_provider)
+        storage_provider = storage_provider_factory(
+            bucket_name=settings.storage_bucket_name,
+            endpoint_url=settings.s3_endpoint_url or "http://minio:9000",
+            access_key=settings.s3_access_key,
+            secret_key=settings.s3_secret_key,
+            region=settings.s3_region,
+            observability=observability,
+        )
+        stack.push_async_callback(_close_resource, storage_provider)
+        recording_provider = LiveKitRecordingService(
+            recording_provider_factory(
+                egress_client=livekit_api.egress,
+                bucket_name=settings.storage_bucket_name,
+                endpoint_url=settings.s3_endpoint_url or "http://minio:9000",
+                access_key=settings.s3_access_key,
+                secret_key=settings.s3_secret_key,
+                region=settings.s3_region,
+                observability=observability,
+            )
+        )
+        if outbox_handlers_factory is None:
+            from app.workers.outbox.registry import build_outbox_handlers
+
+            outbox_handlers_factory = build_outbox_handlers
+        outbox_handlers = outbox_handlers_factory(
+            session_factory=session_factory,
+            telephony_provider=telephony_provider,
+            subscription_provider=subscription_provider,
+            livekit_dispatch_provider=livekit_dispatch_provider,
+            summary_provider=summary_provider,
+            recording_provider=recording_provider,
+            storage_provider=storage_provider,
+            observability=observability,
+            dispatch_token_config=dispatch_token_config(settings),
+            livekit_agent_name=settings.livekit_agent_name,
+            activation_flow_enabled=settings.activation_flow_enabled,
+            max_call_duration_seconds=settings.max_call_duration_seconds,
+            now=now,
+        )
 
         queue_observer = observer_factory(
             arq_redis,

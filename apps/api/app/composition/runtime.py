@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from app.services.livekit_recording_service import LiveKitRecordingService
     from app.services.realtime_service import RealtimeService
     from app.workers.call_finalization_queue import CallFinalizationQueue
-    from app.workers.outbox.delivery import OutboxHandler
+    from app.workers.outbox.registry import OutboxHandler
     from app.workers.queue_observer import QueueObserver
 
 

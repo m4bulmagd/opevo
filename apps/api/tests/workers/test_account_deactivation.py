@@ -37,7 +37,7 @@ from app.repositories.account_deactivation_repository import (
 )
 from app.services.account_lifecycle_service import AccountLifecycleService
 from app.workers.outbox import account_deactivation as account_deactivation_module
-from app.workers.outbox.account_deactivation import deliver_account_deactivation
+from app.workers.outbox.account_deactivation import deliver_account_deactivation as _deliver_account_deactivation_explicit
 from app.workers.outbox.failures import OutboxDeliveryError
 
 
@@ -358,6 +358,20 @@ def _ctx(
     )
 
 
+async def _deliver_account_deactivation(
+    dependencies: dict[str, Any],
+    event: OutboxEvent,
+) -> None:
+    await _deliver_account_deactivation_explicit(
+        event,
+        session_factory=dependencies["session_factory"],
+        telephony_provider=dependencies["telephony_provider"],
+        subscription_provider=dependencies["subscription_provider"],
+        observability=dependencies["observability"],
+        now=dependencies["account_deactivation_now"],
+    )
+
+
 @pytest.mark.anyio
 async def test_owner_request_runs_strict_provider_order_and_preserves_history(
     deactivation_session_factory: async_sessionmaker[AsyncSession],
@@ -365,7 +379,7 @@ async def test_owner_request_runs_strict_provider_order_and_preserves_history(
     seeded = await _seed_operation(deactivation_session_factory)
     ctx, provider_calls, _ = _ctx(deactivation_session_factory)
 
-    await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+    await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     assert provider_calls == [
         ("telephony.disable", PRIVATE_PHONE_PROVIDER_ID),
@@ -504,7 +518,7 @@ async def test_exact_telnyx_disable_404_continues_release_and_reset(
         "account_deactivation_now": lambda: NOW,
     }
 
-    await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+    await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     phone_number_resource.modify.assert_called_once_with(
         PRIVATE_PHONE_PROVIDER_ID,
@@ -543,7 +557,7 @@ async def test_subscription_ended_never_calls_subscription_provider(
     )
     ctx, provider_calls, _ = _ctx(deactivation_session_factory)
 
-    await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+    await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     assert provider_calls == [
         ("telephony.disable", PRIVATE_PHONE_PROVIDER_ID),
@@ -621,7 +635,7 @@ async def test_real_subscription_ended_request_disables_before_drain_and_release
 
     ctx, provider_calls, _ = _ctx(deactivation_session_factory)
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_account_deactivation(ctx, event)
+        await _deliver_account_deactivation(ctx, event)
 
     assert exc_info.value.error_code == "account_call_draining"
     assert provider_calls == [
@@ -639,7 +653,7 @@ async def test_real_subscription_ended_request_disables_before_drain_and_release
         call.status = "completed"
         await session.commit()
 
-    await deliver_account_deactivation(ctx, event)
+    await _deliver_account_deactivation(ctx, event)
 
     assert provider_calls == [
         ("telephony.disable", PRIVATE_PHONE_PROVIDER_ID),
@@ -667,7 +681,7 @@ async def test_terminal_local_subscription_satisfies_step_without_identity_match
         await session.commit()
     ctx, provider_calls, _ = _ctx(deactivation_session_factory)
 
-    await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+    await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     assert ("subscription.cancel", PRIVATE_SUBSCRIPTION_ID) not in provider_calls
     async with deactivation_session_factory() as session:
@@ -684,7 +698,7 @@ async def test_active_call_commits_progress_and_retries_without_exhaustion(
     ctx, provider_calls, _ = _ctx(deactivation_session_factory)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+        await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     assert exc_info.value.error_code == "account_call_draining"
     assert exc_info.value.retryable is True
@@ -706,7 +720,7 @@ async def test_active_call_commits_progress_and_retries_without_exhaustion(
         call.status = "completed"
         await session.commit()
 
-    await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+    await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     assert provider_calls == [
         ("telephony.disable", PRIVATE_PHONE_PROVIDER_ID),
@@ -757,7 +771,7 @@ async def test_restart_from_each_committed_timestamp_skips_completed_provider_wo
     )
     ctx, provider_calls, _ = _ctx(deactivation_session_factory)
 
-    await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+    await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     assert provider_calls == expected_calls
     async with deactivation_session_factory() as session:
@@ -829,7 +843,7 @@ async def test_retryable_provider_failures_are_non_exhausting_and_committed(
     )
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+        await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     assert exc_info.value.error_code == "provider_retryable"
     assert exc_info.value.retryable is True
@@ -949,7 +963,7 @@ async def test_terminal_provider_failure_commits_safe_attention_before_error(
     )
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+        await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     assert exc_info.value.error_code == expected_code
     assert exc_info.value.retryable is False
@@ -972,7 +986,7 @@ async def test_handler_rejects_non_reference_payload_without_provider_work(
     ctx, provider_calls, _ = _ctx(deactivation_session_factory)
 
     with pytest.raises(OutboxDeliveryError) as exc_info:
-        await deliver_account_deactivation(
+        await _deliver_account_deactivation(
             ctx,
             _event(
                 seeded.operation_id,
@@ -997,7 +1011,7 @@ async def test_logs_payload_and_observability_exclude_private_values(
     caplog.set_level(logging.DEBUG)
     event = _event(seeded.operation_id)
 
-    await deliver_account_deactivation(ctx, event)
+    await _deliver_account_deactivation(ctx, event)
 
     telemetry = ctx["observability"]
     exported = repr(
@@ -1044,7 +1058,7 @@ async def test_terminal_failure_redacts_raw_cause_from_customer_projection_and_l
     caplog.set_level(logging.DEBUG)
 
     with pytest.raises(OutboxDeliveryError):
-        await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+        await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     async with deactivation_session_factory() as session:
         projection = await AccountLifecycleService(
@@ -1076,7 +1090,7 @@ async def test_cleanup_and_inactive_completion_share_one_commit_boundary(
 
     monkeypatch.setattr(account_deactivation_module, "_complete", fail_if_called)
 
-    await deliver_account_deactivation(ctx, _event(seeded.operation_id))
+    await _deliver_account_deactivation(ctx, _event(seeded.operation_id))
 
     async with deactivation_session_factory() as session:
         operation = await session.get(AccountDeactivationOperation, seeded.operation_id)

@@ -27,6 +27,10 @@ from app.core.runtime_validation import (
     validate_background_worker_runtime,
     validate_call_lifecycle_worker_runtime,
 )
+from app.workers.outbox.delivery import (
+    outbox_delivery_job,
+    outbox_reconciliation_job,
+)
 
 
 class _BorrowedRedis:
@@ -94,6 +98,7 @@ def _test_settings(**updates: Any) -> Settings:
         app_env="test",
         database_url="sqlite+aiosqlite://",
         redis_url="redis://worker.invalid/0",
+        agent_dispatch_jwt_secret="test-dispatch-secret-with-at-least-32-bytes",
         **updates,
     )
 
@@ -124,7 +129,9 @@ def _background_settings(**updates: Any) -> Settings:
     return Settings(_env_file=None, **values)
 
 
-def _runtime(runtime_type: type[CallLifecycleWorkerRuntime] | type[BackgroundWorkerRuntime]):
+def _runtime(
+    runtime_type: type[CallLifecycleWorkerRuntime] | type[BackgroundWorkerRuntime],
+):
     cleanup = RuntimeCleanup(AsyncExitStack())
     common = {
         "settings": _test_settings(),
@@ -168,7 +175,9 @@ def test_worker_runtime_shapes_are_distinct_and_exact() -> None:
 
 
 @pytest.mark.parametrize("ctx", [{}, {WORKER_RUNTIME_KEY: object()}])
-def test_lifecycle_accessor_rejects_missing_or_wrong_runtime(ctx: dict[str, object]) -> None:
+def test_lifecycle_accessor_rejects_missing_or_wrong_runtime(
+    ctx: dict[str, object],
+) -> None:
     with pytest.raises(WorkerRuntimeConfigurationError, match="call-lifecycle"):
         require_call_lifecycle_runtime(ctx)
 
@@ -193,6 +202,17 @@ def test_background_accessor_rejects_lifecycle_runtime() -> None:
         require_background_runtime(
             {WORKER_RUNTIME_KEY: _runtime(CallLifecycleWorkerRuntime)}
         )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("job", [outbox_delivery_job, outbox_reconciliation_job])
+async def test_outbox_wrappers_reject_lifecycle_runtime_before_opening_session(
+    job,
+) -> None:
+    lifecycle = _runtime(CallLifecycleWorkerRuntime)
+
+    with pytest.raises(WorkerRuntimeConfigurationError, match="background"):
+        await job({WORKER_RUNTIME_KEY: lifecycle})
 
 
 def test_worker_observability_requires_one_of_the_two_concrete_runtimes() -> None:
@@ -409,11 +429,16 @@ def _builder_dependencies(
     *,
     observer: _Observer | None = None,
     handlers: dict[str, object] | None = None,
+    captured_handler_dependencies: dict[str, object] | None = None,
 ) -> tuple[dict[str, Any], _Resource, _Engine, _Observer, dict[str, object]]:
     telemetry = _Resource("telemetry", events)
     engine = _Engine("engine", events)
     observer = observer or _Observer("observer", events)
     handlers = handlers or {"topic": object()}
+    livekit = _Resource("livekit", events)
+    livekit.egress = object()
+    summary = _Resource("summary", events)
+    storage = _Resource("storage", events)
 
     def observability_factory(**_kwargs: Any) -> _Resource:
         events.append("telemetry.create")
@@ -428,7 +453,51 @@ def _builder_dependencies(
         events.append("session_factory.create")
         return object()
 
-    def outbox_handlers_factory() -> dict[str, object]:
+    def telephony_provider_factory(
+        actual_settings: Settings, *, observability: object
+    ) -> object:
+        assert isinstance(actual_settings, Settings)
+        assert observability is telemetry
+        events.append("telephony.create")
+        return object()
+
+    def subscription_provider_factory(actual_settings: Settings) -> object:
+        assert isinstance(actual_settings, Settings)
+        events.append("subscription.create")
+        return object()
+
+    def livekit_api_factory(*, settings: Settings) -> object:
+        assert isinstance(settings, Settings)
+        events.append("livekit.create")
+        return livekit
+
+    def livekit_dispatch_provider_factory(**kwargs: object) -> object:
+        assert kwargs["livekit_api"] is livekit
+        assert kwargs["observability"] is telemetry
+        events.append("dispatch.create")
+        return object()
+
+    def summary_provider_factory(**kwargs: object) -> object:
+        assert kwargs["observability"] is telemetry
+        events.append("summary.create")
+        return summary
+
+    def storage_provider_factory(**kwargs: object) -> object:
+        assert kwargs["observability"] is telemetry
+        events.append("storage.create")
+        return storage
+
+    def recording_provider_factory(**kwargs: object) -> object:
+        assert kwargs["egress_client"] is livekit.egress
+        assert kwargs["observability"] is telemetry
+        events.append("recording.create")
+        return object()
+
+    def outbox_handlers_factory(**kwargs: object) -> dict[str, object]:
+        assert kwargs["observability"] is telemetry
+        assert kwargs["now"] is not None
+        if captured_handler_dependencies is not None:
+            captured_handler_dependencies.update(kwargs)
         events.append("handlers.create")
         return handlers
 
@@ -444,6 +513,13 @@ def _builder_dependencies(
             "session_factory_factory": session_factory_factory,
             "observability_factory": observability_factory,
             "observer_factory": observer_factory,
+            "telephony_provider_factory": telephony_provider_factory,
+            "subscription_provider_factory": subscription_provider_factory,
+            "livekit_api_factory": livekit_api_factory,
+            "livekit_dispatch_provider_factory": livekit_dispatch_provider_factory,
+            "summary_provider_factory": summary_provider_factory,
+            "storage_provider_factory": storage_provider_factory,
+            "recording_provider_factory": recording_provider_factory,
             "outbox_handlers_factory": outbox_handlers_factory,
         },
         telemetry,
@@ -451,6 +527,20 @@ def _builder_dependencies(
         observer,
         handlers,
     )
+
+
+def _remove_background_dependencies(dependencies: dict[str, Any]) -> None:
+    for name in (
+        "telephony_provider_factory",
+        "subscription_provider_factory",
+        "livekit_api_factory",
+        "livekit_dispatch_provider_factory",
+        "summary_provider_factory",
+        "storage_provider_factory",
+        "recording_provider_factory",
+        "outbox_handlers_factory",
+    ):
+        dependencies.pop(name)
 
 
 @pytest.mark.anyio
@@ -463,7 +553,7 @@ async def test_worker_runtime_owns_resources_once_in_reverse_order_but_borrows_r
     dependencies, telemetry, engine, observer, handlers = _builder_dependencies(events)
     settings = _test_settings()
     if builder_name == "lifecycle":
-        dependencies.pop("outbox_handlers_factory")
+        _remove_background_dependencies(dependencies)
         runtime = await build_call_lifecycle_worker_runtime(
             settings,
             arq_redis=redis,
@@ -482,16 +572,82 @@ async def test_worker_runtime_owns_resources_once_in_reverse_order_but_borrows_r
     await asyncio.gather(runtime.aclose(), runtime.aclose())
     await runtime.aclose()
 
-    assert events[-6:] == [
-        "observer.close:start",
-        "observer.close:end",
-        "engine.close:start",
-        "engine.close:end",
-        "telemetry.close:start",
-        "telemetry.close:end",
-    ]
+    expected_close_events = ["observer.close:start", "observer.close:end"]
+    if builder_name == "background":
+        expected_close_events.extend(
+            [
+                "storage.close:start",
+                "storage.close:end",
+                "summary.close:start",
+                "summary.close:end",
+                "livekit.close:start",
+                "livekit.close:end",
+            ]
+        )
+    expected_close_events.extend(
+        [
+            "engine.close:start",
+            "engine.close:end",
+            "telemetry.close:start",
+            "telemetry.close:end",
+        ]
+    )
+    assert events[-len(expected_close_events) :] == expected_close_events
     assert observer.close_calls == engine.close_calls == telemetry.close_calls == 1
     assert redis.aclose_calls == redis.close_calls == 0
+
+
+@pytest.mark.anyio
+async def test_background_composition_binds_selected_providers_and_runtime_values() -> (
+    None
+):
+    events: list[str] = []
+    captured: dict[str, object] = {}
+    dependencies, _telemetry, _engine, _observer, handlers = _builder_dependencies(
+        events,
+        captured_handler_dependencies=captured,
+    )
+    clock = lambda: datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
+    settings = _test_settings(
+        telephony_mode="fake",
+        billing_mode="fake",
+        activation_flow_enabled=True,
+        livekit_agent_name="selected-agent",
+        max_call_duration_seconds=987,
+    )
+
+    runtime = await build_background_worker_runtime(
+        settings,
+        arq_redis=_BorrowedRedis(),
+        now=clock,
+        **dependencies,
+    )
+
+    assert runtime.outbox_handlers is handlers
+    assert set(captured) == {
+        "session_factory",
+        "telephony_provider",
+        "subscription_provider",
+        "livekit_dispatch_provider",
+        "summary_provider",
+        "recording_provider",
+        "storage_provider",
+        "observability",
+        "dispatch_token_config",
+        "livekit_agent_name",
+        "activation_flow_enabled",
+        "max_call_duration_seconds",
+        "now",
+    }
+    assert captured["livekit_agent_name"] == "selected-agent"
+    assert captured["activation_flow_enabled"] is True
+    assert captured["max_call_duration_seconds"] == 987
+    assert captured["now"] is clock
+    assert events.index("telephony.create") < events.index("handlers.create")
+    assert events.index("subscription.create") < events.index("handlers.create")
+    assert events.index("recording.create") < events.index("handlers.create")
+
+    await runtime.aclose()
 
 
 @pytest.mark.anyio
@@ -509,7 +665,7 @@ async def test_worker_runtime_cleanup_continues_after_waiter_cancellation() -> N
         events,
         observer=observer,
     )
-    dependencies.pop("outbox_handlers_factory")
+    _remove_background_dependencies(dependencies)
     runtime = await build_call_lifecycle_worker_runtime(
         _test_settings(),
         arq_redis=_BorrowedRedis(),
@@ -542,7 +698,7 @@ async def test_worker_runtime_cleanup_attempts_all_resources_and_propagates_fail
         events,
         observer=observer,
     )
-    dependencies.pop("outbox_handlers_factory")
+    _remove_background_dependencies(dependencies)
     runtime = await build_call_lifecycle_worker_runtime(
         _test_settings(),
         arq_redis=_BorrowedRedis(),
@@ -569,6 +725,13 @@ async def test_worker_runtime_cleanup_attempts_all_resources_and_propagates_fail
         ("background", "observability"),
         ("background", "engine"),
         ("background", "session_factory"),
+        ("background", "telephony"),
+        ("background", "subscription"),
+        ("background", "livekit"),
+        ("background", "dispatch"),
+        ("background", "summary"),
+        ("background", "storage"),
+        ("background", "recording"),
         ("background", "handlers"),
         ("background", "observer"),
         ("background", "observer_start"),
@@ -592,13 +755,34 @@ async def test_each_worker_construction_failure_unwinds_all_prior_resources(
             construction_error
         )
     elif failure_stage == "session_factory":
-        dependencies["session_factory_factory"] = lambda _engine: (
-            _ for _ in ()
-        ).throw(construction_error)
-    elif failure_stage == "handlers":
-        dependencies["outbox_handlers_factory"] = lambda: (_ for _ in ()).throw(
+        dependencies["session_factory_factory"] = lambda _engine: (_ for _ in ()).throw(
             construction_error
         )
+    elif failure_stage in {
+        "telephony",
+        "subscription",
+        "livekit",
+        "dispatch",
+        "summary",
+        "storage",
+        "recording",
+        "handlers",
+    }:
+        dependencies[f"{failure_stage}_provider_factory"] = lambda *_args, **_kwargs: (
+            _ for _ in ()
+        ).throw(construction_error)
+        if failure_stage == "livekit":
+            dependencies["livekit_api_factory"] = dependencies.pop(
+                "livekit_provider_factory"
+            )
+        elif failure_stage == "dispatch":
+            dependencies["livekit_dispatch_provider_factory"] = dependencies.pop(
+                "dispatch_provider_factory"
+            )
+        elif failure_stage == "handlers":
+            dependencies["outbox_handlers_factory"] = dependencies.pop(
+                "handlers_provider_factory"
+            )
     elif failure_stage == "observer":
         dependencies["observer_factory"] = lambda *_args, **_kwargs: (
             _ for _ in ()
@@ -607,7 +791,7 @@ async def test_each_worker_construction_failure_unwinds_all_prior_resources(
         observer.start_error = construction_error
 
     if builder_name == "lifecycle":
-        dependencies.pop("outbox_handlers_factory")
+        _remove_background_dependencies(dependencies)
         builder = build_call_lifecycle_worker_runtime
     else:
         builder = build_background_worker_runtime
@@ -621,10 +805,24 @@ async def test_each_worker_construction_failure_unwinds_all_prior_resources(
 
     assert caught.value is construction_error
     assert telemetry.close_calls == int(failure_stage != "observability")
-    assert engine.close_calls == int(
-        failure_stage not in {"observability", "engine"}
-    )
+    assert engine.close_calls == int(failure_stage not in {"observability", "engine"})
     assert observer.close_calls == int(failure_stage == "observer_start")
+    for resource_name, created_before in {
+        "livekit": {
+            "dispatch",
+            "summary",
+            "storage",
+            "recording",
+            "handlers",
+            "observer",
+            "observer_start",
+        },
+        "summary": {"storage", "recording", "handlers", "observer", "observer_start"},
+        "storage": {"recording", "handlers", "observer", "observer_start"},
+    }.items():
+        assert events.count(f"{resource_name}.close:start") == int(
+            builder_name == "background" and failure_stage in created_before
+        )
     assert redis.aclose_calls == redis.close_calls == 0
 
 
@@ -688,9 +886,9 @@ async def test_partial_construction_preserves_primary_error_when_cleanup_fails_s
         events
     )
     engine.close_error = close_error
-    dependencies["session_factory_factory"] = lambda _engine: (
-        _ for _ in ()
-    ).throw(construction_error)
+    dependencies["session_factory_factory"] = lambda _engine: (_ for _ in ()).throw(
+        construction_error
+    )
 
     with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError) as caught:
         await build_background_worker_runtime(
@@ -713,13 +911,14 @@ async def test_partial_startup_construction_cancellation_closes_prior_resources(
     dependencies, telemetry, engine, _observer, _handlers = _builder_dependencies(
         events
     )
-    dependencies["outbox_handlers_factory"] = lambda: (_ for _ in ()).throw(
+    dependencies["outbox_handlers_factory"] = lambda **_kwargs: (_ for _ in ()).throw(
         cancellation
     )
 
-    with caplog.at_level(logging.WARNING), pytest.raises(
-        asyncio.CancelledError
-    ) as caught:
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises(asyncio.CancelledError) as caught,
+    ):
         await build_background_worker_runtime(
             _test_settings(),
             arq_redis=_BorrowedRedis(),
@@ -750,7 +949,7 @@ async def test_outer_cancellation_waits_for_blocked_partial_startup_cleanup(
     )
     engine.close_started = close_started
     engine.close_release = close_release
-    dependencies["outbox_handlers_factory"] = lambda: (_ for _ in ()).throw(
+    dependencies["outbox_handlers_factory"] = lambda **_kwargs: (_ for _ in ()).throw(
         construction_error
     )
 
@@ -794,13 +993,14 @@ async def test_partial_cleanup_cancellation_precedes_construction_error_by_ident
         events
     )
     engine.close_error = cleanup_cancellation
-    dependencies["outbox_handlers_factory"] = lambda: (_ for _ in ()).throw(
+    dependencies["outbox_handlers_factory"] = lambda **_kwargs: (_ for _ in ()).throw(
         construction_error
     )
 
-    with caplog.at_level(logging.WARNING), pytest.raises(
-        asyncio.CancelledError
-    ) as caught:
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises(asyncio.CancelledError) as caught,
+    ):
         await build_background_worker_runtime(
             _test_settings(),
             arq_redis=_BorrowedRedis(),

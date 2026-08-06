@@ -11,7 +11,7 @@ from app.core.provider_failures import ProviderFailure
 from app.repositories.provider_cleanup_repository import ProviderCleanupRepository
 from app.services.outbox_service import OutboxService
 from app.workers.outbox.failures import OutboxDeliveryError
-from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
+from app.workers.outbox.provider_cleanup import deliver_provider_cleanup as _deliver_provider_cleanup_explicit
 
 
 class RecordingTelephony:
@@ -48,6 +48,36 @@ class RecordingSubscriptions:
                 disposition="retryable",
                 error_class="unavailable",
             )
+
+
+class _UnusedTelephony:
+    async def disable_number(self, *, provider_number_id: str) -> str:
+        raise AssertionError(f"unexpected telephony cleanup: {provider_number_id}")
+
+    async def release_number(self, *, provider_number_id: str) -> None:
+        raise AssertionError(f"unexpected telephony cleanup: {provider_number_id}")
+
+
+class _UnusedSubscriptions:
+    async def cancel_immediately(self, subscription_id: str) -> None:
+        raise AssertionError(f"unexpected subscription cleanup: {subscription_id}")
+
+
+async def _deliver_provider_cleanup(
+    dependencies: dict[str, object],
+    event: OutboxEvent,
+) -> None:
+    await _deliver_provider_cleanup_explicit(
+        event,
+        session_factory=dependencies["session_factory"],
+        telephony_provider=dependencies.get(
+            "telephony_provider", _UnusedTelephony()
+        ),
+        subscription_provider=dependencies.get(
+            "subscription_provider", _UnusedSubscriptions()
+        ),
+        now=dependencies["provider_cleanup_now"],
+    )
 
 
 async def _seed_cleanup(db_session, active_user: User, resource_type: str):
@@ -90,8 +120,8 @@ async def test_phone_cleanup_commits_disable_before_release_and_is_replay_safe(
         "provider_cleanup_now": lambda: datetime.now(UTC),
     }
 
-    await deliver_provider_cleanup(ctx, event)
-    await deliver_provider_cleanup(ctx, event)
+    await _deliver_provider_cleanup(ctx, event)
+    await _deliver_provider_cleanup(ctx, event)
 
     stored = await db_session.get(ProviderCleanupOperation, operation_id)
     await db_session.refresh(stored)
@@ -125,10 +155,10 @@ async def test_phone_cleanup_retries_release_without_repeating_committed_disable
     }
 
     with pytest.raises(OutboxDeliveryError) as raised:
-        await deliver_provider_cleanup(ctx, event)
+        await _deliver_provider_cleanup(ctx, event)
     assert raised.value.retryable is True
     failing.fail_release = False
-    await deliver_provider_cleanup(ctx, event)
+    await _deliver_provider_cleanup(ctx, event)
 
     stored = await db_session.get(ProviderCleanupOperation, operation_id)
     await db_session.refresh(stored)
@@ -161,10 +191,10 @@ async def test_stale_subscription_cleanup_retries_then_cancels_once(
     }
 
     with pytest.raises(OutboxDeliveryError):
-        await deliver_provider_cleanup(ctx, event)
+        await _deliver_provider_cleanup(ctx, event)
     provider.fail = False
-    await deliver_provider_cleanup(ctx, event)
-    await deliver_provider_cleanup(ctx, event)
+    await _deliver_provider_cleanup(ctx, event)
+    await _deliver_provider_cleanup(ctx, event)
 
     stored = await db_session.get(ProviderCleanupOperation, operation_id)
     await db_session.refresh(stored)

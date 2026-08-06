@@ -1280,6 +1280,12 @@ git commit -m "refactor(api): inject lifecycle worker dependencies"
 - Every topic handler accepts `event` plus keyword-only dependencies; no handler accepts ARQ `ctx`.
 - One shared `now: Callable[[], datetime]` replaces test-only per-handler clock keys.
 
+**Owner decision 6A-C2A:** preserve dispatch behavior by adding
+`max_call_duration_seconds` to the registry dependencies, adding
+`activation_flow_enabled` and `max_call_duration_seconds` to customer dispatch,
+and adding `DispatchTokenConfig` to verification dispatch. Composition binds
+all three explicitly without `Settings`, dependency bags, or fallbacks.
+
 - [ ] **Step 1: Write registry and handler-signature RED tests**
 
 In `test_outbox_architecture.py`, assert exact topic keys and one-argument bound handlers:
@@ -1297,6 +1303,7 @@ handlers = build_outbox_handlers(
     dispatch_token_config=token_config,
     livekit_agent_name="captured-agent",
     activation_flow_enabled=True,
+    max_call_duration_seconds=321,
     now=fixed_now,
 )
 
@@ -1389,6 +1396,8 @@ async def deliver_livekit_dispatch(
     provider: LiveKitDispatchProvider,
     token_config: DispatchTokenConfig,
     livekit_agent_name: str,
+    activation_flow_enabled: bool,
+    max_call_duration_seconds: int,
     now: Callable[[], datetime],
 ) -> None:
 
@@ -1397,6 +1406,7 @@ async def deliver_livekit_verification_dispatch(
     *,
     session_factory: AsyncSessionFactory,
     provider: LiveKitDispatchProvider,
+    token_config: DispatchTokenConfig,
     livekit_agent_name: str,
     now: Callable[[], datetime],
 ) -> None:
@@ -1478,12 +1488,15 @@ return {
         provider=livekit_dispatch_provider,
         token_config=dispatch_token_config,
         livekit_agent_name=livekit_agent_name,
+        activation_flow_enabled=activation_flow_enabled,
+        max_call_duration_seconds=max_call_duration_seconds,
         now=now,
     ),
     "livekit.verification_dispatch": partial(
         deliver_livekit_verification_dispatch,
         session_factory=session_factory,
         provider=livekit_dispatch_provider,
+        token_config=dispatch_token_config,
         livekit_agent_name=livekit_agent_name,
         now=now,
     ),
@@ -1526,7 +1539,8 @@ test for `app.composition.runtime`, `app.composition.workers`,
 - LiveKit API/provider when required by validated mode;
 - Gemini summary provider for the selected summary mode;
 - recording provider and S3 storage;
-- dispatch token config; and
+- dispatch token config;
+- activation policy and maximum call duration; and
 - the bound outbox registry.
 
 Register closeable LiveKit, Gemini, and S3 resources immediately. Development

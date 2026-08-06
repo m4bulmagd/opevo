@@ -1,13 +1,15 @@
-import inspect
+from __future__ import annotations
+
 import logging
-from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, datetime, timedelta
-from typing import Any
+from collections.abc import Callable, Mapping
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from app.core.database import get_session_factory
+from app.composition.runtime import require_background_runtime
+from app.core.database import AsyncSessionFactory
 from app.core.logging import report_safe_exception
-from app.core.observability import bind_call_id, get_observability
+from app.core.observability import Observability, bind_call_id
 from app.models.outbox_event import OutboxEvent
 from app.repositories.account_deactivation_repository import (
     AccountDeactivationRepository,
@@ -26,6 +28,9 @@ from app.workers.outbox.failures import (
     _outbox_error_class,
 )
 
+if TYPE_CHECKING:
+    from app.workers.outbox.registry import OutboxHandler
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +42,6 @@ OUTBOX_RETRY_DELAYS = (
     timedelta(hours=2),
 )
 OUTBOX_BATCH_SIZE = 100
-
-OutboxHandler = Callable[[dict[str, Any], OutboxEvent], Awaitable[None]]
-
 
 _CALL_TOPIC_AGGREGATE_TYPES = {
     "livekit.dispatch": "call",
@@ -79,21 +81,17 @@ async def emit_outbox_terminal_failure_metric(
     )
 
 
-async def outbox_delivery_job(
-    ctx: dict[str, Any],
-    _payload: dict | None = None,
+async def deliver_outbox_batch(
+    *,
+    session_factory: AsyncSessionFactory,
+    handlers: Mapping[str, OutboxHandler],
+    observability: Observability,
+    now: Callable[[], datetime],
 ) -> dict[str, int]:
-    session_factory = ctx.get("session_factory") or get_session_factory()
-    now_provider = ctx.get("outbox_now") or (lambda: datetime.now(UTC))
-    handlers: Mapping[str, OutboxHandler] = (
-        ctx["outbox_handlers"]
-        if "outbox_handlers" in ctx
-        else get_default_outbox_handlers()
-    )
     result = {"claimed": 0, "delivered": 0, "retried": 0, "failed": 0}
 
     for _ in range(OUTBOX_BATCH_SIZE):
-        claim_time = now_provider()
+        claim_time = now()
         async with session_factory() as session:
             claimed = await OutboxRepository(session).claim_batch(
                 limit=1,
@@ -115,12 +113,12 @@ async def outbox_delivery_job(
                 ) from None
             validate_outbox_payload(event.topic, event.payload)
             with bind_call_id(_validated_event_call_id(event)):
-                await handler(ctx, event)
+                await handler(event)
         except Exception as error:
             error_code, retryable, exhaustible = _classify_error(error)
             if error_code == "internal_defect":
                 _report_internal_defect(error)
-            failure_time = now_provider()
+            failure_time = now()
             async with session_factory() as session:
                 stored = await OutboxRepository(session).mark_failed_attempt(
                     event_id=event.id,
@@ -146,23 +144,15 @@ async def outbox_delivery_job(
                 continue
             if stored.status == "failed":
                 result["failed"] += 1
-                metric = ctx.get("outbox_terminal_failure_metric")
-                if metric is None:
-                    telemetry = ctx.get("observability") or get_observability()
-
-                    def metric(topic: str, code: str) -> None:
-                        telemetry.record_outbox_terminal_failure(
-                            topic,
-                            _outbox_error_class(code),
-                        )
-                metric_result = metric(event.topic, error_code)
-                if inspect.isawaitable(metric_result):
-                    await metric_result
+                observability.record_outbox_terminal_failure(
+                    event.topic,
+                    _outbox_error_class(error_code),
+                )
             else:
                 result["retried"] += 1
             continue
 
-        delivered_at = now_provider()
+        delivered_at = now()
         async with session_factory() as session:
             stored = await OutboxRepository(session).mark_delivered(
                 event_id=event.id,
@@ -220,15 +210,23 @@ async def _fail_livekit_dispatch_call(
     await RecordingLifecycleService(session).request_stop(call)
 
 
-async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:
-    result = await outbox_delivery_job(ctx)
-    telemetry = ctx.get("observability") or get_observability()
-    session_factory = ctx.get("session_factory") or get_session_factory()
+async def reconcile_outbox(
+    *,
+    session_factory: AsyncSessionFactory,
+    handlers: Mapping[str, OutboxHandler],
+    observability: Observability,
+    now: Callable[[], datetime],
+) -> dict[str, int]:
+    result = await deliver_outbox_batch(
+        session_factory=session_factory,
+        handlers=handlers,
+        observability=observability,
+        now=now,
+    )
+    telemetry = observability
     try:
         async with session_factory() as session:
-            snapshot = await OutboxRepository(session).observability_snapshot(
-                datetime.now(UTC)
-            )
+            snapshot = await OutboxRepository(session).observability_snapshot(now())
         telemetry.record_outbox_snapshot(snapshot)
     except Exception as error:
         from app.core.logging import report_safe_exception
@@ -242,15 +240,11 @@ async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:
             level=logging.WARNING,
         )
 
-    recording_now_provider = ctx.get(
-        "recording_observability_now",
-        lambda: datetime.now(UTC),
-    )
     try:
         async with session_factory() as session:
             recording_snapshot = await RecordingEgressOperationRepository(
                 session
-            ).observability_snapshot(recording_now_provider())
+            ).observability_snapshot(now())
         telemetry.record_recording_operation_snapshot(recording_snapshot)
     except Exception as error:
         from app.core.logging import report_safe_exception
@@ -264,15 +258,11 @@ async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:
             level=logging.WARNING,
         )
 
-    deactivation_now_provider = ctx.get(
-        "account_deactivation_observability_now",
-        lambda: datetime.now(UTC),
-    )
     try:
         async with session_factory() as session:
             deactivation_snapshot = await AccountDeactivationRepository(
                 session
-            ).observability_snapshot(deactivation_now_provider())
+            ).observability_snapshot(now())
         telemetry.record_account_deactivation_snapshot(deactivation_snapshot)
     except Exception as error:
         from app.core.logging import report_safe_exception
@@ -288,8 +278,23 @@ async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:
     return result
 
 
-def get_default_outbox_handlers() -> Mapping[str, OutboxHandler]:
-    # Imports stay local so worker startup does not eagerly initialize provider SDKs.
-    from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
+async def outbox_delivery_job(
+    ctx: dict[str, Any], _payload: dict | None = None
+) -> dict[str, int]:
+    runtime = require_background_runtime(ctx)
+    return await deliver_outbox_batch(
+        session_factory=runtime.session_factory,
+        handlers=runtime.outbox_handlers,
+        observability=runtime.observability,
+        now=runtime.now,
+    )
 
-    return DEFAULT_OUTBOX_HANDLERS
+
+async def outbox_reconciliation_job(ctx: dict[str, Any]) -> dict[str, int]:
+    runtime = require_background_runtime(ctx)
+    return await reconcile_outbox(
+        session_factory=runtime.session_factory,
+        handlers=runtime.outbox_handlers,
+        observability=runtime.observability,
+        now=runtime.now,
+    )

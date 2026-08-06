@@ -1,6 +1,8 @@
+import inspect
 from pathlib import Path
 import subprocess
 import sys
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -13,19 +15,8 @@ from app.services.outbox_service import (
     SUPPORTED_OUTBOX_TOPICS,
 )
 from app.workers.outbox import delivery
-from app.workers.outbox.account_deactivation import deliver_account_deactivation
-from app.workers.outbox.customer_dispatch import deliver_livekit_dispatch
-from app.workers.outbox.delivery import get_default_outbox_handlers
-from app.workers.outbox.phone import deliver_phone_provision, deliver_phone_routing
-from app.workers.outbox.post_call import (
-    deliver_recording_reconcile,
-    deliver_summary_generate,
-)
-from app.workers.outbox.provider_cleanup import deliver_provider_cleanup
-from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
-from app.workers.outbox.verification_dispatch import (
-    deliver_livekit_verification_dispatch,
-)
+from app.core.dispatch_token import DispatchTokenConfig
+from app.workers.outbox.registry import build_outbox_handlers
 
 
 API_ROOT = Path(__file__).resolve().parents[2]
@@ -59,38 +50,50 @@ def test_delivery_import_does_not_eagerly_import_topic_providers() -> None:
 
 
 def test_registry_exactly_matches_payload_schema_topics() -> None:
-    expected_handlers = {
-        "account.deactivate": deliver_account_deactivation,
-        "provider.cleanup": deliver_provider_cleanup,
-        "phone.provision": deliver_phone_provision,
-        "phone.enable": deliver_phone_routing,
-        "phone.disable": deliver_phone_routing,
-        "livekit.dispatch": deliver_livekit_dispatch,
-        "livekit.verification_dispatch": (
-            deliver_livekit_verification_dispatch
-        ),
-        "summary.generate": deliver_summary_generate,
-        "recording.reconcile": deliver_recording_reconcile,
-    }
-
+    handlers = build_outbox_handlers(
+        session_factory=object(),
+        telephony_provider=object(),
+        subscription_provider=object(),
+        livekit_dispatch_provider=object(),
+        summary_provider=object(),
+        recording_provider=object(),
+        storage_provider=object(),
+        observability=object(),
+        dispatch_token_config=DispatchTokenConfig(secret="captured", ttl_seconds=60),
+        livekit_agent_name="captured-agent",
+        activation_flow_enabled=True,
+        max_call_duration_seconds=321,
+        now=lambda: None,
+    )
     assert SUPPORTED_OUTBOX_TOPICS == frozenset(REFERENCE_PAYLOAD_FIELDS)
-    assert DEFAULT_OUTBOX_HANDLERS == expected_handlers
-
-
-def test_default_handler_lookup_returns_the_explicit_registry() -> None:
-    assert get_default_outbox_handlers() is DEFAULT_OUTBOX_HANDLERS
+    assert frozenset(handlers) == SUPPORTED_OUTBOX_TOPICS
+    for handler in handlers.values():
+        required = [
+            parameter.name
+            for parameter in inspect.signature(handler).parameters.values()
+            if parameter.default is inspect.Parameter.empty
+        ]
+        assert required == ["event"]
 
 
 def test_worker_settings_imports_with_the_complete_registry() -> None:
     script = """
 from app.services.outbox_service import SUPPORTED_OUTBOX_TOPICS
+from app.composition import runtime, workers
 from app.workers import arq_worker
-from app.workers.outbox.registry import DEFAULT_OUTBOX_HANDLERS
+from app.workers.outbox import delivery
+from app.workers.outbox.registry import build_outbox_handlers
 
 if arq_worker.on_background_startup is None:
     raise SystemExit("Background worker startup hook is missing")
-if frozenset(DEFAULT_OUTBOX_HANDLERS) != SUPPORTED_OUTBOX_TOPICS:
-    raise SystemExit("Default outbox registry is incomplete")
+if not callable(build_outbox_handlers):
+    raise SystemExit("Outbox registry builder is missing")
+if not callable(delivery.deliver_outbox_batch):
+    raise SystemExit("Outbox delivery engine is missing")
+if not callable(workers.build_background_worker_runtime):
+    raise SystemExit("Background composition builder is missing")
+if runtime.BackgroundWorkerRuntime is None:
+    raise SystemExit("Background runtime type is missing")
 """
 
     completed = subprocess.run(
@@ -110,14 +113,7 @@ async def test_injected_handlers_bypass_default_registry(
     db_session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail_default_lookup():
-        pytest.fail("default registry must not load when handlers are injected")
-
-    monkeypatch.setattr(
-        delivery,
-        "get_default_outbox_handlers",
-        fail_default_lookup,
-    )
+    del monkeypatch
     operation_id = uuid4()
     outbox_event = await OutboxService(db_session).add(
         topic="recording.reconcile",
@@ -134,16 +130,16 @@ async def test_injected_handlers_bypass_default_registry(
     )
     observed_events: list[tuple[str, str]] = []
 
-    async def injected_recording_handler(_ctx, event: OutboxEvent) -> None:
+    async def injected_recording_handler(event: OutboxEvent) -> None:
         observed_events.append((str(event.id), event.topic))
 
-    result = await delivery.outbox_delivery_job(
-        {
-            "session_factory": session_factory,
-            "outbox_handlers": {
-                "recording.reconcile": injected_recording_handler,
-            },
-        }
+    result = await delivery.deliver_outbox_batch(
+        session_factory=session_factory,
+        handlers={
+            "recording.reconcile": injected_recording_handler,
+        },
+        observability=object(),
+        now=lambda: datetime.now(UTC),
     )
 
     assert result == {

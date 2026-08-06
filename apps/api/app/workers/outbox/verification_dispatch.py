@@ -1,6 +1,6 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from collections.abc import Callable
+from datetime import datetime
 from uuid import UUID
 
 from presvo_contracts import (
@@ -12,12 +12,10 @@ from presvo_contracts import (
     parse_dispatch,
 )
 
-from app.core.config import Settings, get_settings
-from app.core.database import get_session_factory
-from app.core.observability import get_observability
+from app.core.database import AsyncSessionFactory
 from app.core.dispatch_token import (
+    DispatchTokenConfig,
     DispatchTokenConfigurationError,
-    dispatch_token_config,
 )
 from app.core.verification_token import (
     VerificationTokenError,
@@ -26,7 +24,7 @@ from app.core.verification_token import (
 from app.models.customer_activation import CustomerActivation
 from app.models.outbox_event import OutboxEvent
 from app.providers.livekit_dispatch.base import LiveKitDispatch
-from app.providers.livekit_dispatch.livekit import LiveKitDispatchAPIProvider
+from app.providers.livekit_dispatch.base import LiveKitDispatchProvider
 from app.repositories.customer_activation_repository import (
     CustomerActivationRepository,
 )
@@ -34,11 +32,6 @@ from app.repositories.user_repository import UserRepository
 from app.services.forwarding_verification_service import COMPLETION_GRACE, as_utc
 from app.services.livekit_dispatch_lock import verification_dispatch_lock
 from app.workers.outbox._account_lifecycle import _require_current_worker_account
-from app.workers.outbox._livekit_client import (
-    LiveKitClientConfigurationError,
-    require_livekit_client_config,
-)
-from app.workers.outbox._owned_resources import operation_owned_resources
 from app.workers.outbox._livekit_delivery import ensure_livekit_dispatch
 from app.workers.outbox.failures import OutboxDeliveryError
 
@@ -67,82 +60,55 @@ def _parse_verification_dispatch_metadata(
 
 
 async def deliver_livekit_verification_dispatch(
-    ctx: dict[str, Any],
     event: OutboxEvent,
+    *,
+    session_factory: AsyncSessionFactory,
+    provider: LiveKitDispatchProvider,
+    token_config: DispatchTokenConfig,
+    livekit_agent_name: str,
+    now: Callable[[], datetime],
 ) -> None:
     activation_id, session_id, room_name, lifecycle_generation = (
         _validated_verification_dispatch_reference(event)
     )
-    session_factory = ctx.get("session_factory") or get_session_factory()
-    now_provider = ctx.get("verification_now") or (lambda: datetime.now(UTC))
-    settings = get_settings()
-    observability = get_observability()
-    provider = ctx.get("livekit_dispatch_provider")
-    livekit_config = None
-    if provider is None:
-        try:
-            livekit_config = require_livekit_client_config(settings)
-        except LiveKitClientConfigurationError:
-            raise OutboxDeliveryError(
-                "dispatch_configuration",
-                retryable=False,
-            ) from None
+    async with verification_dispatch_lock(session_factory, activation_id):
+        snapshot = await _verification_dispatch_snapshot(
+            session_factory,
+            activation_id=activation_id,
+            session_id=session_id,
+            room_name=room_name,
+            now=now(),
+            token_config=token_config,
+            livekit_agent_name=livekit_agent_name,
+        )
 
-    async with operation_owned_resources(
-        operation="deliver_livekit_verification_dispatch"
-    ) as own:
-        async with verification_dispatch_lock(session_factory, activation_id):
-            snapshot = await _verification_dispatch_snapshot(
+        async def revalidate_account() -> None:
+            await _require_current_worker_account(
                 session_factory,
-                activation_id=activation_id,
-                session_id=session_id,
-                room_name=room_name,
-                now=now_provider(),
-                settings=settings,
+                snapshot.user_id,
+                lifecycle_generation=lifecycle_generation,
             )
-            if provider is None:
-                from livekit import api
 
-                assert livekit_config is not None
-                livekit_api = own(
-                    api.LiveKitAPI(
-                        url=livekit_config.url,
-                        api_key=livekit_config.api_key,
-                        api_secret=livekit_config.api_secret,
-                    )
-                )
-                provider = LiveKitDispatchAPIProvider(
-                    livekit_api=livekit_api,
-                    observability=observability,
-                )
+        def reconcile(
+            dispatches: list[LiveKitDispatch],
+        ) -> LiveKitDispatch | None:
+            return _reconcile_verification_dispatches(snapshot, dispatches)
 
-            async def revalidate_account() -> None:
-                await _require_current_worker_account(
-                    session_factory,
-                    snapshot.user_id,
-                    lifecycle_generation=lifecycle_generation,
-                )
-
-            def reconcile(
-                dispatches: list[LiveKitDispatch],
-            ) -> LiveKitDispatch | None:
-                return _reconcile_verification_dispatches(snapshot, dispatches)
-
-            dispatch = await ensure_livekit_dispatch(
-                provider=provider,
-                room_name=snapshot.room_name,
-                worker_name=snapshot.worker_name,
-                metadata=snapshot.metadata,
-                persisted_dispatch_id=snapshot.persisted_dispatch_id,
-                revalidate_account=revalidate_account,
-                reconcile=reconcile,
-            )
-            await _persist_verification_dispatch_identity(
-                session_factory,
-                activation_id=activation_id,
-                session_id=session_id,
-                dispatch_id=dispatch.id,
-            )
+        dispatch = await ensure_livekit_dispatch(
+            provider=provider,
+            room_name=snapshot.room_name,
+            worker_name=snapshot.worker_name,
+            metadata=snapshot.metadata,
+            persisted_dispatch_id=snapshot.persisted_dispatch_id,
+            revalidate_account=revalidate_account,
+            reconcile=reconcile,
+        )
+        await _persist_verification_dispatch_identity(
+            session_factory,
+            activation_id=activation_id,
+            session_id=session_id,
+            dispatch_id=dispatch.id,
+        )
 
 
 def _validated_verification_dispatch_reference(
@@ -189,7 +155,8 @@ async def _verification_dispatch_snapshot(
     session_id: str,
     room_name: str,
     now: datetime,
-    settings: Settings,
+    token_config: DispatchTokenConfig,
+    livekit_agent_name: str,
 ) -> _VerificationDispatchSnapshot:
     async with session_factory() as session:
         resolved_activation = await session.get(CustomerActivation, activation_id)
@@ -224,7 +191,7 @@ async def _verification_dispatch_snapshot(
                 retryable=False,
             )
 
-        worker_name = settings.livekit_agent_name.strip()
+        worker_name = livekit_agent_name.strip()
         if not worker_name:
             await session.rollback()
             raise OutboxDeliveryError(
@@ -242,7 +209,7 @@ async def _verification_dispatch_snapshot(
                     completion_token=create_verification_token(
                         session_id=session_id,
                         user_id=str(user_id),
-                        config=dispatch_token_config(settings),
+                        config=token_config,
                     ),
                     message=VERIFICATION_MESSAGE,
                     tts_provider="speechmatics",
