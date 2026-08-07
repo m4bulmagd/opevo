@@ -32,6 +32,9 @@ BACKGROUND_CTX_MODULES = {
     Path("app/workers/jobs/verification_expiry.py"),
 }
 
+SETTINGS_MODULE = "app.core.config"
+SETTINGS_IMPORT_ANCESTORS = {"app", "app.core", SETTINGS_MODULE}
+
 
 def _production_modules() -> list[tuple[Path, ast.Module]]:
     return [
@@ -78,6 +81,7 @@ class _ModuleBindingCollector(ast.NodeVisitor):
 
     def __init__(self) -> None:
         self.bindings: list[tuple[int, str]] = []
+        self.passthrough_names: set[str] = set()
 
     def _record(self, line: int, name: str | None) -> None:
         if name is not None:
@@ -132,11 +136,70 @@ class _ModuleBindingCollector(ast.NodeVisitor):
     def visit_MatchStar(self, node: ast.MatchStar) -> None:
         self._record(node.lineno, node.name)
 
+    def visit_Global(self, node: ast.Global) -> None:
+        self.passthrough_names.update(node.names)
+
+    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
+        self.passthrough_names.update(node.names)
+
 
 def _module_bindings(tree: ast.Module) -> list[tuple[int, str]]:
     collector = _ModuleBindingCollector()
     collector.visit(tree)
     return collector.bindings
+
+
+def _import_bindings(
+    tree: ast.Module,
+    *,
+    relative_path: Path,
+) -> dict[str, set[str]]:
+    bindings: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for imported in node.names:
+                local_name = imported.asname or imported.name.split(".", maxsplit=1)[0]
+                resolved_name = imported.name if imported.asname else local_name
+                bindings.setdefault(local_name, set()).add(resolved_name)
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolved_from_module(node, relative_path)
+            if module is None:
+                continue
+            for imported in node.names:
+                if imported.name == "*":
+                    continue
+                local_name = imported.asname or imported.name
+                bindings.setdefault(local_name, set()).add(
+                    f"{module}.{imported.name}"
+                )
+    return bindings
+
+
+def _resolved_import_expressions(
+    node: ast.expr,
+    *,
+    bindings: dict[str, set[str]],
+) -> set[str]:
+    if isinstance(node, ast.Name):
+        return bindings.get(node.id, set())
+    if isinstance(node, ast.Attribute):
+        return {
+            f"{base}.{node.attr}"
+            for base in _resolved_import_expressions(node.value, bindings=bindings)
+        }
+    return set()
+
+
+def _literal_import_name(node: ast.Call) -> str | None:
+    imported_name: ast.expr | None = node.args[0] if node.args else None
+    if imported_name is None:
+        imported_name = next(
+            (keyword.value for keyword in node.keywords if keyword.arg == "name"),
+            None,
+        )
+    if isinstance(imported_name, ast.Constant) and isinstance(imported_name.value, str):
+        return imported_name.value
+    return None
 
 
 def _settings_boundary_violations(
@@ -145,24 +208,46 @@ def _settings_boundary_violations(
     relative_path: Path,
 ) -> list[tuple[int, str]]:
     violations: dict[int, str] = {}
+    import_bindings = _import_bindings(tree, relative_path=relative_path)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            if any(imported.name == "app.core.config" for imported in node.names):
-                violations[node.lineno] = "imports app.core.config module"
+            if any(imported.name == SETTINGS_MODULE for imported in node.names):
+                violations[node.lineno] = f"imports {SETTINGS_MODULE} module"
         elif isinstance(node, ast.ImportFrom):
             module = _resolved_from_module(node, relative_path)
             if module is not None and any(
-                f"{module}.{imported.name}" == "app.core.config"
+                f"{module}.{imported.name}" == SETTINGS_MODULE
                 for imported in node.names
             ):
-                violations[node.lineno] = "imports app.core.config module"
+                violations[node.lineno] = f"imports {SETTINGS_MODULE} module"
                 continue
-            if module != "app.core.config":
+            if module != SETTINGS_MODULE:
                 continue
             if any(imported.name == "*" for imported in node.names):
-                violations[node.lineno] = "star-imports app.core.config"
+                violations[node.lineno] = f"star-imports {SETTINGS_MODULE}"
             elif any(imported.name == "get_settings" for imported in node.names):
-                violations[node.lineno] = "imports app.core.config.get_settings"
+                violations[node.lineno] = f"imports {SETTINGS_MODULE}.get_settings"
+        elif isinstance(node, ast.Attribute):
+            if (
+                f"{SETTINGS_MODULE}.get_settings"
+                in _resolved_import_expressions(node, bindings=import_bindings)
+            ):
+                violations[node.lineno] = (
+                    f"accesses {SETTINGS_MODULE}.get_settings"
+                )
+        elif isinstance(node, ast.Call):
+            is_importlib_call = "importlib.import_module" in (
+                _resolved_import_expressions(node.func, bindings=import_bindings)
+            )
+            is_builtin_import = (
+                isinstance(node.func, ast.Name) and node.func.id == "__import__"
+            )
+            imported_name = _literal_import_name(node)
+            if (
+                (is_importlib_call or is_builtin_import)
+                and imported_name in SETTINGS_IMPORT_ANCESTORS
+            ):
+                violations[node.lineno] = f"dynamically imports {imported_name}"
 
     for line, name in _module_bindings(tree):
         if name == "get_settings" and line not in violations:
@@ -228,7 +313,9 @@ def _obsolete_factory_violations(
     return sorted(violations)
 
 
-def _function_arguments(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.arg]:
+def _function_arguments(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+) -> list[ast.arg]:
     arguments = [
         *node.args.posonlyargs,
         *node.args.args,
@@ -241,15 +328,110 @@ def _function_arguments(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[as
     return arguments
 
 
+def _callable_binds_ctx(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> bool:
+    if any(argument.arg == "ctx" for argument in _function_arguments(node)):
+        return True
+    collector = _ModuleBindingCollector()
+    if isinstance(node, ast.Lambda):
+        collector.visit(node.body)
+    else:
+        for statement in node.body:
+            collector.visit(statement)
+    return any(
+        name == "ctx" and name not in collector.passthrough_names
+        for _line, name in collector.bindings
+    )
+
+
+def _target_binds_ctx(target: ast.AST) -> bool:
+    return any(
+        isinstance(child, ast.Name)
+        and child.id == "ctx"
+        and isinstance(child.ctx, ast.Store)
+        for child in ast.walk(target)
+    )
+
+
+def _class_statement_binds_ctx(statement: ast.stmt) -> bool:
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return statement.name == "ctx"
+    if isinstance(statement, ast.Import):
+        return any(
+            (imported.asname or imported.name.split(".", maxsplit=1)[0]) == "ctx"
+            for imported in statement.names
+        )
+    if isinstance(statement, ast.ImportFrom):
+        return any(
+            imported.name != "*" and (imported.asname or imported.name) == "ctx"
+            for imported in statement.names
+        )
+    if isinstance(statement, ast.Assign):
+        return any(_target_binds_ctx(target) for target in statement.targets)
+    if isinstance(statement, ast.AnnAssign):
+        return statement.value is not None and _target_binds_ctx(statement.target)
+    if isinstance(statement, ast.AugAssign):
+        return _target_binds_ctx(statement.target)
+    return False
+
+
 class _FunctionCtxUseVisitor(ast.NodeVisitor):
-    def __init__(self, *, allowed_accessor: str | None) -> None:
+    def __init__(
+        self,
+        *,
+        allowed_accessor: str | None,
+        ctx_visible: bool = True,
+        lexical_ctx_visible: bool | None = None,
+        class_scope: bool = False,
+    ) -> None:
         self.allowed_accessor = allowed_accessor
+        self.ctx_visible = ctx_visible
+        self.lexical_ctx_visible = (
+            ctx_visible if lexical_ctx_visible is None else lexical_ctx_visible
+        )
+        self.class_scope = class_scope
         self.parents: list[ast.AST] = []
         self.violations: dict[int, str] = {}
 
     def _reject_binding(self, line: int, name: str | None) -> None:
-        if name == "ctx":
+        if self.ctx_visible and not self.class_scope and name == "ctx":
             self.violations[line] = "rebinds ctx"
+
+    def _visit_child_scope(
+        self,
+        nodes: list[ast.AST],
+        *,
+        ctx_visible: bool,
+        class_scope: bool = False,
+    ) -> None:
+        visitor = _FunctionCtxUseVisitor(
+            allowed_accessor=self.allowed_accessor,
+            ctx_visible=ctx_visible,
+            lexical_ctx_visible=ctx_visible,
+            class_scope=class_scope,
+        )
+        for node in nodes:
+            visitor.visit(node)
+            if class_scope and isinstance(node, ast.stmt):
+                if _class_statement_binds_ctx(node):
+                    visitor.ctx_visible = False
+        self.violations.update(visitor.violations)
+
+    def _visit_function_definition_expressions(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for default in [*node.args.defaults, *node.args.kw_defaults]:
+            if default is not None:
+                self.visit(default)
+        for argument in _function_arguments(node):
+            if argument.annotation is not None:
+                self.visit(argument.annotation)
+        if node.returns is not None:
+            self.visit(node.returns)
+        for type_parameter in node.type_params:
+            self.visit(type_parameter)
 
     def visit(self, node: ast.AST) -> None:
         self.parents.append(node)
@@ -257,7 +439,9 @@ class _FunctionCtxUseVisitor(ast.NodeVisitor):
         self.parents.pop()
 
     def visit_Name(self, node: ast.Name) -> None:
-        if node.id != "ctx":
+        if node.id != "ctx" or not self.ctx_visible:
+            return
+        if self.class_scope and isinstance(node.ctx, (ast.Store, ast.Del)):
             return
         parent = self.parents[-2] if len(self.parents) > 1 else None
         if (
@@ -278,15 +462,32 @@ class _FunctionCtxUseVisitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._reject_binding(node.lineno, node.name)
-        if any(argument.arg == "ctx" for argument in _function_arguments(node)):
-            return
-        self.generic_visit(node)
+        self._visit_function_definition_expressions(node)
+        body_ctx_visible = (
+            self.lexical_ctx_visible if self.class_scope else self.ctx_visible
+        ) and not _callable_binds_ctx(node)
+        self._visit_child_scope(node.body, ctx_visible=body_ctx_visible)
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._reject_binding(node.lineno, node.name)
-        return
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for base in node.bases:
+            self.visit(base)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+        for type_parameter in node.type_params:
+            self.visit(type_parameter)
+        body_ctx_visible = (
+            self.lexical_ctx_visible if self.class_scope else self.ctx_visible
+        )
+        self._visit_child_scope(
+            node.body,
+            ctx_visible=body_ctx_visible,
+            class_scope=True,
+        )
 
     def visit_Import(self, node: ast.Import) -> None:
         for imported in node.names:
@@ -319,9 +520,63 @@ class _FunctionCtxUseVisitor(ast.NodeVisitor):
         self._reject_binding(node.lineno, node.name)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
-        if any(argument.arg == "ctx" for argument in _function_arguments(node)):
-            return
-        self.generic_visit(node)
+        for default in [*node.args.defaults, *node.args.kw_defaults]:
+            if default is not None:
+                self.visit(default)
+        body_ctx_visible = (
+            self.lexical_ctx_visible if self.class_scope else self.ctx_visible
+        ) and not _callable_binds_ctx(node)
+        self._visit_child_scope([node.body], ctx_visible=body_ctx_visible)
+
+    def _visit_comprehension(
+        self,
+        node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+    ) -> None:
+        first_generator, *remaining_generators = node.generators
+        self.visit(first_generator.iter)
+        body_ctx_visible = (
+            self.lexical_ctx_visible if self.class_scope else self.ctx_visible
+        )
+        visitor = _FunctionCtxUseVisitor(
+            allowed_accessor=self.allowed_accessor,
+            ctx_visible=body_ctx_visible,
+            lexical_ctx_visible=body_ctx_visible,
+        )
+        generators = [first_generator, *remaining_generators]
+        for index, generator in enumerate(generators):
+            if index > 0:
+                visitor.visit(generator.iter)
+            if _target_binds_ctx(generator.target):
+                visitor.ctx_visible = False
+            for condition in generator.ifs:
+                visitor.visit(condition)
+        if isinstance(node, ast.DictComp):
+            visitor.visit(node.key)
+            visitor.visit(node.value)
+        else:
+            visitor.visit(node.elt)
+        self.violations.update(visitor.violations)
+
+    visit_ListComp = _visit_comprehension
+    visit_SetComp = _visit_comprehension
+    visit_DictComp = _visit_comprehension
+    visit_GeneratorExp = _visit_comprehension
+
+
+class _ModuleFunctionCollector(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.functions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.functions.append(node)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
 
 
 def _worker_ctx_violations(
@@ -330,9 +585,9 @@ def _worker_ctx_violations(
     allowed_accessor: str | None,
 ) -> list[tuple[int, str]]:
     violations: dict[int, str] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
+    collector = _ModuleFunctionCollector()
+    collector.visit(tree)
+    for node in collector.functions:
         if not any(argument.arg == "ctx" for argument in _function_arguments(node)):
             continue
         visitor = _FunctionCtxUseVisitor(allowed_accessor=allowed_accessor)
@@ -503,6 +758,73 @@ def test_settings_boundary_allows_typed_imports_and_nested_shadows() -> None:
         )
         == []
     )
+
+
+def test_settings_boundary_resolves_direct_import_bindings_and_literal_imports() -> None:
+    forbidden_cases = [
+        ("import app\napp.core.config.get_settings()\n", [2]),
+        ("import app as package\npackage.core.config.get_settings\n", [2]),
+        ("import app.core as core\ncore.config.get_settings()\n", [2]),
+        ("from app import core\ncore.config.get_settings()\n", [2]),
+        (
+            "from app import core as foundation\n"
+            "foundation.config.get_settings()\n",
+            [2],
+        ),
+        (
+            "import importlib\n"
+            'importlib.import_module("app")\n',
+            [2],
+        ),
+        (
+            "import importlib as loader\n"
+            'loader.import_module("app.core")\n',
+            [2],
+        ),
+        (
+            "from importlib import import_module\n"
+            'import_module("app.core.config")\n',
+            [2],
+        ),
+        (
+            "from importlib import import_module as load\n"
+            'load("app")\n',
+            [2],
+        ),
+        (
+            "import importlib\n"
+            'importlib.import_module(name="app.core.config")\n',
+            [2],
+        ),
+        ('__import__("app.core")\n', [1]),
+    ]
+
+    for source, expected_lines in forbidden_cases:
+        assert [
+            line
+            for line, _message in _settings_boundary_violations(
+                ast.parse(source),
+                relative_path=Path("app/services/example.py"),
+            )
+        ] == expected_lines
+
+
+def test_settings_boundary_allows_unrelated_and_nonliteral_dynamic_imports() -> None:
+    tree = ast.parse(
+        "import app\n"
+        "app.services.example\n"
+        "import importlib as loader\n"
+        'loader.import_module("livekit.plugins.turn_detector.multilingual")\n'
+        'loader.import_module(f"livekit.plugins.{provider}")\n'
+        "from importlib import import_module as load\n"
+        "load(module_name)\n"
+        '__import__("livekit.plugins")\n'
+    )
+
+    assert _settings_boundary_violations(
+        tree,
+        relative_path=Path("app/services/example.py"),
+    ) == []
 
 
 def test_obsolete_factory_imports_block_alias_and_module_escape() -> None:
@@ -703,6 +1025,155 @@ def test_worker_ctx_boundary_ignores_functions_without_ctx_and_other_mappings() 
     assert (
         _worker_ctx_violations(
             tree,
+            allowed_accessor="require_background_runtime",
+        )
+        == []
+    )
+
+
+def test_worker_ctx_boundary_follows_module_compounds_without_rescanning_nested_defs() -> (
+    None
+):
+    tree = ast.parse(
+        "if enabled:\n"
+        "    async def job(ctx):\n"
+        "        return consume(ctx)\n"
+        "async def outer(payload):\n"
+        "    async def nested(ctx):\n"
+        "        return consume(ctx)\n"
+    )
+
+    assert [
+        line
+        for line, _message in _worker_ctx_violations(
+            tree,
+            allowed_accessor="require_background_runtime",
+        )
+    ] == [3]
+
+def test_worker_ctx_boundary_checks_nested_definition_time_expressions() -> None:
+    forbidden_cases = [
+        (
+            "async def job(ctx):\n"
+            "    def inner(ctx=consume(ctx)):\n"
+            "        return ctx\n",
+            [2],
+        ),
+        (
+            "async def job(ctx):\n"
+            "    @decorate(ctx)\n"
+            "    def inner(ctx):\n"
+            "        return consume(ctx)\n",
+            [2],
+        ),
+        (
+            "async def job(ctx):\n"
+            "    callback = lambda ctx=consume(ctx): consume(ctx)\n",
+            [2],
+        ),
+        (
+            "async def job(ctx):\n"
+            "    def inner(\n"
+            "        value: annotate(ctx),\n"
+            "        *,\n"
+            "        keyword=consume(ctx),\n"
+            "    ) -> returns(ctx):\n"
+            "        return keyword\n",
+            [3, 5, 6],
+        ),
+    ]
+
+    for source, expected_lines in forbidden_cases:
+        assert [
+            line
+            for line, _message in _worker_ctx_violations(
+                ast.parse(source),
+                allowed_accessor="require_background_runtime",
+            )
+        ] == expected_lines
+
+
+def test_worker_ctx_boundary_honors_nested_callable_local_ctx_bindings() -> None:
+    allowed_cases = [
+        (
+            "async def job(ctx):\n"
+            "    def inner(ctx):\n"
+            "        return consume(ctx)\n"
+        ),
+        (
+            "async def job(ctx):\n"
+            "    def inner():\n"
+            "        ctx = local\n"
+            "        return consume(ctx)\n"
+        ),
+        (
+            "async def job(ctx):\n"
+            "    callback = lambda ctx: consume(ctx)\n"
+        ),
+    ]
+
+    for source in allowed_cases:
+        assert (
+            _worker_ctx_violations(
+                ast.parse(source),
+                allowed_accessor="require_background_runtime",
+            )
+            == []
+        )
+
+
+def test_worker_ctx_boundary_models_class_headers_and_sequential_namespace() -> None:
+    forbidden_cases = [
+        (
+            "async def job(ctx):\n"
+            "    class Holder:\n"
+            "        leaked = consume(ctx)\n",
+            [3],
+        ),
+        (
+            "async def job(ctx):\n"
+            "    class Holder(consume(ctx)):\n"
+            "        pass\n",
+            [2],
+        ),
+        (
+            "async def job(ctx):\n"
+            "    @decorate(ctx)\n"
+            "    class Holder:\n"
+            "        pass\n",
+            [2],
+        ),
+        (
+            "async def job(ctx, items):\n"
+            "    class Holder:\n"
+            "        ctx = local\n"
+            "        def method(self):\n"
+            "            return consume(ctx)\n"
+            "        callback = lambda: consume(ctx)\n"
+            "        values = [consume(ctx) for item in items]\n",
+            [5, 6, 7],
+        ),
+    ]
+
+    allowed = ast.parse(
+        "async def job(ctx, items):\n"
+        "    class Holder:\n"
+        "        ctx = local\n"
+        "        value = consume(ctx)\n"
+        "        values = [consume(ctx) for ctx in items]\n"
+    )
+
+    for source, expected_lines in forbidden_cases:
+        assert [
+            line
+            for line, _message in _worker_ctx_violations(
+                ast.parse(source),
+                allowed_accessor="require_background_runtime",
+            )
+        ] == expected_lines
+    assert (
+        _worker_ctx_violations(
+            allowed,
             allowed_accessor="require_background_runtime",
         )
         == []
