@@ -534,6 +534,34 @@ behavior changes. Because production code changes after the previous final gate,
 the complete API, agent, cross-runtime, static, coverage, cleanup, and two-axis
 review sequence must run again.
 
+### Runtime environments are canonical and closed
+
+Final Standards findings 51A and 52A close two remaining boundary-proof gaps.
+Both API and agent settings accept exactly `development`, `test`, `staging`, or
+`production`. Each settings boundary strips surrounding whitespace and applies
+case-insensitive canonicalization before its `Literal` domain is validated. An
+empty value, typo, or undocumented custom label fails during settings
+construction instead of falling through non-production validation. The API's
+pre-dotenv test-mode decision reuses the same normalization rule, so source
+selection and the constructed value cannot disagree.
+
+Composition and router code continue to use direct equality against the now
+canonical value; no second normalization layer or environment-policy service is
+introduced. API and agent keep local aliases and validators because they are
+separate executable packages and must not acquire a shared runtime dependency
+for this four-value contract. Tests cover constructor and process inputs,
+case/whitespace variants, all accepted values, unknown values, API test-mode
+resource suppression, and normalized development-route registration.
+
+The API composition root also receives a focused partial-startup cancellation
+contract test. It injects one retained `CancelledError` only after the earlier
+owned resources have been registered, asserts that the identical cancellation
+object escapes without a cause, and proves every previously opened resource is
+closed exactly once in reverse order. This is test-only unless the RED phase
+exposes a production defect; cleanup errors must not replace the caller's
+cancellation. No deployment, realtime enablement, provider, queue, database, or
+external-account behavior changes.
+
 ## Completion criteria
 
 Issue 6A is complete only when:
