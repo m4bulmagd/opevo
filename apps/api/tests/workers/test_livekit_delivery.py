@@ -8,7 +8,6 @@ from app.core.provider_failures import (
     ProviderOperation,
 )
 from app.providers.livekit_dispatch.base import LiveKitDispatch
-from app.providers.livekit_dispatch.livekit import LiveKitDispatchConfigurationError
 from app.workers.outbox.failures import OutboxDeliveryError
 from app.workers.outbox._livekit_delivery import ensure_livekit_dispatch
 
@@ -263,23 +262,18 @@ async def test_terminal_create_failure_does_not_relist() -> None:
 
 
 @pytest.mark.anyio
-async def test_initial_provider_configuration_failure_is_terminal_configuration() -> None:
+async def test_initial_untyped_provider_error_propagates_unchanged() -> None:
     trace: list[str] = []
-    configuration_error = LiveKitDispatchConfigurationError("missing")
+    untyped_error = RuntimeError("UNTYPED_PROVIDER_DEFECT_SENTINEL")
     provider = _Provider(
         trace,
-        list_results=[configuration_error],
+        list_results=[untyped_error],
     )
 
-    with pytest.raises(OutboxDeliveryError) as caught:
+    with pytest.raises(RuntimeError) as caught:
         await _ensure(provider, trace)
 
-    assert caught.value.error_code == "dispatch_configuration"
-    assert caught.value.retryable is False
-    assert caught.value.exhaustible is True
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is configuration_error
-    assert caught.value.__suppress_context__ is True
+    assert caught.value is untyped_error
     assert provider.list_requests == ["room"]
     assert trace == ["validate", "list"]
 
@@ -316,20 +310,15 @@ async def test_initial_list_provider_failure_preserves_its_policy_and_cause(
 
 
 @pytest.mark.anyio
-async def test_create_configuration_failure_is_terminal_with_suppressed_context() -> None:
+async def test_create_untyped_provider_error_propagates_unchanged() -> None:
     trace: list[str] = []
-    configuration_error = LiveKitDispatchConfigurationError("missing")
-    provider = _Provider(trace, create_result=configuration_error)
+    untyped_error = RuntimeError("UNTYPED_PROVIDER_DEFECT_SENTINEL")
+    provider = _Provider(trace, create_result=untyped_error)
 
-    with pytest.raises(OutboxDeliveryError) as caught:
+    with pytest.raises(RuntimeError) as caught:
         await _ensure(provider, trace)
 
-    assert caught.value.error_code == "dispatch_configuration"
-    assert caught.value.retryable is False
-    assert caught.value.exhaustible is True
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is configuration_error
-    assert caught.value.__suppress_context__ is True
+    assert caught.value is untyped_error
     assert provider.list_requests == ["room"]
     assert trace == [
         "validate",
@@ -388,22 +377,22 @@ async def test_recovery_list_provider_failure_preserves_its_policy_and_cause(
 
 
 @pytest.mark.anyio
-async def test_recovery_list_configuration_failure_propagates_unchanged() -> None:
+async def test_recovery_list_untyped_provider_error_propagates_unchanged() -> None:
     trace: list[str] = []
-    configuration_error = LiveKitDispatchConfigurationError("missing")
+    untyped_error = RuntimeError("UNTYPED_PROVIDER_DEFECT_SENTINEL")
     provider = _Provider(
         trace,
-        list_results=[[], configuration_error],
+        list_results=[[], untyped_error],
         create_result=_provider_failure(
             operation="create_dispatch",
             disposition="retryable",
         ),
     )
 
-    with pytest.raises(LiveKitDispatchConfigurationError) as caught:
+    with pytest.raises(RuntimeError) as caught:
         await _ensure(provider, trace)
 
-    assert caught.value is configuration_error
+    assert caught.value is untyped_error
     assert provider.list_requests == ["room", "room"]
     assert trace == [
         "validate",

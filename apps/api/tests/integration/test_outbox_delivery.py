@@ -5,7 +5,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from types import SimpleNamespace
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -1147,116 +1146,6 @@ async def test_dispatch_provider_failure_retains_provider_exhausted_call_code(
         assert call.status == "failed"
         assert call.failure_code == "dispatch_provider_exhausted"
     assert calls == expected_attempts
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("dispatch_kind", "provider_operation"),
-    [
-        ("customer", "list_dispatches"),
-        ("customer", "create_dispatch"),
-        ("verification", "list_dispatches"),
-        ("verification", "create_dispatch"),
-    ],
-)
-async def test_livekit_dispatch_configuration_errors_are_durable_terminal_failures(
-    outbox_session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    dispatch_kind: str,
-    provider_operation: str,
-) -> None:
-    from tests.fakes import build_test_observability
-    from app.providers.livekit_dispatch.livekit import (
-        LiveKitDispatchAPIProvider,
-        LiveKitDispatchConfigurationError,
-    )
-
-    verification_now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
-    event = (
-        await _seed_customer_dispatch_event(outbox_session_factory)
-        if dispatch_kind == "customer"
-        else await _seed_verification_dispatch_event(
-            outbox_session_factory,
-            now=verification_now,
-        )
-    )
-
-    class ConfigurationFailingDispatchService:
-        async def list_dispatch(self, _room_name: str) -> list:
-            if provider_operation == "list_dispatches":
-                raise LiveKitDispatchConfigurationError(
-                    "LiveKit dispatch settings are not configured"
-                )
-            return []
-
-        async def create_dispatch(self, _request: object) -> object:
-            raise LiveKitDispatchConfigurationError(
-                "LiveKit dispatch settings are not configured"
-            )
-
-    provider = LiveKitDispatchAPIProvider(
-        livekit_api=SimpleNamespace(
-            agent_dispatch=ConfigurationFailingDispatchService()
-        ),
-        observability=build_test_observability(),
-    )
-    if provider_operation == "create_dispatch":
-
-        async def no_existing_dispatches(*, room_name: str) -> list:
-            assert room_name
-            return []
-
-        monkeypatch.setattr(provider, "list_dispatches", no_existing_dispatches)
-    monkeypatch.setattr(
-        "app.workers.outbox.customer_dispatch.create_dispatch_token",
-        lambda **_kwargs: "dispatch-jwt",
-    )
-    monkeypatch.setattr(
-        "app.workers.outbox.verification_dispatch.create_verification_token",
-        lambda **_kwargs: "verification-jwt",
-    )
-    terminal_metrics: list[tuple[str, str]] = []
-    caplog.set_level(logging.CRITICAL, logger="app.workers.outbox.delivery")
-    handler = (
-        _customer_dispatch_handler(
-            session_factory=outbox_session_factory,
-            provider=provider,
-            now=lambda: verification_now,
-        )
-        if dispatch_kind == "customer"
-        else _verification_dispatch_handler(
-            session_factory=outbox_session_factory,
-            provider=provider,
-            now=lambda: verification_now,
-        )
-    )
-    result = await _deliver_outbox_batch(
-        session_factory=outbox_session_factory,
-        handlers={event.topic: handler},
-        now=lambda: event.next_attempt_at + timedelta(seconds=1),
-        terminal_failure_metric=lambda topic, error_code: terminal_metrics.append(
-            (topic, error_code)
-        ),
-    )
-
-    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
-    assert not any(
-        "event=outbox_internal_defect" in record.getMessage()
-        for record in caplog.records
-    )
-    assert terminal_metrics == [(event.topic, "validation")]
-    async with outbox_session_factory() as session:
-        stored = await session.get(OutboxEvent, event.id)
-        assert stored is not None
-        assert stored.status == "failed"
-        assert stored.attempt_count == 1
-        assert stored.last_error_code == "dispatch_configuration"
-        if dispatch_kind == "customer":
-            call = await session.get(Call, event.aggregate_id)
-            assert call is not None
-            assert call.status == "failed"
-            assert call.failure_code == "dispatch_configuration"
 
 
 @pytest.mark.anyio

@@ -5,7 +5,6 @@ from app.providers.livekit_dispatch.base import (
     LiveKitDispatch,
     LiveKitDispatchProvider,
 )
-from app.providers.livekit_dispatch.livekit import LiveKitDispatchConfigurationError
 from app.workers.outbox.failures import (
     OutboxDeliveryError,
     provider_failure_delivery_error,
@@ -32,11 +31,6 @@ async def ensure_livekit_dispatch(
     await revalidate_account()
     try:
         dispatches = await provider.list_dispatches(room_name=room_name)
-    except LiveKitDispatchConfigurationError:
-        raise OutboxDeliveryError(
-            "dispatch_configuration",
-            retryable=False,
-        ) from None
     except ProviderFailure as error:
         raise provider_failure_delivery_error(error) from error
 
@@ -57,11 +51,6 @@ async def ensure_livekit_dispatch(
             room_name=room_name,
             metadata=metadata,
         )
-    except LiveKitDispatchConfigurationError:
-        raise OutboxDeliveryError(
-            "dispatch_configuration",
-            retryable=False,
-        ) from None
     except ProviderFailure as error:
         if not error.retryable:
             raise provider_failure_delivery_error(error) from error

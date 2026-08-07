@@ -8,10 +8,6 @@ from app.providers.livekit_dispatch.base import LiveKitDispatch
 from app.providers.livekit_failures import livekit_failure_from_exception
 
 
-class LiveKitDispatchConfigurationError(RuntimeError):
-    pass
-
-
 class _MalformedLiveKitDispatchResponse(ValueError):
     pass
 
