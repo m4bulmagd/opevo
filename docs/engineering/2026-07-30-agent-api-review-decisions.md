@@ -481,13 +481,19 @@ and request/job/session code receives its dependencies without cached resource
 factories, deep global patching, or application dependency dictionaries.
 
 The reviewed implementation code range is
-`c561877..c4512d6060d8f2e0930094e68e3daedb53763eed`. The following docs-only
+`c561877..bc1be2cc698f4e31e96662abbe84556cddc33c33`. The following docs-only
 ledger commit records this evidence and is intentionally outside that immutable
-code range. Final verification passed 3,046 API tests with no skips (91.92%
-line and 80.32% branch coverage), 697 agent tests with four credential-gated
-evaluation skips (89.25% line and 73.62% branch coverage), and 83 cross-runtime
-integration/import tests. The API architecture guard passed eleven checks and
-the agent guard passed four.
+code range. Final verification passed 3,051 API tests with no skips (91.91%
+line and 80.32% branch coverage), 700 agent tests with four credential-gated
+evaluation skips (89.25% line and 73.62% branch coverage), and 88 cross-runtime
+integration/import tests. The API architecture guard passed sixteen checks and
+the agent guard passed six. The guards model Python definition, lambda,
+comprehension, and class evaluation scopes with explicit possible-provenance
+sets, conservatively merge bounded control-flow joins, reserve every obsolete
+factory name at API module scope, and distinguish actual worker-context aliases
+from unrelated mappings. Agent shutdown-duration characterization passed both
+`100.0 -> 100.4 -> 1` and `100.0 -> 103.9 -> 3` using the injected monotonic
+clock.
 Ruff and mypy passed for both applications, both frozen dependency-lock checks
 passed, and the legacy-factory, settings-boundary, worker-context, and cache
 reference scans were empty.
