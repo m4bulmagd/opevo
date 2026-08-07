@@ -3090,3 +3090,51 @@ complete corrected implementation endpoint is
 this Task 15 evidence commit is documentation-only and intentionally follows
 that endpoint. Step 6 remains pending until two fresh read-only reviewers assess
 the range including this evidence commit.
+
+#### Post-49A and 50A verification evidence before definitive review
+
+The first corrected complete-range Spec review reported zero findings. Its
+Standards review approved the range with one non-blocking cleanup finding: the
+unreachable `LiveKitDispatchConfigurationError` compatibility surface. The
+owner approved **49A**, recorded in the
+[LiveKit Dispatch Error Cleanup Plan](2026-08-07-livekit-dispatch-error-cleanup.md),
+to remove the dead exception, its two translations, and synthetic-only tests
+without adding an alias, broad catch, or replacement policy. Commit
+`d7f2a0d942844ff500f884ab29106cb01ac5bf15` implements that exact cleanup and
+received fresh independent Spec and Standards approvals with zero findings.
+
+The first complete post-49A API run then identified a meaningful untested
+contract: malformed LiveKit list responses were covered, while malformed create
+responses were not. The owner approved **50A** rather than lowering the
+coverage target. Test-only commit
+`6dc96ff6ee6f5e6272573f2b0315b46a34ea9637` parameterizes the same explicit
+failure contract across list and create operations, adding one collected case
+without changing production behavior.
+
+Fresh final verification at that code endpoint passed both frozen lock checks,
+complete API/agent Ruff checks, and mypy for 187 API and 16 agent source files.
+The API passed 3,089 tests with zero skips or failures, covering 11,817 of
+12,853 statements (91.939625%, reported as 91.94%) and 2,685 of 3,340 branches
+(80.389222%, reported as 80.39%). The agent passed 714 tests with exactly the
+four approved credentialed LiveKit evaluation skips, covering 1,347 of 1,506
+statements (89.442231%, reported as 89.44%) and 297 of 398 branches
+(74.623116%, reported as 74.62%). Both stored coverage ratchets passed. The
+exact cross-runtime slice passed 104 tests; the API and agent architecture
+guards passed 34 and seven tests.
+
+Ports 55469 and 56399 and the two exact `opevo-issue6a-final3` container names
+were clear before startup. Only those healthy disposable PostgreSQL and Redis
+containers were removed after verification, no matching container remained,
+and the original seven `bmad-opevo` services matched preflight. Obsolete-error,
+tracked-report, protected-path, diff, and status audits were clean, while all
+six approved Task 3-8 local reports remained ignored and untracked. No real
+environment file, fixed `/tmp` override, deployment, provider account, or
+non-isolated database was read or changed.
+
+The complete post-50A code endpoint is
+`c56187794d3c12e0daca833f5f8f2e729e98eead...6dc96ff6ee6f5e6272573f2b0315b46a34ea9637`.
+The final evidence commit is documentation-only and intentionally follows that
+endpoint. A fresh complete-range Spec and Standards review of the range
+including the evidence commit remains the final integration gate. Issue 6A
+remains Implemented; realtime, deployment, database, queue-policy, worker-source
+extraction, and Issues 1A, 14A, and 16A remain unchanged.
