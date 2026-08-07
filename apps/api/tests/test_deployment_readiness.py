@@ -748,20 +748,30 @@ def test_non_development_runtime_rejects_missing_or_unsafe_dispatch_secret(
         validate_api_runtime(settings)
 
 
-@pytest.mark.parametrize("app_env", ["test", "staging"])
-def test_non_development_runtime_accepts_strong_dispatch_secret_only(
+@pytest.mark.parametrize(
+    ("app_env", "livekit_configuration"),
+    [
+        ("test", LIVEKIT_DISABLED),
+        (
+            "staging",
+            {
+                "livekit_url": "wss://livekit.example.com",
+                "livekit_api_key": "livekit-api-key",
+                "livekit_api_secret": "livekit-api-secret",
+            },
+        ),
+    ],
+)
+def test_non_development_runtime_accepts_strong_dispatch_with_valid_livekit_configuration(
     app_env: str,
+    livekit_configuration: dict[str, str | None],
 ) -> None:
     settings = Settings(
         app_env=app_env,
         database_url="sqlite+aiosqlite://",
         redis_url="redis://localhost:6379/0",
         agent_dispatch_jwt_secret="runtime-dispatch-secret-with-at-least-32-bytes",
-        livekit_url="wss://livekit.example.com" if app_env == "staging" else None,
-        livekit_api_key="livekit-api-key" if app_env == "staging" else None,
-        livekit_api_secret=(
-            "livekit-api-secret" if app_env == "staging" else None
-        ),
+        **livekit_configuration,
     )
 
     validate_api_runtime(settings)
