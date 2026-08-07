@@ -41,9 +41,7 @@ PRODUCTION_REQUIRED_SETTINGS = (
 )
 
 BACKGROUND_WORKER_REQUIRED_SETTINGS = (
-    "livekit_url",
-    "livekit_api_key",
-    "livekit_api_secret",
+    *LIVEKIT_REQUIRED_SETTINGS,
     "livekit_agent_name",
     "storage_bucket_name",
     "s3_endpoint_url",
