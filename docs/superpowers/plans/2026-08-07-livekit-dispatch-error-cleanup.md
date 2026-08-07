@@ -355,3 +355,51 @@ is
 this evidence update is documentation-only and intentionally follows that
 endpoint. Step 7 remains pending until two fresh read-only reviewers assess the
 complete range including this durable evidence commit.
+
+#### Post-51A/52A/53A final6 evidence
+
+The owner-approved correction plan at commit `7624f34` followed the post-50A
+endpoint. **51A** closed and canonicalized the API and agent environment domains;
+commit `e591478f7f23e8dad621b6197fff2a55eed6a7a2` completed its test-first RED/GREEN
+cycle and received independent Spec and Standards approvals with zero findings.
+**52A** added the test-only late-composition-cancellation characterization in
+commit `219155c674cab3d5cc3f64d587c76cd2b68d9bfb`; existing production behavior
+already retained the exact cancellation and closed earlier resources once in
+reverse order, and independent Spec and Standards/test-quality reviews approved
+the commit with zero findings.
+
+The first complete post-52A API run exposed one stale dashboard-test parameter:
+3,106 tests passed and only the `preview` dashboard-reference-time case failed
+because 51A correctly rejected that custom environment first. **53A** removed
+only that dashboard-specific overlap while retaining explicit API and agent
+constructor/process `preview` rejection. Test-only commit
+`7c93cb521b8e98bbf51b5e4c2226da943b5142e5` completed GREEN and received
+independent Spec and Standards/test-quality approvals with zero findings.
+
+Fresh final6 verification at `7c93cb521b8e98bbf51b5e4c2226da943b5142e5`
+passed both frozen lock checks, complete Ruff, and mypy for 187 API and 16 agent
+source files. The API passed 3,106 tests with zero skips or failures and one
+dependency warning, covering 11,826/12,862 statements (91.945265%) and
+2,688/3,342 branches (80.430880%). The agent passed 732 tests with exactly four
+approved credentialed skips, covering 1,360/1,517 statements (89.650626%) and
+299/400 branches (74.75%). Both stored ratchets and the stricter API
+91.93%/80.39% and agent 89.44%/74.62% endpoints passed. The exact cross-runtime
+slice passed 104 tests; API and agent architecture guards passed 38 and seven;
+and explicit canonical/invalid environment slices passed 16 and 16.
+
+Ports 55472/56402 and the exact final6 names were clear before startup. Both
+isolated services became healthy, only those exact containers were removed,
+and final container/network/volume/port checks were empty. The original seven
+running services and pre-existing exited-success one-shots matched preflight by
+ID and state. Obsolete-error/runtime, tracked-report, protected-path, hash,
+diff, and status audits were clean; all six Task 3-8 reports remain local,
+ignored, and untracked. No protected environment, fixed override, deployment,
+provider account, non-isolated database, lock, baseline, or threshold changed.
+All Python test/coverage evidence was produced outside the filesystem sandbox;
+the discarded in-sandbox timeout attempt is not product-failure evidence.
+
+The corrected code range is
+`c56187794d3c12e0daca833f5f8f2e729e98eead...7c93cb521b8e98bbf51b5e4c2226da943b5142e5`.
+This four-file evidence update follows it. Step 7 remains pending until fresh
+complete-range Spec and Standards reviews include the evidence commit and both
+report zero findings.

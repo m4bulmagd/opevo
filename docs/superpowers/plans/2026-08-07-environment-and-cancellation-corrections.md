@@ -77,3 +77,60 @@ agent settings/runtime-validation suites; do not create a broad new abstraction.
 
 If any gate fails, stop and present the concrete issue and options. Never lower
 coverage thresholds, add coverage-only assertions, or silently broaden scope.
+
+## Task 22 final6 execution evidence
+
+The approved design/plan is commit `7624f34`. Task 20 used test-first RED
+coverage for canonical accepted environments, constructor/process invalid
+values, dotenv hermeticity, composition, development routes, and production
+validation. **51A** GREEN is commit
+`e591478f7f23e8dad621b6197fff2a55eed6a7a2`; independent Spec and Standards
+reviews both approved it with zero findings.
+
+Task 21 added the late-construction cancellation characterization before any
+production edit. Existing behavior already retained the exact
+`asyncio.CancelledError`, left its cause absent, and closed all earlier owned
+resources exactly once in reverse order, so no production change was required.
+**52A** is test-only commit
+`219155c674cab3d5cc3f64d587c76cd2b68d9bfb`; independent Spec and
+Standards/test-quality reviews both approved it with zero findings.
+
+The first full post-52A API gate was the corrective RED for **53A**: 3,106 tests
+passed, while the single dashboard reference-time `preview` parameter failed
+because 51A correctly rejects `preview` before dashboard-specific validation.
+Commit `7c93cb521b8e98bbf51b5e4c2226da943b5142e5` removed only that test overlap;
+explicit API and agent constructor/process invalid-environment matrices still
+cover `preview`. Independent Spec and Standards/test-quality reviews approved
+53A with zero findings.
+
+Fresh final6 GREEN evidence at the 53A code endpoint:
+
+- frozen lock and complete Ruff gates passed for API and agent; mypy passed 187
+  API and 16 agent source files;
+- API: 3,106 passed, zero skipped/failed, one dependency warning;
+  11,826/12,862 statements (91.945265%) and 2,688/3,342 branches
+  (80.430880%); stored and stricter 91.93%/80.39% ratchets passed;
+- agent: 732 passed and exactly four approved credentialed skips;
+  1,360/1,517 statements (89.650626%) and 299/400 branches (74.75%); stored and
+  stricter 89.44%/74.62% ratchets passed;
+- cross-runtime: 104 passed; architecture: 38 API and seven agent passed; and
+  explicit canonical/invalid APP_ENV slices: 16 API and 16 agent passed.
+
+Exact ports 55472/56402 and final6 names were clear before startup. Both
+isolated containers became healthy and only those exact containers were
+removed. No matching container, network, volume, name, or listener remained;
+the original seven running services and the pre-existing exited-success
+one-shots matched preflight by ID/state. Obsolete references/files were absent,
+locks and coverage baselines retained their hashes, protected/diff/status and
+tracked-report audits were clean, and all six ignored Task 3-8 reports remain.
+No protected path, real `.env`, fixed `/tmp` override, deployment, provider
+account, non-isolated database, lock, baseline, or threshold was touched.
+
+All Python pytest and coverage-check evidence above ran outside the filesystem
+sandbox. The earlier in-sandbox timeout attempt is discarded execution-context
+evidence and is not counted as a product failure. The corrected code endpoint
+is `c56187794d3c12e0daca833f5f8f2e729e98eead...7c93cb521b8e98bbf51b5e4c2226da943b5142e5`.
+This documentation-only evidence commit follows it. Task 22's definitive fresh
+complete-range Spec and Standards reviews remain pending; integration must not
+be offered until both approve the range including the evidence commit with zero
+findings.

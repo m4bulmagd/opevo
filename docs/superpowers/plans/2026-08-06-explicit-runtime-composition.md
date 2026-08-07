@@ -3138,3 +3138,77 @@ endpoint. A fresh complete-range Spec and Standards review of the range
 including the evidence commit remains the final integration gate. Issue 6A
 remains Implemented; realtime, deployment, database, queue-policy, worker-source
 extraction, and Issues 1A, 14A, and 16A remain unchanged.
+
+#### Post-51A, 52A, and 53A verification evidence before definitive review
+
+Owner decision **51A** closes runtime environment selection in both executables
+to `development`, `test`, `staging`, and `production`, canonicalizing case and
+surrounding whitespace before the explicit `Literal` boundary and rejecting
+empty, misspelled, and custom values from constructor and process sources.
+Test-first RED evidence covered those boundary cases, dotenv hermeticity,
+composition, development-only routing, and production validation. Commit
+`e591478f7f23e8dad621b6197fff2a55eed6a7a2` completed GREEN without a shared
+cross-app abstraction. Independent Spec and Standards reviews each approved
+51A with zero findings.
+
+Owner decision **52A** adds a focused test-only characterization of late API
+composition cancellation. It retains the exact `asyncio.CancelledError`, proves
+an absent cause, and proves every earlier owned resource closes exactly once in
+reverse registration order. The characterization passed against existing
+production behavior, so no production fix was needed. Commit
+`219155c674cab3d5cc3f64d587c76cd2b68d9bfb` received independent Spec and
+Standards/test-quality approvals with zero findings.
+
+The first complete post-52A API run produced 3,106 passes and one failure: the
+dashboard-reference-time matrix still treated `preview` as a valid environment,
+while 51A correctly rejected it at the environment boundary first. Owner
+decision **53A** removed only that overlapping dashboard-specific parameter;
+the API and agent constructor/process invalid-environment matrices still
+explicitly cover `preview`. Test-only commit
+`7c93cb521b8e98bbf51b5e4c2226da943b5142e5` completed GREEN and received
+independent Spec and Standards/test-quality approvals with zero findings. The
+approved correction design/plan commit is `7624f34`.
+
+Fresh final6 verification at code endpoint
+`7c93cb521b8e98bbf51b5e4c2226da943b5142e5` produced:
+
+- both frozen lock checks and complete API/agent Ruff checks passed; mypy passed
+  for 187 API and 16 agent source files;
+- 3,106 API tests passed with zero skips or failures and one dependency
+  deprecation warning, covering 11,826 of 12,862 statements (91.945265%,
+  reported as 91.95%) and 2,688 of 3,342 branches (80.430880%, reported as
+  80.43%); both the stored ratchet and stricter 91.93%/80.39% endpoint passed;
+- 732 agent tests passed with exactly the four approved credentialed LiveKit
+  evaluation skips, covering 1,360 of 1,517 statements (89.650626%, reported
+  as 89.65%) and 299 of 400 branches (74.75%); both the stored ratchet and
+  stricter 89.44%/74.62% endpoint passed;
+- the exact cross-runtime slice passed 104 tests; the API and agent architecture
+  guards passed 38 and seven tests; and
+- explicit constructor/process canonicalization and invalid-environment slices
+  passed 16 API and 16 agent cases; obsolete runtime and dispatch-error
+  references remained absent.
+
+Ports 55472 and 56402 and the exact `opevo-issue6a-final6-postgres` and
+`opevo-issue6a-final6-redis` names were clear before startup. Both disposable
+services became healthy; afterward only those exact containers were removed,
+and matching container, network, volume, port, and name checks were empty. The
+original seven running `bmad-opevo` services and the pre-existing successful
+`migrate`/`minio-init` one-shots matched preflight by container ID and state.
+
+The protected-path, lock/baseline-hash, tracked-report, stale-reference,
+`git diff --check`, and status audits were clean. All six approved Task 3-8
+reports remain present locally, ignored, and untracked. No protected path, real
+environment file, fixed `/tmp` voice/Telnyx/Clerk override, deployment,
+provider account, non-isolated database, lockfile, baseline, or threshold was
+read or changed. All Python test and coverage evidence above was produced
+outside the filesystem sandbox; the earlier in-sandbox timeout attempt is
+discarded environment evidence, not a product failure.
+
+The complete corrected code endpoint is
+`c56187794d3c12e0daca833f5f8f2e729e98eead...7c93cb521b8e98bbf51b5e4c2226da943b5142e5`.
+This evidence update is documentation-only and intentionally follows that
+endpoint. Fresh definitive complete-range Spec and Standards reviews including
+the evidence commit remain pending and must both report zero findings before
+integration is offered. Issue 6A remains Implemented; realtime, deployment,
+database, queue policy, worker-source extraction, and Issues 1A, 14A, and 16A
+remain unchanged.

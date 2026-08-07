@@ -1719,3 +1719,65 @@ Issues **3A and 13A** were subsequently implemented by the
 [Application-Scoped Clerk Authentication Verifier Implementation Plan](../superpowers/plans/2026-08-01-clerk-auth-verifier.md).
 Every later wave should receive its own reviewed implementation plan, preserve
 the issue numbers above, and state which accepted risks remain unchanged.
+
+## Environment and Cancellation Corrections — 51A, 52A, and 53A
+
+Design/plan commit `7624f34` authorized the final runtime-environment and API
+cancellation corrections. **51A** selected one explicit API/agent environment
+domain (`development`, `test`, `staging`, and `production`) with boundary
+case/whitespace canonicalization and fail-closed rejection of empty,
+misspelled, or custom values. Its test-first RED scope included constructor and
+process sources, dotenv hermeticity, composition, development routing, and
+production validation. Commit
+`e591478f7f23e8dad621b6197fff2a55eed6a7a2` completed GREEN; independent Spec
+and Standards reviews both approved it with zero findings.
+
+**52A** selected a focused, test-only API composition contract: a retained late
+`asyncio.CancelledError` escapes by object identity with no cause while every
+earlier owned resource closes once in reverse registration order. The
+characterization passed before any production edit, proving no production fix
+was required. Commit `219155c674cab3d5cc3f64d587c76cd2b68d9bfb` received
+independent Spec and Standards/test-quality approvals with zero findings.
+
+The first complete post-52A API run passed 3,106 tests and failed one stale
+dashboard-reference-time `preview` parameter. This was not a product defect:
+51A intentionally rejects `preview` at the environment boundary before the
+dashboard validator. Owner decision **53A** removed only that overlapping
+dashboard-specific case while preserving explicit constructor/process invalid
+environment coverage in both executables. Test-only commit
+`7c93cb521b8e98bbf51b5e4c2226da943b5142e5` completed GREEN and received
+independent Spec and Standards/test-quality approvals with zero findings.
+
+Fresh final6 verification at the 53A endpoint passed both frozen lock checks,
+complete API/agent Ruff, and mypy for 187 API and 16 agent source files. The API
+passed 3,106 tests with zero skips/failures and one dependency deprecation
+warning, covering 11,826/12,862 statements (91.945265%, 91.95% reported) and
+2,688/3,342 branches (80.430880%, 80.43% reported). The agent passed 732 tests
+with exactly four approved credentialed skips, covering 1,360/1,517 statements
+(89.650626%, 89.65% reported) and 299/400 branches (74.75%). Stored ratchets
+and the stricter API 91.93%/80.39% and agent 89.44%/74.62% endpoints passed.
+The exact cross-runtime slice passed 104 tests; API and agent architecture
+guards passed 38 and seven; explicit constructor/process canonical and invalid
+environment slices passed 16 and 16.
+
+Final6 used only healthy `opevo-issue6a-final6-postgres` and
+`opevo-issue6a-final6-redis` on preflight-free ports 55472 and 56402. Only those
+exact containers were removed; no matching container, network, volume, or
+listener remained. The original seven running `bmad-opevo` services and the
+pre-existing exited-success `migrate`/`minio-init` one-shots matched preflight
+by ID and state. Stale-resource/error, protected-path, lock/baseline-hash,
+tracked-report, diff, and status audits were clean; all six Task 3-8 reports
+remain local, ignored, and untracked. No protected path, real environment file,
+fixed override, deployment, provider account, non-isolated database, lock,
+baseline, or threshold was changed. All Python test and coverage evidence ran
+outside the filesystem sandbox; the discarded in-sandbox timeout attempt is
+not product-failure evidence.
+
+The corrected code range is
+`c56187794d3c12e0daca833f5f8f2e729e98eead...7c93cb521b8e98bbf51b5e4c2226da943b5142e5`.
+This evidence commit is documentation-only and follows that endpoint. Fresh
+definitive complete-range Spec and Standards reviews including the evidence
+commit remain pending and must both report zero findings before integration.
+Issue 6A remains Implemented. Realtime Issues 1A/14A, performance-governance
+Issue 16A, deployment, database, queue policy, and worker-source extraction
+remain unchanged.
