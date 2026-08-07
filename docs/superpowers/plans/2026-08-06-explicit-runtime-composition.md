@@ -606,7 +606,11 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 runtime accessor, so `composition/api.py` can import database/auth constructors
 without forming a cycle.
 
-`get_auth_provider`, readiness, recording storage, realtime, webhook receiver, call-finalization queue, and ARQ wakeup accessors must call `get_api_runtime`. HTTP-facing accessors may translate a missing optional resource into the existing 500/503 response; internal accessors keep the configuration error.
+`get_auth_provider`, readiness, recording storage, realtime, webhook receiver,
+call-finalization queue, and ARQ wakeup accessors must call `get_api_runtime`.
+HTTP-facing provider accessors return 503 when an optional integration is
+explicitly disabled; they do not expose `None` or return 500 for that state.
+Internal missing-required-resource accessors keep the configuration error.
 
 - [ ] **Step 4: Replace direct request-state reads**
 
@@ -2220,7 +2224,8 @@ child statement list of class-level `if`, `while`, `try`, and `try*` syntax:
 
 This clarification adds no joins, provenance, dataflow interpretation, shared
 test support, or production behavior. Round 6 is the final owner-authorized
-fix round for Issue 6A.
+Task 11 architecture-guard fix round. The later complete-range review findings
+43A–47A are separately authorized corrections covered by Tasks 12–15.
 
 - [ ] **Step 2: Run architecture RED**
 
@@ -2350,3 +2355,681 @@ git commit -m "refactor: complete explicit runtime composition"
 ```
 
 The commit is allowed only after Steps 4–8 pass and the staged diff contains no protected or unrelated files.
+
+---
+
+## Final-review correction addendum
+
+The complete-range Standards and Spec review found five gaps after Task 11.
+The owner approved 43A, 44A, 45A, 46A, and 47A. Section 13 of the design is
+the controlling specification for Tasks 12–15 below. These tasks do not reopen
+realtime, deployment, database, queue-policy, provider-selection, or source-app
+extraction decisions.
+
+Tasks 12–14 each use a fresh implementer, test-first RED/GREEN evidence, and an
+independent Spec then Standards review before the next task starts. A reviewer
+finding may receive at most five bounded fix rounds; a scope or owner-decision
+conflict returns to the owner before code changes. Task 15 uses fresh read-only
+reviewers for the complete corrected range.
+
+### Task 12: Make API LiveKit configuration explicit and fail safe
+
+**Files:**
+- Modify: `apps/api/app/core/runtime_validation.py`
+- Modify: `apps/api/app/webhooks/livekit.py`
+- Modify: `apps/api/tests/test_deployment_readiness.py`
+- Modify: `apps/api/tests/composition/test_api_composition.py`
+- Modify: `apps/api/tests/livekit/test_dispatch_webhook.py`
+
+**Interfaces:**
+- Produces: one validation rule for the `livekit_url`, `livekit_api_key`, and
+  `livekit_api_secret` configuration group.
+- Produces: `get_webhook_receiver(request: Request) -> object`, returning a
+  receiver or raising HTTP 503; it never returns `None` to a route handler.
+- Preserves: stable LiveKit routes, `ApiRuntime` optional fields for explicitly
+  disabled development/test runtimes, and existing complete production wiring.
+
+- [ ] **Step 1: Write configuration-state RED tests**
+
+In `test_deployment_readiness.py`, add explicit state-table coverage:
+
+```python
+LIVEKIT_DISABLED = {
+    "livekit_url": None,
+    "livekit_api_key": None,
+    "livekit_api_secret": None,
+}
+
+
+@pytest.mark.parametrize("app_env", ["development", "test"])
+def test_api_runtime_allows_fully_disabled_livekit_locally(
+    base_settings: Settings,
+    app_env: str,
+) -> None:
+    validate_api_runtime(
+        base_settings.model_copy(update={"app_env": app_env, **LIVEKIT_DISABLED})
+    )
+
+
+@pytest.mark.parametrize(
+    ("configured", "missing_names"),
+    [
+        ({"livekit_url": "wss://livekit.example.com"}, {"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"}),
+        ({"livekit_api_key": "key"}, {"LIVEKIT_URL", "LIVEKIT_API_SECRET"}),
+        ({"livekit_api_secret": "secret"}, {"LIVEKIT_URL", "LIVEKIT_API_KEY"}),
+        ({"livekit_url": "wss://livekit.example.com", "livekit_api_key": "key"}, {"LIVEKIT_API_SECRET"}),
+        ({"livekit_url": "wss://livekit.example.com", "livekit_api_secret": "secret"}, {"LIVEKIT_API_KEY"}),
+        ({"livekit_api_key": "key", "livekit_api_secret": "secret"}, {"LIVEKIT_URL"}),
+    ],
+)
+def test_api_runtime_rejects_partial_livekit_configuration(
+    base_settings: Settings,
+    configured: dict[str, str],
+    missing_names: set[str],
+) -> None:
+    settings = base_settings.model_copy(
+        update={"app_env": "development", **LIVEKIT_DISABLED, **configured}
+    )
+    with pytest.raises(RuntimeError) as caught:
+        validate_api_runtime(settings)
+    assert missing_names <= set(str(caught.value).replace(",", "").split())
+
+
+def test_staging_api_requires_complete_livekit_configuration(
+    base_settings: Settings,
+) -> None:
+    settings = base_settings.model_copy(
+        update={"app_env": "staging", **LIVEKIT_DISABLED}
+    )
+    with pytest.raises(RuntimeError) as caught:
+        validate_api_runtime(settings)
+    assert {"LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"} <= set(
+        str(caught.value).replace(",", "").split()
+    )
+```
+
+Keep the existing complete production validation test as the complete-state
+case. Add a composition assertion that partial settings fail before resource
+construction:
+
+```python
+@pytest.mark.anyio
+async def test_api_composition_rejects_partial_livekit_before_resources_start(
+    settings,
+) -> None:
+    from app.composition.api import build_api_runtime
+
+    partial_settings = settings.model_copy(
+        update={
+            "app_env": "development",
+            "livekit_url": "wss://livekit.example.com",
+            "livekit_api_key": "key",
+            "livekit_api_secret": None,
+        }
+    )
+    with pytest.raises(RuntimeError, match="LIVEKIT_API_SECRET"):
+        await build_api_runtime(
+            partial_settings,
+            engine_factory=_forbidden_factory("engine"),
+        )
+```
+
+Because validation is the first builder operation, the forbidden engine factory
+also proves Redis, observability, webhook, and recording factories cannot run.
+
+- [ ] **Step 2: Write disabled-request RED tests**
+
+In `test_dispatch_webhook.py`, install an `ApiRuntime` whose
+`livekit_webhook_receiver` is `None`, call `/webhooks/livekit`, and assert:
+
+```python
+@pytest.mark.anyio
+async def test_disabled_livekit_webhook_returns_service_unavailable(
+    async_client,
+) -> None:
+    response = await async_client.post(
+        "/webhooks/livekit",
+        content=b"{}",
+        headers={"authorization": "Bearer ignored"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "LiveKit webhook receiver is not initialized"
+    }
+```
+
+Retain the existing recording dependency 503 assertion and add a paired test
+if it does not already assert the disabled runtime directly. No provider factory
+or handler service may run on either disabled request path.
+
+- [ ] **Step 3: Run Task 12 RED tests**
+
+```bash
+cd apps/api
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_deployment_readiness.py \
+  tests/composition/test_api_composition.py \
+  tests/livekit/test_dispatch_webhook.py
+```
+
+Expected: the partial/staging state table and disabled webhook request fail for
+the missing validation and `None` dereference behavior only.
+
+- [ ] **Step 4: Implement the three-state validation rule**
+
+In `runtime_validation.py`, define the group once and validate it before the
+development early return:
+
+```python
+LIVEKIT_REQUIRED_SETTINGS = (
+    "livekit_url",
+    "livekit_api_key",
+    "livekit_api_secret",
+)
+
+
+def _validate_livekit_configuration(settings: Settings, environment: str) -> None:
+    missing = _require(settings, LIVEKIT_REQUIRED_SETTINGS)
+    if not missing:
+        return
+    if len(missing) != len(LIVEKIT_REQUIRED_SETTINGS):
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: " + ", ".join(missing)
+        )
+    if environment not in {"development", "test"}:
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: " + ", ".join(missing)
+        )
+```
+
+Call the helper from `validate_api_runtime` after authentication validation and
+before any environment return. Keep the production required-settings tuple as
+the final production-wide safety net; do not add a second LiveKit mode setting.
+
+In `webhooks/livekit.py`, mirror the existing recording dependency:
+
+```python
+def get_webhook_receiver(request: Request) -> object:
+    receiver = get_api_runtime(request.app).livekit_webhook_receiver
+    if receiver is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LiveKit webhook receiver is not initialized",
+        )
+    return receiver
+```
+
+- [ ] **Step 5: Run Task 12 GREEN and static checks**
+
+```bash
+cd apps/api
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_deployment_readiness.py \
+  tests/composition/test_api_composition.py \
+  tests/livekit/test_dispatch_webhook.py
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check \
+  app/core/runtime_validation.py app/webhooks/livekit.py \
+  tests/test_deployment_readiness.py tests/composition/test_api_composition.py \
+  tests/livekit/test_dispatch_webhook.py
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
+```
+
+Expected: all selected tests and static checks pass.
+
+- [ ] **Step 6: Commit Task 12**
+
+```bash
+git add apps/api/app/core/runtime_validation.py \
+  apps/api/app/webhooks/livekit.py \
+  apps/api/tests/test_deployment_readiness.py \
+  apps/api/tests/composition/test_api_composition.py \
+  apps/api/tests/livekit/test_dispatch_webhook.py
+git commit -m "fix(api): make LiveKit disablement explicit"
+```
+
+### Task 13: Delete obsolete worker and generated execution artifacts
+
+**Files:**
+- Delete: `apps/api/app/workers/outbox/_owned_resources.py`
+- Delete: `apps/api/app/workers/outbox/_livekit_client.py`
+- Delete: `apps/api/tests/workers/test_owned_resources.py`
+- Delete: `.superpowers/sdd/2026-08-06-explicit-runtime-composition/task-3-report.md`
+- Delete: `.superpowers/sdd/2026-08-06-explicit-runtime-composition/task-4-report.md`
+- Delete: `.superpowers/sdd/2026-08-06-explicit-runtime-composition/task-5-report.md`
+- Delete: `.superpowers/sdd/2026-08-06-explicit-runtime-composition/task-6-report.md`
+- Delete: `.superpowers/sdd/2026-08-06-explicit-runtime-composition/task-7-report.md`
+- Delete: `.superpowers/sdd/2026-08-06-explicit-runtime-composition/task-8-report.md`
+
+**Interfaces:**
+- Removes: operation-scoped resource ownership superseded by process-owned
+  runtimes and an unconsumed LiveKit settings adapter.
+- Preserves: `RuntimeCleanup`, API/worker runtime ownership, current provider
+  construction, and the tracked design/plan/engineering decision record.
+
+- [ ] **Step 1: Prove the production modules are dead**
+
+From the repository root:
+
+```bash
+rg -n "operation_owned_resources|require_livekit_client_config|LiveKitClientConfig|LiveKitClientConfigurationError" \
+  apps/api/app apps/api/tests
+```
+
+Expected: `_owned_resources.py` is referenced only by
+`test_owned_resources.py`; `_livekit_client.py` has no external reference.
+Any additional production consumer blocks this task and requires owner review.
+
+- [ ] **Step 2: Prove durable documentation contains the approved record**
+
+```bash
+for decision in 6A-C1A 6A-C2A 6A-C3A 6A-C4A 6A-C5A; do
+  rg -n "$decision" \
+    docs/superpowers/specs/2026-08-06-explicit-runtime-composition-design.md \
+    docs/superpowers/plans/2026-08-06-explicit-runtime-composition.md \
+    docs/engineering/2026-07-30-agent-api-review-decisions.md
+done
+rg -n "3069|701|106|91\.92|80\.32|89\.25|73\.62" \
+  docs/superpowers/plans/2026-08-06-explicit-runtime-composition.md \
+  docs/engineering/2026-07-30-agent-api-review-decisions.md
+```
+
+Expected: every owner decision is present in tracked durable documentation and
+the last complete verification evidence is retained outside task reports.
+
+- [ ] **Step 3: Delete only the approved files**
+
+Delete the nine listed files with patch-based file deletion. Do not delete the
+ignored SDD progress ledger or any report outside the explicit-runtime-composition
+directory. Do not modify `.gitignore`.
+
+- [ ] **Step 4: Run post-deletion reference and API worker checks**
+
+```bash
+! rg -n "operation_owned_resources|require_livekit_client_config|LiveKitClientConfig|LiveKitClientConfigurationError" \
+  apps/api/app apps/api/tests
+cd apps/api
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/composition/test_lifecycle.py \
+  tests/composition/test_worker_composition.py \
+  tests/workers/test_arq_worker.py
+```
+
+Confirm `test_owned_resources.py` is absent and the three remaining files pass.
+Also run `ruff check app tests` and `mypy app` so deletion cannot hide a stale
+import.
+
+- [ ] **Step 5: Audit the deletion diff and commit Task 13**
+
+```bash
+git diff --name-status
+git diff --check
+git status --short
+```
+
+Expected: exactly the approved obsolete modules, orphan-only test, and six task
+reports are deleted; no durable spec, plan, ledger, protected path, environment
+file, or unrelated report is removed.
+
+```bash
+git add -u -- \
+  apps/api/app/workers/outbox/_owned_resources.py \
+  apps/api/app/workers/outbox/_livekit_client.py \
+  apps/api/tests/workers/test_owned_resources.py \
+  .superpowers/sdd/2026-08-06-explicit-runtime-composition
+git commit -m "refactor: remove obsolete runtime artifacts"
+```
+
+### Task 14: Make agent settings and injected plugins authoritative
+
+**Files:**
+- Modify: `apps/agent/agent/debug_streams.py`
+- Modify: `apps/agent/agent/pipeline_factory.py`
+- Modify: `apps/agent/tests/test_debug_streams.py`
+- Modify: `apps/agent/tests/test_pipeline_factory.py`
+
+**Interfaces:**
+- Changes: `StreamDebugLogger.from_dispatch_metadata(metadata, *, enabled)`;
+  the caller must provide the validated boolean.
+- Produces: `AgentPipelineConfigurationError`, a stable missing-plugin error
+  that names the absent registry key and contains no credential values.
+- Preserves: `plugin_modules=None` as the only production-default import path;
+  explicit complete mappings and all existing pipeline/provider behavior.
+
+- [ ] **Step 1: Write explicit-debug-settings RED tests**
+
+In `test_pipeline_factory.py`, parameterize conflicting environment values:
+
+```python
+@pytest.mark.parametrize(
+    ("environment_value", "settings_value"),
+    [("true", False), ("false", True)],
+)
+def test_pipeline_debug_logger_uses_explicit_settings_when_environment_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+    environment_value: str,
+    settings_value: bool,
+) -> None:
+    monkeypatch.setenv("AGENT_DEBUG_STREAMS", environment_value)
+    agent, _session = build_agent_runtime(
+        DEFAULT_DISPATCH_METADATA,
+        settings=make_settings(agent_debug_streams=settings_value),
+        plugin_modules=COMPLETE_FAKE_PLUGINS,
+        session_cls=FakeSession,
+    )
+    assert isinstance(agent, InstrumentedAgent)
+assert agent._debug_logger.enabled is settings_value
+```
+
+In `test_debug_streams.py`, lock the factory's explicit argument independently
+of pipeline construction:
+
+```python
+import pytest
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_stream_debug_logger_factory_uses_explicit_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    monkeypatch.setenv("AGENT_DEBUG_STREAMS", "true" if not enabled else "false")
+    debug_logger = StreamDebugLogger.from_dispatch_metadata(
+        {"call_id": "call_123", "user_id": "user_123"},
+        enabled=enabled,
+    )
+    assert debug_logger.enabled is enabled
+```
+
+Define `DEFAULT_DISPATCH_METADATA` and `COMPLETE_FAKE_PLUGINS` once in the test
+module to remove repeated fixture dictionaries only where all values are truly
+identical. Do not turn variant provider configurations into one clever builder.
+
+- [ ] **Step 2: Write explicit-registry RED tests**
+
+Cover `None`, empty, partial, and complete registries:
+
+```python
+def test_agent_runtime_empty_plugin_registry_does_not_load_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(
+        pipeline_factory,
+        "_default_plugin_modules",
+        lambda *_args, **_kwargs: pytest.fail("explicit registry loaded defaults"),
+    )
+    with pytest.raises(
+        pipeline_factory.AgentPipelineConfigurationError,
+        match="speechmatics",
+    ):
+        build_agent_runtime(
+            DEFAULT_DISPATCH_METADATA,
+            settings=make_settings(),
+            plugin_modules={},
+            agent_cls=FakeAgent,
+            session_cls=FakeSession,
+        )
+```
+
+Add a partial registry case whose selected speech plugin exists but `google`,
+`silero`, or `turn_detector_multilingual` is missing; assert the exact missing
+key and that no default importer runs. Parameterize an STS empty/partial case
+missing `google`. Add explicit `plugin_modules=None` tests for STT/LLM/TTS and
+STS that record the selected default imports, and retain complete-mapping tests
+for both modes. Optional VAD and turn-detector cases use settings that enable one
+at a time and assert the missing optional registry key without importing a
+default.
+
+- [ ] **Step 3: Run Task 14 RED tests**
+
+```bash
+cd apps/agent
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_debug_streams.py tests/test_pipeline_factory.py
+```
+
+Expected: conflict cases expose the environment reread, and empty/partial
+registries either load defaults or raise raw `KeyError` instead of the required
+stable configuration error.
+
+- [ ] **Step 4: Remove the debug environment read**
+
+Delete `debug_streams_enabled` and its `os` import. Change the factory and caller:
+
+```python
+@classmethod
+def from_dispatch_metadata(
+    cls,
+    metadata: dict[str, Any],
+    *,
+    enabled: bool,
+) -> "StreamDebugLogger":
+    return cls(
+        enabled=enabled,
+        call_id=metadata.get("call_id"),
+        user_id=metadata.get("user_id"),
+    )
+```
+
+```python
+debug_logger=StreamDebugLogger.from_dispatch_metadata(
+    dispatch_metadata,
+    enabled=settings.agent_debug_streams,
+)
+```
+
+Do not add a logger factory or another settings lookup.
+
+- [ ] **Step 5: Make injected registry failures explicit**
+
+In `pipeline_factory.py`:
+
+```python
+class AgentPipelineConfigurationError(RuntimeError):
+    """The selected agent pipeline is missing an explicitly required plugin."""
+
+
+def _require_plugin(plugins: dict[str, Any], name: str) -> Any:
+    try:
+        return plugins[name]
+    except KeyError:
+        raise AgentPipelineConfigurationError(
+            f"Required pipeline plugin is unavailable: {name}"
+        ) from None
+```
+
+Resolve the registry with an identity check:
+
+```python
+plugins = (
+    _default_plugin_modules(settings, config)
+    if plugin_modules is None
+    else plugin_modules
+)
+```
+
+Use `_require_plugin` at each selected STT, LLM, TTS, STS, VAD, and turn-detector
+lookup. Assign a repeated selected module to a local variable so Speechmatics
+mode resolution and construction do not perform the same lookup twice. Do not
+catch exceptions raised inside plugin constructors.
+
+- [ ] **Step 6: Run Task 14 GREEN and static checks**
+
+```bash
+cd apps/agent
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_debug_streams.py tests/test_pipeline_factory.py \
+  tests/test_runtime_validation.py tests/test_composition.py
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check \
+  agent/debug_streams.py agent/pipeline_factory.py \
+  tests/test_debug_streams.py tests/test_pipeline_factory.py
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
+```
+
+Expected: all selected tests and static checks pass; environment conflict tests
+prove settings authority and no test imports an unrequested production plugin.
+
+- [ ] **Step 7: Commit Task 14**
+
+```bash
+git add apps/agent/agent/debug_streams.py \
+  apps/agent/agent/pipeline_factory.py \
+  apps/agent/tests/test_debug_streams.py \
+  apps/agent/tests/test_pipeline_factory.py
+git commit -m "fix(agent): enforce explicit pipeline configuration"
+```
+
+### Task 15: Reverify the complete corrected Issue 6 range
+
+**Files:**
+- Modify: `docs/superpowers/plans/2026-08-06-explicit-runtime-composition.md`
+- Modify: `docs/engineering/2026-07-30-agent-api-review-decisions.md`
+
+**Interfaces:**
+- Consumes: independently approved Tasks 12–14.
+- Produces: exact final test counts, coverage, cleanup evidence, corrected commit
+  range, and a second complete-range Standards/Spec approval.
+
+- [ ] **Step 1: Run frozen dependency and static gates**
+
+Run:
+
+```bash
+cd apps/api
+UV_CACHE_DIR=/tmp/uv-cache uv lock --check
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check app tests
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
+cd ../agent
+UV_CACHE_DIR=/tmp/uv-cache uv lock --check
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check agent tests
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
+```
+
+A lockfile change is out of scope and must stop the task.
+
+- [ ] **Step 2: Run the complete API suite in isolated services**
+
+Verify loopback ports 55467 and 56397 are unused, then start only these two
+uniquely named disposable containers:
+
+```bash
+! ss -ltn | rg -q ':55467|:56397'
+docker run --detach --rm --name opevo-issue6a-final-postgres \
+  --env POSTGRES_DB=ai_call_test \
+  --env POSTGRES_USER=postgres \
+  --env POSTGRES_PASSWORD=postgres \
+  --publish 127.0.0.1:55467:5432 \
+  --health-cmd='pg_isready -U postgres -d ai_call_test' \
+  --health-interval=5s --health-timeout=5s --health-retries=10 \
+  postgres:17.8-bookworm
+docker run --detach --rm --name opevo-issue6a-final-redis \
+  --publish 127.0.0.1:56397:6379 \
+  --health-cmd='redis-cli ping' \
+  --health-interval=5s --health-timeout=5s --health-retries=10 \
+  redis:7.4.7-alpine
+```
+
+Wait for both health checks, then export only the isolated service URLs:
+
+```bash
+until test "$(docker inspect --format '{{.State.Health.Status}}' \
+  opevo-issue6a-final-postgres)" = healthy; do sleep 1; done
+until test "$(docker inspect --format '{{.State.Health.Status}}' \
+  opevo-issue6a-final-redis)" = healthy; do sleep 1; done
+export APP_ENV=test
+export DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55467/ai_call_test
+export TEST_DATABASE_URL="$DATABASE_URL"
+export REDIS_URL=redis://127.0.0.1:56397/0
+export TEST_REDIS_URL="$REDIS_URL"
+```
+
+Run:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  --cov=app --cov-report=term-missing --cov-report=json:coverage.json
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python \
+  ../../scripts/check_python_coverage.py check \
+  --report coverage.json --baseline coverage-baseline.json
+```
+
+Expected: zero API skips or failures and no line/branch coverage regression from
+91.92%/80.32%.
+
+- [ ] **Step 3: Run the complete agent and cross-runtime suites**
+
+```bash
+cd apps/agent
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  --cov=agent --cov-report=term-missing --cov-report=json:coverage.json
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python \
+  ../../scripts/check_python_coverage.py check \
+  --report coverage.json --baseline coverage-baseline.json
+cd ../api
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/integration/test_agent_runtime_transcript_durability.py \
+  tests/integration/test_local_activation_to_number.py \
+  tests/integration/test_outbox_delivery.py \
+  tests/integration/test_worker_queue_isolation.py \
+  tests/livekit/test_dispatch_webhook.py \
+  tests/workers/test_outbox_architecture.py \
+  tests/test_composition_architecture.py
+```
+
+Four credentialed LiveKit evaluations may skip; no other skip is accepted.
+Expected: no regression from 89.25%/73.62% and all cross-runtime tests pass.
+
+- [ ] **Step 4: Remove isolated resources and audit the repository**
+
+Remove only Task 15's two explicitly named disposable containers:
+
+```bash
+docker rm --force opevo-issue6a-final-postgres opevo-issue6a-final-redis
+test -z "$(docker ps -a --filter name=opevo-issue6a-final --format '{{.Names}}')"
+docker compose -f compose.dev.yaml ps
+```
+
+The final command must still show only the original seven `bmad-opevo` services
+with their prior health. No named network or volume is created by Step 2. Run:
+
+```bash
+cd apps/api
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_composition_architecture.py
+cd ../agent
+UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
+  tests/test_composition_architecture.py
+cd ../..
+! rg -n "operation_owned_resources|require_livekit_client_config|debug_streams_enabled" \
+  apps/api/app apps/api/tests apps/agent/agent apps/agent/tests
+test -z "$(git ls-files '.superpowers/sdd/2026-08-06-explicit-runtime-composition/task-*-report.md')"
+git diff --check
+git status --short
+```
+
+Also compare the final changed-path list with the protected-path list before
+recording completion:
+
+```bash
+! git diff --name-only c56187794d3c12e0daca833f5f8f2e729e98eead...HEAD | \
+  rg '^(Presvo_frontend/|\.worktrees/shadcn-activation-preview/)|(^|/)\.env$'
+```
+
+Any protected or real environment file stops the task. The fixed `/tmp`
+voice/Telnyx/Clerk override files are not read, changed, or used by this plan.
+
+- [ ] **Step 5: Update durable evidence and commit it separately**
+
+Record exact test counts, coverage, correction commit hashes, cleanup evidence,
+and owner decisions 43A–47A in the plan and engineering ledger. Keep Issue 6A
+`Implemented`; leave 1A, 14A, 16A, realtime, deployment, and worker extraction
+unchanged. Commit only the two durable documentation files.
+
+- [ ] **Step 6: Run a fresh complete-range two-axis review**
+
+Two fresh read-only reviewers compare `c56187794d3c12e0daca833f5f8f2e729e98eead...HEAD`:
+
+- Standards: `CONTRIBUTING.md`, repository tooling, and the Fowler smell baseline.
+- Spec: the approved design, this plan, engineering decision ledger, and every
+  owner decision through 47A.
+
+Both axes must return zero findings. Any finding is presented to the owner with
+options; no unapproved implementation loop begins.

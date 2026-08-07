@@ -526,7 +526,9 @@ Conditions, exception types, and genuine direct uses remain rejected. One
 saved/reset branch helper plus shared `If`/`While` and `Try`/`TryStar` visitors
 address the repeated class-scope switches without a generalized scope/dataflow
 abstraction. Production code is unchanged, and Round 6 is the final authorized
-Issue 6A fix round.
+Task 11 architecture-guard fix round. The later complete-range review
+corrections 43A–47A are tracked separately in the approved design amendment and
+implementation-plan addendum until their final evidence is recorded here.
 
 The only intentional cross-root guard duplication is 38 identical
 dynamic-literal helper lines in each app's architecture test, plus app-specific
