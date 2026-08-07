@@ -512,6 +512,28 @@ pipeline modes and optional VAD/turn-detector requirements where applicable.
 These changes do not add logger injection, plugin registries beyond the existing
 mapping seam, control-flow inference, realtime work, or deployment behavior.
 
+### LiveKit dispatch uses one reachable failure vocabulary
+
+Final complete-range finding 49A removes the obsolete
+`LiveKitDispatchConfigurationError` compatibility path. The current LiveKit
+dispatch provider no longer raises that exception: configuration is validated
+before composition, while reachable provider validation, transport, and remote
+failures use `ProviderFailure` with an explicit disposition and error class.
+
+The dead exception class, both delivery-helper catch branches, and tests that
+manufacture only that impossible condition are deleted. Existing tests for
+reachable terminal and retryable `ProviderFailure` behavior remain authoritative
+and are strengthened only if deletion exposes an assertion gap. Unknown bugs in
+an injected implementation are not relabeled as configuration failures; they
+retain their original exception so internal defects are not silently converted
+into an outbox business outcome.
+
+No replacement compatibility exception is added to the provider interface, and
+no provider-selection, retry-policy, queue, deployment, or external-account
+behavior changes. Because production code changes after the previous final gate,
+the complete API, agent, cross-runtime, static, coverage, cleanup, and two-axis
+review sequence must run again.
+
 ## Completion criteria
 
 Issue 6A is complete only when:
