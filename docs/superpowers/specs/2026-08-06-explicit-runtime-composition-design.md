@@ -454,6 +454,64 @@ independently verified phases keep failures attributable and avoid a single
 uncontrolled rewrite. The expected result has high positive impact and lower
 ongoing maintenance through explicit ownership and stronger tests.
 
+## 13. Final-review corrections
+
+The owner approved findings 43A, 44A, 45A, 46A, and 47A after the complete
+Issue 6A range received its final two-axis review. These corrections are part
+of Issue 6A completion rather than follow-up compatibility work.
+
+### LiveKit configuration has three explicit states
+
+`LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` form one indivisible
+configuration group:
+
+- when all three are present, the API composes the webhook receiver and
+  recording service;
+- when all three are absent, development and test runtimes may start with
+  LiveKit disabled, and every LiveKit request dependency returns HTTP 503
+  instead of exposing `None` to a handler;
+- when only part of the group is present, startup fails in every environment
+  with the missing setting names; and
+- staging and production runtimes require the complete group through their
+  normal runtime validation.
+
+Tests cover absent, each representative partial state, and complete settings,
+plus the disabled webhook and recording request paths. The router remains
+stable across environments; disabled behavior is an explicit 503 rather than
+environment-dependent route omission.
+
+### Proven-dead worker mechanisms are deleted
+
+The unreferenced `_livekit_client.py` module and the `_owned_resources.py`
+operation-owned lifecycle helper are deleted together with tests that exercise
+only those obsolete implementations. Reference scans must remain empty before
+and after deletion. Current process-owned API and worker lifecycle tests remain
+the authoritative cleanup and cancellation coverage; no replacement abstraction
+is introduced.
+
+The six force-tracked `.superpowers/sdd/2026-08-06-explicit-runtime-composition`
+task reports are removed from the branch and remain ignored local execution
+artifacts. Before removal, the tracked design, implementation plan, and
+engineering decision ledger must be checked for all owner decisions and final
+verification evidence so the durable record is not lost.
+
+### Agent settings and plugin seams are authoritative
+
+`StreamDebugLogger` receives `settings.agent_debug_streams` explicitly when the
+pipeline constructs the production agent. It does not read
+`AGENT_DEBUG_STREAMS` itself. Conflicting environment values in both directions
+must prove that the supplied, already validated `AgentSettings` object wins.
+
+For `build_agent_runtime`, `plugin_modules=None` is the only request to load
+default production plugins. An explicitly supplied empty or partial mapping is
+never replaced. It fails with a stable pipeline-configuration error that names
+the missing plugin without exposing credentials or importing an unrequested
+plugin. Tests cover default, empty, partial, and complete registries for both
+pipeline modes and optional VAD/turn-detector requirements where applicable.
+
+These changes do not add logger injection, plugin registries beyond the existing
+mapping seam, control-flow inference, realtime work, or deployment behavior.
+
 ## Completion criteria
 
 Issue 6A is complete only when:
