@@ -1781,3 +1781,42 @@ commit remain pending and must both report zero findings before integration.
 Issue 6A remains Implemented. Realtime Issues 1A/14A, performance-governance
 Issue 16A, deployment, database, queue policy, and worker-source extraction
 remain unchanged.
+
+## Post-merge Agent Settings Isolation — 54A and 55A
+
+The approved local fast-forward merge exposed an environment-sensitive agent
+test failure that the isolated feature worktree could not reproduce. Two
+production-environment variants expected missing launch credentials but instead
+inherited a developer-specific debug-stream value through implicit dotenv
+loading. No real dotenv file was inspected; the failed final8 run was preserved
+only as test-isolation RED evidence, its API run was interrupted, and its exact
+disposable resources were removed.
+
+The owner selected **54A**: direct `AgentSettings(...)` construction is
+hermetic, while cached executable-root `get_settings()` is the sole explicit
+`.env` loader. This avoids repetitive `_env_file=None` test arguments, pytest
+detection, cwd hooks, global model mutation, and hidden settings-source policy.
+The owner selected **55A** for Pydantic's typing gap: retain the literal
+runtime-supported `_env_file=".env"` call with one narrow documented
+`call-arg` suppression rather than add `Any`, a cast, a plugin rollout, or a
+custom constructor.
+
+Design/plan commit `521206942420570040bfb0a094edb13569e711ab` records the
+contract. Implementation commit
+`898f98f6306f29901afb12d244c252b6172a44ca` changes exactly the agent settings
+module and its runtime-validation tests. Synthetic poison-dotenv RED/GREEN,
+complete agent settings validation, architecture, lock, Ruff, and mypy gates
+passed. Independent Spec and Standards reviews approved the implementation with
+zero findings.
+
+Fresh merged-main final9 verification passed 3,106 API tests with zero
+skips/failures (92.01523868760691% statement and 80.43087971274686% branch
+coverage) and 735 agent tests with exactly four approved skips and zero failures
+(89.58470665787739% statement and 74.75% branch coverage). Stored and stricter
+ratchets passed. Frozen locks, full Ruff, mypy for 187 API/16 agent files, 69
+focused API settings/architecture tests, and 41 focused agent
+validation/architecture tests passed. Exact isolated final9 dependencies were
+removed; original services, locks, baselines, protected paths, feature
+worktrees, and all six ignored Task 3-8 reports were preserved pending final
+worktree cleanup. No deployment, provider, realtime, database, queue, or worker
+extraction decision changed.

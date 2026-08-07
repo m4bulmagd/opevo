@@ -182,3 +182,57 @@ API run was intentionally interrupted and is not completion evidence. Exact
 final8 disposable resources were removed and all original services, locks,
 baselines, protected paths, feature artifacts, and repository state were
 preserved.
+
+## Task 23–24 completion evidence
+
+The owner approved **54A** and the design/continuation plan was committed as
+`521206942420570040bfb0a094edb13569e711ab`. Test-first RED used only a
+synthetic poison dotenv under `tmp_path`: direct settings construction consumed
+the poison environment and API URL in two failing cases, while the companion
+explicit-root loader case passed. No developer dotenv file was opened.
+
+Commit `898f98f6306f29901afb12d244c252b6172a44ca` implements 54A in exactly
+`apps/agent/agent/config.py` and
+`apps/agent/tests/test_runtime_validation.py`. `AgentSettings` no longer names
+an implicit dotenv file; cached `get_settings()` alone supplies
+`_env_file=".env"`. Constructor, process-environment, and file-secret sources,
+environment canonicalization, validation, Compose, credentials, and runtime
+ownership remain unchanged. The owner separately approved **55A**, one live and
+documented `# type: ignore[call-arg]` on that explicit loader call because
+Pydantic accepts `_env_file` at runtime while mypy's synthesized subclass
+signature omits it. No `Any`, cast, plugin, custom constructor, or settings
+source override was added.
+
+GREEN passed the three focused dotenv contracts, all 34 runtime-validation
+tests, the formerly contaminated production variants, seven agent architecture
+tests, the frozen lock check, full Ruff, and mypy across 16 agent source files.
+Independent Spec and Standards reviews both approved 54A/55A with zero
+findings.
+
+Fresh merged-main final9 verification at `898f98f` produced:
+
+- API: 3,106 passed with zero skips/failures and one known dependency
+  deprecation warning; 92.01523868760691% statements and
+  80.43087971274686% branches;
+- agent: 735 passed with exactly the four approved credentialed skips and zero
+  failures; 89.58470665787739% statements and 74.75% branches;
+- stored ratchets and the stricter API 91.93%/80.39% and agent 89.44%/74.62%
+  endpoints passed;
+- frozen locks, complete Ruff, and mypy passed for 187 API and 16 agent source
+  files; and
+- focused API settings/composition/outbox architecture passed 69 tests, while
+  agent runtime-validation/composition architecture passed 41 tests.
+
+The prior exact cross-runtime slice was not repeated because none of its seven
+selected files imports or constructs agent settings; the affected boundaries
+are covered directly by the agent and API architecture gates above.
+
+Final9 used only healthy `opevo-issue6a-final9-postgres` and
+`opevo-issue6a-final9-redis` on preflight-free ports 55475 and 56405. Only those
+exact containers were removed; name, listener, network, and volume filters were
+empty afterward. The original seven running services and two exited-success
+one-shots matched preflight by container ID and state. Locks and coverage
+baselines retained their hashes. Tracked main remained clean except for the
+opaque protected `Presvo_frontend/`, which was never inspected or touched. The
+protected frontend worktree, feature worktree/branch, and six ignored Task 3-8
+reports remained intact pending the final preservation and cleanup step.
