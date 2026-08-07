@@ -481,13 +481,13 @@ and request/job/session code receives its dependencies without cached resource
 factories, deep global patching, or application dependency dictionaries.
 
 The reviewed implementation code range is
-`c561877..aa8c6b597d6b863152f0f494a56dcb2b5af76f09`. The following docs-only
+`c561877..14c76ddfaeaea4287d26b6f0e0bd4249e8f1e4a1`. The following docs-only
 ledger commit records this evidence and is intentionally outside that immutable
-code range. Round 4 service-backed verification passed 3,056 API tests with no
+code range. Final service-backed verification passed 3,067 API tests with no
 skips (91.92% line and 80.32% branch coverage), 701 agent tests with four
-credential-gated evaluation skips (89.38% line and 73.62% branch coverage),
-and 93 cross-runtime integration/import tests. The final API architecture
-guard passed twenty-one checks and the agent guard passed seven.
+credential-gated evaluation skips (89.25% line and 73.62% branch coverage),
+and 104 cross-runtime integration/import tests. The final API architecture
+guard passed thirty-two checks and the agent guard passed seven.
 
 Decision 6A-C4A keeps those guards syntactic rather than interpreting Python
 dataflow. Outside the exact executable roots, direct/aliased/star
@@ -498,15 +498,31 @@ accessor; aliasing, rebinding, other calls, and direct mapping access fail. A
 small recursive module-statement binding collector reserves every deleted
 factory name while allowing nested function/class/lambda/comprehension locals.
 The superseded possible-provenance and control-flow interpreters were removed.
-The remaining settings escape guard resolves only direct import bindings and
-syntactic attribute chains. It also rejects literal config-package ancestors
-passed to `importlib.import_module` aliases or bare `__import__`, while allowing
-nonliteral and LiveKit plugin imports. It performs no assignment/string
-provenance or reflective lookup. The worker guard checks nested definition-time
-expressions in the enclosing lexical scope, honors nested callable-local `ctx`
-bindings, models sequential class-local bindings, and treats methods, lambdas,
-comprehensions, and nested class bodies as capturing the enclosing worker scope
-rather than the class namespace.
+The final settings escape guard has no import-binding pipeline. It forbids
+module-form imports of the API/agent package, requires explicit `ImportFrom`
+dependencies, and rejects config-bearing or star imports through relevant
+package ancestors while allowing typed settings and unrelated imports. A later
+lexical shadow does not weaken that explicit import boundary. Literal bare or
+attribute `import_module` calls and bare `__import__` calls are recognized by
+syntax regardless of their import binding. Literal relative `import_module`
+names are normalized with a literal positional/keyword package before config
+ancestors are rejected; invalid, nonliteral, unrelated, and LiveKit forms stay
+allowed by this bounded rule. The worker guard checks nested definition-time
+expressions in the enclosing lexical scope. Containing-callable binders include
+named expressions inside comprehensions but exclude comprehension iteration
+targets; `global ctx` does not capture the worker parameter, while `nonlocal
+ctx` does. Sequential class-local binding includes named expressions,
+sync/async loops and with statements, exception targets, match captures,
+destructuring, definitions, and imports. Methods, lambdas, comprehensions, and
+nested class bodies still do not inherit the class namespace.
+
+The only intentional cross-root guard duplication is 38 identical
+dynamic-literal helper lines in each app's architecture test, plus app-specific
+settings walkers of 45 API lines and 40 agent lines. API and agent have separate
+application packages, test environments, and package roots; extracting this
+small stable logic would introduce a shared test/production support dependency,
+so no shared dependency was added.
+
 Agent shutdown-duration characterization passed both
 `100.0 -> 100.4 -> 1` and `100.0 -> 103.9 -> 3` using the injected monotonic
 clock.

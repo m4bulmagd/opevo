@@ -2149,6 +2149,54 @@ escape families:
   scope traversal. It still forbids call binding, assignment/string
   provenance, control-flow interpretation, and reflection.
 
+#### 6A-C4A Round 5 final syntax contract
+
+The final guard removes the remaining import-binding pipeline instead of
+expanding it. In every non-executable settings module:
+
+- Module-form imports of the process package are forbidden: `import app` and
+  `import app.*` in API production, and `import agent` and `import agent.*` in
+  agent production. Dependencies must use explicit `ImportFrom` syntax. This
+  import boundary is intentionally stronger than lexical name resolution, so
+  a later or enclosing shadow of the imported name does not make the module
+  import valid.
+- `ImportFrom` rejects config-bearing package escapes and stars from relevant
+  ancestors: `from app import core`, `from app.core import config`, and the
+  corresponding relative/star forms; the agent guard applies the analogous
+  `agent.config` rule. Exact `get_settings` and star imports from the config
+  module remain forbidden, while `Settings`, `AgentSettings`, and unrelated
+  explicit dependencies remain valid. `get_settings` also remains reserved at
+  module scope.
+- Literal dynamic calls are matched from syntax alone: a bare or attribute
+  `import_module(...)` and a bare `__import__(...)`, independent of how the
+  callable name was imported. Positional and keyword literal `name` arguments
+  are checked. Relative `import_module` names with a positional or keyword
+  literal `package` are normalized with `importlib.util.resolve_name`; resolved
+  config modules and package ancestors fail safely. Nonliteral/invalid
+  relative calls and unrelated or LiveKit literal/formatted-string calls stay
+  outside this deliberately bounded rule.
+
+Worker `ctx` checking uses the containing callable's lexical binders. Ordinary
+parameters, assignments, imports, definitions, targets, patterns, and named
+expressions bind locally. Named expressions in comprehension iterables,
+filters, elements, keys, and values count as containing-callable bindings;
+comprehension iteration targets do not. `global ctx` means a nested callable
+does not capture the worker parameter and is allowed by this boundary, whereas
+`nonlocal ctx` preserves the enclosing capture and remains subject to the
+direct-access rule. Sequential class namespaces also account for named
+expressions; sync/async loop and with targets; exception targets; match
+star/as/mapping captures; destructuring; definitions; and imports before the
+relevant body. Methods, lambdas, comprehensions, and nested classes do not
+inherit that class namespace.
+
+The dynamic-literal helpers contain 38 identical lines in each architecture
+test root; the app-specific settings walkers contain 45 API lines and 40 agent
+lines. This is the only intentional cross-root guard duplication left. The API
+and agent are separately packaged applications with independent test
+environments and package roots, so extracting those test helpers would create
+a shared test/production support dependency between processes for a small,
+stable syntax rule. No such shared dependency is added.
+
 - [ ] **Step 2: Run architecture RED**
 
 ```bash
