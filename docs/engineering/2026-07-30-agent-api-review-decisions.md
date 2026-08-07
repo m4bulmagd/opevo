@@ -489,6 +489,18 @@ credential-gated evaluation skips (89.25% line and 73.62% branch coverage),
 and 106 cross-runtime integration/import tests. The final API architecture
 guard passed thirty-four checks and the agent guard passed seven.
 
+Owner decision 6A-C1A retains strict process validators while allowing the API
+and both development workers to share the same optional `apps/api/.env` source;
+the implementation neither opens nor commits that file, and explicit Compose
+values retain precedence. API identity, webhook, and payment secrets are masked
+from both workers, while background-provider credentials are additionally
+masked from the lifecycle worker. No dummy provider values were added.
+Readiness and documentation tests exercise the resolved secret scope, worker
+processes remain isolated, and the voice profile is unchanged. Commits
+`7ddb343`, `bfb8197`, `826a988`, and `80f6a2e` implement and verify the decision;
+its final independent review completed with zero findings. This records local
+development composition only and makes no deployment or production claim.
+
 Decision 6A-C4A keeps those guards syntactic rather than interpreting Python
 dataflow. Outside the exact executable roots, direct/aliased/star
 `get_settings` imports, config-module imports, and public module bindings named
