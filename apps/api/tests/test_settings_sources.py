@@ -15,10 +15,99 @@ ACTIVATION_FLOW_ENABLED=true
 CLERK_JWT_KEY=dotenv-static-key
 CLERK_JWKS_URL=https://poison.example.invalid/jwks.json
 """
+ENVIRONMENT_VARIANTS = [
+    (" DeVeLoPmEnT ", "development"),
+    (" TEST ", "test"),
+    (" StAgInG ", "staging"),
+    (" PrOdUcTiOn ", "production"),
+]
+INVALID_ENVIRONMENTS = ["", "   ", "prodution", "preview"]
 
 
 def _write_dotenv(tmp_path: Path, content: str = POISONED_DOTENV) -> None:
     (tmp_path / ".env").write_text(content, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("source_value", "canonical_value"),
+    ENVIRONMENT_VARIANTS,
+)
+def test_constructor_environment_is_canonicalized(
+    source_value: str,
+    canonical_value: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    settings = Settings(
+        app_env=source_value,
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+    )
+
+    assert settings.app_env == canonical_value
+
+
+@pytest.mark.parametrize(
+    ("source_value", "canonical_value"),
+    ENVIRONMENT_VARIANTS,
+)
+def test_process_environment_is_canonicalized(
+    source_value: str,
+    canonical_value: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", source_value)
+
+    settings = Settings(
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+    )
+
+    assert settings.app_env == canonical_value
+
+
+@pytest.mark.parametrize("app_env", INVALID_ENVIRONMENTS)
+def test_constructor_rejects_unknown_environment(
+    app_env: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            app_env=app_env,
+            database_url="sqlite+aiosqlite://",
+            redis_url="redis://localhost:6379/0",
+        )
+
+    assert {tuple(error["loc"]) for error in exc_info.value.errors()} == {
+        ("app_env",)
+    }
+
+
+@pytest.mark.parametrize("app_env", INVALID_ENVIRONMENTS)
+def test_process_rejects_unknown_environment(
+    app_env: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", app_env)
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            database_url="sqlite+aiosqlite://",
+            redis_url="redis://localhost:6379/0",
+        )
+
+    assert {tuple(error["loc"]) for error in exc_info.value.errors()} == {
+        ("app_env",)
+    }
 
 
 @pytest.mark.parametrize("app_env", ["test", " TEST ", "TeSt"])
@@ -45,6 +134,7 @@ def test_explicit_test_environment_ignores_dotenv(
     assert settings.activation_flow_enabled is False
     assert settings.clerk_jwt_key == "constructor-static-key"
     assert settings.clerk_jwks_url is None
+    assert settings.app_env == "test"
 
 
 def test_process_test_environment_makes_settings_ignore_dotenv(
@@ -64,6 +154,7 @@ def test_process_test_environment_makes_settings_ignore_dotenv(
     assert settings.activation_flow_enabled is False
     assert settings.clerk_jwt_key == "process-static-key"
     assert settings.clerk_jwks_url is None
+    assert settings.app_env == "test"
 
 
 def test_development_without_pre_dotenv_app_env_loads_dotenv(
@@ -107,9 +198,17 @@ def test_app_env_selected_only_by_dotenv_does_not_preempt_that_source(
     assert settings.otel_service_name == "dotenv-poison-sentinel"
 
 
-@pytest.mark.parametrize("app_env", ["", "   ", "development", "contest"])
+@pytest.mark.parametrize(
+    ("app_env", "canonical_value"),
+    [
+        ("development", "development"),
+        (" STAGING ", "staging"),
+        ("PRODUCTION", "production"),
+    ],
+)
 def test_non_test_constructor_values_keep_dotenv_enabled(
     app_env: str,
+    canonical_value: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -122,13 +221,21 @@ def test_non_test_constructor_values_keep_dotenv_enabled(
         redis_url="redis://localhost:6379/0",
     )
 
-    assert settings.app_env == app_env
+    assert settings.app_env == canonical_value
     assert settings.otel_service_name == "dotenv-poison-sentinel"
 
 
-@pytest.mark.parametrize("app_env", ["", "   ", "development", "contest"])
+@pytest.mark.parametrize(
+    ("app_env", "canonical_value"),
+    [
+        ("development", "development"),
+        (" STAGING ", "staging"),
+        ("PRODUCTION", "production"),
+    ],
+)
 def test_non_test_process_values_keep_dotenv_enabled(
     app_env: str,
+    canonical_value: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -141,7 +248,7 @@ def test_non_test_process_values_keep_dotenv_enabled(
         redis_url="redis://localhost:6379/0",
     )
 
-    assert settings.app_env == app_env
+    assert settings.app_env == canonical_value
     assert settings.otel_service_name == "dotenv-poison-sentinel"
 
 

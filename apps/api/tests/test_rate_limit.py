@@ -32,3 +32,13 @@ def test_fresh_non_test_app_reenables_limiter_after_test_app() -> None:
     application = create_app(_settings(app_env="development"))
 
     assert application.state.limiter.enabled is True
+
+
+def test_normalized_development_environment_registers_development_routes() -> None:
+    from app.main import create_app
+
+    application = create_app(_settings(app_env=" DeVeLoPmEnT "))
+
+    registered_paths = {route.path for route in application.routes}
+    assert "/api/development/activate-starter" in registered_paths
+    assert "/api/development/simulate-forwarded-call" in registered_paths

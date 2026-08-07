@@ -1,6 +1,22 @@
 from functools import lru_cache
+from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+type RuntimeEnvironment = Literal[
+    "development",
+    "test",
+    "staging",
+    "production",
+]
+
+
+def _normalize_runtime_environment(value: object) -> object:
+    if isinstance(value, str):
+        return value.strip().casefold()
+    return value
 
 
 class AgentSettings(BaseSettings):
@@ -8,7 +24,7 @@ class AgentSettings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    app_env: str = "development"
+    app_env: RuntimeEnvironment = "development"
 
     # LiveKit
     livekit_url: str | None = None
@@ -39,6 +55,11 @@ class AgentSettings(BaseSettings):
     agent_max_endpointing_delay: float = 1.5
     livekit_silero_vad_enabled: bool = True
     livekit_turn_detector_enabled: bool = True
+
+    @field_validator("app_env", mode="before")
+    @classmethod
+    def normalize_app_env(cls, value: object) -> object:
+        return _normalize_runtime_environment(value)
 
 
 @lru_cache

@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
@@ -97,11 +97,79 @@ class _DependencyProbe:
         raise self.close_error
 
 
+class _RealtimeServiceProbe:
+    def __init__(self) -> None:
+        self.fanout_calls = 0
+
+    def fanout_forever(self) -> Awaitable[None]:
+        self.fanout_calls += 1
+
+        async def fail() -> None:
+            raise AssertionError("test environment must not start realtime fanout")
+
+        return fail()
+
+
 def _forbidden_factory(name: str) -> Callable[..., Any]:
     def forbidden(*_args: object, **_kwargs: object) -> Any:
         raise AssertionError(f"{name} must not be constructed")
 
     return forbidden
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("settings_source", ["constructor", "process"])
+async def test_normalized_test_environment_keeps_api_runtime_hermetic(
+    settings,
+    settings_source: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.composition.api import build_api_runtime
+    from app.core.config import Settings
+
+    values = settings.model_dump()
+    values.update(
+        {
+            "realtime_enabled": True,
+            "livekit_url": None,
+            "livekit_api_key": None,
+            "livekit_api_secret": None,
+        }
+    )
+    values.pop("app_env")
+    if settings_source == "constructor":
+        values["app_env"] = " TEST "
+    else:
+        monkeypatch.setenv("APP_ENV", " TEST ")
+    configured_settings = Settings(**values)
+    closed_resources: list[str] = []
+    realtime_service = _RealtimeServiceProbe()
+
+    runtime = await build_api_runtime(
+        configured_settings,
+        engine_factory=lambda _url: _Engine("engine", closed_resources),
+        redis_factory=lambda _url: _OwnedResource("redis", closed_resources),
+        observability_factory=lambda **_kwargs: _OwnedResource(
+            "observability", closed_resources
+        ),
+        auth_factory=lambda **_kwargs: _OwnedResource("auth", closed_resources),
+        readiness_factory=lambda **_kwargs: object(),
+        storage_factory=lambda **_kwargs: _OwnedResource(
+            "storage", closed_resources
+        ),
+        arq_pool_factory=_forbidden_factory("ARQ pool"),
+        realtime_service_factory=lambda *_args, **_kwargs: realtime_service,
+        webhook_receiver_factory=_forbidden_factory("LiveKit webhook receiver"),
+        recording_service_factory=_forbidden_factory("recording service"),
+    )
+    try:
+        assert configured_settings.app_env == "test"
+        assert runtime.arq_pool is None
+        assert runtime.call_finalization_queue is None
+        assert runtime.realtime_service is realtime_service
+        assert realtime_service.fanout_calls == 0
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.anyio

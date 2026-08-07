@@ -1,8 +1,82 @@
 import pytest
+from pydantic import ValidationError
 
 from agent.config import AgentSettings
 from agent.main import build_worker_options
 from agent.runtime_validation import validate_agent_runtime
+
+
+ENVIRONMENT_VARIANTS = [
+    (" DeVeLoPmEnT ", "development"),
+    (" TEST ", "test"),
+    (" StAgInG ", "staging"),
+    (" PrOdUcTiOn ", "production"),
+]
+INVALID_ENVIRONMENTS = ["", "   ", "prodution", "preview"]
+
+
+@pytest.mark.parametrize(
+    ("source_value", "canonical_value"),
+    ENVIRONMENT_VARIANTS,
+)
+def test_agent_constructor_environment_is_canonicalized(
+    source_value: str,
+    canonical_value: str,
+) -> None:
+    settings = AgentSettings(app_env=source_value)
+
+    assert settings.app_env == canonical_value
+
+
+@pytest.mark.parametrize(
+    ("source_value", "canonical_value"),
+    ENVIRONMENT_VARIANTS,
+)
+def test_agent_process_environment_is_canonicalized(
+    source_value: str,
+    canonical_value: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", source_value)
+
+    settings = AgentSettings()
+
+    assert settings.app_env == canonical_value
+
+
+@pytest.mark.parametrize("app_env", INVALID_ENVIRONMENTS)
+def test_agent_constructor_rejects_unknown_environment(app_env: str) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        AgentSettings(app_env=app_env)
+
+    assert {tuple(error["loc"]) for error in exc_info.value.errors()} == {
+        ("app_env",)
+    }
+
+
+@pytest.mark.parametrize("app_env", INVALID_ENVIRONMENTS)
+def test_agent_process_rejects_unknown_environment(
+    app_env: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", app_env)
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentSettings()
+
+    assert {tuple(error["loc"]) for error in exc_info.value.errors()} == {
+        ("app_env",)
+    }
+
+
+@pytest.mark.parametrize("app_env", [" PRODUCTION ", "PrOdUcTiOn"])
+def test_agent_production_variants_cannot_bypass_runtime_validation(
+    app_env: str,
+) -> None:
+    settings = AgentSettings(app_env=app_env)
+
+    with pytest.raises(RuntimeError, match="LIVEKIT_URL"):
+        validate_agent_runtime(settings)
 
 
 @pytest.fixture

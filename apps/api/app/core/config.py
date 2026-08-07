@@ -1,9 +1,23 @@
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import PydanticBaseSettingsSource
+
+
+type RuntimeEnvironment = Literal[
+    "development",
+    "test",
+    "staging",
+    "production",
+]
+
+
+def _normalize_runtime_environment(value: object) -> object:
+    if isinstance(value, str):
+        return value.strip().casefold()
+    return value
 
 
 def _requests_test_mode(
@@ -16,14 +30,11 @@ def _requests_test_mode(
         if "app_env" in init_values
         else env_settings().get("app_env")
     )
-    return (
-        isinstance(effective_app_env, str)
-        and effective_app_env.strip().casefold() == "test"
-    )
+    return _normalize_runtime_environment(effective_app_env) == "test"
 
 
 class Settings(BaseSettings):
-    app_env: str = "development"
+    app_env: RuntimeEnvironment = "development"
     database_url: str
     redis_url: str
     otel_service_name: str = "presvo-api"
@@ -114,6 +125,11 @@ class Settings(BaseSettings):
         if _requests_test_mode(init_settings, env_settings):
             return init_settings, env_settings, file_secret_settings
         return init_settings, env_settings, dotenv_settings, file_secret_settings
+
+    @field_validator("app_env", mode="before")
+    @classmethod
+    def normalize_app_env(cls, value: object) -> object:
+        return _normalize_runtime_environment(value)
 
     @model_validator(mode="after")
     def validate_connected_reconciliation_timeout(self) -> Self:
