@@ -480,14 +480,53 @@ Long-lived resources have one owner, partial-startup cleanup is deterministic,
 and request/job/session code receives its dependencies without cached resource
 factories, deep global patching, or application dependency dictionaries.
 
-The reviewed implementation code range is
-`c561877..ccae2df82276f738c6b19822acf1d4b54fef4d97`. The following docs-only
-ledger commit records this evidence and is intentionally outside that immutable
-code range. Final service-backed verification passed 3,069 API tests with no
-skips (91.92% line and 80.32% branch coverage), 701 agent tests with four
-credential-gated evaluation skips (89.25% line and 73.62% branch coverage),
-and 106 cross-runtime integration/import tests. The final API architecture
-guard passed thirty-four checks and the agent guard passed seven.
+The original reviewed implementation code range was
+`c561877..ccae2df82276f738c6b19822acf1d4b54fef4d97`. The complete-range review
+then identified corrections 43A-47A. The owner approved all five, including
+clarifications 43A-1A, 43A-2A, 43A-3A, 45A-1A, 45A-2A, and 45A-3A:
+
+- `4264b2f`, `ebf8083`, and `fd03ad1` make LiveKit configuration an explicit
+  disabled/partial/complete state group, return 503 for disabled dependencies,
+  preserve useful validation precedence, reuse one setting tuple, and express
+  the accepted test/staging state matrix directly;
+- `ece5307`, `48056ea`, and `f26a709` preserve the worker environment decision,
+  delete the two proven-dead worker mechanisms and tracked generated reports,
+  and accurately distinguish Compose's optional runtime environment source from
+  verification that did not inspect a developer's real environment file; and
+- `a86c7fb` makes the supplied `AgentSettings` boolean authoritative and treats
+  `plugin_modules=None` as the only production-default import request, with
+  explicit missing-plugin diagnostics for injected empty or partial mappings.
+
+Each correction endpoint passed independent Spec and Standards review with zero
+open findings. After the first Task 15 run exposed a 0.007-point rounded line
+coverage regression, the owner approved 48A. Test-only commit `dafbec9` covers
+the meaningful unsafe Clerk JWKS URL validation path and also passed independent
+Spec and Standards review with zero findings.
+
+Fresh service-backed verification at
+`dafbec9044eaefaac76fe4555b7f3c7d74e417c4` passed 3,091 API tests with zero
+skips or failures (91.928460% line and 80.389222% branch coverage), 714 agent
+tests with only four credential-gated LiveKit evaluation skips (89.442231% line
+and 74.623116% branch coverage), and 108 exact cross-runtime tests. Both coverage
+ratchets passed. The API architecture guard passed 34 tests and the agent guard
+passed seven. Both frozen lock checks, complete Ruff checks, and mypy checks for
+187 API and 16 agent source files passed.
+
+Only the uniquely named Task 15 PostgreSQL and Redis containers were created and
+removed. Their container, named-network, and named-volume filters were empty
+after cleanup; all seven original `bmad-opevo` services retained their preflight
+running/health state. Obsolete-reference, tracked-report, protected-path,
+`git diff --check`, and status audits were clean. The approved local-only
+retention is evidenced separately: the six Task 3-8 reports remain present
+locally as ignored, untracked artifacts. No protected path, real environment
+file, fixed `/tmp` voice/Telnyx/Clerk override, deployment, provider account, or
+non-isolated database was read or changed.
+
+The complete corrected implementation endpoint is
+`c56187794d3c12e0daca833f5f8f2e729e98eead...dafbec9044eaefaac76fe4555b7f3c7d74e417c4`.
+The following Task 15 evidence commit is documentation-only and intentionally
+outside that endpoint; a fresh complete-range Standards and Spec review remains
+the final gate.
 
 Owner decision 6A-C1A retains strict process validators while allowing the API
 and both development workers to share the same optional `apps/api/.env` source;
@@ -541,8 +580,8 @@ saved/reset branch helper plus shared `If`/`While` and `Try`/`TryStar` visitors
 address the repeated class-scope switches without a generalized scope/dataflow
 abstraction. Production code is unchanged, and Round 6 is the final authorized
 Task 11 architecture-guard fix round. The later complete-range review
-corrections 43A–47A are tracked separately in the approved design amendment and
-implementation-plan addendum until their final evidence is recorded here.
+corrections 43A-47A and coverage follow-up 48A are recorded above with their
+final verification evidence.
 
 The only intentional cross-root guard duplication is 38 identical
 dynamic-literal helper lines in each app's architecture test, plus app-specific

@@ -2888,7 +2888,7 @@ git commit -m "fix(agent): enforce explicit pipeline configuration"
 - Produces: exact final test counts, coverage, cleanup evidence, corrected commit
   range, and a second complete-range Standards/Spec approval.
 
-- [ ] **Step 1: Run frozen dependency and static gates**
+- [x] **Step 1: Run frozen dependency and static gates**
 
 Run:
 
@@ -2905,7 +2905,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
 
 A lockfile change is out of scope and must stop the task.
 
-- [ ] **Step 2: Run the complete API suite in isolated services**
+- [x] **Step 2: Run the complete API suite in isolated services**
 
 Verify loopback ports 55467 and 56397 are unused, then start only these two
 uniquely named disposable containers:
@@ -2954,7 +2954,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python \
 Expected: zero API skips or failures and no line/branch coverage regression from
 91.92%/80.32%.
 
-- [ ] **Step 3: Run the complete agent and cross-runtime suites**
+- [x] **Step 3: Run the complete agent and cross-runtime suites**
 
 ```bash
 cd apps/agent
@@ -2977,7 +2977,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
 Four credentialed LiveKit evaluations may skip; no other skip is accepted.
 Expected: no regression from 89.25%/73.62% and all cross-runtime tests pass.
 
-- [ ] **Step 4: Remove isolated resources and audit the repository**
+- [x] **Step 4: Remove isolated resources and audit the repository**
 
 Remove only Task 15's two explicitly named disposable containers:
 
@@ -3016,7 +3016,7 @@ recording completion:
 Any protected or real environment file stops the task. The fixed `/tmp`
 voice/Telnyx/Clerk override files are not read, changed, or used by this plan.
 
-- [ ] **Step 5: Update durable evidence and commit it separately**
+- [x] **Step 5: Update durable evidence and commit it separately**
 
 Record exact test counts, coverage, correction commit hashes, cleanup evidence,
 and owner decisions 43A–47A in the plan and engineering ledger. Keep Issue 6A
@@ -3033,3 +3033,60 @@ Two fresh read-only reviewers compare `c56187794d3c12e0daca833f5f8f2e729e98eead.
 
 Both axes must return zero findings. Any finding is presented to the owner with
 options; no unapproved implementation loop begins.
+
+#### Task 15 verification evidence before the final complete-range review
+
+The owner approved 43A, 44A, 45A, 46A, and 47A, followed by the bounded
+clarifications 43A-1A, 43A-2A, 43A-3A, 45A-1A, 45A-2A, and 45A-3A. The
+correction implementation is recorded by:
+
+- `4264b2f`, `ebf8083`, and `fd03ad1` for the explicit three-state LiveKit
+  validation, shared setting group, disabled-request behavior, and explicit
+  test-state table;
+- `ece5307`, `48056ea`, and `f26a709` for durable decision preservation,
+  deletion of the two obsolete worker mechanisms and tracked generated
+  reports, and the corrected optional environment-source wording; and
+- `a86c7fb` for authoritative agent debug settings and explicit injected
+  plugin registries.
+
+Each correction endpoint received independent Spec and Standards approval with
+zero open findings before Task 15. The first complete API run then exposed a
+0.007-point line-coverage rounding regression after the approved deletion. The
+owner approved 48A: add meaningful coverage for the previously untested unsafe
+Clerk JWKS URL validation path rather than a coverage-only assertion. Commit
+`dafbec9` implements that test-only correction and received independent Spec
+and Standards approval with zero findings.
+
+Fresh verification at `dafbec9044eaefaac76fe4555b7f3c7d74e417c4` produced:
+
+- both frozen lock checks passed; complete Ruff checks passed for API and agent;
+  mypy passed for 187 API source files and 16 agent source files;
+- 3,091 API tests passed with zero skips or failures against the uniquely named
+  disposable PostgreSQL and Redis services, with 11,822 of 12,860 statements
+  covered (91.928460%, reported as 91.93%) and 2,685 of 3,340 branches covered
+  (80.389222%, reported as 80.39%); the stored coverage ratchet passed;
+- 714 agent tests passed with only the four approved credentialed LiveKit
+  evaluation skips, with 1,347 of 1,506 statements covered (89.442231%,
+  reported as 89.44%) and 297 of 398 branches covered (74.623116%, reported as
+  74.62%); the stored coverage ratchet passed;
+- the exact cross-runtime slice passed 108 tests; and
+- the focused API architecture guard passed 34 tests and the agent guard passed
+  seven tests.
+
+Ports 55467 and 56397 and the two exact disposable container names were clear
+before startup. After the suites, only `opevo-issue6a-final-postgres` and
+`opevo-issue6a-final-redis` were removed. Container, named-network, and
+named-volume filters for `opevo-issue6a-final` were empty afterward. The
+original seven `bmad-opevo` services retained their preflight state: web, API,
+PostgreSQL, Redis, and MinIO were healthy, and both workers were running.
+
+The obsolete-resource/debug-setting reference scan, protected-path scan,
+tracked-report scan, `git diff --check`, and repository status audit were clean.
+The approved local-only retention is evidenced separately: all six Task 3-8
+reports remain present locally, ignored, and untracked. No real environment file
+or fixed `/tmp` voice, Telnyx, or Clerk override was read, changed, or used. The
+complete corrected implementation endpoint is
+`c56187794d3c12e0daca833f5f8f2e729e98eead...dafbec9044eaefaac76fe4555b7f3c7d74e417c4`;
+this Task 15 evidence commit is documentation-only and intentionally follows
+that endpoint. Step 6 remains pending until two fresh read-only reviewers assess
+the range including this evidence commit.
