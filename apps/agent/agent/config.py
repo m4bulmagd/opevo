@@ -20,9 +20,7 @@ def _normalize_runtime_environment(value: object) -> object:
 
 
 class AgentSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_file_encoding="utf-8", extra="ignore")
 
     app_env: RuntimeEnvironment = "development"
 
@@ -64,4 +62,4 @@ class AgentSettings(BaseSettings):
 
 @lru_cache
 def get_settings() -> AgentSettings:
-    return AgentSettings()
+    return AgentSettings(_env_file=".env")  # type: ignore[call-arg]

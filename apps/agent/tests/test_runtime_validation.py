@@ -1,7 +1,9 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
-from agent.config import AgentSettings
+from agent.config import AgentSettings, get_settings
 from agent.main import build_worker_options
 from agent.runtime_validation import validate_agent_runtime
 
@@ -13,6 +15,73 @@ ENVIRONMENT_VARIANTS = [
     (" PrOdUcTiOn ", "production"),
 ]
 INVALID_ENVIRONMENTS = ["", "   ", "prodution", "preview"]
+
+
+def test_direct_agent_settings_ignore_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / ".env").write_text(
+        "APP_ENV=preview\nAPI_BASE_URL=https://poison.invalid\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("API_BASE_URL", raising=False)
+
+    settings = AgentSettings()
+
+    assert settings.app_env == "development"
+    assert settings.api_base_url == "http://api:8000"
+
+
+def test_direct_agent_settings_keep_constructor_and_process_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / ".env").write_text(
+        "APP_ENV=preview\n"
+        "API_BASE_URL=https://poison.invalid\n"
+        "LIVEKIT_AGENT_NAME=dotenv-agent\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("API_BASE_URL", raising=False)
+    monkeypatch.delenv("LIVEKIT_AGENT_NAME", raising=False)
+    monkeypatch.setenv("LIVEKIT_AGENT_NAME", "process-agent")
+
+    settings = AgentSettings(app_env=" TEST ")
+
+    assert settings.app_env == "test"
+    assert settings.api_base_url == "http://api:8000"
+    assert settings.livekit_agent_name == "process-agent"
+
+
+def test_get_settings_explicitly_loads_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / ".env").write_text(
+        "APP_ENV= TEST \n"
+        "API_BASE_URL=https://dotenv.example.com\n"
+        "LIVEKIT_AGENT_NAME=dotenv-agent\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("API_BASE_URL", raising=False)
+    monkeypatch.delenv("LIVEKIT_AGENT_NAME", raising=False)
+    get_settings.cache_clear()
+
+    try:
+        settings = get_settings()
+
+        assert settings.app_env == "test"
+        assert settings.api_base_url == "https://dotenv.example.com"
+        assert settings.livekit_agent_name == "dotenv-agent"
+    finally:
+        get_settings.cache_clear()
 
 
 @pytest.mark.parametrize(
