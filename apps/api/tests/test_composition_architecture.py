@@ -441,6 +441,13 @@ class _FunctionCtxUseVisitor(ast.NodeVisitor):
             ):
                 self.ctx_visible = False
 
+    def _visit_class_branches(self, *branches: list[ast.stmt]) -> None:
+        outer_visibility = self.ctx_visible
+        for branch in branches:
+            self.ctx_visible = outer_visibility
+            self._visit_nodes(branch)
+        self.ctx_visible = outer_visibility
+
     def _visit_function_definition_expressions(
         self,
         node: ast.FunctionDef | ast.AsyncFunctionDef,
@@ -537,6 +544,26 @@ class _FunctionCtxUseVisitor(ast.NodeVisitor):
         self.visit(node.target)
         if _target_binds_ctx(node.target):
             self.ctx_visible = False
+
+    def visit_If(self, node: ast.If | ast.While) -> None:
+        if not self.class_scope:
+            self.generic_visit(node)
+            return
+        self.visit(node.test)
+        self._visit_class_branches(node.body, node.orelse)
+
+    visit_While = visit_If
+
+    def visit_Try(self, node: ast.Try | ast.TryStar) -> None:
+        if not self.class_scope:
+            self.generic_visit(node)
+            return
+        self._visit_class_branches(node.body)
+        for handler in node.handlers:
+            self.visit(handler)
+        self._visit_class_branches(node.orelse, node.finalbody)
+
+    visit_TryStar = visit_Try
 
     def visit_For(self, node: ast.For) -> None:
         if not self.class_scope:
@@ -1537,6 +1564,131 @@ def test_worker_ctx_boundary_allows_class_destructuring_defs_and_imports() -> No
             )
             == []
         )
+
+
+def test_worker_ctx_boundary_tracks_sequential_class_binders_inside_branches() -> None:
+    allowed_cases = [
+        (
+            "async def job(ctx, enabled):\n"
+            "    class Holder:\n"
+            "        if enabled:\n"
+            "            import local as ctx\n"
+            "            direct = consume(ctx)\n"
+            "        else:\n"
+            "            def ctx():\n"
+            "                return local\n"
+            "            direct = consume(ctx)\n"
+        ),
+        (
+            "async def job(ctx, enabled, values):\n"
+            "    class Holder:\n"
+            "        while enabled:\n"
+            "            ctx, other = values\n"
+            "            direct = consume(ctx)\n"
+            "        else:\n"
+            "            import local as ctx\n"
+            "            direct = consume(ctx)\n"
+        ),
+        (
+            "async def job(ctx, values):\n"
+            "    class Holder:\n"
+            "        try:\n"
+            "            def ctx():\n"
+            "                return local\n"
+            "            in_body = consume(ctx)\n"
+            "        except Error:\n"
+            "            ctx, other = values\n"
+            "            in_handler = consume(ctx)\n"
+            "        else:\n"
+            "            import local as ctx\n"
+            "            in_else = consume(ctx)\n"
+            "        finally:\n"
+            "            ctx, other = values\n"
+            "            in_finally = consume(ctx)\n"
+        ),
+        (
+            "async def job(ctx):\n"
+            "    class Holder:\n"
+            "        try:\n"
+            "            import local as ctx\n"
+            "            in_body = consume(ctx)\n"
+            "        except* Error:\n"
+            "            pass\n"
+            "        finally:\n"
+            "            def ctx():\n"
+            "                return local\n"
+            "            in_finally = consume(ctx)\n"
+        ),
+    ]
+
+    for source in allowed_cases:
+        assert (
+            _worker_ctx_violations(
+                ast.parse(source),
+                allowed_accessor="require_background_runtime",
+            )
+            == []
+        )
+
+
+def test_worker_ctx_boundary_keeps_class_compound_suites_branch_local() -> None:
+    forbidden_cases = [
+        (
+            "async def job(ctx, enabled):\n"
+            "    class Holder:\n"
+            "        if enabled:\n"
+            "            import local as ctx\n"
+            "            local_use = consume(ctx)\n"
+            "        else:\n"
+            "            direct = consume(ctx)\n"
+            "        after = consume(ctx)\n",
+            [7, 8],
+        ),
+        (
+            "async def job(ctx, enabled, values):\n"
+            "    class Holder:\n"
+            "        while enabled:\n"
+            "            ctx, other = values\n"
+            "            local_use = consume(ctx)\n"
+            "        else:\n"
+            "            direct = consume(ctx)\n"
+            "        after = consume(ctx)\n",
+            [7, 8],
+        ),
+        (
+            "async def job(ctx):\n"
+            "    class Holder:\n"
+            "        try:\n"
+            "            import local as ctx\n"
+            "            local_use = consume(ctx)\n"
+            "        except Error:\n"
+            "            direct = consume(ctx)\n"
+            "        else:\n"
+            "            direct = consume(ctx)\n"
+            "        finally:\n"
+            "            direct = consume(ctx)\n"
+            "        after = consume(ctx)\n",
+            [7, 9, 11, 12],
+        ),
+        (
+            "async def job(ctx, enabled):\n"
+            "    class Holder:\n"
+            "        if consume(ctx, enabled):\n"
+            "            pass\n"
+            "        while enabled:\n"
+            "            direct = consume(ctx)\n",
+            [3, 6],
+        ),
+    ]
+
+    for source, expected_lines in forbidden_cases:
+        assert [
+            line
+            for line, _message in _worker_ctx_violations(
+                ast.parse(source),
+                allowed_accessor="require_background_runtime",
+            )
+        ] == expected_lines
 
 
 def test_worker_ctx_boundary_checks_class_binding_inputs_before_target() -> None:
