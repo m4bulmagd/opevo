@@ -129,22 +129,57 @@ async def test_livekit_dispatch_adapter_maps_every_twirp_code_to_safe_provider_f
 
 
 @pytest.mark.anyio
-async def test_livekit_dispatch_malformed_response_is_terminal_validation_and_defects_escape() -> None:
+@pytest.mark.parametrize("operation", ["list_dispatches", "create_dispatch"])
+async def test_livekit_dispatch_malformed_response_is_terminal_validation(
+    operation: str,
+) -> None:
     class MalformedDispatchService:
         async def list_dispatch(self, _room_name: str):
             return [SimpleNamespace(id="dispatch", agent_name="Ava", room="", metadata="{}")]
+
+        async def create_dispatch(self, _request: object):
+            return SimpleNamespace(id="dispatch", agent_name="Ava", room="", metadata="{}")
 
     provider = LiveKitDispatchAPIProvider(
         livekit_api=SimpleNamespace(agent_dispatch=MalformedDispatchService()),
         observability=_Telemetry(),
     )
+    if operation == "list_dispatches":
+
+        async def invoke() -> object:
+            return await provider.list_dispatches(room_name="room-owned")
+
+    else:
+
+        async def invoke() -> object:
+            return await provider.create_dispatch(
+                agent_name="Ava",
+                room_name="room-owned",
+                metadata='{"call_id":"call-owned"}',
+            )
+
     with pytest.raises(ProviderFailure) as exc_info:
-        await provider.list_dispatches(room_name="room-owned")
-    assert (exc_info.value.disposition, exc_info.value.error_class) == (
+        await invoke()
+
+    failure = exc_info.value
+    assert (
+        failure.provider,
+        failure.operation,
+        failure.disposition,
+        failure.error_class,
+        failure.context,
+    ) == (
+        "livekit",
+        operation,
         "terminal",
         "validation",
+        {},
     )
+    assert failure.__cause__ is None
 
+
+@pytest.mark.anyio
+async def test_livekit_dispatch_untyped_defect_escapes_unchanged() -> None:
     defect = TypeError("INTERNAL_SENTINEL")
 
     class DefectiveDispatchService:
