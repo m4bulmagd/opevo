@@ -2098,6 +2098,29 @@ The test walks every `app/**/*.py`, records `ImportFrom` and calls to imported `
 
 The agent guard allows `get_settings()` only in `agent/main.py` and its definition in `agent/config.py`, and prevents `agent/api_client.py`, `event_publisher.py`, `pipeline_factory.py`, `session_runtime.py`, and `verification_runtime.py` from importing composition or settings globals.
 
+#### 6A-C4A guard-design amendment
+
+Owner-approved decision 6A-C4A supersedes the call-dataflow and ctx-provenance
+wording above. Architecture guards remain intentionally syntactic and bounded:
+
+- Outside the exact executable settings modules, reject direct, aliased, and
+  star imports of `get_settings`; imports of the relevant config module; and
+  module-scope bindings named `get_settings`. Specific typed imports such as
+  `Settings` and `AgentSettings` remain valid. Nested lambda, comprehension,
+  class, and function-local shadows without a forbidden import remain valid.
+- In `app/workers/jobs` and `app/workers/outbox`, a function with an actual
+  `ctx` parameter may use it only as the sole direct argument to the runtime
+  accessor assigned to that worker family. Aliasing, rebinding, passing `ctx`
+  elsewhere, and direct metadata/application-key reads are rejected. Current
+  jobs/outbox code needs no ARQ metadata whitelist.
+- All six deleted factory names are reserved at API module scope. A small
+  recursive binding collector follows module-level compound statements and
+  records assignment/import/target/pattern/function/class bindings while
+  stopping at function, class, lambda, and comprehension scopes.
+- Do not implement Python call binding, evaluation scopes, possible provenance,
+  or control-flow interpretation in these guards. Import escapes and prohibited
+  `ctx` syntax fail directly, independent of runtime dataflow.
+
 - [ ] **Step 2: Run architecture RED**
 
 ```bash
