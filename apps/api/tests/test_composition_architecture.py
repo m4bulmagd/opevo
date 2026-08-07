@@ -5,39 +5,31 @@ from pathlib import Path
 API_ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = API_ROOT / "app"
 
-ALLOWED_SETTINGS_CALLERS = {
+ALLOWED_SETTINGS_MODULES = {
     Path("app/main.py"),
     Path("app/workers/arq_worker.py"),
     Path("app/core/config.py"),
 }
 
-FORBIDDEN_GLOBAL_IMPORTS = {
+FORBIDDEN_FACTORY_IMPORTS = {
     ("app.core.database", "get_engine"),
     ("app.core.database", "get_session_factory"),
     ("app.core.redis", "get_redis_client"),
+    ("app.core.observability", "get_observability"),
     ("app.providers.storage.s3", "get_s3_storage"),
     ("app.providers.telephony.telnyx", "get_telephony_provider"),
 }
 
-RESERVED_FACTORY_NAMES = {
-    "get_engine",
-    "get_session_factory",
-    "get_redis_client",
-    "get_s3_storage",
-    "get_telephony_provider",
-    "get_observability",
+RESERVED_FACTORY_NAMES = {name for _module, name in FORBIDDEN_FACTORY_IMPORTS}
+FORBIDDEN_FACTORY_MODULES = {module for module, _name in FORBIDDEN_FACTORY_IMPORTS}
+
+CALL_LIFECYCLE_CTX_MODULES = {
+    Path("app/workers/jobs/call_finalization.py"),
+    Path("app/workers/jobs/call_reconciliation.py"),
 }
 
-APPLICATION_DEPENDENCY_KEYS = {
-    "session_factory",
-    "observability",
-    "outbox_handlers",
-    "telephony_provider",
-    "subscription_provider",
-    "livekit_dispatch_provider",
-    "summary_provider",
-    "storage_provider",
-    "recording_reconciler",
+BACKGROUND_CTX_MODULES = {
+    Path("app/workers/jobs/verification_expiry.py"),
 }
 
 
@@ -61,24 +53,6 @@ def _resolved_from_module(node: ast.ImportFrom, relative_path: Path) -> str | No
     return ".".join(resolved_parts)
 
 
-def _imported_names(
-    tree: ast.Module,
-    *,
-    relative_path: Path,
-) -> list[tuple[str, str, int]]:
-    imported: list[tuple[str, str, int]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom):
-            continue
-        module = _resolved_from_module(node, relative_path)
-        if module is None:
-            continue
-        imported.extend(
-            (module, imported_name.name, node.lineno) for imported_name in node.names
-        )
-    return imported
-
-
 def _imported_module_paths(
     tree: ast.Module,
     *,
@@ -87,60 +61,51 @@ def _imported_module_paths(
     imported: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imported.extend(
-                (imported_name.name, node.lineno) for imported_name in node.names
-            )
+            imported.extend((name.name, node.lineno) for name in node.names)
         elif isinstance(node, ast.ImportFrom):
             module = _resolved_from_module(node, relative_path)
             if module is None:
                 continue
             imported.append((module, node.lineno))
             imported.extend(
-                (f"{module}.{imported_name.name}", node.lineno)
-                for imported_name in node.names
+                (f"{module}.{name.name}", node.lineno) for name in node.names
             )
     return imported
 
 
-BindingState = dict[str, frozenset[str]]
+class _ModuleBindingCollector(ast.NodeVisitor):
+    """Collect bindings executed in module scope without entering nested scopes."""
 
-
-def _merge_binding_states(*states: BindingState) -> BindingState:
-    return {
-        name: frozenset().union(*(state.get(name, frozenset()) for state in states))
-        for name in set().union(*(state.keys() for state in states))
-    }
-
-
-class _LocalBindingCollector(ast.NodeVisitor):
     def __init__(self) -> None:
-        self.names: set[str] = set()
-        self.global_names: set[str] = set()
+        self.bindings: list[tuple[int, str]] = []
+
+    def _record(self, line: int, name: str | None) -> None:
+        if name is not None:
+            self.bindings.append((line, name))
 
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, (ast.Store, ast.Del)):
-            self.names.add(node.id)
+            self._record(node.lineno, node.id)
 
     def visit_Import(self, node: ast.Import) -> None:
-        self.names.update(
-            imported.asname or imported.name.split(".", maxsplit=1)[0]
-            for imported in node.names
-        )
+        for imported in node.names:
+            self._record(
+                node.lineno,
+                imported.asname or imported.name.split(".", maxsplit=1)[0],
+            )
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        self.names.update(
-            imported.asname or imported.name
-            for imported in node.names
-            if imported.name != "*"
-        )
+        for imported in node.names:
+            if imported.name != "*":
+                self._record(node.lineno, imported.asname or imported.name)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self.names.add(node.name)
+        self._record(node.lineno, node.name)
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self.names.add(node.name)
+        self._record(node.lineno, node.name)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         return
@@ -152,36 +117,118 @@ class _LocalBindingCollector(ast.NodeVisitor):
     visit_DictComp = visit_ListComp
     visit_GeneratorExp = visit_ListComp
 
-    def visit_Global(self, node: ast.Global) -> None:
-        self.global_names.update(node.names)
-
-    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
-        self.global_names.update(node.names)
-
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
-        if node.name is not None:
-            self.names.add(node.name)
+        self._record(node.lineno, node.name)
         self.generic_visit(node)
 
     def visit_MatchAs(self, node: ast.MatchAs) -> None:
-        if node.name is not None:
-            self.names.add(node.name)
+        self._record(node.lineno, node.name)
         self.generic_visit(node)
 
     def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
-        if node.rest is not None:
-            self.names.add(node.rest)
+        self._record(node.lineno, node.rest)
         self.generic_visit(node)
 
     def visit_MatchStar(self, node: ast.MatchStar) -> None:
-        if node.name is not None:
-            self.names.add(node.name)
+        self._record(node.lineno, node.name)
 
 
-def _function_local_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    collector = _LocalBindingCollector()
-    for statement in node.body:
-        collector.visit(statement)
+def _module_bindings(tree: ast.Module) -> list[tuple[int, str]]:
+    collector = _ModuleBindingCollector()
+    collector.visit(tree)
+    return collector.bindings
+
+
+def _settings_boundary_violations(
+    tree: ast.Module,
+    *,
+    relative_path: Path,
+) -> list[tuple[int, str]]:
+    violations: dict[int, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(imported.name == "app.core.config" for imported in node.names):
+                violations[node.lineno] = "imports app.core.config module"
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolved_from_module(node, relative_path)
+            if module is not None and any(
+                f"{module}.{imported.name}" == "app.core.config"
+                for imported in node.names
+            ):
+                violations[node.lineno] = "imports app.core.config module"
+                continue
+            if module != "app.core.config":
+                continue
+            if any(imported.name == "*" for imported in node.names):
+                violations[node.lineno] = "star-imports app.core.config"
+            elif any(imported.name == "get_settings" for imported in node.names):
+                violations[node.lineno] = "imports app.core.config.get_settings"
+
+    for line, name in _module_bindings(tree):
+        if name == "get_settings" and line not in violations:
+            violations[line] = "defines get_settings"
+    return sorted(violations.items())
+
+
+def _forbidden_factory_module_import(
+    node: ast.Import | ast.ImportFrom,
+    *,
+    relative_path: Path,
+) -> str | None:
+    if isinstance(node, ast.Import):
+        return next(
+            (
+                imported.name
+                for imported in node.names
+                if imported.name in FORBIDDEN_FACTORY_MODULES
+            ),
+            None,
+        )
+    module = _resolved_from_module(node, relative_path)
+    if module is None:
+        return None
+    return next(
+        (
+            full_name
+            for imported in node.names
+            if (full_name := f"{module}.{imported.name}") in FORBIDDEN_FACTORY_MODULES
+        ),
+        None,
+    )
+
+
+def _obsolete_factory_violations(
+    relative_path: Path,
+    tree: ast.Module,
+) -> list[tuple[int, str]]:
+    violations = {
+        (line, f"defines {name}")
+        for line, name in _module_bindings(tree)
+        if name in RESERVED_FACTORY_NAMES
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        forbidden_module = _forbidden_factory_module_import(
+            node,
+            relative_path=relative_path,
+        )
+        if forbidden_module is not None:
+            violations.add((node.lineno, f"imports {forbidden_module} module"))
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        module = _resolved_from_module(node, relative_path)
+        if module is None:
+            continue
+        violations.update(
+            (node.lineno, f"imports {module}.{imported.name}")
+            for imported in node.names
+            if (module, imported.name) in FORBIDDEN_FACTORY_IMPORTS
+        )
+    return sorted(violations)
+
+
+def _function_arguments(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.arg]:
     arguments = [
         *node.args.posonlyargs,
         *node.args.args,
@@ -191,423 +238,147 @@ def _function_local_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[s
         arguments.append(node.args.vararg)
     if node.args.kwarg is not None:
         arguments.append(node.args.kwarg)
-    return (
-        collector.names | {argument.arg for argument in arguments}
-    ) - collector.global_names
+    return arguments
 
 
-def _pattern_binding_names(pattern: ast.pattern) -> set[str]:
-    return {
-        child.name
-        for child in ast.walk(pattern)
-        if isinstance(child, ast.MatchAs) and child.name is not None
-    } | {
-        child.rest
-        for child in ast.walk(pattern)
-        if isinstance(child, ast.MatchMapping) and child.rest is not None
-    }
+class _FunctionCtxUseVisitor(ast.NodeVisitor):
+    def __init__(self, *, allowed_accessor: str | None) -> None:
+        self.allowed_accessor = allowed_accessor
+        self.parents: list[ast.AST] = []
+        self.violations: dict[int, str] = {}
 
+    def _reject_binding(self, line: int, name: str | None) -> None:
+        if name == "ctx":
+            self.violations[line] = "rebinds ctx"
 
-def _match_is_exhaustive(node: ast.Match) -> bool:
-    if not node.cases:
-        return False
-    last_case = node.cases[-1]
-    return (
-        last_case.guard is None
-        and isinstance(last_case.pattern, ast.MatchAs)
-        and last_case.pattern.pattern is None
-        and last_case.pattern.name is None
-    )
+    def visit(self, node: ast.AST) -> None:
+        self.parents.append(node)
+        super().visit(node)
+        self.parents.pop()
 
-
-class _BindingAnalyzer(ast.NodeVisitor):
-    def __init__(self, *, relative_path: Path) -> None:
-        self.relative_path = relative_path
-        self.bindings: BindingState = {}
-        self.calls: list[tuple[int, str]] = []
-        self.attributes: list[tuple[int, str]] = []
-        self.scope_kind = "module"
-        self.class_lexical_bindings: BindingState | None = None
-
-    def _resolve(self, node: ast.expr) -> frozenset[str]:
-        if isinstance(node, ast.Name):
-            return self.bindings.get(node.id, frozenset())
-        if isinstance(node, ast.Attribute):
-            return frozenset(
-                f"{parent}.{node.attr}" for parent in self._resolve(node.value)
-            )
-        return frozenset()
-
-    def _bind_target(
-        self,
-        target: ast.expr,
-        provenances: frozenset[str] = frozenset(),
-    ) -> None:
-        if isinstance(target, ast.Name):
-            self.bindings[target.id] = provenances
-        elif isinstance(target, (ast.Tuple, ast.List)):
-            for element in target.elts:
-                self._bind_target(element)
-
-    def _analyze_branch(
-        self,
-        statements: list[ast.stmt],
-        initial: BindingState,
-    ) -> BindingState:
-        saved = self.bindings
-        self.bindings = initial.copy()
-        for statement in statements:
-            self.visit(statement)
-        result = self.bindings
-        self.bindings = saved
-        return result
-
-    def visit_Import(self, node: ast.Import) -> None:
-        for imported_name in node.names:
-            if imported_name.asname is not None:
-                self.bindings[imported_name.asname] = frozenset({imported_name.name})
-            else:
-                root_name = imported_name.name.split(".", maxsplit=1)[0]
-                self.bindings[root_name] = frozenset({root_name})
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        module = _resolved_from_module(node, self.relative_path)
-        if module is None:
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id != "ctx":
             return
-        for imported_name in node.names:
-            if imported_name.name == "*":
-                if module == "app.core.config":
-                    self.bindings["get_settings"] = frozenset(
-                        {"app.core.config.get_settings"}
-                    )
-                continue
-            local_name = imported_name.asname or imported_name.name
-            self.bindings[local_name] = frozenset({f"{module}.{imported_name.name}"})
-
-    def visit_Assign(self, node: ast.Assign) -> None:
-        self.visit(node.value)
-        for target in node.targets:
-            self._bind_target(target, self._resolve(node.value))
-
-    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        self.visit(node.annotation)
-        if node.value is not None:
-            self.visit(node.value)
-            self._bind_target(node.target, self._resolve(node.value))
-        else:
-            self._bind_target(node.target)
-
-    def visit_AugAssign(self, node: ast.AugAssign) -> None:
-        self.visit(node.target)
-        self.visit(node.value)
-        self._bind_target(node.target)
-
-    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
-        self.visit(node.value)
-        self._bind_target(node.target, self._resolve(node.value))
-
-    def visit_Call(self, node: ast.Call) -> None:
-        for resolved in self._resolve(node.func):
-            self.calls.append((node.lineno, resolved))
-        self.generic_visit(node)
-
-    def visit_Attribute(self, node: ast.Attribute) -> None:
-        for resolved in self._resolve(node):
-            self.attributes.append((node.lineno, resolved))
-        self.generic_visit(node)
-
-    def visit_If(self, node: ast.If) -> None:
-        self.visit(node.test)
-        initial = self.bindings.copy()
-        body = self._analyze_branch(node.body, initial)
-        otherwise = (
-            self._analyze_branch(node.orelse, initial) if node.orelse else initial
+        parent = self.parents[-2] if len(self.parents) > 1 else None
+        if (
+            isinstance(node.ctx, ast.Load)
+            and isinstance(parent, ast.Call)
+            and self.allowed_accessor is not None
+            and isinstance(parent.func, ast.Name)
+            and parent.func.id == self.allowed_accessor
+            and parent.args == [node]
+            and not parent.keywords
+        ):
+            return
+        self.violations[node.lineno] = (
+            f"uses ctx outside {self.allowed_accessor}(ctx)"
+            if self.allowed_accessor is not None
+            else "uses ctx without an approved runtime accessor"
         )
-        self.bindings = _merge_binding_states(body, otherwise)
-
-    def visit_For(self, node: ast.For) -> None:
-        self.visit(node.iter)
-        initial = self.bindings.copy()
-        saved = self.bindings
-        self.bindings = initial.copy()
-        self._bind_target(node.target)
-        for statement in node.body:
-            self.visit(statement)
-        body = self.bindings
-        self.bindings = saved
-        merged = _merge_binding_states(initial, body)
-        self.bindings = (
-            self._analyze_branch(node.orelse, merged) if node.orelse else merged
-        )
-
-    visit_AsyncFor = visit_For
-
-    def visit_While(self, node: ast.While) -> None:
-        self.visit(node.test)
-        initial = self.bindings.copy()
-        body = self._analyze_branch(node.body, initial)
-        merged = _merge_binding_states(initial, body)
-        self.bindings = (
-            self._analyze_branch(node.orelse, merged) if node.orelse else merged
-        )
-
-    def visit_Try(self, node: ast.Try) -> None:
-        initial = self.bindings.copy()
-        body = self._analyze_branch(node.body, initial)
-        normal = self._analyze_branch(node.orelse, body) if node.orelse else body
-        outcomes = [normal]
-        for handler in node.handlers:
-            if handler.type is not None:
-                self.visit(handler.type)
-            handler_initial = initial.copy()
-            if handler.name is not None:
-                handler_initial[handler.name] = frozenset()
-            outcomes.append(self._analyze_branch(handler.body, handler_initial))
-        merged = _merge_binding_states(*outcomes)
-        self.bindings = (
-            self._analyze_branch(node.finalbody, merged) if node.finalbody else merged
-        )
-
-    visit_TryStar = visit_Try
-
-    def visit_Match(self, node: ast.Match) -> None:
-        self.visit(node.subject)
-        initial = self.bindings.copy()
-        outcomes = [] if _match_is_exhaustive(node) else [initial]
-        for case in node.cases:
-            saved = self.bindings
-            self.bindings = initial.copy()
-            for name in _pattern_binding_names(case.pattern):
-                self.bindings[name] = frozenset()
-            if case.guard is not None:
-                self.visit(case.guard)
-            for statement in case.body:
-                self.visit(statement)
-            outcomes.append(self.bindings)
-            self.bindings = saved
-        self.bindings = _merge_binding_states(*outcomes)
-
-    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        for decorator in node.decorator_list:
-            self.visit(decorator)
-        for default in [*node.args.defaults, *node.args.kw_defaults]:
-            if default is not None:
-                self.visit(default)
-        arguments = [
-            *node.args.posonlyargs,
-            *node.args.args,
-            *node.args.kwonlyargs,
-        ]
-        if node.args.vararg is not None:
-            arguments.append(node.args.vararg)
-        if node.args.kwarg is not None:
-            arguments.append(node.args.kwarg)
-        for argument in arguments:
-            if argument.annotation is not None:
-                self.visit(argument.annotation)
-        if node.returns is not None:
-            self.visit(node.returns)
-
-        outer_bindings = self.bindings
-        outer_scope_kind = self.scope_kind
-        outer_class_lexical_bindings = self.class_lexical_bindings
-        lexical_bindings = (
-            self.class_lexical_bindings
-            if self.scope_kind == "class" and self.class_lexical_bindings is not None
-            else outer_bindings
-        )
-        self.bindings = lexical_bindings.copy()
-        if self.scope_kind != "class":
-            self.bindings[node.name] = frozenset()
-        for local_name in _function_local_names(node):
-            self.bindings[local_name] = frozenset()
-        self.scope_kind = "function"
-        self.class_lexical_bindings = None
-        for statement in node.body:
-            self.visit(statement)
-        self.bindings = outer_bindings
-        self.scope_kind = outer_scope_kind
-        self.class_lexical_bindings = outer_class_lexical_bindings
-        self.bindings[node.name] = frozenset()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._visit_function(node)
+        self._reject_binding(node.lineno, node.name)
+        if any(argument.arg == "ctx" for argument in _function_arguments(node)):
+            return
+        self.generic_visit(node)
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._visit_function(node)
+    visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        for expression in [*node.decorator_list, *node.bases]:
-            self.visit(expression)
-        for keyword in node.keywords:
-            self.visit(keyword.value)
+        self._reject_binding(node.lineno, node.name)
+        return
 
-        outer_bindings = self.bindings
-        outer_scope_kind = self.scope_kind
-        outer_class_lexical_bindings = self.class_lexical_bindings
-        lexical_bindings = (
-            self.class_lexical_bindings
-            if self.scope_kind == "class" and self.class_lexical_bindings is not None
-            else outer_bindings
-        )
-        self.bindings = outer_bindings.copy()
-        self.scope_kind = "class"
-        self.class_lexical_bindings = lexical_bindings.copy()
-        for statement in node.body:
-            self.visit(statement)
-        self.bindings = outer_bindings
-        self.scope_kind = outer_scope_kind
-        self.class_lexical_bindings = outer_class_lexical_bindings
-        self.bindings[node.name] = frozenset()
+    def visit_Import(self, node: ast.Import) -> None:
+        for imported in node.names:
+            self._reject_binding(
+                node.lineno,
+                imported.asname or imported.name.split(".", maxsplit=1)[0],
+            )
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for imported in node.names:
+            if imported.name != "*":
+                self._reject_binding(
+                    node.lineno,
+                    imported.asname or imported.name,
+                )
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        self._reject_binding(node.lineno, node.name)
+        self.generic_visit(node)
+
+    def visit_MatchAs(self, node: ast.MatchAs) -> None:
+        self._reject_binding(node.lineno, node.name)
+        self.generic_visit(node)
+
+    def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+        self._reject_binding(node.lineno, node.rest)
+        self.generic_visit(node)
+
+    def visit_MatchStar(self, node: ast.MatchStar) -> None:
+        self._reject_binding(node.lineno, node.name)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
-        for default in [*node.args.defaults, *node.args.kw_defaults]:
-            if default is not None:
-                self.visit(default)
-        outer_bindings = self.bindings
-        self.bindings = outer_bindings.copy()
-        arguments = [
-            *node.args.posonlyargs,
-            *node.args.args,
-            *node.args.kwonlyargs,
-        ]
-        if node.args.vararg is not None:
-            arguments.append(node.args.vararg)
-        if node.args.kwarg is not None:
-            arguments.append(node.args.kwarg)
-        for argument in arguments:
-            self.bindings[argument.arg] = frozenset()
-        self.visit(node.body)
-        self.bindings = outer_bindings
-
-    def _visit_comprehension(
-        self,
-        node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
-    ) -> None:
-        first, *remaining = node.generators
-        self.visit(first.iter)
-        outer_bindings = self.bindings
-        self.bindings = outer_bindings.copy()
-        self._bind_target(first.target)
-        for condition in first.ifs:
-            self.visit(condition)
-        for generator in remaining:
-            self.visit(generator.iter)
-            self._bind_target(generator.target)
-            for condition in generator.ifs:
-                self.visit(condition)
-        if isinstance(node, ast.DictComp):
-            self.visit(node.key)
-            self.visit(node.value)
-        else:
-            self.visit(node.elt)
-        self.bindings = outer_bindings
-
-    visit_ListComp = _visit_comprehension
-    visit_SetComp = _visit_comprehension
-    visit_DictComp = _visit_comprehension
-    visit_GeneratorExp = _visit_comprehension
+        if any(argument.arg == "ctx" for argument in _function_arguments(node)):
+            return
+        self.generic_visit(node)
 
 
-def _analyze_bindings(tree: ast.Module, *, relative_path: Path) -> _BindingAnalyzer:
-    analyzer = _BindingAnalyzer(relative_path=relative_path)
-    analyzer.visit(tree)
-    return analyzer
-
-
-def _settings_calls(tree: ast.Module, *, relative_path: Path) -> list[int]:
-    analyzer = _analyze_bindings(tree, relative_path=relative_path)
-    return sorted(
-        line_number
-        for line_number, resolved in analyzer.calls
-        if resolved == "app.core.config.get_settings"
-    )
-
-
-def _assignment_target_names(node: ast.Assign | ast.AnnAssign) -> list[str]:
-    def names(target: ast.expr) -> list[str]:
-        if isinstance(target, ast.Name):
-            return [target.id]
-        if isinstance(target, (ast.Tuple, ast.List)):
-            return [name for element in target.elts for name in names(element)]
-        return []
-
-    targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
-    return [name for target in targets for name in names(target)]
-
-
-def _obsolete_factory_violations(
-    relative_path: Path,
+def _worker_ctx_violations(
     tree: ast.Module,
+    *,
+    allowed_accessor: str | None,
 ) -> list[tuple[int, str]]:
-    violations: list[tuple[int, str]] = []
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and (
-            node.name in RESERVED_FACTORY_NAMES
-        ):
-            violations.append((node.lineno, f"defines {node.name}"))
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            violations.extend(
-                (node.lineno, f"defines {target_name}")
-                for target_name in _assignment_target_names(node)
-                if target_name in RESERVED_FACTORY_NAMES
-            )
-        elif isinstance(node, ast.Import):
-            violations.extend(
-                (node.lineno, f"defines {local_name}")
-                for imported_name in node.names
-                if (
-                    local_name := imported_name.asname
-                    or imported_name.name.split(".", maxsplit=1)[0]
-                )
-                in RESERVED_FACTORY_NAMES
-            )
-        elif isinstance(node, ast.ImportFrom):
-            violations.extend(
-                (node.lineno, f"defines {local_name}")
-                for imported_name in node.names
-                if imported_name.name != "*"
-                and (local_name := imported_name.asname or imported_name.name)
-                in RESERVED_FACTORY_NAMES
-            )
+    violations: dict[int, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not any(argument.arg == "ctx" for argument in _function_arguments(node)):
+            continue
+        visitor = _FunctionCtxUseVisitor(allowed_accessor=allowed_accessor)
+        for statement in node.body:
+            visitor.visit(statement)
+        violations.update(visitor.violations)
+    return sorted(violations.items())
 
-    for module, imported_name, line_number in _imported_names(
-        tree,
-        relative_path=relative_path,
+
+def _worker_ctx_accessor(relative_path: Path) -> str | None:
+    if relative_path in CALL_LIFECYCLE_CTX_MODULES:
+        return "require_call_lifecycle_runtime"
+    if relative_path in BACKGROUND_CTX_MODULES or relative_path.is_relative_to(
+        Path("app/workers/outbox")
     ):
-        if (module, imported_name) in FORBIDDEN_GLOBAL_IMPORTS:
-            violations.append((line_number, f"imports {module}.{imported_name}"))
+        return "require_background_runtime"
+    return None
 
-    forbidden_paths = {f"{module}.{name}" for module, name in FORBIDDEN_GLOBAL_IMPORTS}
-    analyzer = _analyze_bindings(tree, relative_path=relative_path)
-    violations.extend(
-        (line_number, f"references {resolved}")
-        for line_number, resolved in analyzer.attributes
-        if resolved in forbidden_paths
+
+def _is_forbidden_worker_import(imported_path: str) -> bool:
+    return (
+        imported_path == "app.main"
+        or imported_path == "app.routers"
+        or imported_path.startswith("app.routers.")
     )
-    return sorted(set(violations))
 
 
 def test_obsolete_global_factories_cannot_be_defined_or_imported() -> None:
-    violations: list[str] = []
-    for relative_path, tree in _production_modules():
-        violations.extend(
-            f"{relative_path}:{line_number}: {message}"
-            for line_number, message in _obsolete_factory_violations(
-                relative_path,
-                tree,
-            )
-        )
+    violations = [
+        f"{relative_path}:{line}: {message}"
+        for relative_path, tree in _production_modules()
+        for line, message in _obsolete_factory_violations(relative_path, tree)
+    ]
 
     assert violations == [], "\n".join(violations)
 
 
-def test_get_settings_calls_stay_at_executable_boundaries() -> None:
+def test_settings_access_stays_at_executable_boundaries() -> None:
     violations = [
-        f"{relative_path}:{line_number}: calls get_settings"
+        f"{relative_path}:{line}: {message}"
         for relative_path, tree in _production_modules()
-        if relative_path not in ALLOWED_SETTINGS_CALLERS
-        for line_number in _settings_calls(tree, relative_path=relative_path)
+        if relative_path not in ALLOWED_SETTINGS_MODULES
+        for line, message in _settings_boundary_violations(
+            tree,
+            relative_path=relative_path,
+        )
     ]
 
     assert violations == [], "\n".join(violations)
@@ -618,14 +389,12 @@ def test_workers_do_not_import_the_api_application_or_routers() -> None:
     for relative_path, tree in _production_modules():
         if not relative_path.is_relative_to(Path("app/workers")):
             continue
-        for imported_path, line_number in _imported_module_paths(
+        for imported_path, line in _imported_module_paths(
             tree,
             relative_path=relative_path,
         ):
             if _is_forbidden_worker_import(imported_path):
-                violations.append(
-                    f"{relative_path}:{line_number}: imports {imported_path}"
-                )
+                violations.append(f"{relative_path}:{line}: imports {imported_path}")
 
     assert violations == [], "\n".join(violations)
 
@@ -637,228 +406,32 @@ def test_business_modules_do_not_import_composition() -> None:
         Path("app/providers"),
         Path("app/models"),
     }
-    violations: list[str] = []
-    for relative_path, tree in _production_modules():
-        if not any(relative_path.is_relative_to(root) for root in business_roots):
-            continue
-        for imported_path, line_number in _imported_module_paths(
+    violations = [
+        f"{relative_path}:{line}: imports {imported_path}"
+        for relative_path, tree in _production_modules()
+        if any(relative_path.is_relative_to(root) for root in business_roots)
+        for imported_path, line in _imported_module_paths(
             tree,
             relative_path=relative_path,
-        ):
-            if imported_path == "app.composition" or imported_path.startswith(
-                "app.composition."
-            ):
-                violations.append(
-                    f"{relative_path}:{line_number}: imports {imported_path}"
-                )
+        )
+        if imported_path == "app.composition"
+        or imported_path.startswith("app.composition.")
+    ]
 
     assert violations == [], "\n".join(violations)
 
 
-def _is_forbidden_worker_import(imported_path: str) -> bool:
-    return (
-        imported_path == "app.main"
-        or imported_path == "app.routers"
-        or imported_path.startswith("app.routers.")
-    )
-
-
-class _CtxDependencyReadAnalyzer(ast.NodeVisitor):
-    def __init__(self) -> None:
-        self.bindings: BindingState = {}
-        self.reads: list[tuple[int, str]] = []
-
-    def _resolve(self, node: ast.expr) -> frozenset[str]:
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return frozenset({f"key:{node.value}"})
-        if isinstance(node, ast.Name):
-            return self.bindings.get(node.id, frozenset())
-        return frozenset()
-
-    def _bind_target(
-        self,
-        target: ast.expr,
-        provenances: frozenset[str] = frozenset(),
-    ) -> None:
-        if isinstance(target, ast.Name):
-            self.bindings[target.id] = provenances
-        elif isinstance(target, (ast.Tuple, ast.List)):
-            for element in target.elts:
-                self._bind_target(element)
-
-    def _analyze_branch(
-        self,
-        statements: list[ast.stmt],
-        initial: BindingState,
-    ) -> BindingState:
-        saved = self.bindings
-        self.bindings = initial.copy()
-        for statement in statements:
-            self.visit(statement)
-        result = self.bindings
-        self.bindings = saved
-        return result
-
-    def visit_Assign(self, node: ast.Assign) -> None:
-        self.visit(node.value)
-        for target in node.targets:
-            self._bind_target(target, self._resolve(node.value))
-
-    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        self.visit(node.annotation)
-        if node.value is not None:
-            self.visit(node.value)
-            self._bind_target(node.target, self._resolve(node.value))
-        else:
-            self._bind_target(node.target)
-
-    def visit_AugAssign(self, node: ast.AugAssign) -> None:
-        self.visit(node.target)
-        self.visit(node.value)
-        self._bind_target(node.target)
-
-    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
-        self.visit(node.value)
-        self._bind_target(node.target, self._resolve(node.value))
-
-    def _record_read(self, node: ast.expr, key_node: ast.expr, line: int) -> None:
-        if "ctx" not in self._resolve(node):
-            return
-        for provenance in self._resolve(key_node):
-            if not provenance.startswith("key:"):
-                continue
-            key = provenance.removeprefix("key:")
-            if key in APPLICATION_DEPENDENCY_KEYS:
-                self.reads.append((line, key))
-
-    def visit_Call(self, node: ast.Call) -> None:
-        if (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr == "get"
-            and node.args
-        ):
-            self._record_read(node.func.value, node.args[0], node.lineno)
-        self.generic_visit(node)
-
-    def visit_Subscript(self, node: ast.Subscript) -> None:
-        self._record_read(node.value, node.slice, node.lineno)
-        self.generic_visit(node)
-
-    def visit_If(self, node: ast.If) -> None:
-        self.visit(node.test)
-        initial = self.bindings.copy()
-        body = self._analyze_branch(node.body, initial)
-        otherwise = (
-            self._analyze_branch(node.orelse, initial) if node.orelse else initial
-        )
-        self.bindings = _merge_binding_states(body, otherwise)
-
-    def visit_For(self, node: ast.For) -> None:
-        self.visit(node.iter)
-        initial = self.bindings.copy()
-        saved = self.bindings
-        self.bindings = initial.copy()
-        self._bind_target(node.target)
-        for statement in node.body:
-            self.visit(statement)
-        body = self.bindings
-        self.bindings = saved
-        merged = _merge_binding_states(initial, body)
-        self.bindings = (
-            self._analyze_branch(node.orelse, merged) if node.orelse else merged
-        )
-
-    visit_AsyncFor = visit_For
-
-    def visit_While(self, node: ast.While) -> None:
-        self.visit(node.test)
-        initial = self.bindings.copy()
-        body = self._analyze_branch(node.body, initial)
-        merged = _merge_binding_states(initial, body)
-        self.bindings = (
-            self._analyze_branch(node.orelse, merged) if node.orelse else merged
-        )
-
-    def visit_Try(self, node: ast.Try) -> None:
-        initial = self.bindings.copy()
-        body = self._analyze_branch(node.body, initial)
-        normal = self._analyze_branch(node.orelse, body) if node.orelse else body
-        outcomes = [normal]
-        for handler in node.handlers:
-            if handler.type is not None:
-                self.visit(handler.type)
-            handler_initial = initial.copy()
-            if handler.name is not None:
-                handler_initial[handler.name] = frozenset()
-            outcomes.append(self._analyze_branch(handler.body, handler_initial))
-        merged = _merge_binding_states(*outcomes)
-        self.bindings = (
-            self._analyze_branch(node.finalbody, merged) if node.finalbody else merged
-        )
-
-    visit_TryStar = visit_Try
-
-    def visit_Match(self, node: ast.Match) -> None:
-        self.visit(node.subject)
-        initial = self.bindings.copy()
-        outcomes = [] if _match_is_exhaustive(node) else [initial]
-        for case in node.cases:
-            saved = self.bindings
-            self.bindings = initial.copy()
-            for name in _pattern_binding_names(case.pattern):
-                self.bindings[name] = frozenset()
-            if case.guard is not None:
-                self.visit(case.guard)
-            for statement in case.body:
-                self.visit(statement)
-            outcomes.append(self.bindings)
-            self.bindings = saved
-        self.bindings = _merge_binding_states(*outcomes)
-
-    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        outer_bindings = self.bindings
-        self.bindings = outer_bindings.copy()
-        for local_name in _function_local_names(node):
-            self.bindings[local_name] = frozenset()
-        arguments = [
-            *node.args.posonlyargs,
-            *node.args.args,
-            *node.args.kwonlyargs,
-        ]
-        if node.args.vararg is not None:
-            arguments.append(node.args.vararg)
-        if node.args.kwarg is not None:
-            arguments.append(node.args.kwarg)
-        for argument in arguments:
-            if argument.arg == "ctx":
-                self.bindings[argument.arg] = frozenset({"ctx"})
-        for statement in node.body:
-            self.visit(statement)
-        self.bindings = outer_bindings
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._visit_function(node)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._visit_function(node)
-
-
-def _application_dependency_reads(tree: ast.Module) -> list[tuple[int, str]]:
-    analyzer = _CtxDependencyReadAnalyzer()
-    analyzer.visit(tree)
-    return sorted(set(analyzer.reads))
-
-
-def test_worker_jobs_do_not_read_application_dependencies_from_ctx() -> None:
+def test_worker_jobs_use_ctx_only_for_the_typed_runtime_accessor() -> None:
     worker_logic_roots = {Path("app/workers/jobs"), Path("app/workers/outbox")}
-    violations: list[str] = []
-    for relative_path, tree in _production_modules():
-        if not any(relative_path.is_relative_to(root) for root in worker_logic_roots):
-            continue
-        for line_number, key in _application_dependency_reads(tree):
-            violations.append(
-                f"{relative_path}:{line_number}: reads application dependency {key!r}"
-            )
+    violations = [
+        f"{relative_path}:{line}: {message}"
+        for relative_path, tree in _production_modules()
+        if any(relative_path.is_relative_to(root) for root in worker_logic_roots)
+        for line, message in _worker_ctx_violations(
+            tree,
+            allowed_accessor=_worker_ctx_accessor(relative_path),
+        )
+    ]
 
     assert violations == [], "\n".join(violations)
 
@@ -876,214 +449,90 @@ def test_relative_imports_are_resolved_before_dependency_direction_checks() -> N
     assert ("app.composition", 2) in imported_paths
 
 
-def test_settings_call_analysis_follows_only_relevant_import_bindings() -> None:
+def test_settings_boundary_rejects_imports_and_module_scope_bindings() -> None:
     cases = [
+        ("from app.core.config import get_settings\n", [1]),
+        ("from app.core.config import get_settings as load\n", [1]),
+        ("from app.core.config import *\n", [1]),
+        ("import app.core.config\n", [1]),
+        ("import app.core.config as config\n", [1]),
+        ("from app.core import config as config_module\n", [1]),
         (
-            "from app.core.config import get_settings as load_settings\n"
-            "again = load_settings\n"
-            "again()\n",
-            [3],
-        ),
-        (
-            "import app.core.config as config\nload = config.get_settings\nload()\n",
-            [3],
-        ),
-        (
-            "import app.core.config\napp.core.config.get_settings()\n",
+            "def load():\n"
+            "    from app.core.config import get_settings as local\n"
+            "    return local()\n",
             [2],
         ),
-        (
-            "from app.core.config import *\nget_settings()\n",
-            [2],
-        ),
-        (
-            "from app.core.config import get_settings\n"
-            "class RuntimeConsumer:\n"
-            "    def load(self):\n"
-            "        return get_settings()\n",
-            [4],
-        ),
-        (
-            "def get_settings():\n    return None\nget_settings()\n",
-            [],
-        ),
+        ("get_settings = local\n", [1]),
+        ("get_settings: object\n", [1]),
+        ("def get_settings():\n    return None\n", [1]),
+        ("class get_settings:\n    pass\n", [1]),
+        ("import compatibility as get_settings\n", [1]),
+        ("from compatibility import load as get_settings\n", [1]),
+        ("if enabled:\n    get_settings = local\n", [2]),
     ]
 
     for source, expected_lines in cases:
-        assert (
-            _settings_calls(
+        assert [
+            line
+            for line, _message in _settings_boundary_violations(
                 ast.parse(source),
                 relative_path=Path("app/services/example.py"),
             )
-            == expected_lines
-        )
+        ] == expected_lines
 
 
-def test_settings_call_analysis_models_python_evaluation_scopes() -> None:
-    cases = [
-        (
-            "from app.core.config import get_settings\n"
-            "safe = lambda get_settings: get_settings()\n"
-            "uses_outer = lambda value=get_settings(): value\n",
-            [3],
-        ),
-        (
-            "from app.core.config import get_settings\n"
-            "[get_settings() for get_settings in factories]\n"
-            "[item for item in get_settings()]\n"
-            "[get_settings() for item in items if get_settings()]\n",
-            [3, 4, 4],
-        ),
-        (
-            "from app.core.config import get_settings\n"
-            "@get_settings()\n"
-            "def get_settings(\n"
-            "    arg: get_settings() = get_settings(),\n"
-            "    *,\n"
-            "    keyword: get_settings() = get_settings(),\n"
-            ") -> get_settings():\n"
-            "    return arg\n",
-            [2, 4, 4, 6, 6, 7],
-        ),
-        (
-            "from app.core.config import get_settings\n"
-            "@get_settings()\n"
-            "class get_settings(get_settings(), metaclass=get_settings()):\n"
-            "    value: get_settings()\n",
-            [2, 3, 3, 4],
-        ),
-        (
-            "from app.core.config import get_settings\n"
-            "class RuntimeConsumer:\n"
-            "    def get_settings(self):\n"
-            "        return None\n"
-            "    value = get_settings()\n",
-            [],
-        ),
-        (
-            "from app.core.config import get_settings\n"
-            "def use_local():\n"
-            "    def get_settings():\n"
-            "        return None\n"
-            "    return get_settings()\n",
-            [],
-        ),
-    ]
-
-    for source, expected_lines in cases:
-        assert (
-            _settings_calls(
-                ast.parse(source),
-                relative_path=Path("app/services/example.py"),
-            )
-            == expected_lines
-        )
-
-
-def test_settings_call_analysis_merges_possible_control_flow_bindings() -> None:
-    cases = [
-        (
-            "from app.core.config import get_settings as load\n"
-            "if enabled:\n"
-            "    load = local\n"
-            "load()\n",
-            [4],
-        ),
-        (
-            "from app.core.config import get_settings\n"
-            "if enabled:\n"
-            "    load = get_settings\n"
-            "else:\n"
-            "    load = local\n"
-            "load()\n",
-            [6],
-        ),
-        (
-            "from app.core.config import get_settings\n"
-            "load = get_settings\n"
-            "try:\n"
-            "    load = local\n"
-            "except Exception:\n"
-            "    pass\n"
-            "load()\n",
-            [7],
-        ),
-        (
-            "from app.core.config import get_settings\n"
-            "load = get_settings\n"
-            "match value:\n"
-            "    case 1:\n"
-            "        load = local\n"
-            "load()\n",
-            [6],
-        ),
-        (
-            "from app.core.config import get_settings\n"
-            "load = get_settings\n"
-            "for item in items:\n"
-            "    load = local\n"
-            "load()\n",
-            [5],
-        ),
-        (
-            "from app.core.config import get_settings\nload = local\nload()\n",
-            [],
-        ),
-    ]
-
-    for source, expected_lines in cases:
-        assert (
-            _settings_calls(
-                ast.parse(source),
-                relative_path=Path("app/services/example.py"),
-            )
-            == expected_lines
-        )
-
-
-def test_obsolete_factory_analysis_detects_attributes_and_compatibility_aliases() -> (
-    None
-):
-    consumer_tree = ast.parse(
-        "import app.core.database as db\n"
-        "database = db\n"
-        "factory = database.get_engine\n"
-        "database.get_session_factory()\n"
-    )
-    definition_tree = ast.parse(
-        "get_engine = get_session_factory = create_session_factory\n"
-        "get_redis_client: object = create_redis_client\n"
-    )
-    local_name_tree = ast.parse(
-        "def inspect_engine():\n    get_engine = object()\n    return get_engine\n"
+def test_settings_boundary_allows_typed_imports_and_nested_shadows() -> None:
+    tree = ast.parse(
+        "from app.core.config import Settings\n"
+        "safe = lambda get_settings: get_settings()\n"
+        "values = [get_settings for get_settings in factories]\n"
+        "class Consumer:\n"
+        "    get_settings = local\n"
+        "    def get_settings(self):\n"
+        "        return None\n"
+        "def use_local():\n"
+        "    get_settings = local\n"
+        "    return get_settings()\n"
     )
 
-    assert _obsolete_factory_violations(
-        Path("app/services/example.py"),
-        consumer_tree,
-    ) == [
-        (3, "references app.core.database.get_engine"),
-        (4, "references app.core.database.get_session_factory"),
-    ]
-    assert _obsolete_factory_violations(
-        Path("app/core/database.py"),
-        definition_tree,
-    ) == [
-        (1, "defines get_engine"),
-        (1, "defines get_session_factory"),
-        (2, "defines get_redis_client"),
-    ]
     assert (
-        _obsolete_factory_violations(
-            Path("app/core/database.py"),
-            local_name_tree,
+        _settings_boundary_violations(
+            tree,
+            relative_path=Path("app/services/example.py"),
         )
         == []
     )
 
 
-def test_obsolete_factory_names_are_reserved_in_every_api_module() -> None:
-    facade_tree = ast.parse(
+def test_obsolete_factory_imports_block_alias_and_module_escape() -> None:
+    cases = [
+        (
+            "from app.core.database import get_engine as engine_factory\n",
+            [(1, "imports app.core.database.get_engine")],
+        ),
+        (
+            "import app.core.database as database\nfactory = database.get_engine\n",
+            [(1, "imports app.core.database module")],
+        ),
+        (
+            "from app.core import database as database_module\n",
+            [(1, "imports app.core.database module")],
+        ),
+    ]
+
+    for source, expected in cases:
+        assert (
+            _obsolete_factory_violations(
+                Path("app/services/example.py"),
+                ast.parse(source),
+            )
+            == expected
+        )
+
+
+def test_reserved_factory_names_apply_in_every_api_module() -> None:
+    tree = ast.parse(
         "get_engine = create_database_engine\n"
         "get_session_factory: object = create_session_factory\n"
         "def get_redis_client():\n"
@@ -1096,7 +545,7 @@ def test_obsolete_factory_names_are_reserved_in_every_api_module() -> None:
 
     assert _obsolete_factory_violations(
         Path("app/services/compatibility.py"),
-        facade_tree,
+        tree,
     ) == [
         (1, "defines get_engine"),
         (2, "defines get_session_factory"),
@@ -1107,87 +556,154 @@ def test_obsolete_factory_names_are_reserved_in_every_api_module() -> None:
     ]
 
 
+def test_reserved_factory_bindings_recurse_only_through_module_statements() -> None:
+    tree = ast.parse(
+        "if enabled:\n"
+        "    get_engine, *rest = factories\n"
+        "for get_session_factory in factories:\n"
+        "    pass\n"
+        "with resource() as get_redis_client:\n"
+        "    pass\n"
+        "try:\n"
+        "    pass\n"
+        "except Error as get_s3_storage:\n"
+        "    pass\n"
+        "match value:\n"
+        '    case {"provider": get_telephony_provider}:\n'
+        "        pass\n"
+        "while (get_observability := next_value()):\n"
+        "    break\n"
+        "def local_scope():\n"
+        "    get_engine = local\n"
+        "class Holder:\n"
+        "    get_session_factory = local\n"
+    )
+
+    assert _obsolete_factory_violations(
+        Path("app/services/example.py"),
+        tree,
+    ) == [
+        (2, "defines get_engine"),
+        (3, "defines get_session_factory"),
+        (5, "defines get_redis_client"),
+        (9, "defines get_s3_storage"),
+        (12, "defines get_telephony_provider"),
+        (14, "defines get_observability"),
+    ]
+
+
+def test_reserved_factory_bindings_include_compound_defs_classes_and_imports() -> None:
+    tree = ast.parse(
+        "if enabled:\n"
+        "    def get_engine():\n"
+        "        return None\n"
+        "else:\n"
+        "    class get_s3_storage:\n"
+        "        pass\n"
+        "try:\n"
+        "    import compatibility as get_redis_client\n"
+        "except Exception:\n"
+        "    from compatibility import observe as get_observability\n"
+    )
+
+    assert _obsolete_factory_violations(
+        Path("app/services/example.py"),
+        tree,
+    ) == [
+        (2, "defines get_engine"),
+        (5, "defines get_s3_storage"),
+        (8, "defines get_redis_client"),
+        (10, "defines get_observability"),
+    ]
+
+
 def test_worker_router_import_boundary_uses_a_complete_module_segment() -> None:
     assert _is_forbidden_worker_import("app.routers") is True
     assert _is_forbidden_worker_import("app.routers.calls") is True
     assert _is_forbidden_worker_import("app.routers_legacy") is False
 
 
-def test_dependency_reads_follow_ctx_and_key_aliases() -> None:
-    tree = ast.parse(
-        'SESSION_KEY = "session_factory"\n'
-        "async def job(ctx):\n"
-        "    context = ctx\n"
-        "    worker_context: dict = context\n"
-        "    key = SESSION_KEY\n"
-        "    alias = key\n"
-        "    context.get(alias)\n"
-        '    observation_key = "observability"\n'
-        "    worker_context[observation_key]\n"
-    )
-
-    assert _application_dependency_reads(tree) == [
-        (7, "session_factory"),
-        (9, "observability"),
-    ]
-
-
-def test_dependency_reads_ignore_unrelated_mappings_and_module_names() -> None:
-    tree = ast.parse(
-        'payload.get("session_factory")\n'
-        'snapshot["observability"]\n'
-        'ctx.get("outbox_handlers")\n'
-        "def job(payload):\n"
-        '    return payload.get("telephony_provider")\n'
-    )
-
-    assert _application_dependency_reads(tree) == []
-
-
-def test_dependency_reads_merge_possible_ctx_and_key_control_flow() -> None:
-    tree = ast.parse(
-        "async def job(ctx, payload, enabled, value, items):\n"
-        "    context = ctx\n"
-        '    key = "session_factory"\n'
-        "    if enabled:\n"
-        "        context = payload\n"
-        '        key = "ordinary"\n'
-        "    context.get(key)\n"
-        "    try:\n"
-        "        selected = ctx\n"
-        "    except Exception:\n"
-        "        selected = payload\n"
-        '    selected["observability"]\n'
-        "    match value:\n"
-        "        case 1:\n"
-        "            matched = ctx\n"
-        "        case _:\n"
-        "            matched = payload\n"
-        '    matched.get("outbox_handlers")\n'
-        "    loop_context = ctx\n"
-        "    for item in items:\n"
-        "        loop_context = payload\n"
-        '    loop_context.get("telephony_provider")\n'
-    )
-
-    assert _application_dependency_reads(tree) == [
-        (7, "session_factory"),
-        (12, "observability"),
-        (18, "outbox_handlers"),
-        (22, "telephony_provider"),
-    ]
-
-
-def test_dependency_reads_allow_unconditional_ctx_and_key_reassignment() -> None:
-    tree = ast.parse(
+def test_worker_ctx_boundary_allows_only_the_direct_typed_runtime_accessor() -> None:
+    allowed = ast.parse(
         "async def job(ctx, payload):\n"
-        "    context = ctx\n"
-        "    context = payload\n"
+        "    runtime = require_background_runtime(ctx)\n"
+        '    return payload.get("session_factory"), runtime\n'
+    )
+    forbidden_cases = [
+        (
+            "async def job(ctx, enabled):\n"
+            "    if enabled:\n"
+            "        context = ctx\n"
+            "    return context\n",
+            [3],
+        ),
+        (
+            "async def job(ctx):\n"
+            "    try:\n"
+            "        context = ctx\n"
+            "    except Exception:\n"
+            "        context = {}\n",
+            [3],
+        ),
+        (
+            "async def job(ctx):\n"
+            "    try:\n"
+            "        pass\n"
+            "    except Exception as ctx:\n"
+            "        pass\n",
+            [4],
+        ),
+        (
+            "async def job(ctx, items):\n"
+            "    for item in items:\n"
+            "        context = ctx\n",
+            [3],
+        ),
+        ("async def job(ctx):\n    import payload as ctx\n", [2]),
+        (
+            "async def job(ctx, value):\n"
+            "    match value:\n"
+            "        case _ as ctx:\n"
+            "            pass\n",
+            [3],
+        ),
+        ("async def job(ctx):\n    ctx = {}\n", [2]),
+        ("async def job(ctx):\n    return consume(ctx)\n", [2]),
+        ("async def job(ctx):\n    return ctx.get('job_try')\n", [2]),
+        (
+            "async def job(ctx):\n    return require_call_lifecycle_runtime(ctx)\n",
+            [2],
+        ),
+    ]
+
+    assert (
+        _worker_ctx_violations(
+            allowed,
+            allowed_accessor="require_background_runtime",
+        )
+        == []
+    )
+    for source, expected_lines in forbidden_cases:
+        assert [
+            line
+            for line, _message in _worker_ctx_violations(
+                ast.parse(source),
+                allowed_accessor="require_background_runtime",
+            )
+        ] == expected_lines
+
+
+def test_worker_ctx_boundary_ignores_functions_without_ctx_and_other_mappings() -> None:
+    tree = ast.parse(
+        "async def job(context, payload):\n"
         '    context.get("session_factory")\n'
-        '    key = "observability"\n'
-        '    key = "ordinary"\n'
-        "    ctx.get(key)\n"
-        '    payload.get("outbox_handlers")\n'
+        '    payload["observability"]\n'
     )
 
-    assert _application_dependency_reads(tree) == []
+    assert (
+        _worker_ctx_violations(
+            tree,
+            allowed_accessor="require_background_runtime",
+        )
+        == []
+    )
