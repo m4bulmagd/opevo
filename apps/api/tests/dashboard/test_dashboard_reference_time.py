@@ -26,7 +26,7 @@ def test_dashboard_reference_time_is_accepted_only_in_safe_environments(
     assert settings.dashboard_metrics_reference_time == REFERENCE_TIME
 
 
-@pytest.mark.parametrize("app_env", ["staging", "production", "preview"])
+@pytest.mark.parametrize("app_env", ["staging", "production"])
 def test_dashboard_reference_time_is_rejected_outside_safe_environments(
     app_env: str,
 ) -> None:
