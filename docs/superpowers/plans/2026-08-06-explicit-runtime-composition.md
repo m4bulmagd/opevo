@@ -2197,6 +2197,31 @@ environments and package roots, so extracting those test helpers would create
 a shared test/production support dependency between processes for a small,
 stable syntax rule. No such shared dependency is added.
 
+#### 6A-C5A exceptional Round 6 class-suite clarification
+
+Owner-approved decision 6A-C5A permits one final bounded correction to the API
+architecture test only. Sequential class-local visibility applies within every
+child statement list of class-level `if`, `while`, `try`, and `try*` syntax:
+
+- Each `if`/`else`, `while`/`else`, `try` body, exception handler, `else`, and
+  `finally` suite starts with the incoming class visibility. Statements within
+  that suite are processed sequentially, so an import, definition, assignment,
+  or destructuring binder named `ctx` hides the enclosing worker `ctx` for
+  later statements in the same suite.
+- Suite visibility is branch-local. No binder is joined or propagated to a
+  sibling suite or to statements after the compound statement. Conditions,
+  exception types, and any genuine direct use of the enclosing worker `ctx`
+  remain subject to the existing direct-access rule.
+- The implementation reuses `_visit_nodes` through one saved/reset
+  `_visit_class_branches` helper. `If`/`While` and `Try`/`TryStar` share their
+  respective visitors. Other construct-specific class-scope switches remain
+  explicit because consolidating different evaluation orders would create the
+  over-generalized scope abstraction that 6A-C4A rejected.
+
+This clarification adds no joins, provenance, dataflow interpretation, shared
+test support, or production behavior. Round 6 is the final owner-authorized
+fix round for Issue 6A.
+
 - [ ] **Step 2: Run architecture RED**
 
 ```bash

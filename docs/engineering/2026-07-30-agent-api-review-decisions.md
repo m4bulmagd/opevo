@@ -481,13 +481,13 @@ and request/job/session code receives its dependencies without cached resource
 factories, deep global patching, or application dependency dictionaries.
 
 The reviewed implementation code range is
-`c561877..14c76ddfaeaea4287d26b6f0e0bd4249e8f1e4a1`. The following docs-only
+`c561877..ccae2df82276f738c6b19822acf1d4b54fef4d97`. The following docs-only
 ledger commit records this evidence and is intentionally outside that immutable
-code range. Final service-backed verification passed 3,067 API tests with no
+code range. Final service-backed verification passed 3,069 API tests with no
 skips (91.92% line and 80.32% branch coverage), 701 agent tests with four
 credential-gated evaluation skips (89.25% line and 73.62% branch coverage),
-and 104 cross-runtime integration/import tests. The final API architecture
-guard passed thirty-two checks and the agent guard passed seven.
+and 106 cross-runtime integration/import tests. The final API architecture
+guard passed thirty-four checks and the agent guard passed seven.
 
 Decision 6A-C4A keeps those guards syntactic rather than interpreting Python
 dataflow. Outside the exact executable roots, direct/aliased/star
@@ -515,6 +515,18 @@ ctx` does. Sequential class-local binding includes named expressions,
 sync/async loops and with statements, exception targets, match captures,
 destructuring, definitions, and imports. Methods, lambdas, comprehensions, and
 nested class bodies still do not inherit the class namespace.
+
+Exceptional owner decision 6A-C5A closes the final class-suite false positive
+without adding control-flow interpretation. Class-level `if`, `while`, `try`,
+and `try*` child statement lists each receive independent incoming visibility
+and process their own statements sequentially. A local import, definition, or
+destructuring binder therefore applies to a later `ctx` use in the same suite,
+but never joins into a sibling suite or escapes after the compound statement.
+Conditions, exception types, and genuine direct uses remain rejected. One
+saved/reset branch helper plus shared `If`/`While` and `Try`/`TryStar` visitors
+address the repeated class-scope switches without a generalized scope/dataflow
+abstraction. Production code is unchanged, and Round 6 is the final authorized
+Issue 6A fix round.
 
 The only intentional cross-root guard duplication is 38 identical
 dynamic-literal helper lines in each app's architecture test, plus app-specific
