@@ -92,8 +92,14 @@ def get_realtime_service(request: Request) -> RealtimeService | None:
     return get_api_runtime(request.app).realtime_service
 
 
-def get_webhook_receiver(request: Request):
-    return get_api_runtime(request.app).livekit_webhook_receiver
+def get_webhook_receiver(request: Request) -> object:
+    receiver = get_api_runtime(request.app).livekit_webhook_receiver
+    if receiver is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LiveKit webhook receiver is not initialized",
+        )
+    return receiver
 
 
 def get_recording_service(request: Request) -> LiveKitRecordingService:

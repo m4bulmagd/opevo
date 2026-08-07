@@ -132,6 +132,11 @@ CONVENTIONAL_SENSITIVE_SETTING_MARKERS = (
     "CONNECTION_ID",
     "PASSWORD",
 )
+LIVEKIT_DISABLED = {
+    "livekit_url": None,
+    "livekit_api_key": None,
+    "livekit_api_secret": None,
+}
 
 
 def conventionally_sensitive_setting(setting_name: str) -> bool:
@@ -353,6 +358,86 @@ def base_settings() -> Settings:
         summary_provider="gemini",
         summary_model="gemini-2.5-flash",
         gemini_api_key="gemini-api-key",
+    )
+
+
+@pytest.mark.parametrize("app_env", ["development", "test"])
+def test_api_runtime_allows_fully_disabled_livekit_locally(
+    base_settings: Settings,
+    app_env: str,
+) -> None:
+    validate_api_runtime(
+        base_settings.model_copy(update={"app_env": app_env, **LIVEKIT_DISABLED})
+    )
+
+
+@pytest.mark.parametrize(
+    ("configured", "missing_names"),
+    [
+        (
+            {"livekit_url": "wss://livekit.example.com"},
+            {"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"},
+        ),
+        (
+            {"livekit_api_key": "key"},
+            {"LIVEKIT_URL", "LIVEKIT_API_SECRET"},
+        ),
+        (
+            {"livekit_api_secret": "secret"},
+            {"LIVEKIT_URL", "LIVEKIT_API_KEY"},
+        ),
+        (
+            {
+                "livekit_url": "wss://livekit.example.com",
+                "livekit_api_key": "key",
+            },
+            {"LIVEKIT_API_SECRET"},
+        ),
+        (
+            {
+                "livekit_url": "wss://livekit.example.com",
+                "livekit_api_secret": "secret",
+            },
+            {"LIVEKIT_API_KEY"},
+        ),
+        (
+            {"livekit_api_key": "key", "livekit_api_secret": "secret"},
+            {"LIVEKIT_URL"},
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "app_env",
+    ["development", "test", "staging", "production"],
+)
+def test_api_runtime_rejects_partial_livekit_configuration(
+    base_settings: Settings,
+    configured: dict[str, str],
+    missing_names: set[str],
+    app_env: str,
+) -> None:
+    settings = base_settings.model_copy(
+        update={"app_env": app_env, **LIVEKIT_DISABLED, **configured}
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        validate_api_runtime(settings)
+
+    assert missing_names <= set(str(caught.value).replace(",", "").split())
+
+
+def test_staging_api_requires_complete_livekit_configuration(
+    base_settings: Settings,
+) -> None:
+    settings = base_settings.model_copy(
+        update={"app_env": "staging", **LIVEKIT_DISABLED}
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        validate_api_runtime(settings)
+
+    assert {"LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"} <= set(
+        str(caught.value).replace(",", "").split()
     )
 
 
@@ -672,6 +757,11 @@ def test_non_development_runtime_accepts_strong_dispatch_secret_only(
         database_url="sqlite+aiosqlite://",
         redis_url="redis://localhost:6379/0",
         agent_dispatch_jwt_secret="runtime-dispatch-secret-with-at-least-32-bytes",
+        livekit_url="wss://livekit.example.com" if app_env == "staging" else None,
+        livekit_api_key="livekit-api-key" if app_env == "staging" else None,
+        livekit_api_secret=(
+            "livekit-api-secret" if app_env == "staging" else None
+        ),
     )
 
     validate_api_runtime(settings)

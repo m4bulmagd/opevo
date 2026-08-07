@@ -10,6 +10,12 @@ from app.core.http_origin import (
 )
 
 
+LIVEKIT_REQUIRED_SETTINGS = (
+    "livekit_url",
+    "livekit_api_key",
+    "livekit_api_secret",
+)
+
 PRODUCTION_REQUIRED_SETTINGS = (
     "database_url",
     "redis_url",
@@ -22,9 +28,7 @@ PRODUCTION_REQUIRED_SETTINGS = (
     "stripe_checkout_cancel_url",
     "stripe_billing_portal_return_url",
     "stripe_billing_portal_configuration_id",
-    "livekit_url",
-    "livekit_api_key",
-    "livekit_api_secret",
+    *LIVEKIT_REQUIRED_SETTINGS,
     "telnyx_api_key",
     "telnyx_active_connection_id",
     "telnyx_disabled_connection_id",
@@ -62,6 +66,20 @@ def _require(settings: Settings, names: Sequence[str]) -> list[str]:
     return [name.upper() for name in names if _is_missing(getattr(settings, name))]
 
 
+def _validate_livekit_configuration(settings: Settings, environment: str) -> None:
+    missing = _require(settings, LIVEKIT_REQUIRED_SETTINGS)
+    if not missing:
+        return
+    if len(missing) == len(LIVEKIT_REQUIRED_SETTINGS) and environment in {
+        "development",
+        "test",
+    }:
+        return
+    raise RuntimeError(
+        "Missing or invalid required runtime settings: " + ", ".join(missing)
+    )
+
+
 def validate_api_runtime(settings: Settings) -> None:
     environment = settings.app_env.strip().lower()
     if settings.auth_mode == "local" and (
@@ -96,6 +114,7 @@ def validate_api_runtime(settings: Settings) -> None:
                 + ", ".join(invalid_clerk)
             )
     if environment == "development":
+        _validate_livekit_configuration(settings, environment)
         return
 
     invalid_modes: list[str] = []
@@ -120,6 +139,7 @@ def validate_api_runtime(settings: Settings) -> None:
     _validate_dispatch_secret(settings)
 
     if environment != "production":
+        _validate_livekit_configuration(settings, environment)
         return
 
     missing = _require(settings, PRODUCTION_REQUIRED_SETTINGS)

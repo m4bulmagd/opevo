@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import install_test_api_runtime
+from fastapi import FastAPI, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.requests import Request
 
 from app.models.agent_config import AgentConfig
 from app.models.call import Call
@@ -110,6 +112,38 @@ class FakeWebhookSession:
 
     async def commit(self) -> None:
         self.commits += 1
+
+
+@pytest.mark.anyio
+async def test_disabled_livekit_webhook_returns_service_unavailable(
+    async_client,
+) -> None:
+    response = await async_client.post(
+        "/webhooks/livekit",
+        content=b"{}",
+        headers={"authorization": "Bearer ignored"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "LiveKit webhook receiver is not initialized"
+    }
+
+
+def test_disabled_livekit_recording_dependency_returns_service_unavailable(
+    settings,
+) -> None:
+    from app.webhooks.livekit import get_recording_service
+
+    app = FastAPI()
+    install_test_api_runtime(app, settings=settings)
+    request = Request({"type": "http", "app": app})
+
+    with pytest.raises(HTTPException) as caught:
+        get_recording_service(request)
+
+    assert caught.value.status_code == 503
+    assert caught.value.detail == "LiveKit recording service is not initialized"
 
 
 @pytest.mark.anyio

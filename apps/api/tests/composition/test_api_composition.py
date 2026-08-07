@@ -104,6 +104,37 @@ def _forbidden_factory(name: str) -> Callable[..., Any]:
     return forbidden
 
 
+@pytest.mark.anyio
+async def test_api_composition_rejects_partial_livekit_before_resources_start(
+    settings,
+) -> None:
+    from app.composition.api import build_api_runtime
+
+    partial_settings = settings.model_copy(
+        update={
+            "app_env": "development",
+            "livekit_url": "wss://livekit.example.com",
+            "livekit_api_key": "key",
+            "livekit_api_secret": None,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="LIVEKIT_API_SECRET"):
+        await build_api_runtime(
+            partial_settings,
+            engine_factory=_forbidden_factory("engine"),
+            redis_factory=_forbidden_factory("redis"),
+            observability_factory=_forbidden_factory("observability"),
+            auth_factory=_forbidden_factory("auth"),
+            readiness_factory=_forbidden_factory("readiness"),
+            storage_factory=_forbidden_factory("storage"),
+            arq_pool_factory=_forbidden_factory("ARQ pool"),
+            realtime_service_factory=_forbidden_factory("realtime service"),
+            webhook_receiver_factory=_forbidden_factory("webhook receiver"),
+            recording_service_factory=_forbidden_factory("recording service"),
+        )
+
+
 @asynccontextmanager
 async def _sqlite_api_runtime(
     settings,
