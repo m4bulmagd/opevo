@@ -562,6 +562,27 @@ exposes a production defect; cleanup errors must not replace the caller's
 cancellation. No deployment, realtime enablement, provider, queue, database, or
 external-account behavior changes.
 
+### Agent dotenv loading is an explicit executable-root decision
+
+Post-merge verification finding 54A makes direct `AgentSettings(...)`
+construction hermetic. The settings model continues to read constructor,
+process-environment, and file-secret sources, but it has no implicit dotenv
+path. The cached `get_settings()` executable-root function is the only
+production path that explicitly supplies `_env_file=".env"`.
+
+This separates two distinct contracts: tests and injected callers construct
+settings from only the sources they provide, while the real agent entrypoint
+retains the existing local-development dotenv behavior. A synthetic poison
+dotenv test proves direct construction ignores the file and a companion test
+proves `get_settings()` deliberately loads it. Tests never inspect a developer's
+real dotenv file. No pytest detection, global model mutation, process-wide cwd
+hook, or repetitive `_env_file=None` call-site convention is introduced.
+
+The change does not alter environment canonicalization, production validation,
+credentials, Compose, deployment, provider selection, or runtime ownership.
+Post-merge full-suite verification must pass before the feature worktree is
+removed and the merged branch is deleted.
+
 ## Completion criteria
 
 Issue 6A is complete only when:

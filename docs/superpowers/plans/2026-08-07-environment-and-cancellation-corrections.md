@@ -134,3 +134,51 @@ This documentation-only evidence commit follows it. Task 22's definitive fresh
 complete-range Spec and Standards reviews remain pending; integration must not
 be offered until both approve the range including the evidence commit with zero
 findings.
+
+## Task 23: Implement post-merge dotenv isolation decision 54A
+
+Post-merge verification exposed that direct agent settings construction can
+inherit a developer dotenv file. The owner approved **54A**: direct
+`AgentSettings(...)` construction is hermetic, and only the executable-root
+`get_settings()` function explicitly requests `.env` loading.
+
+1. Add RED tests in the existing agent settings/runtime-validation suite using
+   a synthetic poison `.env` under `tmp_path`. Never inspect or copy a real
+   dotenv file.
+2. Prove direct `AgentSettings(...)` ignores the synthetic file while retaining
+   constructor and process-environment precedence. Prove cached `get_settings()`
+   explicitly loads the synthetic file and clean its cache in `finally` so test
+   order cannot leak state.
+3. Remove implicit `env_file` from `AgentSettings.model_config`; keep encoding,
+   ignored-extra, canonicalization, and all other fields unchanged. Change only
+   `get_settings()` to call `AgentSettings(_env_file=".env")`.
+4. Do not add pytest detection, cwd hooks, global model mutation, a cross-app
+   abstraction, or repeated `_env_file=None` arguments across tests.
+5. Run focused RED/GREEN, full agent Ruff/mypy, source scans proving production
+   construction remains centralized, and exact protected/status checks. Commit
+   54A separately and require fresh Spec and Standards approvals with zero
+   findings.
+
+## Task 24: Complete merged-main verification and cleanup
+
+1. Rerun the complete agent and API suites with coverage on merged `main` using
+   fresh isolated PostgreSQL/Redis dependencies and the required outside-sandbox
+   Python execution context. Keep all existing ratchets and the exact four agent
+   credential skips.
+2. Rerun focused environment and architecture checks affected by 54A. Stop on
+   any genuine failure; do not weaken validation, thresholds, or assertions.
+3. Record 54A, its commit, reviews, exact merged-main counts/coverage, and exact
+   cleanup in this plan and the engineering ledger.
+4. Preserve the six ignored Task 3-8 reports at their corresponding ignored
+   paths in the main worktree before removing the owned feature worktree.
+5. Remove only the owned `issue-6a-runtime-composition` worktree, prune its
+   registration, and delete only the merged local feature branch. Preserve the
+   protected frontend worktree and the untracked `Presvo_frontend/` directory.
+
+The failed final8 agent run is valid RED evidence for test isolation only:
+`730 passed`, four approved skips, and two production-variant failures whose
+expected default validation was contaminated by an implicit dotenv value. The
+API run was intentionally interrupted and is not completion evidence. Exact
+final8 disposable resources were removed and all original services, locks,
+baselines, protected paths, feature artifacts, and repository state were
+preserved.
