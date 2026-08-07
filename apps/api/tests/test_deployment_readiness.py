@@ -509,6 +509,37 @@ def test_production_rejects_nonexclusive_clerk_verification_sources(
     assert "test-static-verification-key" not in message
 
 
+@pytest.mark.parametrize(
+    ("unsafe_jwks_url", "sentinel"),
+    [
+        ("JWKS_MALFORMED_SENTINEL", "JWKS_MALFORMED_SENTINEL"),
+        (
+            "http://jwks-http-sentinel.example/.well-known/jwks.json",
+            "jwks-http-sentinel",
+        ),
+        (
+            "https://jwks-userinfo-sentinel@clerk.example.com/jwks.json",
+            "jwks-userinfo-sentinel",
+        ),
+    ],
+)
+def test_production_rejects_unsafe_clerk_jwks_urls_without_echoing_values(
+    base_settings: Settings,
+    unsafe_jwks_url: str,
+    sentinel: str,
+) -> None:
+    settings = base_settings.model_copy(
+        update={"clerk_jwt_key": None, "clerk_jwks_url": unsafe_jwks_url}
+    )
+
+    with pytest.raises(RuntimeError, match="CLERK_JWKS_URL") as error:
+        validate_api_runtime(settings)
+
+    message = str(error.value)
+    assert unsafe_jwks_url not in message
+    assert sentinel not in message
+
+
 def test_production_rejects_disabled_telnyx_ordering(
     base_settings: Settings,
 ) -> None:
