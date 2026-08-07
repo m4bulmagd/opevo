@@ -491,10 +491,12 @@ guard passed thirty-four checks and the agent guard passed seven.
 
 Owner decision 6A-C1A retains strict process validators while allowing the API
 and both development workers to share the same optional `apps/api/.env` source;
-the implementation neither opens nor commits that file, and explicit Compose
-values retain precedence. API identity, webhook, and payment secrets are masked
-from both workers, while background-provider credentials are additionally
-masked from the lifecycle worker. No dummy provider values were added.
+Compose deliberately reads that optional file at runtime when present, while
+explicit Compose values retain precedence. The change and its verification did
+not inspect or commit a developer's real `apps/api/.env`. API identity, webhook,
+and payment secrets are masked from both workers, while background-provider
+credentials are additionally masked from the lifecycle worker. No dummy
+provider values were added.
 Readiness and documentation tests exercise the resolved secret scope, worker
 processes remain isolated, and the voice profile is unchanged. Commits
 `7ddb343`, `bfb8197`, `826a988`, and `80f6a2e` implement and verify the decision;
