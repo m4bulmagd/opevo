@@ -1,7 +1,24 @@
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from agent.debug_streams import StreamDebugLogger
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_stream_debug_logger_factory_uses_explicit_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    monkeypatch.setenv("AGENT_DEBUG_STREAMS", "true" if not enabled else "false")
+
+    debug_logger = StreamDebugLogger.from_dispatch_metadata(
+        {"call_id": "call_123", "user_id": "user_123"},
+        enabled=enabled,
+    )
+
+    assert debug_logger.enabled is enabled
 
 
 def test_stream_debug_logger_emits_structured_stage_logs(caplog) -> None:

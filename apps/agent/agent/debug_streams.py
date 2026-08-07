@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 import logging
-import os
 import time
 from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any
@@ -12,10 +11,6 @@ from livekit.agents import Agent
 
 
 logger = logging.getLogger(__name__)
-
-
-def debug_streams_enabled() -> bool:
-    return os.getenv("AGENT_DEBUG_STREAMS", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 async def _iterate_node_output(value: Any) -> AsyncIterator[Any]:
@@ -37,9 +32,14 @@ class StreamDebugLogger:
         self.user_id = user_id or "unknown"
 
     @classmethod
-    def from_dispatch_metadata(cls, metadata: dict[str, Any]) -> "StreamDebugLogger":
+    def from_dispatch_metadata(
+        cls,
+        metadata: dict[str, Any],
+        *,
+        enabled: bool,
+    ) -> "StreamDebugLogger":
         return cls(
-            enabled=debug_streams_enabled(),
+            enabled=enabled,
             call_id=metadata.get("call_id"),
             user_id=metadata.get("user_id"),
         )

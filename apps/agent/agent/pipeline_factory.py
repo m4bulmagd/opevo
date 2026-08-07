@@ -15,6 +15,19 @@ class VerificationSessionConfigurationError(RuntimeError):
     """A verification TTS-only session could not be configured safely."""
 
 
+class AgentPipelineConfigurationError(RuntimeError):
+    """The selected agent pipeline is missing an explicitly required plugin."""
+
+
+def _require_plugin(plugins: dict[str, Any], name: str) -> Any:
+    try:
+        return plugins[name]
+    except KeyError:
+        raise AgentPipelineConfigurationError(
+            f"Required pipeline plugin is unavailable: {name}"
+        ) from None
+
+
 def _resolve_speechmatics_turn_detection_mode(
     settings: AgentSettings,
     plugin_module: Any,
@@ -105,19 +118,25 @@ def _build_stt(
     plugins: dict[str, Any],
 ):
     if config["stt_provider"] == STTProvider.SPEECHMATICS.value:
-        return plugins["speechmatics"].STT(
+        speechmatics = _require_plugin(plugins, "speechmatics")
+        return speechmatics.STT(
             api_key=settings.speechmatics_api_key,
             turn_detection_mode=_resolve_speechmatics_turn_detection_mode(
                 settings,
-                plugins["speechmatics"],
+                speechmatics,
             ),
         )
 
     if config["stt_provider"] == STTProvider.ELEVENLABS.value:
-        return plugins["elevenlabs"].STT(model_id="scribe_v2_realtime", api_key=settings.elevenlabs_api_key)
+        elevenlabs = _require_plugin(plugins, "elevenlabs")
+        return elevenlabs.STT(
+            model_id="scribe_v2_realtime",
+            api_key=settings.elevenlabs_api_key,
+        )
 
     if config["stt_provider"] == STTProvider.DEEPGRAM.value:
-        return plugins["deepgram"].STT(model="nova-3", language="multi")
+        deepgram = _require_plugin(plugins, "deepgram")
+        return deepgram.STT(model="nova-3", language="multi")
 
     raise ValueError(f"Unsupported STT provider: {config['stt_provider']}")
 
@@ -128,7 +147,7 @@ def _build_llm(
     plugins: dict[str, Any],
 ):
     if config["llm_provider"] == LLMProvider.GEMINI.value:
-        return _resolve_gemini_llm(settings, plugins["google"])
+        return _resolve_gemini_llm(settings, _require_plugin(plugins, "google"))
     raise ValueError(f"Unsupported LLM provider: {config['llm_provider']}")
 
 
@@ -138,14 +157,16 @@ def _build_tts(
     plugins: dict[str, Any],
 ):
     if config["tts_provider"] == TTSProvider.ELEVENLABS.value:
-        return plugins["elevenlabs"].TTS(
+        elevenlabs = _require_plugin(plugins, "elevenlabs")
+        return elevenlabs.TTS(
             voice_id=settings.elevenlabs_voice_id,
             model="eleven_flash_v2_5",
             api_key=settings.elevenlabs_api_key,
         )
 
     if config["tts_provider"] == TTSProvider.SPEECHMATICS.value:
-        return plugins["speechmatics"].TTS(
+        speechmatics = _require_plugin(plugins, "speechmatics")
+        return speechmatics.TTS(
             api_key=settings.speechmatics_api_key,
         )
     raise ValueError(f"Unsupported TTS provider: {config['tts_provider']}")
@@ -192,13 +213,16 @@ def build_verification_session(
 def _build_vad(settings: AgentSettings, plugins: dict[str, Any]):
     if not settings.livekit_silero_vad_enabled:
         return None
-    return plugins["silero"].VAD.load()
+    return _require_plugin(plugins, "silero").VAD.load()
 
 
 def _build_turn_detection(settings: AgentSettings, plugins: dict[str, Any]):
     if not settings.livekit_turn_detector_enabled:
         return None
-    return plugins["turn_detector_multilingual"].MultilingualModel()
+    return _require_plugin(
+        plugins,
+        "turn_detector_multilingual",
+    ).MultilingualModel()
 
 
 def _bind_turn_detector_executor(turn_detection, inference_executor):
@@ -218,7 +242,8 @@ def _build_sts_model(
     if config["sts_provider"] != STSProvider.GEMINI.value:
         raise ValueError(f"Unsupported STS provider: {config['sts_provider']}")
 
-    realtime_module = getattr(plugins["google"], "realtime", None)
+    google = _require_plugin(plugins, "google")
+    realtime_module = getattr(google, "realtime", None)
     if realtime_module is None or not hasattr(realtime_module, "RealtimeModel"):
         raise ValueError("Google realtime plugin is required for sts pipeline mode")
 
@@ -253,7 +278,11 @@ def build_agent_runtime(
     session_cls=AgentSession,
 ):
     config = build_pipeline_config(dispatch_metadata)
-    plugins = plugin_modules or _default_plugin_modules(settings, config)
+    plugins = (
+        _default_plugin_modules(settings, config)
+        if plugin_modules is None
+        else plugin_modules
+    )
     instructions = build_system_prompt(
         agent_name=dispatch_metadata["agent_name"],
         owner_name=dispatch_metadata["owner_name"],
@@ -298,7 +327,10 @@ def build_agent_runtime(
 
     if agent_cls is Agent:
         agent = InstrumentedAgent(
-            debug_logger=StreamDebugLogger.from_dispatch_metadata(dispatch_metadata),
+            debug_logger=StreamDebugLogger.from_dispatch_metadata(
+                dispatch_metadata,
+                enabled=settings.agent_debug_streams,
+            ),
             instructions=instructions,
             min_endpointing_delay=settings.agent_min_endpointing_delay,
             max_endpointing_delay=settings.agent_max_endpointing_delay,

@@ -80,6 +80,27 @@ class FakeSession:
         self.kwargs = kwargs
 
 
+DEFAULT_DISPATCH_METADATA = {
+    "agent_name": "Ava",
+    "owner_name": "Sam",
+    "system_prompt": "Be helpful.",
+    "knowledge_base": "Hours 9-5",
+    "pipeline_mode": "stt_llm_tts",
+    "stt_provider": "speechmatics",
+    "llm_provider": "gemini",
+    "tts_provider": "speechmatics",
+}
+
+COMPLETE_FAKE_PLUGINS = {
+    "deepgram": FakeDeepgramPlugin,
+    "elevenlabs": FakeElevenLabsPlugin,
+    "google": FakeGooglePlugin,
+    "speechmatics": FakeSpeechmaticsPlugin,
+    "silero": FakeSileroPlugin,
+    "turn_detector_multilingual": FakeTurnDetectorModule.multilingual,
+}
+
+
 def make_settings(**overrides: object) -> AgentSettings:
     settings = AgentSettings(
         gemini_api_key="gemini-test-key",
@@ -311,16 +332,7 @@ def test_pipeline_factory_rejects_removed_openai_provider() -> None:
 
 def test_pipeline_factory_builds_agent_runtime_with_live_providers() -> None:
     agent, session = build_agent_runtime(
-        {
-            "agent_name": "Ava",
-            "owner_name": "Sam",
-            "system_prompt": "Be helpful.",
-            "knowledge_base": "Hours 9-5",
-            "pipeline_mode": "stt_llm_tts",
-            "stt_provider": "speechmatics",
-            "llm_provider": "gemini",
-            "tts_provider": "speechmatics",
-        },
+        DEFAULT_DISPATCH_METADATA,
         settings=make_settings(),
         plugin_modules={
             "deepgram": FakeDeepgramPlugin,
@@ -375,16 +387,7 @@ def test_pipeline_factory_does_not_print_prompt_content(capsys) -> None:
 
 def test_pipeline_factory_binds_turn_detector_executor_when_provided() -> None:
     _agent, session = build_agent_runtime(
-        {
-            "agent_name": "Ava",
-            "owner_name": "Sam",
-            "system_prompt": "Be helpful.",
-            "knowledge_base": "Hours 9-5",
-            "pipeline_mode": "stt_llm_tts",
-            "stt_provider": "speechmatics",
-            "llm_provider": "gemini",
-            "tts_provider": "speechmatics",
-        },
+        DEFAULT_DISPATCH_METADATA,
         settings=make_settings(),
         plugin_modules={
             "google": FakeGooglePlugin,
@@ -402,16 +405,7 @@ def test_pipeline_factory_binds_turn_detector_executor_when_provided() -> None:
 
 def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> None:
     agent, _session = build_agent_runtime(
-        {
-            "agent_name": "Ava",
-            "owner_name": "Sam",
-            "system_prompt": "Be helpful.",
-            "knowledge_base": "Hours 9-5",
-            "pipeline_mode": "stt_llm_tts",
-            "stt_provider": "speechmatics",
-            "llm_provider": "gemini",
-            "tts_provider": "speechmatics",
-        },
+        DEFAULT_DISPATCH_METADATA,
         settings=make_settings(),
         plugin_modules={
             "google": FakeGooglePlugin,
@@ -423,6 +417,237 @@ def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> No
     )
 
     assert isinstance(agent, InstrumentedAgent)
+
+
+@pytest.mark.parametrize(
+    ("environment_value", "settings_value"),
+    [("true", False), ("false", True)],
+)
+def test_pipeline_debug_logger_uses_explicit_settings_when_environment_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+    environment_value: str,
+    settings_value: bool,
+) -> None:
+    monkeypatch.setenv("AGENT_DEBUG_STREAMS", environment_value)
+
+    agent, _session = build_agent_runtime(
+        DEFAULT_DISPATCH_METADATA,
+        settings=make_settings(agent_debug_streams=settings_value),
+        plugin_modules=COMPLETE_FAKE_PLUGINS,
+        session_cls=FakeSession,
+    )
+
+    assert isinstance(agent, InstrumentedAgent)
+    assert agent._debug_logger.enabled is settings_value
+
+
+def test_agent_runtime_empty_plugin_registry_does_not_load_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pipeline_factory,
+        "_default_plugin_modules",
+        lambda *_args, **_kwargs: pytest.fail("explicit registry loaded defaults"),
+    )
+
+    with pytest.raises(
+        pipeline_factory.AgentPipelineConfigurationError,
+        match="Required pipeline plugin is unavailable: speechmatics",
+    ):
+        build_agent_runtime(
+            DEFAULT_DISPATCH_METADATA,
+            settings=make_settings(
+                livekit_silero_vad_enabled=False,
+                livekit_turn_detector_enabled=False,
+            ),
+            plugin_modules={},
+            agent_cls=FakeAgent,
+            session_cls=FakeSession,
+        )
+
+
+@pytest.mark.parametrize(
+    ("dispatch_metadata", "plugin_modules", "missing_plugin"),
+    [
+        (
+            {
+                **DEFAULT_DISPATCH_METADATA,
+                "stt_provider": "deepgram",
+            },
+            {
+                "google": FakeGooglePlugin,
+                "speechmatics": FakeSpeechmaticsPlugin,
+            },
+            "deepgram",
+        ),
+        (
+            DEFAULT_DISPATCH_METADATA,
+            {"speechmatics": FakeSpeechmaticsPlugin},
+            "google",
+        ),
+        (
+            {
+                **DEFAULT_DISPATCH_METADATA,
+                "stt_provider": "deepgram",
+            },
+            {
+                "deepgram": FakeDeepgramPlugin,
+                "google": FakeGooglePlugin,
+            },
+            "speechmatics",
+        ),
+        (
+            {
+                **DEFAULT_DISPATCH_METADATA,
+                "pipeline_mode": "sts",
+                "sts_provider": "gemini",
+            },
+            {},
+            "google",
+        ),
+    ],
+)
+def test_agent_runtime_partial_registry_reports_selected_missing_plugin_without_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    dispatch_metadata: dict[str, object],
+    plugin_modules: dict[str, object],
+    missing_plugin: str,
+) -> None:
+    monkeypatch.setattr(
+        pipeline_factory,
+        "_default_plugin_modules",
+        lambda *_args, **_kwargs: pytest.fail("explicit registry loaded defaults"),
+    )
+    settings = make_settings(
+        gemini_api_key="credential-sentinel",
+        livekit_silero_vad_enabled=False,
+        livekit_turn_detector_enabled=False,
+    )
+
+    with pytest.raises(pipeline_factory.AgentPipelineConfigurationError) as caught:
+        build_agent_runtime(
+            dispatch_metadata,
+            settings=settings,
+            plugin_modules=plugin_modules,
+            agent_cls=FakeAgent,
+            session_cls=FakeSession,
+        )
+
+    assert str(caught.value) == (
+        f"Required pipeline plugin is unavailable: {missing_plugin}"
+    )
+    assert "credential-sentinel" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("settings_overrides", "plugin_modules", "missing_plugin"),
+    [
+        (
+            {
+                "livekit_silero_vad_enabled": True,
+                "livekit_turn_detector_enabled": False,
+            },
+            {
+                "google": FakeGooglePlugin,
+                "speechmatics": FakeSpeechmaticsPlugin,
+            },
+            "silero",
+        ),
+        (
+            {
+                "livekit_silero_vad_enabled": False,
+                "livekit_turn_detector_enabled": True,
+            },
+            {
+                "google": FakeGooglePlugin,
+                "speechmatics": FakeSpeechmaticsPlugin,
+            },
+            "turn_detector_multilingual",
+        ),
+    ],
+)
+def test_agent_runtime_explicit_registry_requires_enabled_optional_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+    settings_overrides: dict[str, object],
+    plugin_modules: dict[str, object],
+    missing_plugin: str,
+) -> None:
+    monkeypatch.setattr(
+        pipeline_factory,
+        "_default_plugin_modules",
+        lambda *_args, **_kwargs: pytest.fail("explicit registry loaded defaults"),
+    )
+
+    with pytest.raises(
+        pipeline_factory.AgentPipelineConfigurationError,
+        match=f"Required pipeline plugin is unavailable: {missing_plugin}",
+    ):
+        build_agent_runtime(
+            DEFAULT_DISPATCH_METADATA,
+            settings=make_settings(**settings_overrides),
+            plugin_modules=plugin_modules,
+            agent_cls=FakeAgent,
+            session_cls=FakeSession,
+        )
+
+
+@pytest.mark.parametrize(
+    ("dispatch_metadata", "default_plugins", "expected_config"),
+    [
+        (
+            DEFAULT_DISPATCH_METADATA,
+            COMPLETE_FAKE_PLUGINS,
+            {
+                "pipeline_mode": "stt_llm_tts",
+                "stt_provider": "speechmatics",
+                "llm_provider": "gemini",
+                "tts_provider": "speechmatics",
+                "sts_provider": "gemini",
+            },
+        ),
+        (
+            {
+                **DEFAULT_DISPATCH_METADATA,
+                "pipeline_mode": "sts",
+                "sts_provider": "gemini",
+            },
+            {"google": FakeGoogleRealtimePlugin},
+            {
+                "pipeline_mode": "sts",
+                "stt_provider": "speechmatics",
+                "llm_provider": "gemini",
+                "tts_provider": "speechmatics",
+                "sts_provider": "gemini",
+            },
+        ),
+    ],
+)
+def test_agent_runtime_none_registry_loads_defaults_for_selected_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    dispatch_metadata: dict[str, object],
+    default_plugins: dict[str, object],
+    expected_config: dict[str, object],
+) -> None:
+    loaded_configs: list[dict[str, object]] = []
+
+    def load_defaults(
+        _settings: AgentSettings,
+        config: dict[str, object],
+    ) -> dict[str, object]:
+        loaded_configs.append(config.copy())
+        return default_plugins
+
+    monkeypatch.setattr(pipeline_factory, "_default_plugin_modules", load_defaults)
+
+    build_agent_runtime(
+        dispatch_metadata,
+        settings=make_settings(),
+        plugin_modules=None,
+        agent_cls=FakeAgent,
+        session_cls=FakeSession,
+    )
+
+    assert loaded_configs == [expected_config]
 
 
 def test_pipeline_factory_builds_sts_runtime_from_explicit_settings_when_environment_conflicts(
