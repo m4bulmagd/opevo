@@ -481,13 +481,13 @@ and request/job/session code receives its dependencies without cached resource
 factories, deep global patching, or application dependency dictionaries.
 
 The reviewed implementation code range is
-`c561877..87222a97b532836f81fd3f2ad2ee84f01aaf0f19`. The following docs-only
+`c561877..aa8c6b597d6b863152f0f494a56dcb2b5af76f09`. The following docs-only
 ledger commit records this evidence and is intentionally outside that immutable
-code range. Final verification passed 3,050 API tests with no skips (91.91%
-line and 80.32% branch coverage), 699 agent tests with four credential-gated
-evaluation skips (89.25% line and 73.62% branch coverage), and 87 cross-runtime
-integration/import tests. The API architecture guard passed fifteen checks and
-the agent guard passed five.
+code range. Round 4 service-backed verification passed 3,056 API tests with no
+skips (91.92% line and 80.32% branch coverage), 701 agent tests with four
+credential-gated evaluation skips (89.38% line and 73.62% branch coverage),
+and 93 cross-runtime integration/import tests. The final API architecture
+guard passed twenty-one checks and the agent guard passed seven.
 
 Decision 6A-C4A keeps those guards syntactic rather than interpreting Python
 dataflow. Outside the exact executable roots, direct/aliased/star
@@ -498,6 +498,15 @@ accessor; aliasing, rebinding, other calls, and direct mapping access fail. A
 small recursive module-statement binding collector reserves every deleted
 factory name while allowing nested function/class/lambda/comprehension locals.
 The superseded possible-provenance and control-flow interpreters were removed.
+The remaining settings escape guard resolves only direct import bindings and
+syntactic attribute chains. It also rejects literal config-package ancestors
+passed to `importlib.import_module` aliases or bare `__import__`, while allowing
+nonliteral and LiveKit plugin imports. It performs no assignment/string
+provenance or reflective lookup. The worker guard checks nested definition-time
+expressions in the enclosing lexical scope, honors nested callable-local `ctx`
+bindings, models sequential class-local bindings, and treats methods, lambdas,
+comprehensions, and nested class bodies as capturing the enclosing worker scope
+rather than the class namespace.
 Agent shutdown-duration characterization passed both
 `100.0 -> 100.4 -> 1` and `100.0 -> 103.9 -> 3` using the injected monotonic
 clock.

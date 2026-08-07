@@ -2121,6 +2121,34 @@ wording above. Architecture guards remain intentionally syntactic and bounded:
   or control-flow interpretation in these guards. Import escapes and prohibited
   `ctx` syntax fail directly, independent of runtime dataflow.
 
+#### 6A-C4A Round 4 syntax-escape clarification
+
+The final review keeps 6A-C4A syntax-directed while closing two remaining
+escape families:
+
+- Settings checks resolve only names established by direct `Import` and
+  `ImportFrom` statements, then follow syntactic attribute chains. Access to
+  the exact `app.core.config.get_settings` or `agent.config.get_settings`
+  attribute is forbidden outside the executable roots. Literal
+  `importlib.import_module` calls (including direct import aliases) and bare
+  `__import__` calls may not name the config module or a literal package
+  ancestor from which it can be reached. Existing literal and formatted
+  LiveKit plugin imports remain valid. The guard deliberately does not resolve
+  assignment aliases, computed strings, arbitrary dataflow, `getattr`, or
+  other reflective access.
+- Worker `ctx` checking follows lexical syntax rather than independently
+  rescanning every nested function. Decorators, defaults, keyword defaults,
+  parameter annotations, return annotations, class decorators, bases, and
+  class keywords are checked in the enclosing scope where Python evaluates
+  them. A nested callable body with a lexical local `ctx` binding is local;
+  otherwise it captures the worker `ctx`. Class bodies are checked
+  sequentially, while methods, lambdas, comprehensions, and nested class bodies
+  do not inherit the class namespace and therefore continue to capture an
+  enclosing worker `ctx` unless they bind their own.
+- This clarification adds only bounded import-binding resolution and lexical
+  scope traversal. It still forbids call binding, assignment/string
+  provenance, control-flow interpretation, and reflection.
+
 - [ ] **Step 2: Run architecture RED**
 
 ```bash
