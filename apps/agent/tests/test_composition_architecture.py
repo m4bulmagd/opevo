@@ -1,4 +1,5 @@
 import ast
+from importlib.util import resolve_name
 from pathlib import Path
 
 
@@ -20,6 +21,7 @@ COMPOSITION_FREE_MODULES = {
 
 SETTINGS_MODULE = "agent.config"
 SETTINGS_IMPORT_ANCESTORS = {"agent", SETTINGS_MODULE}
+SETTINGS_PACKAGE = "agent"
 
 
 def _production_modules() -> list[tuple[Path, ast.Module]]:
@@ -126,57 +128,46 @@ def _module_bindings(tree: ast.Module) -> list[tuple[int, str]]:
     return collector.bindings
 
 
-def _import_bindings(
-    tree: ast.Module,
+def _literal_call_argument(
+    node: ast.Call,
     *,
-    relative_path: Path,
-) -> dict[str, set[str]]:
-    bindings: dict[str, set[str]] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for imported in node.names:
-                local_name = imported.asname or imported.name.split(".", maxsplit=1)[0]
-                resolved_name = imported.name if imported.asname else local_name
-                bindings.setdefault(local_name, set()).add(resolved_name)
-        elif isinstance(node, ast.ImportFrom):
-            module = _resolved_from_module(node, relative_path)
-            if module is None:
-                continue
-            for imported in node.names:
-                if imported.name == "*":
-                    continue
-                local_name = imported.asname or imported.name
-                bindings.setdefault(local_name, set()).add(
-                    f"{module}.{imported.name}"
-                )
-    return bindings
-
-
-def _resolved_import_expressions(
-    node: ast.expr,
-    *,
-    bindings: dict[str, set[str]],
-) -> set[str]:
-    if isinstance(node, ast.Name):
-        return bindings.get(node.id, set())
-    if isinstance(node, ast.Attribute):
-        return {
-            f"{base}.{node.attr}"
-            for base in _resolved_import_expressions(node.value, bindings=bindings)
-        }
-    return set()
-
-
-def _literal_import_name(node: ast.Call) -> str | None:
-    imported_name: ast.expr | None = node.args[0] if node.args else None
-    if imported_name is None:
-        imported_name = next(
-            (keyword.value for keyword in node.keywords if keyword.arg == "name"),
+    position: int,
+    keyword: str,
+) -> str | None:
+    argument: ast.expr | None = (
+        node.args[position] if len(node.args) > position else None
+    )
+    if argument is None:
+        argument = next(
+            (item.value for item in node.keywords if item.arg == keyword),
             None,
         )
-    if isinstance(imported_name, ast.Constant) and isinstance(imported_name.value, str):
-        return imported_name.value
+    if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+        return argument.value
     return None
+
+
+def _literal_dynamic_import(node: ast.Call) -> str | None:
+    is_import_module = (
+        isinstance(node.func, ast.Name) and node.func.id == "import_module"
+    ) or (isinstance(node.func, ast.Attribute) and node.func.attr == "import_module")
+    is_builtin_import = (
+        isinstance(node.func, ast.Name) and node.func.id == "__import__"
+    )
+    if not (is_import_module or is_builtin_import):
+        return None
+    imported_name = _literal_call_argument(node, position=0, keyword="name")
+    if imported_name is None or not imported_name.startswith("."):
+        return imported_name
+    if is_builtin_import:
+        return None
+    package = _literal_call_argument(node, position=1, keyword="package")
+    if package is None:
+        return None
+    try:
+        return resolve_name(imported_name, package)
+    except (ImportError, ValueError):
+        return None
 
 
 def _settings_boundary_violations(
@@ -185,45 +176,34 @@ def _settings_boundary_violations(
     relative_path: Path,
 ) -> list[tuple[int, str]]:
     violations: dict[int, str] = {}
-    import_bindings = _import_bindings(tree, relative_path=relative_path)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            if any(imported.name == SETTINGS_MODULE for imported in node.names):
-                violations[node.lineno] = f"imports {SETTINGS_MODULE} module"
-        elif isinstance(node, ast.ImportFrom):
-            module = _resolved_from_module(node, relative_path)
-            if module is not None and any(
-                f"{module}.{imported.name}" == SETTINGS_MODULE
+            if any(
+                imported.name == SETTINGS_PACKAGE
+                or imported.name.startswith(f"{SETTINGS_PACKAGE}.")
                 for imported in node.names
             ):
+                violations[node.lineno] = (
+                    f"uses module-form {SETTINGS_PACKAGE} import"
+                )
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolved_from_module(node, relative_path)
+            if module == SETTINGS_PACKAGE and any(
+                imported.name == "config" for imported in node.names
+            ):
                 violations[node.lineno] = f"imports {SETTINGS_MODULE} module"
                 continue
-            if module != SETTINGS_MODULE:
-                continue
-            if any(imported.name == "*" for imported in node.names):
-                violations[node.lineno] = f"star-imports {SETTINGS_MODULE}"
-            elif any(imported.name == "get_settings" for imported in node.names):
+            if module in SETTINGS_IMPORT_ANCESTORS and any(
+                imported.name == "*" for imported in node.names
+            ):
+                violations[node.lineno] = f"star-imports {module}"
+            elif module == SETTINGS_MODULE and any(
+                imported.name == "get_settings" for imported in node.names
+            ):
                 violations[node.lineno] = f"imports {SETTINGS_MODULE}.get_settings"
-        elif isinstance(node, ast.Attribute):
-            if (
-                f"{SETTINGS_MODULE}.get_settings"
-                in _resolved_import_expressions(node, bindings=import_bindings)
-            ):
-                violations[node.lineno] = (
-                    f"accesses {SETTINGS_MODULE}.get_settings"
-                )
         elif isinstance(node, ast.Call):
-            is_importlib_call = "importlib.import_module" in (
-                _resolved_import_expressions(node.func, bindings=import_bindings)
-            )
-            is_builtin_import = (
-                isinstance(node.func, ast.Name) and node.func.id == "__import__"
-            )
-            imported_name = _literal_import_name(node)
-            if (
-                (is_importlib_call or is_builtin_import)
-                and imported_name in SETTINGS_IMPORT_ANCESTORS
-            ):
+            imported_name = _literal_dynamic_import(node)
+            if imported_name in SETTINGS_IMPORT_ANCESTORS:
                 violations[node.lineno] = f"dynamically imports {imported_name}"
 
     for line, name in _module_bindings(tree):
@@ -331,13 +311,23 @@ def test_agent_settings_boundary_allows_typed_imports_and_nested_shadows() -> No
     )
 
 
-def test_agent_settings_boundary_resolves_imports_and_literal_dynamic_imports() -> (
+def test_agent_settings_boundary_rejects_package_syntax_and_literal_dynamic_imports() -> (
     None
 ):
     forbidden_cases = [
-        ("import agent\nagent.config.get_settings()\n", [2]),
-        ("import agent as package\npackage.config.get_settings\n", [2]),
-        ("from agent import config as cfg\ncfg.get_settings()\n", [1, 2]),
+        ("import agent\nagent.config.get_settings()\n", [1]),
+        ("import agent as package\npackage.config.get_settings\n", [1]),
+        ("import agent.providers\n", [1]),
+        ("from agent import config as cfg\ncfg.get_settings()\n", [1]),
+        ("from agent import *\n", [1]),
+        ("from . import config\n", [1]),
+        (
+            "def use_local():\n"
+            "    import agent as package\n"
+            "    package = local\n"
+            "    return package\n",
+            [2],
+        ),
         (
             "import importlib\n"
             'importlib.import_module("agent")\n',
@@ -349,16 +339,15 @@ def test_agent_settings_boundary_resolves_imports_and_literal_dynamic_imports() 
             [2],
         ),
         (
-            "from importlib import import_module as load\n"
-            'load("agent")\n',
-            [2],
+            'import_module(".config", "agent")\n',
+            [1],
         ),
         (
-            "import importlib\n"
-            'importlib.import_module(name="agent.config")\n',
-            [2],
+            'loader.import_module(name=".config", package="agent")\n',
+            [1],
         ),
         ('__import__("agent.config")\n', [1]),
+        ('__import__(name="agent.config")\n', [1]),
     ]
 
     for source, expected_lines in forbidden_cases:
@@ -375,13 +364,17 @@ def test_agent_settings_boundary_allows_livekit_and_nonliteral_dynamic_imports()
     None
 ):
     tree = ast.parse(
-        "import agent\n"
-        "agent.providers\n"
+        "from agent import providers\n"
+        "from .config import AgentSettings\n"
+        "import agentic\n"
         "import importlib as loader\n"
         'loader.import_module("livekit.plugins.turn_detector.multilingual")\n'
         'loader.import_module(f"livekit.plugins.{tts_provider}")\n'
-        "from importlib import import_module as load\n"
-        "load(module_name)\n"
+        'loader.import_module(".providers", package="agent")\n'
+        'loader.import_module("..config", package="")\n'
+        'loader.import_module(".config", package_name)\n'
+        'loader.import_module(name=".config", package=None)\n'
+        "import_module(module_name, package=package_name)\n"
         '__import__("livekit.plugins")\n'
     )
 
