@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
@@ -440,6 +441,80 @@ async def test_build_api_runtime_unwinds_every_open_resource_on_late_failure(
             recording_service_factory=_forbidden_factory("recording service"),
         )
 
+    assert closed_resources == [
+        "arq_pool",
+        "storage",
+        "auth",
+        "redis",
+        "engine",
+        "observability",
+    ]
+    assert all(
+        resource.close_calls == 1
+        for resource in (
+            arq_pool,
+            storage_provider,
+            auth_provider,
+            redis_client,
+            engine,
+            observability,
+        )
+    )
+
+
+@pytest.mark.anyio
+async def test_build_api_runtime_preserves_cancellation_while_unwinding_resources(
+    settings,
+) -> None:
+    from app.composition.api import build_api_runtime
+    from app.core.config import Settings
+
+    values = settings.model_dump()
+    values.update(
+        {
+            "app_env": "development",
+            "realtime_enabled": False,
+            "livekit_url": "wss://livekit.example.com",
+            "livekit_api_key": "livekit-key",
+            "livekit_api_secret": "livekit-secret",
+        }
+    )
+    configured_settings = Settings(**values)
+    closed_resources: list[str] = []
+    observability = _OwnedResource("observability", closed_resources)
+    engine = _Engine("engine", closed_resources)
+    redis_client = _OwnedResource("redis", closed_resources)
+    auth_provider = _OwnedResource("auth", closed_resources)
+    storage_provider = _OwnedResource("storage", closed_resources)
+    arq_pool = _OwnedResource("arq_pool", closed_resources)
+    cancellation = asyncio.CancelledError("cancel API runtime construction")
+
+    async def arq_pool_factory(_redis_url: str):
+        return arq_pool
+
+    def cancel_webhook_receiver(*, settings, observability):
+        assert settings is configured_settings
+        assert observability is globals_observability
+        raise cancellation
+
+    globals_observability = observability
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await build_api_runtime(
+            configured_settings,
+            engine_factory=lambda _url: engine,
+            redis_factory=lambda _url: redis_client,
+            observability_factory=lambda **_kwargs: observability,
+            auth_factory=lambda **_kwargs: auth_provider,
+            readiness_factory=lambda **_kwargs: object(),
+            storage_factory=lambda **_kwargs: storage_provider,
+            arq_pool_factory=arq_pool_factory,
+            realtime_service_factory=_forbidden_factory("realtime service"),
+            webhook_receiver_factory=cancel_webhook_receiver,
+            recording_service_factory=_forbidden_factory("recording service"),
+        )
+
+    assert caught.value is cancellation
+    assert caught.value.__cause__ is None
     assert closed_resources == [
         "arq_pool",
         "storage",
