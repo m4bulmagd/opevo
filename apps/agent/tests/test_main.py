@@ -1376,13 +1376,22 @@ async def test_entrypoint_injects_job_shutdown_into_session_runtime(
     ]
 
 
+@pytest.mark.parametrize(
+    ("clock_values", "expected_duration"),
+    [
+        ([100.0, 100.4], 1),
+        ([100.0, 103.9], 3),
+    ],
+)
 @pytest.mark.anyio
 async def test_entrypoint_uses_injected_clock_for_minimum_shutdown_duration(
     monkeypatch: pytest.MonkeyPatch,
+    clock_values: list[float],
+    expected_duration: int,
 ) -> None:
     context = FakeJobContext(make_metadata())
     session = FakeEntrypointSession()
-    clock_values = iter([100.0, 100.4])
+    clock = iter(clock_values)
     captured_durations: list[int] = []
 
     class CapturingRuntime:
@@ -1410,13 +1419,13 @@ async def test_entrypoint_uses_injected_clock_for_minimum_shutdown_duration(
         context,
         agent_runtime_factory=lambda *_args, **_kwargs: (object(), session),
         session_runtime_factory=CapturingRuntime,
-        monotonic=lambda: next(clock_values),
+        monotonic=lambda: next(clock),
     )
     await context.shutdown_callbacks[0]()
 
-    assert captured_durations == [1]
+    assert captured_durations == [expected_duration]
     with pytest.raises(StopIteration):
-        next(clock_values)
+        next(clock)
 
 
 def test_silero_prewarm_failure_does_not_render_exception_message(
