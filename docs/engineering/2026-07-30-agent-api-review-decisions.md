@@ -832,16 +832,23 @@ Issue 8A is implemented in the repository:
 - The final security-patched lock resolves `aiohttp==3.14.3` and
   `cryptography==50.0.0`; the previously reviewed Transformers exception
   retains its 2026-08-14 expiry.
-- Local evidence is 741 passing tests with four credential-gated skips, Ruff
-  and mypy success, 89.85% line coverage, 75.13% branch coverage, an exact
-  CI-equivalent dependency audit, and a successful final container build.
+- Staged evidence includes 740 passing tests with four credential-gated skips
+  on both the untouched 1.4.4 baseline and the committed 1.5.17 checkpoint.
+- Final 1.6.9 evidence is 742 passing tests with four credential-gated skips,
+  Ruff and mypy success, 89.91% line coverage, 75.51% branch coverage, and an
+  exact CI-equivalent dependency audit.
+- The final tagged image builds successfully, runs as UID 10001, imports the
+  application and all seven 1.6.9 packages, contains downloaded model assets,
+  initializes its worker processes, and returns HTTP 200 from its configured
+  health endpoint.
 
 ### Required validation
 
 - **Complete locally:** unit and contract tests for metadata, callbacks, error
   translation, pipeline construction, and shutdown.
-- **Complete locally:** container build proving all required plugin assets are
-  downloaded through the public command.
+- **Complete locally:** container build and non-root runtime smoke proving all
+  required plugin assets are downloaded through the public command, imports
+  succeed, and the configured health endpoint responds.
 - **Still required before promotion:** credentialed recorded/scripted audio
   integration cases for silence, interruption, long utterance, quick
   backchannel, French speech, provider timeout, and cancellation.

@@ -17,9 +17,10 @@ locally verified. Compliance, recovery evidence, cloud deployment, and
 real-provider certification remain controlled-beta gates.
 
 The voice worker uses one coherent exact LiveKit Agents 1.6.9 package family.
-Its public lifecycle migration, asset download, dependency audit, and final
-container build are locally verified. The four credential-gated behavioral
-voice evaluations still require a configured real-provider run.
+Its public lifecycle migration, asset download, dependency audit, final
+container build, non-root runtime imports/assets, and health endpoint are
+locally verified. The four credential-gated behavioral voice evaluations still
+require a configured real-provider run.
 
 ## Current product boundary
 
@@ -52,7 +53,7 @@ voice evaluations still require a configured real-provider run.
 | Starter billing | **Implemented** | Stripe Checkout, a pinned Billing Portal configuration, paid-invoice minute grants, subscription lifecycle handling, and PostgreSQL-backed usage accounting are present. Portal subscription-only cancellation remains active until the paid-period end; owner account deactivation cancels immediately without automatic proration or refund. The Portal configuration still requires deployment-time review and real Stripe certification. |
 | French number provisioning | **Implemented** | Queue-backed provisioning, persisted status, retry handling, assignment, and routing gates are present. Payment eligibility and explicit provisioning consent are separate. The fake local path is browser-proven; Telnyx still needs fresh staging certification. |
 | Agent configuration | **Implemented** | Customer-owned agent identity, owner context, system prompt, knowledge base, fixed launch pipeline, guarded routing toggle, persisted profile-owned content overrides, and unsaved-change protection are present. |
-| Inbound voice runtime | **Implemented** | LiveKit dispatch and a separate agent worker support Speechmatics or Deepgram STT, Gemini LLM, and Speechmatics or ElevenLabs TTS. The coherent LiveKit Agents 1.6.9 family uses public turn-handling and asset-download APIs; 741 local tests, the coverage gate, dependency audit, and final image build pass, while credentialed behavioral evaluation remains a production-readiness gate. |
+| Inbound voice runtime | **Implemented** | LiveKit dispatch and a separate agent worker support Speechmatics or Deepgram STT, Gemini LLM, and Speechmatics or ElevenLabs TTS. The coherent LiveKit Agents 1.6.9 family uses public turn-handling and asset-download APIs; 742 local tests, the coverage gate, dependency audit, final image build, non-root runtime smoke, and health probe pass, while credentialed behavioral evaluation remains a production-readiness gate. |
 | Native-audio STS runtime | **Partial** | Gemini native-audio support exists in the worker and tests but is intentionally hidden from the customer-facing France launch. |
 | Durable call lifecycle | **Implemented** | Incremental transcript persistence, call-scoped agent JWTs, a state machine, reconciliation, duration limits, and idempotent finalization are present. |
 | Call review | **Implemented** | Call list/detail, transcript, summary, recording availability, signed recording URLs, and usage charge are present. |
