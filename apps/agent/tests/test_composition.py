@@ -4,13 +4,14 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from livekit.agents import JobExecutorType, JobProcess
 
 from agent.composition import (
-    AgentProcessRuntime,
     AgentRuntimeConfigurationError,
     build_agent_api_client,
     build_agent_process_runtime,
     build_event_publisher,
+    publish_agent_process_runtime,
     require_agent_process_runtime,
 )
 from agent.config import AgentSettings
@@ -81,6 +82,14 @@ class _Redis:
         self.close_calls += 1
 
 
+def _job_process() -> JobProcess:
+    return JobProcess(
+        executor_type=JobExecutorType.PROCESS,
+        user_arguments=None,
+        http_proxy=None,
+    )
+
+
 @pytest.mark.parametrize("userdata", [None, {}, object()])
 def test_require_agent_process_runtime_rejects_missing_or_wrong_process_data(
     userdata: object,
@@ -101,8 +110,27 @@ def test_require_agent_process_runtime_returns_typed_process_data() -> None:
         event_publisher_factory=lambda _settings: _Publisher(),
         silero_vad=object(),
     )
+    proc = _job_process()
+    publish_agent_process_runtime(proc, runtime)
 
-    assert require_agent_process_runtime(SimpleNamespace(userdata=runtime)) is runtime
+    assert require_agent_process_runtime(proc) is runtime
+
+
+@pytest.mark.parametrize("userdata", [None, object()])
+def test_publish_agent_process_runtime_rejects_nonmutable_userdata(
+    userdata: object,
+) -> None:
+    runtime = build_agent_process_runtime(
+        _settings(),
+        api_client_factory=lambda _settings: _ApiClient(),
+        event_publisher_factory=lambda _settings: _Publisher(),
+    )
+
+    with pytest.raises(
+        AgentRuntimeConfigurationError,
+        match="agent process userdata is not a mutable mapping",
+    ):
+        publish_agent_process_runtime(SimpleNamespace(userdata=userdata), runtime)
 
 
 def test_agent_transport_factories_are_synchronous_and_construction_only(
@@ -116,7 +144,7 @@ def test_agent_transport_factories_are_synchronous_and_construction_only(
     )
     redis = _Redis()
     redis_calls: list[tuple[str, bool]] = []
-    proc = SimpleNamespace(userdata=object())
+    proc = SimpleNamespace(userdata={})
 
     def fail_http_construction(**_kwargs: object) -> Any:
         pytest.fail("API factory eagerly acquired an HTTP transport")
@@ -137,9 +165,9 @@ def test_agent_transport_factories_are_synchronous_and_construction_only(
         ),
     )
 
-    assert isinstance(proc.userdata, AgentProcessRuntime)
-    api_client = proc.userdata.api_client
-    publisher = proc.userdata.event_publisher
+    runtime = require_agent_process_runtime(proc)
+    api_client = runtime.api_client
+    publisher = runtime.event_publisher
     assert api_client.base_url == "http://api.runtime.test/root"
     assert api_client.timeout == 7.5
     assert api_client.max_retries == 4
@@ -250,7 +278,7 @@ async def test_event_publisher_never_closes_borrowed_redis() -> None:
 
 def test_prewarm_publishes_complete_runtime_with_exact_settings_and_no_vad() -> None:
     settings = _settings()
-    original_userdata = object()
+    original_userdata: dict[object, object] = {}
     proc = SimpleNamespace(userdata=original_userdata)
 
     api_client = _ApiClient()
@@ -263,11 +291,38 @@ def test_prewarm_publishes_complete_runtime_with_exact_settings_and_no_vad() -> 
         event_publisher_factory=lambda _settings: publisher,
     )
 
-    assert isinstance(proc.userdata, AgentProcessRuntime)
-    assert proc.userdata.settings is settings
-    assert proc.userdata.api_client is api_client
-    assert proc.userdata.event_publisher is publisher
-    assert proc.userdata.silero_vad is None
+    runtime = require_agent_process_runtime(proc)
+    assert proc.userdata is original_userdata
+    assert runtime.settings is settings
+    assert runtime.api_client is api_client
+    assert runtime.event_publisher is publisher
+    assert runtime.silero_vad is None
+
+
+def test_prewarm_publishes_runtime_without_replacing_livekit_userdata() -> None:
+    settings = _settings()
+    proc = _job_process()
+    original_userdata = proc.userdata
+    unrelated_value = object()
+    original_userdata["unrelated"] = unrelated_value
+
+    api_client = _ApiClient()
+    publisher = _Publisher()
+
+    prewarm_assets(
+        proc,
+        settings=settings,
+        api_client_factory=lambda _settings: api_client,
+        event_publisher_factory=lambda _settings: publisher,
+    )
+
+    runtime = require_agent_process_runtime(proc)
+    assert proc.userdata is original_userdata
+    assert proc.userdata["unrelated"] is unrelated_value
+    assert runtime.settings is settings
+    assert runtime.api_client is api_client
+    assert runtime.event_publisher is publisher
+    assert runtime.silero_vad is None
 
 
 def test_prewarm_publishes_loaded_vad_in_complete_runtime(
@@ -277,7 +332,7 @@ def test_prewarm_publishes_loaded_vad_in_complete_runtime(
 
     settings = _settings(livekit_silero_vad_enabled=True)
     vad = object()
-    original_userdata = object()
+    original_userdata: dict[object, object] = {}
     proc = SimpleNamespace(userdata=original_userdata)
 
     def load_vad() -> object:
@@ -296,16 +351,18 @@ def test_prewarm_publishes_loaded_vad_in_complete_runtime(
         event_publisher_factory=lambda _settings: publisher,
     )
 
-    assert isinstance(proc.userdata, AgentProcessRuntime)
-    assert proc.userdata.settings is settings
-    assert proc.userdata.api_client is api_client
-    assert proc.userdata.event_publisher is publisher
-    assert proc.userdata.silero_vad is vad
+    runtime = require_agent_process_runtime(proc)
+    assert proc.userdata is original_userdata
+    assert runtime.settings is settings
+    assert runtime.api_client is api_client
+    assert runtime.event_publisher is publisher
+    assert runtime.silero_vad is vad
 
 
 def test_prewarm_does_not_publish_a_partial_runtime_when_factory_fails() -> None:
     settings = _settings()
-    original_userdata = object()
+    existing_value = object()
+    original_userdata: dict[object, object] = {"existing": existing_value}
     proc = SimpleNamespace(userdata=original_userdata)
     api_client = build_agent_api_client(settings)
 
@@ -320,5 +377,10 @@ def test_prewarm_does_not_publish_a_partial_runtime_when_factory_fails() -> None
             event_publisher_factory=fail_publisher,
         )
 
-    assert proc.userdata is original_userdata
+    assert proc.userdata == {"existing": existing_value}
+    with pytest.raises(
+        AgentRuntimeConfigurationError,
+        match="agent process runtime is not initialized",
+    ):
+        require_agent_process_runtime(proc)
     assert api_client.http_client is None

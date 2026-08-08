@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, MutableMapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Protocol
@@ -14,6 +14,7 @@ from agent.safe_logging import report_safe_exception
 
 
 logger = logging.getLogger(__name__)
+_AGENT_PROCESS_RUNTIME_KEY = "presvo.agent.process_runtime"
 
 
 class AgentRuntimeConfigurationError(RuntimeError):
@@ -122,8 +123,32 @@ def build_agent_process_runtime(
     )
 
 
+def _agent_process_userdata(
+    proc: object,
+) -> MutableMapping[object, object] | None:
+    userdata = getattr(proc, "userdata", None)
+    if not isinstance(userdata, MutableMapping):
+        return None
+    return userdata
+
+
+def publish_agent_process_runtime(
+    proc: object,
+    runtime: AgentProcessRuntime,
+) -> None:
+    userdata = _agent_process_userdata(proc)
+    if userdata is None:
+        raise AgentRuntimeConfigurationError(
+            "agent process userdata is not a mutable mapping"
+        )
+    userdata[_AGENT_PROCESS_RUNTIME_KEY] = runtime
+
+
 def require_agent_process_runtime(proc: object) -> AgentProcessRuntime:
-    runtime = getattr(proc, "userdata", None)
+    userdata = _agent_process_userdata(proc)
+    runtime = (
+        None if userdata is None else userdata.get(_AGENT_PROCESS_RUNTIME_KEY)
+    )
     if not isinstance(runtime, AgentProcessRuntime):
         raise AgentRuntimeConfigurationError(
             "agent process runtime is not initialized"

@@ -9,7 +9,11 @@ import pytest
 from presvo_contracts import ContractError, VersionedContract, dump_contract
 
 import agent.main as agent_main
-from agent.composition import build_agent_process_runtime
+from agent.composition import (
+    build_agent_process_runtime,
+    publish_agent_process_runtime,
+    require_agent_process_runtime,
+)
 from agent.config import AgentSettings
 
 
@@ -59,8 +63,10 @@ class FakeJobContext:
     def __init__(self, metadata: str) -> None:
         self.job = SimpleNamespace(metadata=metadata)
         self.shutdown_callbacks: list[object] = []
-        self.proc = SimpleNamespace(
-            userdata=build_agent_process_runtime(TEST_SETTINGS)
+        self.proc = SimpleNamespace(userdata={})
+        publish_agent_process_runtime(
+            self.proc,
+            build_agent_process_runtime(TEST_SETTINGS),
         )
         self.inference_executor = object()
         self.room = object()
@@ -227,7 +233,7 @@ async def test_entrypoint_parses_exact_shared_dispatch_artifacts(
     ) -> None:
         assert resolved_context is context
         assert settings is TEST_SETTINGS
-        assert api_client is context.proc.userdata.api_client
+        assert api_client is require_agent_process_runtime(context.proc).api_client
         parsed_payloads.append(dump_contract(cast(VersionedContract, metadata)))
 
     def capture_customer(

@@ -17,7 +17,12 @@ from presvo_contracts import (
 )
 
 import agent.main as agent_main
-from agent.composition import AgentProcessRuntime, build_agent_process_runtime
+from agent.composition import (
+    AgentProcessRuntime,
+    build_agent_process_runtime,
+    publish_agent_process_runtime,
+    require_agent_process_runtime,
+)
 from agent.config import AgentSettings
 
 
@@ -295,12 +300,14 @@ class FakeVerificationContext:
         self.job = SimpleNamespace(metadata=json.dumps(metadata or {}))
         api_client = FakeVerificationApiClient(self.events)
         publisher = FakeVerificationPublisher(self.events)
-        self.proc = SimpleNamespace(
-            userdata=build_agent_process_runtime(
+        self.proc = SimpleNamespace(userdata={})
+        publish_agent_process_runtime(
+            self.proc,
+            build_agent_process_runtime(
                 VERIFICATION_SETTINGS,
                 api_client_factory=lambda _settings: api_client,
                 event_publisher_factory=lambda _settings: publisher,
-            )
+            ),
         )
         self.shutdown_callbacks: list[object] = []
 
@@ -698,7 +705,7 @@ async def test_entrypoint_branches_to_verification_before_normal_call_runtime(
             context,
             metadata,
             VERIFICATION_SETTINGS,
-            context.proc.userdata.api_client,
+            require_agent_process_runtime(context.proc).api_client,
         )
     ]
     assert len(context.shutdown_callbacks) == 1
@@ -726,11 +733,14 @@ async def test_shutdown_waits_for_forwarding_verification_transport_use_and_clea
             await publisher.aclose()
             await api_client.aclose()
 
-    context.proc.userdata = AgentProcessRuntime(
-        settings=VERIFICATION_SETTINGS,
-        api_client=api_client,
-        event_publisher=publisher,
-        _cleanup=InlineCleanup(),  # type: ignore[arg-type]
+    publish_agent_process_runtime(
+        context.proc,
+        AgentProcessRuntime(
+            settings=VERIFICATION_SETTINGS,
+            api_client=api_client,
+            event_publisher=publisher,
+            _cleanup=InlineCleanup(),  # type: ignore[arg-type]
+        ),
     )
 
     async def block_verification(
@@ -742,7 +752,7 @@ async def test_shutdown_waits_for_forwarding_verification_transport_use_and_clea
     ) -> None:
         assert resolved_context is context
         assert settings is VERIFICATION_SETTINGS
-        assert api_client is context.proc.userdata.api_client
+        assert api_client is require_agent_process_runtime(context.proc).api_client
         events.append("verification.started")
         verification_started.set()
         await release_verification.wait()

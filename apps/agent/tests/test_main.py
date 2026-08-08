@@ -2,6 +2,7 @@ import asyncio
 import gc
 import json
 import logging
+import pickle
 import sys
 from contextlib import contextmanager
 from types import ModuleType, SimpleNamespace
@@ -12,7 +13,12 @@ from livekit.agents import JobExecutorType
 from presvo_contracts import ContractError, CustomerCallDispatch, create_contract
 
 import agent.main as agent_main
-from agent.composition import AgentProcessRuntime, build_agent_process_runtime
+from agent.composition import (
+    AgentProcessRuntime,
+    build_agent_process_runtime,
+    publish_agent_process_runtime,
+    require_agent_process_runtime,
+)
 from agent.config import AgentSettings
 from agent.main import build_worker_options
 from agent.main import entrypoint
@@ -107,13 +113,30 @@ def make_metadata(**overrides) -> CustomerCallDispatch:
     return create_contract(CustomerCallDispatch, **defaults)
 
 
-def test_build_worker_options_sets_prewarm_hook() -> None:
+def test_build_worker_options_keeps_process_isolation_and_drain_timeout() -> None:
+    options = build_worker_options(TEST_SETTINGS)
+
+    assert options.job_executor_type is JobExecutorType.PROCESS
+    assert options.drain_timeout == 3900
+
+
+def test_build_worker_options_sets_process_serializable_prewarm_hook() -> None:
     options = build_worker_options(TEST_SETTINGS)
 
     assert options.prewarm_fnc is not None
-    assert options.prewarm_fnc.__name__ == "prewarm_configured_assets"
-    assert options.job_executor_type is JobExecutorType.PROCESS
-    assert options.drain_timeout == 3900
+    restored_hook = pickle.loads(pickle.dumps(options.prewarm_fnc))
+
+    assert callable(restored_hook)
+
+
+def test_build_worker_options_prewarm_hook_repr_hides_settings_values() -> None:
+    secret_sentinel = "PREWARM_SETTINGS_SECRET_SENTINEL"
+    settings = TEST_SETTINGS.model_copy(update={"gemini_api_key": secret_sentinel})
+
+    options = build_worker_options(settings)
+
+    assert options.prewarm_fnc is not None
+    assert secret_sentinel not in repr(options.prewarm_fnc)
 
 
 def test_build_worker_options_registers_job_request_handler() -> None:
@@ -136,7 +159,7 @@ def test_build_worker_options_passes_exact_settings_to_inference_registration(
     assert called == [TEST_SETTINGS]
 
 
-def test_build_worker_options_prewarm_closure_uses_exact_settings(
+def test_build_worker_options_prewarm_hook_uses_exact_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[object, AgentSettings]] = []
@@ -474,7 +497,8 @@ def test_dispatch_metadata_forbids_extra_fields() -> None:
 class FakeJobContext:
     def __init__(self, metadata: CustomerCallDispatch) -> None:
         self.job = SimpleNamespace(metadata=metadata.model_dump_json())
-        self.proc = SimpleNamespace(userdata=make_process_runtime())
+        self.proc = SimpleNamespace(userdata={})
+        publish_agent_process_runtime(self.proc, make_process_runtime())
         self.inference_executor = object()
         self.room = object()
         self.events: list[object] = []
@@ -534,7 +558,10 @@ async def test_entrypoint_passes_process_settings_and_prewarmed_vad_to_pipeline(
     )
     vad = object()
     context = FakeJobContext(metadata)
-    context.proc.userdata = make_process_runtime(settings, silero_vad=vad)
+    publish_agent_process_runtime(
+        context.proc,
+        make_process_runtime(settings, silero_vad=vad),
+    )
     session = FakeEntrypointSession()
     captured: dict[str, object] = {}
 
@@ -724,10 +751,13 @@ async def test_entrypoint_uses_one_shutdown_callback_with_strict_cleanup_order(
     api_client = FakeProcessApiClient(events)
     publisher = FakeProcessPublisher(events)
     context = FakeJobContext(metadata)
-    context.proc.userdata = make_process_runtime(
-        events=events,
-        api_client=api_client,
-        publisher=publisher,
+    publish_agent_process_runtime(
+        context.proc,
+        make_process_runtime(
+            events=events,
+            api_client=api_client,
+            publisher=publisher,
+        ),
     )
     session = FakeEntrypointSession()
     captured: dict[str, object] = {}
@@ -825,9 +855,12 @@ async def test_shutdown_callback_cancellation_joins_the_full_ordered_cleanup(
     api_client = FakeProcessApiClient(events)
     publisher = BlockingPublisher(events)
     context = FakeJobContext(metadata)
-    context.proc.userdata = make_process_runtime(
-        api_client=api_client,
-        publisher=publisher,
+    publish_agent_process_runtime(
+        context.proc,
+        make_process_runtime(
+            api_client=api_client,
+            publisher=publisher,
+        ),
     )
     session = FakeEntrypointSession()
     monkeypatch.setattr(agent_main, "shutdown_observability", shutdown_observability)
@@ -885,9 +918,12 @@ async def test_cancelled_shutdown_waiter_safely_reports_retained_failure_once(
     api_client = FakeProcessApiClient(events)
     publisher = BlockingPublisher(events)
     context = FakeJobContext(metadata)
-    context.proc.userdata = make_process_runtime(
-        api_client=api_client,
-        publisher=publisher,
+    publish_agent_process_runtime(
+        context.proc,
+        make_process_runtime(
+            api_client=api_client,
+            publisher=publisher,
+        ),
     )
     session = FakeEntrypointSession()
     monkeypatch.setattr(
@@ -1050,11 +1086,14 @@ async def test_shutdown_waits_for_customer_entrypoint_setup_before_state_publica
         events.append("observability.close")
 
     context = FakeJobContext(metadata)
-    context.proc.userdata = AgentProcessRuntime(
-        settings=TEST_SETTINGS,
-        api_client=api_client,
-        event_publisher=publisher,
-        _cleanup=InlineCleanup(),  # type: ignore[arg-type]
+    publish_agent_process_runtime(
+        context.proc,
+        AgentProcessRuntime(
+            settings=TEST_SETTINGS,
+            api_client=api_client,
+            event_publisher=publisher,
+            _cleanup=InlineCleanup(),  # type: ignore[arg-type]
+        ),
     )
     context.connect = block_connect
     session = FakeEntrypointSession()
@@ -1097,7 +1136,7 @@ async def test_entrypoint_registers_observability_shutdown_before_metadata_parsi
 ) -> None:
     metadata = make_metadata()
     context = FakeJobContext(metadata)
-    process_runtime = context.proc.userdata
+    process_runtime = require_agent_process_runtime(context.proc)
     context.job.metadata = "{"
     shutdown_calls: list[bool] = []
 
@@ -1137,7 +1176,7 @@ async def test_entrypoint_shutdown_closes_process_runtime_after_connect_terminat
     expected_error: type[BaseException],
 ) -> None:
     context = FakeJobContext(make_metadata())
-    process_runtime = context.proc.userdata
+    process_runtime = require_agent_process_runtime(context.proc)
     shutdown_calls: list[bool] = []
 
     async def fail_connect(**_kwargs: object) -> None:
@@ -1165,7 +1204,7 @@ async def test_entrypoint_shutdown_closes_process_runtime_after_pipeline_setup_f
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = FakeJobContext(make_metadata())
-    process_runtime = context.proc.userdata
+    process_runtime = require_agent_process_runtime(context.proc)
 
     def fail_pipeline(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("provider setup failed")
@@ -1191,7 +1230,7 @@ async def test_entrypoint_shutdown_finalizes_and_closes_after_session_start_fail
 ) -> None:
     metadata = make_metadata()
     context = FakeJobContext(metadata)
-    process_runtime = context.proc.userdata
+    process_runtime = require_agent_process_runtime(context.proc)
     session = FakeEntrypointSession()
 
     async def fail_start(**_kwargs: object) -> None:
@@ -1459,9 +1498,9 @@ def test_silero_prewarm_failure_does_not_render_exception_message(
             settings=settings,
         )
 
-    assert isinstance(proc.userdata, AgentProcessRuntime)
-    assert proc.userdata.settings is settings
-    assert proc.userdata.silero_vad is None
+    runtime = require_agent_process_runtime(proc)
+    assert runtime.settings is settings
+    assert runtime.silero_vad is None
     assert "SILERO_AUTHORIZATION_SENTINEL" not in caplog.text
     assert "event=silero_prewarm_failed" in caplog.text
     assert "operation=load_silero_vad" in caplog.text
@@ -1475,10 +1514,10 @@ def test_observability_initialization_failure_does_not_prevent_prewarm(
 ) -> None:
     from livekit import plugins
 
-    proc = SimpleNamespace(userdata=object())
+    proc = SimpleNamespace(userdata={})
 
     def fail_initialization() -> None:
-        assert isinstance(proc.userdata, AgentProcessRuntime)
+        assert isinstance(require_agent_process_runtime(proc), AgentProcessRuntime)
         raise RuntimeError("OTEL_EXPORTER_CREDENTIAL_SENTINEL")
 
     adaptive_mode = object()

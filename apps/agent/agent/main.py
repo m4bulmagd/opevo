@@ -4,6 +4,7 @@ import logging
 import importlib
 import inspect
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from livekit import rtc
@@ -27,6 +28,7 @@ from agent.composition import (
     build_agent_api_client,
     build_agent_process_runtime,
     build_event_publisher,
+    publish_agent_process_runtime,
     require_agent_process_runtime,
 )
 from agent.config import AgentSettings, get_settings
@@ -486,8 +488,16 @@ def prewarm_assets(
             )
 
     runtime.silero_vad = silero_vad
-    proc.userdata = runtime
+    publish_agent_process_runtime(proc, runtime)
     _initialize_observability_safely()
+
+
+@dataclass(frozen=True, slots=True)
+class _PrewarmConfiguredAssets:
+    settings: AgentSettings = field(repr=False)
+
+    def __call__(self, proc: Any) -> None:
+        prewarm_assets(proc, settings=self.settings)
 
 
 def build_worker_options(settings: AgentSettings | None = None) -> WorkerOptions:
@@ -495,13 +505,10 @@ def build_worker_options(settings: AgentSettings | None = None) -> WorkerOptions
     validate_agent_runtime(configured)
     _register_inference_runners(configured)
 
-    def prewarm_configured_assets(proc) -> None:
-        prewarm_assets(proc, settings=configured)
-
     return WorkerOptions(
         entrypoint_fnc=entrypoint,
         request_fnc=handle_job_request,
-        prewarm_fnc=prewarm_configured_assets,
+        prewarm_fnc=_PrewarmConfiguredAssets(configured),
         agent_name=configured.livekit_agent_name,
         ws_url=configured.livekit_url,
         api_key=configured.livekit_api_key,
