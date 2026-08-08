@@ -77,7 +77,3 @@ source = ["agent"]
 precision = 2
 show_missing = true
 skip_covered = false
-
-[[tool.mypy.overrides]]
-module = ["speechmatics.voice._smart_turn"]
-ignore_missing_imports = true

@@ -39,7 +39,6 @@ from agent.observability import (
     shutdown_observability,
 )
 from agent.pipeline_factory import build_agent_runtime
-from agent.pipeline_factory import _resolve_speechmatics_turn_detection_mode
 from agent.prompt_builder import build_initial_greeting
 from agent.providers import PipelineMode
 from agent.runtime_validation import validate_agent_runtime
@@ -465,26 +464,6 @@ def prewarm_assets(
 
     if settings.livekit_turn_detector_enabled:
         logger.info("turn detector will initialize in job context")
-
-    try:
-        from livekit.plugins import speechmatics
-        from speechmatics.voice._smart_turn import SmartTurnDetector
-    except ModuleNotFoundError:
-        logger.info("speechmatics prewarm skipped: optional packages unavailable")
-    else:
-        try:
-            if (
-                _resolve_speechmatics_turn_detection_mode(settings, speechmatics)
-                == speechmatics.TurnDetectionMode.SMART_TURN
-            ):
-                SmartTurnDetector().setup()
-        except Exception as exc:
-            report_safe_exception(
-                logger,
-                event="speechmatics_prewarm_failed",
-                operation="setup_smart_turn_detector",
-                error=exc,
-            )
 
     runtime.silero_vad = silero_vad
     publish_agent_process_runtime(proc, runtime)

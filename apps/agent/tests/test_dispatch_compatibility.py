@@ -68,7 +68,6 @@ class FakeJobContext:
             self.proc,
             build_agent_process_runtime(TEST_SETTINGS),
         )
-        self.inference_executor = object()
         self.room = object()
         self.events: list[object] = []
 

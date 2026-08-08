@@ -499,7 +499,6 @@ class FakeJobContext:
         self.job = SimpleNamespace(metadata=metadata.model_dump_json())
         self.proc = SimpleNamespace(userdata={})
         publish_agent_process_runtime(self.proc, make_process_runtime())
-        self.inference_executor = object()
         self.room = object()
         self.events: list[object] = []
         self.shutdown_callbacks: list[object] = []
@@ -1513,36 +1512,17 @@ def test_observability_initialization_failure_does_not_prevent_prewarm(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from livekit import plugins
-
     proc = SimpleNamespace(userdata={})
 
     def fail_initialization() -> None:
         assert isinstance(require_agent_process_runtime(proc), AgentProcessRuntime)
         raise RuntimeError("OTEL_EXPORTER_CREDENTIAL_SENTINEL")
 
-    adaptive_mode = object()
-    smart_turn_mode = object()
-    fake_speechmatics = ModuleType("livekit.plugins.speechmatics")
-    fake_speechmatics.TurnDetectionMode = SimpleNamespace(
-        ADAPTIVE=adaptive_mode,
-        SMART_TURN=smart_turn_mode,
-    )
-    fake_smart_turn = ModuleType("speechmatics.voice._smart_turn")
-    fake_smart_turn.SmartTurnDetector = object
-    monkeypatch.setattr(plugins, "speechmatics", fake_speechmatics, raising=False)
-    monkeypatch.setitem(sys.modules, "livekit.plugins.speechmatics", fake_speechmatics)
-    monkeypatch.setitem(sys.modules, "speechmatics.voice._smart_turn", fake_smart_turn)
-
     monkeypatch.setattr(
         agent_main,
         "initialize_observability",
         fail_initialization,
         raising=False,
-    )
-    monkeypatch.setattr(
-        "agent.main._resolve_speechmatics_turn_detection_mode",
-        lambda _settings, _plugin: adaptive_mode,
     )
 
     with caplog.at_level(logging.ERROR):
@@ -1554,35 +1534,22 @@ def test_observability_initialization_failure_does_not_prevent_prewarm(
     assert all(record.exc_info is None for record in caplog.records)
 
 
-def test_speechmatics_prewarm_failure_does_not_render_exception_message(
-    monkeypatch,
-    caplog,
+def test_prewarm_does_not_initialize_private_speechmatics_smart_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from livekit import plugins
+    setup_calls: list[bool] = []
 
-    smart_turn_mode = object()
-    fake_speechmatics = ModuleType("livekit.plugins.speechmatics")
-    fake_speechmatics.TurnDetectionMode = SimpleNamespace(SMART_TURN=smart_turn_mode)
-
-    class FailingSmartTurnDetector:
+    class RecordingSmartTurnDetector:
         def setup(self) -> None:
-            raise RuntimeError("SPEECHMATICS_TOKEN_SENTINEL")
+            setup_calls.append(True)
 
     fake_smart_turn = ModuleType("speechmatics.voice._smart_turn")
-    fake_smart_turn.SmartTurnDetector = FailingSmartTurnDetector
-    monkeypatch.setattr(plugins, "speechmatics", fake_speechmatics, raising=False)
-    monkeypatch.setitem(sys.modules, "livekit.plugins.speechmatics", fake_speechmatics)
+    fake_smart_turn.SmartTurnDetector = RecordingSmartTurnDetector
     monkeypatch.setitem(sys.modules, "speechmatics.voice._smart_turn", fake_smart_turn)
-    monkeypatch.setattr(
-        "agent.main._resolve_speechmatics_turn_detection_mode",
-        lambda _settings, _plugin: smart_turn_mode,
-    )
 
     with caplog.at_level(logging.ERROR):
         prewarm_assets(SimpleNamespace(userdata={}), settings=TEST_SETTINGS)
 
-    assert "SPEECHMATICS_TOKEN_SENTINEL" not in caplog.text
-    assert "event=speechmatics_prewarm_failed" in caplog.text
-    assert "operation=setup_smart_turn_detector" in caplog.text
-    assert "error_type=RuntimeError" in caplog.text
-    assert all(record.exc_info is None for record in caplog.records)
+    assert setup_calls == []
+    assert "speechmatics_prewarm_failed" not in caplog.text
