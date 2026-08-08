@@ -234,7 +234,7 @@ Expected: command exits successfully after discovering plugins and ensuring thei
 
 - [ ] **Step 3: Build the agent container**
 
-    docker build -f apps/agent/Dockerfile apps/agent
+    docker build -f apps/agent/Dockerfile .
 
 Expected: image build succeeds, including the public asset-download layer. If Docker is unavailable, record that environmental limitation without claiming container verification.
 
