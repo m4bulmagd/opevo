@@ -34,7 +34,7 @@ Change the Deepgram plugin version assertion in test_pipeline_factory.py from 1.
 - [ ] **Step 2: Run the focused test and confirm the expected failure**
 
     cd apps/agent
-    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest -q tests/test_pipeline_factory.py
+    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/test_pipeline_factory.py
 
 Expected: failure because the installed plugin still reports 1.4.4.
 
@@ -54,7 +54,7 @@ Expected: all commands succeed and the resolved LiveKit family is 1.5.17.
 - [ ] **Step 5: Verify the checkpoint**
 
     cd apps/agent
-    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest -q tests/test_pipeline_factory.py tests/test_main.py tests/test_dispatch_compatibility.py tests/test_debug_streams.py
+    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/test_pipeline_factory.py tests/test_main.py tests/test_dispatch_compatibility.py tests/test_debug_streams.py
     UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check agent tests
     UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
 
@@ -89,7 +89,7 @@ Require the ElevenLabs STT fake to receive model="scribe_v2_realtime" and no mod
 - [ ] **Step 3: Run focused tests and confirm expected failures**
 
     cd apps/agent
-    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest -q tests/test_pipeline_factory.py tests/test_main.py
+    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/test_pipeline_factory.py tests/test_main.py
 
 Expected: failures reference legacy endpointing arguments, direct turn_detection, executor binding, and model_id.
 
@@ -102,7 +102,7 @@ In main.py, stop passing context.inference_executor to the factory. Retain plugi
 - [ ] **Step 5: Run focused verification**
 
     cd apps/agent
-    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest -q tests/test_pipeline_factory.py tests/test_main.py tests/test_dispatch_compatibility.py
+    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/test_pipeline_factory.py tests/test_main.py tests/test_dispatch_compatibility.py
     UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check agent tests
     UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
 
@@ -130,7 +130,7 @@ Install a fake speechmatics.voice._smart_turn.SmartTurnDetector that records cal
 - [ ] **Step 2: Run the focused test and confirm the expected failure**
 
     cd apps/agent
-    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest -q tests/test_main.py -k prewarm
+    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/test_main.py -k prewarm
 
 Expected: failure because current code still initializes SmartTurnDetector.
 
@@ -147,7 +147,7 @@ Expected: no application integration match. Test doubles may use ordinary leadin
 - [ ] **Step 5: Run focused verification**
 
     cd apps/agent
-    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest -q tests/test_main.py tests/test_pipeline_factory.py
+    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/test_main.py tests/test_pipeline_factory.py
     UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check agent tests
     UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
 
@@ -175,7 +175,7 @@ Change the Deepgram plugin version assertion from 1.5.17 to 1.6.9.
 - [ ] **Step 2: Run the version test and confirm the expected failure**
 
     cd apps/agent
-    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest -q tests/test_pipeline_factory.py
+    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/test_pipeline_factory.py
 
 Expected: failure because the installed plugin still reports 1.5.17.
 
@@ -200,7 +200,7 @@ Expected: each direct LiveKit package is exactly 1.6.9 with no conflicting famil
 - [ ] **Step 5: Run compatibility verification**
 
     cd apps/agent
-    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest -q tests/test_pipeline_factory.py tests/test_main.py tests/test_dispatch_compatibility.py tests/test_debug_streams.py tests/test_composition.py tests/test_runtime_validation.py tests/test_verification_runtime.py
+    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/test_pipeline_factory.py tests/test_main.py tests/test_dispatch_compatibility.py tests/test_debug_streams.py tests/test_composition.py tests/test_runtime_validation.py tests/test_verification_runtime.py
     UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check agent tests
     UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy agent
 
@@ -304,7 +304,7 @@ Expected: lock, install, lint, types, tests, and coverage gate all succeed.
 - [ ] **Step 2: Run credential-gated evaluations when available**
 
     cd apps/agent
-    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pytest -q -m livekit_eval
+    UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q -m livekit_eval
 
 Expected: evaluations succeed when credentials are configured, or skip cleanly with their documented reason.
 
