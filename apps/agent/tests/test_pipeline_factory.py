@@ -361,6 +361,23 @@ def test_pipeline_factory_builds_agent_runtime_with_live_providers() -> None:
     assert "turn_detection" not in session.kwargs
 
 
+def test_pipeline_factory_disables_sdk_default_turn_detector_when_flag_is_off(
+) -> None:
+    _agent, session = build_agent_runtime(
+        DEFAULT_DISPATCH_METADATA,
+        settings=make_settings(livekit_turn_detector_enabled=False),
+        plugin_modules={
+            "google": FakeGooglePlugin,
+            "speechmatics": FakeSpeechmaticsPlugin,
+            "silero": FakeSileroPlugin,
+        },
+        agent_cls=FakeAgent,
+        session_cls=FakeSession,
+    )
+
+    assert session.kwargs["turn_handling"] == {"turn_detection": None}
+
+
 def test_pipeline_factory_uses_public_elevenlabs_stt_model_option() -> None:
     _agent, session = build_agent_runtime(
         {

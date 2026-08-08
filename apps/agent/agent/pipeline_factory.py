@@ -308,10 +308,9 @@ def build_agent_runtime(
         }
         if resolved_vad is not None:
             session_kwargs["vad"] = resolved_vad
-        if resolved_turn_detection is not None:
-            session_kwargs["turn_handling"] = TurnHandlingOptions(
-                turn_detection=resolved_turn_detection
-            )
+        session_kwargs["turn_handling"] = TurnHandlingOptions(
+            turn_detection=resolved_turn_detection
+        )
 
         session = session_cls(**session_kwargs)
 
