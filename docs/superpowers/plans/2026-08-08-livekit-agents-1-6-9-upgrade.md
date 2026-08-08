@@ -310,9 +310,9 @@ Expected: evaluations succeed when credentials are configured, or skip cleanly w
 
 - [ ] **Step 3: Scan for old pins and private integrations**
 
-    rg -n 'livekit-(agents|plugins-[a-z-]+)==(1\.4\.4|1\.5\.17)|_EUORunnerMultilingual|SmartTurnDetector|inference_executor=' apps/agent .github docs/security docs/engineering/2026-07-30-agent-api-review-decisions.md docs/PROJECT_STATUS.md
+    rg -n 'livekit-(agents|plugins-[a-z-]+)==(1\.4\.4|1\.5\.17)|_EUORunnerMultilingual|SmartTurnDetector|inference_executor=' apps/agent/agent apps/agent/pyproject.toml apps/agent/Dockerfile .github docs/security docs/engineering/2026-07-30-agent-api-review-decisions.md docs/PROJECT_STATUS.md
 
-Expected: no current configuration or application integration matches. Historical documentation outside listed current-state files may retain historical versions.
+Expected: no current configuration or application integration matches. The negative regression test may continue to emulate a private Speechmatics class to prove that prewarming does not initialize it, and historical documentation outside listed current-state files may retain historical versions.
 
 - [ ] **Step 4: Update current-state documentation**
 

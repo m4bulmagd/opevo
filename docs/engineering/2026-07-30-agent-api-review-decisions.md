@@ -778,20 +778,16 @@ Final controller verification at `5bd13d8`:
 
 Issue 7 is **implemented**.
 
-## Issue 8 — LiveKit Is Pinned to an Old Family and Uses Private APIs
+## Issue 8 — LiveKit Family and Private API Upgrade — Implemented
 
 ### Concrete problem and evidence
 
-- `apps/agent/pyproject.toml:7-13` pins the LiveKit package family to `1.4.4`.
-- `apps/agent/Dockerfile:14` calls the private
-  `_EUORunnerMultilingual._download_files()` method.
-- `apps/agent/agent/pipeline_factory.py:193-198` mutates a private `_executor`.
-- `apps/agent/agent/main.py:359-368` imports
-  `speechmatics.voice._smart_turn.SmartTurnDetector`.
-- `apps/agent/pyproject.toml:61` suppresses typing concerns for that private
-  module.
-- `apps/agent/agent/debug_streams.py:98-163` subclasses SDK pipeline nodes,
-  making upgrade characterization important even where hooks are public.
+Before implementation, the agent pinned the complete LiveKit family to 1.4.4,
+called a private multilingual-runner asset method during its image build,
+mutated the turn detector's private executor field, and manually initialized a
+private Speechmatics smart-turn class. The mypy configuration also carried an
+override for that private module. The debug instrumentation subclasses public
+SDK pipeline nodes, so staged compatibility characterization was required.
 
 Private names have no compatibility promise. The strict old-family pin reduces
 surprise today but makes security fixes, provider compatibility, and future
@@ -822,16 +818,35 @@ upgrades progressively harder.
    latency, interruption, false-endpoint, and language behavior. Retain it only
    if it earns its complexity.
 
+### Implementation result — 2026-08-08
+
+Issue 8A is implemented in the repository:
+
+- All seven direct LiveKit packages are exactly `1.6.9`, reached through a
+  locked and tested `1.5.17` checkpoint.
+- Endpointing and the existing text `MultilingualModel` are configured through
+  public `TurnHandlingOptions`; the SDK owns inference-runner lifecycle.
+- ElevenLabs STT uses its supported `model` option.
+- The private Speechmatics prewarm path and its mypy override are removed.
+- The image build uses `python -m livekit.agents download-files`.
+- The final security-patched lock resolves `aiohttp==3.14.3` and
+  `cryptography==50.0.0`; the previously reviewed Transformers exception
+  retains its 2026-08-14 expiry.
+- Local evidence is 741 passing tests with four credential-gated skips, Ruff
+  and mypy success, 89.85% line coverage, 75.13% branch coverage, an exact
+  CI-equivalent dependency audit, and a successful final container build.
+
 ### Required validation
 
-- Unit and contract tests for metadata, callbacks, error translation, and
-  shutdown.
-- Recorded/scripted audio integration cases covering silence, interruption,
-  long utterance, quick backchannel, French speech, provider timeout, and
-  cancellation.
-- Container build test proving all required model assets are present without
-  private imports.
-- Manual real-provider staging call matrix before promotion.
+- **Complete locally:** unit and contract tests for metadata, callbacks, error
+  translation, pipeline construction, and shutdown.
+- **Complete locally:** container build proving all required plugin assets are
+  downloaded through the public command.
+- **Still required before promotion:** credentialed recorded/scripted audio
+  integration cases for silence, interruption, long utterance, quick
+  backchannel, French speech, provider timeout, and cancellation.
+- **Still required before promotion:** manual real-provider staging call
+  matrix.
 
 ---
 
