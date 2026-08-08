@@ -200,6 +200,26 @@ def test_background_only_synthetic_values_cover_every_owned_setting() -> None:
     assert all(synthetic_values.values())
 
 
+def run_compose_config(
+    command: list[str],
+    environment: dict[str, str],
+    *,
+    working_directory: Path,
+    stdin: str | None = None,
+) -> dict:
+    result = subprocess.run(
+        command,
+        cwd=working_directory,
+        capture_output=True,
+        check=False,
+        env={**os.environ, **environment},
+        input=stdin,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
 def render_compose(
     compose_file: str | Path,
     environment: dict[str, str],
@@ -207,33 +227,60 @@ def render_compose(
     resolve_env_files: bool = True,
     working_directory: Path = REPO_ROOT,
 ) -> dict:
-    command = [
-        "docker",
-        "compose",
-    ]
+    command = ["docker", "compose"]
+    declared_service_env_files: dict[str, list[dict[str, object]]] = {}
+    env_file_reset_override_yaml = None
+
     if not resolve_env_files:
         command.extend(("--env-file", os.devnull))
-    command.extend(
-        [
-            "-f",
-            str(compose_file),
-            "config",
-            "--format",
-            "json",
-        ]
-    )
-    if not resolve_env_files:
-        command.append("--no-env-resolution")
-    result = subprocess.run(
+        source_document = run_compose_config(
+            [
+                *command,
+                "-f",
+                str(compose_file),
+                "config",
+                "--format",
+                "json",
+                "--no-interpolate",
+                "--no-env-resolution",
+            ],
+            environment,
+            working_directory=working_directory,
+        )
+        declared_service_env_files = {
+            service_name: service["env_file"]
+            for service_name, service in source_document["services"].items()
+            if "env_file" in service
+        }
+        if declared_service_env_files:
+            env_file_reset_override_yaml = "\n".join(
+                [
+                    "services:",
+                    *(
+                        line
+                        for service_name in declared_service_env_files
+                        for line in (
+                            f"  {json.dumps(service_name)}:",
+                            "    env_file: !reset []",
+                        )
+                    ),
+                    "",
+                ]
+            )
+
+    command.extend(("-f", str(compose_file)))
+    if env_file_reset_override_yaml is not None:
+        command.extend(("-f", "-"))
+    command.extend(("config", "--format", "json"))
+    document = run_compose_config(
         command,
-        cwd=working_directory,
-        capture_output=True,
-        check=False,
-        env={**os.environ, **environment},
-        text=True,
+        environment,
+        working_directory=working_directory,
+        stdin=env_file_reset_override_yaml,
     )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+    for service_name, env_files in declared_service_env_files.items():
+        document["services"][service_name]["env_file"] = env_files
+    return document
 
 
 def load_compose_yaml() -> dict:
