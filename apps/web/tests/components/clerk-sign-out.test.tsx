@@ -9,8 +9,7 @@ vi.mock("@clerk/nextjs", async () => {
   const { Children, cloneElement } = await import("react");
 
   return {
-    SignOutButton: ({ children }: { children: ReactNode }) =>
-      cloneElement(Children.only(children) as ReactElement),
+    SignOutButton: ({ children }: { children: ReactNode }) => cloneElement(Children.only(children) as ReactElement),
   };
 });
 

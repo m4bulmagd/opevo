@@ -6,7 +6,7 @@ const BASE_URL = process.env.E2E_BASE_URL ?? "http://127.0.0.1:3300";
 const AGENT_NAME = "Lea";
 
 type ThemeMode = "dark" | "light";
-type ViewportMode = "desktop" | "mobile";
+type ViewportMode = "compact-desktop" | "desktop" | "mobile";
 
 type VisualCase = {
   name: string;
@@ -80,14 +80,18 @@ async function expectDashboardReady(page: Page, viewportMode: ViewportMode) {
   const desktopNavigation = page.getByRole("navigation", { exact: true, name: "Workspace navigation" });
   const mobileTrigger = page.getByRole("button", { name: "Open navigation" });
 
-  if (viewportMode === "desktop") {
+  if (viewportMode !== "mobile") {
     await expect(sidebar).toBeVisible();
     await expect(sidebar).toHaveCSS("width", "256px");
     await expect(desktopNavigation.getByRole("link", { exact: true, name: "Agent" })).toBeVisible();
     await expect(sidebar.getByRole("group", { name: `Agent runtime: ${AGENT_NAME}, Enabled` })).toBeVisible();
-    await expect(mobileTrigger).toBeHidden();
   } else {
     await expect(sidebar).toBeHidden();
+  }
+
+  if (viewportMode === "desktop") {
+    await expect(mobileTrigger).toBeHidden();
+  } else {
     await expect(mobileTrigger).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Mobile workspace destinations" })).toBeHidden();
   }
@@ -269,7 +273,8 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await setThemeBeforeNavigation(page, "light");
     await page.goto("/dashboard");
-    await expectDashboardReady(page, viewport.width < 1024 ? "mobile" : "desktop");
+    const viewportMode = viewport.width < 1024 ? "mobile" : viewport.width < 1280 ? "compact-desktop" : "desktop";
+    await expectDashboardReady(page, viewportMode);
 
     const overflow = await page.evaluate(() => ({
       bodyClientWidth: document.body.clientWidth,
@@ -290,7 +295,11 @@ for (const viewport of [
       await expect(mobileTrigger).toBeVisible();
       await expect(sidebar).toBeHidden();
     } else {
-      await expect(mobileTrigger).toBeHidden();
+      if (viewport.width < 1280) {
+        await expect(mobileTrigger).toBeVisible();
+      } else {
+        await expect(mobileTrigger).toBeHidden();
+      }
       await expect(sidebar).toBeVisible();
       await expect(sidebar).toHaveCSS("width", "256px");
     }

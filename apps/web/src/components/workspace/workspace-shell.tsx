@@ -44,11 +44,7 @@ export function WorkspaceShell({
       <div className="min-h-svh lg:flex lg:gap-4 lg:p-4" data-slot="workspace-content">
         <CommandRail agentName={agentName} runtimeState={commandRailRuntimeState(account, agentEnabled)} />
         <div className="flex min-w-0 flex-1 flex-col">
-          <WorkspaceHeader
-            accountControls={accountControls}
-            activeCaller={activeCaller}
-            agentName={agentName}
-          />
+          <WorkspaceHeader accountControls={accountControls} activeCaller={activeCaller} agentName={agentName} />
           <main
             className="flex w-full flex-col gap-5 px-4 py-5 sm:px-6 md:gap-7 md:px-8 md:py-8 lg:px-0"
             id="workspace-main"
