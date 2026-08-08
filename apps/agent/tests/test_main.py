@@ -573,6 +573,7 @@ async def test_entrypoint_passes_process_settings_and_prewarmed_vad_to_pipeline(
 
     assert captured["settings"] is settings
     assert captured["vad"] is vad
+    assert "inference_executor" not in captured
 
 
 @pytest.mark.anyio

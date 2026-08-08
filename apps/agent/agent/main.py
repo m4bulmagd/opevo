@@ -385,7 +385,6 @@ async def entrypoint(
                 metadata_dict,
                 settings=process_runtime.settings,
                 vad=process_runtime.silero_vad,
-                inference_executor=context.inference_executor,
             )
             session_runtime = session_runtime_factory(
                 process_runtime.event_publisher,

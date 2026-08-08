@@ -3,6 +3,7 @@ from typing import Any
 
 from livekit.agents import Agent
 from livekit.agents import AgentSession
+from livekit.agents import TurnHandlingOptions
 
 from agent.config import AgentSettings
 from agent.debug_streams import InstrumentedAgent
@@ -130,7 +131,7 @@ def _build_stt(
     if config["stt_provider"] == STTProvider.ELEVENLABS.value:
         elevenlabs = _require_plugin(plugins, "elevenlabs")
         return elevenlabs.STT(
-            model_id="scribe_v2_realtime",
+            model="scribe_v2_realtime",
             api_key=settings.elevenlabs_api_key,
         )
 
@@ -225,14 +226,6 @@ def _build_turn_detection(settings: AgentSettings, plugins: dict[str, Any]):
     ).MultilingualModel()
 
 
-def _bind_turn_detector_executor(turn_detection, inference_executor):
-    if turn_detection is None or inference_executor is None:
-        return turn_detection
-    if hasattr(turn_detection, "_executor"):
-        turn_detection._executor = inference_executor
-    return turn_detection
-
-
 def _build_sts_model(
     settings: AgentSettings,
     config: dict,
@@ -273,7 +266,6 @@ def build_agent_runtime(
     plugin_modules: dict[str, Any] | None = None,
     vad=None,
     turn_detection=None,
-    inference_executor=None,
     agent_cls=Agent,
     session_cls=AgentSession,
 ):
@@ -309,10 +301,6 @@ def build_agent_runtime(
             if turn_detection is not None
             else _build_turn_detection(settings, plugins)
         )
-        resolved_turn_detection = _bind_turn_detector_executor(
-            resolved_turn_detection, inference_executor
-        )
-
         session_kwargs = {
             "stt": stt,
             "llm": llm,
@@ -321,10 +309,18 @@ def build_agent_runtime(
         if resolved_vad is not None:
             session_kwargs["vad"] = resolved_vad
         if resolved_turn_detection is not None:
-            session_kwargs["turn_detection"] = resolved_turn_detection
+            session_kwargs["turn_handling"] = TurnHandlingOptions(
+                turn_detection=resolved_turn_detection
+            )
 
         session = session_cls(**session_kwargs)
 
+    agent_turn_handling = TurnHandlingOptions(
+        endpointing={
+            "min_delay": settings.agent_min_endpointing_delay,
+            "max_delay": settings.agent_max_endpointing_delay,
+        }
+    )
     if agent_cls is Agent:
         agent = InstrumentedAgent(
             debug_logger=StreamDebugLogger.from_dispatch_metadata(
@@ -332,13 +328,11 @@ def build_agent_runtime(
                 enabled=settings.agent_debug_streams,
             ),
             instructions=instructions,
-            min_endpointing_delay=settings.agent_min_endpointing_delay,
-            max_endpointing_delay=settings.agent_max_endpointing_delay,
+            turn_handling=agent_turn_handling,
         )
     else:
         agent = agent_cls(
             instructions=instructions,
-            min_endpointing_delay=settings.agent_min_endpointing_delay,
-            max_endpointing_delay=settings.agent_max_endpointing_delay,
+            turn_handling=agent_turn_handling,
         )
     return agent, session

@@ -1,3 +1,4 @@
+import inspect
 from importlib.metadata import version
 import pytest
 
@@ -67,7 +68,6 @@ class FakeTurnDetectorModule:
         class MultilingualModel:
             def __init__(self) -> None:
                 self.plugin = "turn_detector"
-                self._executor = None
 
 
 class FakeAgent:
@@ -345,13 +345,42 @@ def test_pipeline_factory_builds_agent_runtime_with_live_providers() -> None:
         session_cls=FakeSession,
     )
 
-    assert agent.kwargs["min_endpointing_delay"] == 0.25
-    assert agent.kwargs["max_endpointing_delay"] == 1.5
+    assert agent.kwargs["turn_handling"] == {
+        "endpointing": {"min_delay": 0.25, "max_delay": 1.5}
+    }
+    assert "min_endpointing_delay" not in agent.kwargs
+    assert "max_endpointing_delay" not in agent.kwargs
     assert session.kwargs["stt"].kwargs["turn_detection_mode"] == "adaptive"
     assert session.kwargs["llm"].kwargs["model"] == "gemini-2.5-flash"
     assert "api_key" in session.kwargs["tts"].kwargs
     assert session.kwargs["vad"]["plugin"] == "silero"
-    assert session.kwargs["turn_detection"].plugin == "turn_detector"
+    assert (
+        session.kwargs["turn_handling"]["turn_detection"].plugin
+        == "turn_detector"
+    )
+    assert "turn_detection" not in session.kwargs
+
+
+def test_pipeline_factory_uses_public_elevenlabs_stt_model_option() -> None:
+    _agent, session = build_agent_runtime(
+        {
+            **DEFAULT_DISPATCH_METADATA,
+            "stt_provider": "elevenlabs",
+        },
+        settings=make_settings(),
+        plugin_modules={
+            "elevenlabs": FakeElevenLabsPlugin,
+            "google": FakeGooglePlugin,
+            "speechmatics": FakeSpeechmaticsPlugin,
+            "silero": FakeSileroPlugin,
+            "turn_detector_multilingual": FakeTurnDetectorModule.multilingual,
+        },
+        agent_cls=FakeAgent,
+        session_cls=FakeSession,
+    )
+
+    assert session.kwargs["stt"].kwargs["model"] == "scribe_v2_realtime"
+    assert "model_id" not in session.kwargs["stt"].kwargs
 
 
 def test_pipeline_factory_does_not_print_prompt_content(capsys) -> None:
@@ -385,22 +414,11 @@ def test_pipeline_factory_does_not_print_prompt_content(capsys) -> None:
     assert knowledge_sentinel not in captured.out
 
 
-def test_pipeline_factory_binds_turn_detector_executor_when_provided() -> None:
-    _agent, session = build_agent_runtime(
-        DEFAULT_DISPATCH_METADATA,
-        settings=make_settings(),
-        plugin_modules={
-            "google": FakeGooglePlugin,
-            "speechmatics": FakeSpeechmaticsPlugin,
-            "silero": FakeSileroPlugin,
-            "turn_detector_multilingual": FakeTurnDetectorModule.multilingual,
-        },
-        inference_executor="executor",
-        agent_cls=FakeAgent,
-        session_cls=FakeSession,
+def test_pipeline_factory_leaves_turn_detector_execution_to_livekit() -> None:
+    assert (
+        "inference_executor"
+        not in inspect.signature(build_agent_runtime).parameters
     )
-
-    assert session.kwargs["turn_detection"]._executor == "executor"
 
 
 def test_pipeline_factory_wraps_default_agent_with_debug_instrumentation() -> None:
@@ -670,12 +688,17 @@ def test_pipeline_factory_builds_sts_runtime_from_explicit_settings_when_environ
         session_cls=FakeSession,
     )
 
-    assert agent.kwargs["min_endpointing_delay"] == 0.25
+    assert agent.kwargs["turn_handling"] == {
+        "endpointing": {"min_delay": 0.25, "max_delay": 1.5}
+    }
+    assert "min_endpointing_delay" not in agent.kwargs
+    assert "max_endpointing_delay" not in agent.kwargs
     assert session.kwargs["llm"].kwargs["api_key"] == "test-key"
     assert "stt" not in session.kwargs
     assert "tts" not in session.kwargs
     assert "vad" not in session.kwargs
     assert "turn_detection" not in session.kwargs
+    assert "turn_handling" not in session.kwargs
 
 
 def test_pipeline_factory_rejects_sts_without_google_credentials() -> None:
