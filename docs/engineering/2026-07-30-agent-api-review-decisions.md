@@ -1841,3 +1841,67 @@ expanded read-only attribution (56B-A); add focused wakeup characterization
 (56B-B) only when that evidence justifies it. Exact final10/final11/final12
 resources were removed and all original services, protected paths, locks,
 baselines, reports, branches, and worktrees were preserved before cleanup.
+
+## Local LiveKit Process Compatibility — 57B and 58A
+
+The first full local voice-stack startup after the runtime-composition work
+exposed two concrete mismatches with LiveKit Agents 1.4.4. Neither defect was
+visible in the earlier unit doubles, and both occurred before a customer call
+could be accepted.
+
+### 57B — Preserve process isolation with a serializable prewarm callable
+
+LiveKit's Linux process executor serializes the configured prewarm hook for its
+forkserver. The nested `build_worker_options.<locals>.prewarm_configured_assets`
+closure could not be pickled, so job processes failed during startup.
+
+The selected solution keeps `JobExecutorType.PROCESS` and replaces the closure
+with one top-level frozen, slotted callable that owns the exact validated
+`AgentSettings` instance. Its settings field is excluded from `repr` so
+credentials cannot be rendered accidentally. This preserves process fault and
+resource isolation without reloading configuration inside child processes.
+
+The rejected directions were to switch the worker to thread execution, which
+would reduce isolation and change scaling/failure behavior, or to resolve
+settings again inside the child, which would restore hidden environment
+coupling and duplicate configuration ownership. The selected callable is a
+small compatibility boundary rather than a general callback abstraction.
+
+Tests serialize and deserialize the actual configured hook, prove it remains
+callable, prove it receives the exact settings object, and prove its
+representation omits a credential sentinel.
+
+### 58A — Use LiveKit's userdata mapping without replacing it
+
+The real LiveKit `JobProcess.userdata` property returns a mutable dictionary but
+has no setter. Assigning the complete `AgentProcessRuntime` to the property
+therefore raised `AttributeError` during prewarm even after 57B was corrected.
+
+The selected solution centralizes publication and retrieval in
+`publish_agent_process_runtime` and `require_agent_process_runtime`. The
+runtime is stored under one private namespaced key in LiveKit's existing
+mapping. Publication fails explicitly if a future process object does not
+provide a mutable mapping, retrieval remains type checked, unrelated LiveKit
+or plugin entries are preserved, and partial runtime construction is never
+published.
+
+The rejected directions were to mutate LiveKit internals or replace its
+read-only property, both version-fragile, and to scatter direct dictionary-key
+access throughout the entrypoint and tests, which would duplicate SDK
+knowledge and weaken the runtime invariant. The two helpers are the sole
+compatibility seam.
+
+Tests use the real LiveKit `JobProcess` contract as well as focused failure
+doubles. They prove mapping identity and unrelated values are preserved,
+invalid mapping shapes fail explicitly, complete VAD/non-VAD runtimes publish,
+factory failure leaves no partial runtime, and all dispatch, verification, and
+shutdown paths retrieve the typed runtime through the shared seam.
+
+Implementation commit `5315ed9` contains exactly the six agent source/test
+files for 57B and 58A. Fresh verification passed the frozen lock, complete Ruff
+and mypy gates, **740 agent tests** with exactly four approved credential-gated
+skips, and the committed coverage ratchets at **89.69% line** and **75.00%
+branch**. The full local Compose voice stack then started with four job
+processes, zero initialization errors or restarts, and the owner completed a
+successful real call. Realtime, deployment, provider-account configuration,
+queue ownership, worker extraction, and coverage thresholds remain unchanged.
