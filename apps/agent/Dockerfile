@@ -14,7 +14,7 @@ COPY libs/shared/src /app/libs/shared/src
 RUN python -m pip install --no-cache-dir uv==0.11.19 \
     && uv sync --directory apps/agent --frozen --no-dev --no-editable
 RUN mkdir -p "$HF_HOME" \
-    && /app/.venv/bin/python -c "from livekit.plugins.turn_detector.multilingual import _EUORunnerMultilingual; _EUORunnerMultilingual._download_files()"
+    && /app/.venv/bin/python -m livekit.agents download-files
 
 FROM builder AS development
 
