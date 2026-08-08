@@ -1,7 +1,7 @@
 # LiveKit Agents 1.6.9 Upgrade Design
 
 **Date:** 2026-08-08
-**Status:** Approved direction; written specification pending owner review
+**Status:** Approved
 
 ## Purpose
 
@@ -67,7 +67,7 @@ expensive production window.
   - `livekit-plugins-turn-detector`
 - Regenerate `apps/agent/uv.lock` under Python 3.13 and retain frozen installs.
 - Replace the private Docker-time LiveKit asset downloader with the documented
-  `python -m livekit.agents.download` entry point.
+  `python -m livekit.agents download-files` entry point.
 - Remove LiveKit private executor mutation. Runtime construction must use only
   a documented constructor, lifecycle, or worker interface available in the
   selected family.
