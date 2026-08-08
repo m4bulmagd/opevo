@@ -236,3 +236,43 @@ baselines retained their hashes. Tracked main remained clean except for the
 opaque protected `Presvo_frontend/`, which was never inspected or touched. The
 protected frontend worktree, feature worktree/branch, and six ignored Task 3-8
 reports remained intact pending the final preservation and cleanup step.
+
+## Finishing coverage decision — 56A and 56B-C
+
+Exact-HEAD final10 verification passed all 3,106 API tests and all 735 agent
+tests with exactly the four approved agent skips. The API stored ratchet passed,
+but fresh branch coverage was 80.25134649910234%, below the temporary stricter
+80.39% finishing endpoint reached by final9. Cleanup was exact and branch/
+worktree removal stopped while the difference was diagnosed.
+
+Approved read-only diagnosis **56A** forced Coverage.py's CTracer and ran three
+explicit billing scenarios three times without contexts and three times with
+per-test contexts. All six runs passed and produced identical normalized line
+and arc sets. Contexts did not change attribution. The explicit reactivation
+and final-cancellation bodies executed, but their controlling async condition
+arcs were not credited. Existing tests already assert cancellation-operation
+creation/reuse and persisted outbox events; wakeup signaling itself is not
+directly asserted. The experiment ruled out dynamic contexts but did not locate
+which other full-suite integration path accounts for the final9/final10
+aggregate difference.
+
+The owner selected **56B-C for now**: accept the committed coverage ratchets as
+the finishing authority and do not add speculative tests, refactor production,
+or change coverage configuration merely to reproduce the transient 80.39%
+endpoint. This is an explicit accepted risk, not a claim that the variation is
+explained. The recommended future follow-up remains expanded read-only
+attribution (**56B-A**), followed—if justified—by focused service-level wakeup
+characterization (**56B-B**). No threshold file or coverage baseline changed.
+
+Final10 completion evidence at exact pre-decision documentation HEAD
+`e22e43eb64f462bfc386995478cb3963e9254ad9`:
+
+- API: 3,106 passed, zero skips/failures, one known dependency warning;
+  91.96081480329653% statements and 80.25134649910234% branches; committed
+  90.04%/77.76% ratchets passed;
+- agent: 735 passed, exactly four approved skips, zero failures;
+  89.58470665787739% statements and 74.75% branches; committed
+  88.35%/71.07% ratchets passed; and
+- exact final10 and diagnostic final11/final12 containers were removed, original
+  services matched preflight, and protected paths, locks, baselines, reports,
+  feature branch, and worktrees remained unchanged.

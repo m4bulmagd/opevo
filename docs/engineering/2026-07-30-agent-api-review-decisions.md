@@ -1820,3 +1820,24 @@ removed; original services, locks, baselines, protected paths, feature
 worktrees, and all six ignored Task 3-8 reports were preserved pending final
 worktree cleanup. No deployment, provider, realtime, database, queue, or worker
 extraction decision changed.
+
+### Accepted finishing risk — 56B-C
+
+Exact-HEAD final10 again passed 3,106 API tests and 735 agent tests with the
+expected four skips. API branch coverage varied to 80.25134649910234%: above
+the committed 77.76% ratchet but below the temporary stricter 80.39% finishing
+endpoint. Six forced-CTracer repeatability runs under approved diagnosis 56A
+were internally identical with and without per-test contexts. They confirmed
+strong existing cancellation/reactivation scenarios and systematic missing
+attribution around async control lines, but did not identify the other
+full-suite path responsible for the aggregate difference. Wakeup signaling
+remains the only concrete assertion gap found.
+
+The owner selected **56B-C for now**. The committed coverage ratchets are the
+finishing authority; no baseline, threshold file, production code, test, or
+coverage configuration was changed. Unexplained attribution variability and
+the wakeup assertion gap are accepted follow-up risks. If resumed, first run
+expanded read-only attribution (56B-A); add focused wakeup characterization
+(56B-B) only when that evidence justifies it. Exact final10/final11/final12
+resources were removed and all original services, protected paths, locks,
+baselines, reports, branches, and worktrees were preserved before cleanup.
