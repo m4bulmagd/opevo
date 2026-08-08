@@ -277,7 +277,7 @@ def test_deepgram_advertised_stt_path_has_pinned_plugin_and_loader(
         }
     )
 
-    assert version("livekit-plugins-deepgram") == "1.4.4"
+    assert version("livekit-plugins-deepgram") == "1.5.17"
     assert modules["deepgram"].__name__ == "livekit.plugins.deepgram"
 
 
