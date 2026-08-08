@@ -11,14 +11,14 @@ take a fixed version.
 - **Status:** temporarily accepted for the beta
 - **Owner:** Presvo engineering
 - **Accepted:** 2026-07-14
-- **Last reviewed:** 2026-07-29
-- **Review by:** 2026-08-05
+- **Last reviewed:** 2026-08-08
+- **Review by:** 2026-08-12
 - **Expires:** 2026-08-14
 - **Affected application:** `apps/agent` only
 - **Dependency paths:**
-  - `livekit-plugins-turn-detector==1.4.4` requires
+  - `livekit-plugins-turn-detector==1.6.9` requires
     `transformers>=4.47.1,<=4.57.1`.
-  - `livekit-plugins-speechmatics==1.4.4` installs
+  - `livekit-plugins-speechmatics==1.6.9` installs
     `speechmatics-voice[smart]==0.2.8`, which requires
     `transformers>=4.57,<5`.
 
@@ -33,7 +33,7 @@ resolve a fixed `transformers` version:
 | `PYSEC-2026-2288` | `GHSA-69w3-r845-3855` / `CVE-2026-1839` | `Trainer` checkpoint deserialization | The production agent does inference only and never imports or invokes `Trainer`. |
 | `PYSEC-2026-2289` | `GHSA-29pf-2h5f-8g72` / `CVE-2026-4372` | Malicious `AutoModel` configuration loading | The agent never calls an `AutoModel` API or accepts a model identifier from users or dispatch metadata. |
 
-As of the 2026-07-29 review, the advisory service returns
+As of the 2026-08-08 review, the advisory service returns
 `PYSEC-2026-2290` twice with the same `GHSA-fgcw-684q-jj6r` and
 `CVE-2026-5241` aliases: one row has no fix version and one names `5.5.0`.
 This is six scanner rows for the five distinct reviewed advisory IDs above,
