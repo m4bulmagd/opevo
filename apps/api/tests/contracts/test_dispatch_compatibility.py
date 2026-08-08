@@ -3,7 +3,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from presvo_contracts import dump_contract, parse_dispatch
+from opevo_contracts import dump_contract, parse_dispatch
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 

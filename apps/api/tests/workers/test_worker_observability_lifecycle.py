@@ -114,18 +114,18 @@ def test_isolated_worker_components_preserve_identity_and_optional_exporters(
     monkeypatch.setattr(sdk_metrics, "MeterProvider", FakeMeterProvider)
 
     meter, tracer, lifecycle = _build_components(
-        "presvo-worker-call-lifecycle",
+        "opevo-worker-call-lifecycle",
         trace_endpoint,
         metric_endpoint,
     )
 
-    assert meter == ("meter", "presvo")
-    assert tracer == ("tracer", "presvo")
+    assert meter == ("meter", "opevo")
+    assert tracer == ("tracer", "opevo")
     assert lifecycle.tracer_provider.resource == {
-        "service.name": "presvo-worker-call-lifecycle"
+        "service.name": "opevo-worker-call-lifecycle"
     }
     assert lifecycle.meter_provider.resource == {
-        "service.name": "presvo-worker-call-lifecycle"
+        "service.name": "opevo-worker-call-lifecycle"
     }
     actual_exporters = {
         *("trace" for _exporter in created["span_exporters"]),
@@ -341,10 +341,10 @@ def test_lifecycle_worker_snapshot_exports_only_bounded_call_states() -> None:
         )
     )
 
-    assert meter.instruments["presvo.calls.current"].measurements == [
+    assert meter.instruments["opevo.calls.current"].measurements == [
         (2, {"state": "pending"})
     ]
-    assert meter.instruments["presvo.calls.stale"].measurements == [
+    assert meter.instruments["opevo.calls.stale"].measurements == [
         (1, {"state": "finalizing"})
     ]
     assert "PRIVATE_CURRENT_STATE" not in repr(meter.instruments)
@@ -365,10 +365,10 @@ def test_background_worker_snapshot_exports_only_bounded_outbox_statuses() -> No
         )
     )
 
-    assert meter.instruments["presvo.outbox.events"].measurements == [
+    assert meter.instruments["opevo.outbox.events"].measurements == [
         (3, {"status": "pending"})
     ]
-    assert meter.instruments["presvo.outbox.oldest_unfinished.age"].measurements == [
+    assert meter.instruments["opevo.outbox.oldest_unfinished.age"].measurements == [
         (12.5, {})
     ]
     assert "PRIVATE_OUTBOX_STATUS" not in repr(meter.instruments)
@@ -411,7 +411,7 @@ async def test_worker_job_reference_skips_untrusted_candidates_before_payload_ke
 
     assert result == call_id
     assert observed_contexts == [ctx]
-    assert tracer.spans[0].attributes["presvo.call.id"] == call_id
+    assert tracer.spans[0].attributes["opevo.call.id"] == call_id
     assert "PRIVATE_INVALID_CALL_ID" not in repr(tracer.spans[0].attributes)
 
 

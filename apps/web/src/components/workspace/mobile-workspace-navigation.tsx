@@ -36,11 +36,11 @@ export function MobileWorkspaceNavigation({ accountControl }: MobileWorkspaceNav
         side="left"
       >
         <SheetTitle className="sr-only">Workspace navigation</SheetTitle>
-        <SheetDescription className="sr-only">Navigate between Presvo workspace destinations.</SheetDescription>
+        <SheetDescription className="sr-only">Navigate between Opevo workspace destinations.</SheetDescription>
         <div className="flex h-full flex-col gap-6 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-sidebar-foreground">
           <div className="flex items-center justify-between gap-3">
             <Link
-              aria-label="Presvo overview"
+              aria-label="Opevo overview"
               className="flex min-h-11 min-w-0 items-center gap-3 rounded-lg px-2 py-1.5 outline-none focus-visible:ring-3 focus-visible:ring-sidebar-ring/50"
               href="/dashboard"
               onClick={() => setOpen(false)}
@@ -50,7 +50,7 @@ export function MobileWorkspaceNavigation({ accountControl }: MobileWorkspaceNav
                 <PhoneCall aria-hidden="true" className="size-4" />
               </span>
               <span className="min-w-0">
-                <span className="block truncate font-semibold text-sm tracking-tight">Presvo</span>
+                <span className="block truncate font-semibold text-sm tracking-tight">Opevo</span>
                 <span className="block truncate text-muted-foreground text-xs">AI Call Assistant</span>
               </span>
             </Link>

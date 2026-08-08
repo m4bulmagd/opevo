@@ -20,7 +20,7 @@
 - Prove test strength with temporary mutations, restore the affected provisioning or subscription repository byte-for-byte after every mutation, and commit no production mutation.
 - Keep realtime and activation flow disabled. Do not enable or implement realtime.
 - Do not alter deployment, frontend, agent, dependencies, lockfiles, Compose service declarations, or production configuration.
-- Do not touch `/home/mo/code/ai/bmad-opevo/Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
+- Do not touch `/home/mo/code/ai/bmad-opevo/Opevo_frontend/` or `.worktrees/shadcn-activation-preview`.
 - Never inspect, rewrite, or delete a developer's real `.env`. The controlled poison proof may create only a pre-checked absent `apps/api/.env` inside this isolated worktree and must remove that exact file afterward.
 - Use `UV_CACHE_DIR=/tmp/uv-cache` for every `uv` command. Do not push, deploy, open a PR, or modify remote branches.
 - Never lower either value in `apps/api/coverage-baseline.json`. Raise a value only to a two-decimal `ROUND_DOWN` floor shared by all three identical reports.
@@ -346,7 +346,7 @@ apps/api/tests/repositories/test_phone_number_provisioning_repository.py
 - Modify: `apps/api/pyproject.toml:62-68`
 - Test: `apps/api/tests/agent/test_agent_config_api.py`
 - Test: `apps/api/tests/agent/test_call_completion.py`
-- Disposable and always removed: `/tmp/presvo_aiosqlite_diag.py`, `/tmp/presvo-api-provisioning-phase1-global.db`, and that database's exact `-journal`, `-wal`, and `-shm` siblings
+- Disposable and always removed: `/tmp/opevo_aiosqlite_diag.py`, `/tmp/opevo-api-provisioning-phase1-global.db`, and that database's exact `-journal`, `-wal`, and `-shm` siblings
 
 **Interfaces:**
 - Consumes: the exact Phase 1 root-cause evidence and diagnostic plugin appendix in `.superpowers/sdd/2026-08-02-api-provisioning-coverage-stabilization/task-2-report.md`.
@@ -377,22 +377,22 @@ ignore or suppress any warning.
 - [x] **Step 2: Reproduce the undisposed-engine RED with the exact diagnostic boundary**
 
 First prove all exact disposable paths are absent. Recreate
-`/tmp/presvo_aiosqlite_diag.py` with `apply_patch` using the exact content in
+`/tmp/opevo_aiosqlite_diag.py` with `apply_patch` using the exact content in
 the Task 2 report's `### Diagnostic plugin appendix`; do not shorten, adapt, or
 install it. Run from `apps/api` outside the restricted sandbox:
 
 ```bash
 env -u CLIENT_TEST_DATABASE_URL \
   APP_ENV=test \
-  DATABASE_URL=sqlite+aiosqlite:////tmp/presvo-api-provisioning-phase1-global.db \
-  TEST_DATABASE_URL=sqlite+aiosqlite:////tmp/presvo-api-provisioning-phase1-global.db \
+  DATABASE_URL=sqlite+aiosqlite:////tmp/opevo-api-provisioning-phase1-global.db \
+  TEST_DATABASE_URL=sqlite+aiosqlite:////tmp/opevo-api-provisioning-phase1-global.db \
   REDIS_URL=redis://127.0.0.1:1/0 \
   TEST_REDIS_URL=redis://127.0.0.1:1/0 \
   PYTHONPATH=/tmp \
   UV_CACHE_DIR=/tmp/uv-cache \
   uv run --frozen --no-sync python -m pytest -q -s \
     -p no:cacheprovider \
-    -p presvo_aiosqlite_diag \
+    -p opevo_aiosqlite_diag \
     --maxfail=1 \
     tests/agent/test_agent_config_api.py::test_patch_agent_config_enable_with_incomplete_setup_returns_409 \
     tests/agent/test_call_completion.py::test_agent_completion_endpoint_rejects_negative_duration \
@@ -465,7 +465,7 @@ plugin. Expected: all six selected tests pass, no
 `AIOSQLITE_DIAG_LIVE`, or `AIOSQLITE_DIAG_UNDISPOSED_ENGINES` marker remains,
 and pytest reports no thread warning/error.
 
-Use `apply_patch` to delete only `/tmp/presvo_aiosqlite_diag.py`. Remove only
+Use `apply_patch` to delete only `/tmp/opevo_aiosqlite_diag.py`. Remove only
 the exact disposable SQLite file and its exact `-journal`, `-wal`, and `-shm`
 siblings, then prove all five paths absent. Do not remove any other `/tmp`
 file.
@@ -714,7 +714,7 @@ the commit.
 - Modify conditionally: `apps/api/coverage-baseline.json`
 - Modify: `docs/superpowers/specs/2026-08-02-api-provisioning-coverage-stabilization-design.md`
 - Modify: `docs/superpowers/plans/2026-08-02-api-provisioning-coverage-stabilization.md`
-- Disposable and always removed: `apps/api/.env`, `apps/api/.coverage`, `apps/api/coverage.json`, `/tmp/presvo-api-provisioning-coverage-clean-1.json`, `/tmp/presvo-api-provisioning-coverage-clean-2.json`, `/tmp/presvo-api-provisioning-coverage-poison.json`
+- Disposable and always removed: `apps/api/.env`, `apps/api/.coverage`, `apps/api/coverage.json`, `/tmp/opevo-api-provisioning-coverage-clean-1.json`, `/tmp/opevo-api-provisioning-coverage-clean-2.json`, `/tmp/opevo-api-provisioning-coverage-poison.json`
 
 **Interfaces:**
 - Consumes: Tasks 1 and 3 deterministic repository tests, Task 2 exception-safe test-app engine ownership and strict thread-warning gate, the existing coverage checker, and exact disposable PostgreSQL/Redis services.
@@ -730,16 +730,16 @@ git diff --check
 test ! -e apps/api/.env
 test ! -e apps/api/.coverage
 test ! -e apps/api/coverage.json
-test ! -e /tmp/presvo-api-provisioning-coverage-clean-1.json
-test ! -e /tmp/presvo-api-provisioning-coverage-clean-2.json
-test ! -e /tmp/presvo-api-provisioning-coverage-poison.json
-test ! -e /tmp/presvo_aiosqlite_diag.py
-test ! -e /tmp/presvo-api-provisioning-phase1-global.db
-test ! -e /tmp/presvo-api-provisioning-phase1-global.db-journal
-test ! -e /tmp/presvo-api-provisioning-phase1-global.db-wal
-test ! -e /tmp/presvo-api-provisioning-phase1-global.db-shm
-test -z "$(docker ps -a --filter name=^/presvo-api-provisioning-coverage-postgres$ --format '{{.Names}}')"
-test -z "$(docker ps -a --filter name=^/presvo-api-provisioning-coverage-redis$ --format '{{.Names}}')"
+test ! -e /tmp/opevo-api-provisioning-coverage-clean-1.json
+test ! -e /tmp/opevo-api-provisioning-coverage-clean-2.json
+test ! -e /tmp/opevo-api-provisioning-coverage-poison.json
+test ! -e /tmp/opevo_aiosqlite_diag.py
+test ! -e /tmp/opevo-api-provisioning-phase1-global.db
+test ! -e /tmp/opevo-api-provisioning-phase1-global.db-journal
+test ! -e /tmp/opevo-api-provisioning-phase1-global.db-wal
+test ! -e /tmp/opevo-api-provisioning-phase1-global.db-shm
+test -z "$(docker ps -a --filter name=^/opevo-api-provisioning-coverage-postgres$ --format '{{.Names}}')"
+test -z "$(docker ps -a --filter name=^/opevo-api-provisioning-coverage-redis$ --format '{{.Names}}')"
 ```
 
 Expected: the worktree is clean, every exact artifact and container is absent,
@@ -752,14 +752,14 @@ Start:
 
 ```bash
 docker run -d \
-  --name presvo-api-provisioning-coverage-postgres \
+  --name opevo-api-provisioning-coverage-postgres \
   -e POSTGRES_DB=ai_call_test \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
   -p 127.0.0.1:55460:5432 \
   postgres:17.8-bookworm
 docker run -d \
-  --name presvo-api-provisioning-coverage-redis \
+  --name opevo-api-provisioning-coverage-redis \
   -p 127.0.0.1:56390:6379 \
   redis:7.4.7-alpine
 ```
@@ -793,7 +793,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python \
   ../../scripts/check_python_coverage.py check \
   --report coverage.json \
   --baseline coverage-baseline.json
-cp coverage.json /tmp/presvo-api-provisioning-coverage-clean-1.json
+cp coverage.json /tmp/opevo-api-provisioning-coverage-clean-1.json
 ```
 
 Expected: 2,402 tests pass, zero skip, only the already-known Starlette/httpx
@@ -805,7 +805,7 @@ Repeat the exact Step 3 pytest and coverage-check commands, then copy the new
 report to:
 
 ```bash
-cp coverage.json /tmp/presvo-api-provisioning-coverage-clean-2.json
+cp coverage.json /tmp/opevo-api-provisioning-coverage-clean-2.json
 ```
 
 Compare every file's `executed_lines`, `missing_lines`, `executed_branches`,
@@ -843,7 +843,7 @@ Repeat the exact Step 3 pytest and coverage-check commands while the controlled
 dotenv exists, then copy:
 
 ```bash
-cp coverage.json /tmp/presvo-api-provisioning-coverage-poison.json
+cp coverage.json /tmp/opevo-api-provisioning-coverage-poison.json
 ```
 
 Expected: 2,402 tests pass, zero skip, the same one known warning, and both
@@ -875,15 +875,15 @@ Step 5. Remove the exact generated coverage files and exact named containers:
 rm -f \
   apps/api/.coverage \
   apps/api/coverage.json \
-  /tmp/presvo-api-provisioning-coverage-clean-1.json \
-  /tmp/presvo-api-provisioning-coverage-clean-2.json \
-  /tmp/presvo-api-provisioning-coverage-poison.json
+  /tmp/opevo-api-provisioning-coverage-clean-1.json \
+  /tmp/opevo-api-provisioning-coverage-clean-2.json \
+  /tmp/opevo-api-provisioning-coverage-poison.json
 docker stop \
-  presvo-api-provisioning-coverage-postgres \
-  presvo-api-provisioning-coverage-redis
+  opevo-api-provisioning-coverage-postgres \
+  opevo-api-provisioning-coverage-redis
 docker rm \
-  presvo-api-provisioning-coverage-postgres \
-  presvo-api-provisioning-coverage-redis
+  opevo-api-provisioning-coverage-postgres \
+  opevo-api-provisioning-coverage-redis
 ```
 
 Verify every listed file is absent and exact-name `docker ps -a` filters return

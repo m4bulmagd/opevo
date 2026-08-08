@@ -166,7 +166,7 @@ describe("number milestone", () => {
     const navigate = vi.fn();
     render(<PaymentAction localBilling={false} navigate={navigate} />);
 
-    expect(screen.getByText(/Cancel checkout before completing payment/i)).toHaveTextContent(/Presvo will not charge/i);
+    expect(screen.getByText(/Cancel checkout before completing payment/i)).toHaveTextContent(/Opevo will not charge/i);
     fireEvent.click(screen.getByRole("button", { name: /Start starter plan/i }));
 
     await waitFor(() => expect(checkoutMock).toHaveBeenCalledTimes(1));
@@ -182,9 +182,9 @@ describe("number milestone", () => {
     expect(confirmProvisioningMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: /Review number provisioning/i }));
-    expect(screen.getByRole("heading", { name: /Provision your French Presvo number/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Provision your French Opevo number/i })).toBeInTheDocument();
     expect(screen.getByText(/France \(\+33\)/i)).toBeInTheDocument();
-    expect(screen.getByText(/One Presvo number/i)).toBeInTheDocument();
+    expect(screen.getByText(/One Opevo number/i)).toBeInTheDocument();
     expect(screen.getByText(/Configure conditional forwarding/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Confirm and provision my number/i })).toBeEnabled();
   });

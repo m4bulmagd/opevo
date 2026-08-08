@@ -1,16 +1,16 @@
-# Presvo UI Migration Roadmap Implementation Plan
+# Opevo UI Migration Roadmap Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `apps/web` the production-ready Presvo frontend, visually matching `Presvo_frontend` while preserving France-first product truth, existing backend behavior, and explicit Preview labeling for local-only features.
+**Goal:** Make `apps/web` the production-ready Opevo frontend, visually matching `Opevo_frontend` while preserving France-first product truth, existing backend behavior, and explicit Preview labeling for local-only features.
 
-**Architecture:** Migrate in place through five independently releasable phases. Keep the Next.js App Router, Clerk/local authentication, server actions, typed FastAPI clients, and existing domain state machines. Treat `Presvo_frontend` as a read-only visual reference and adapt its presentation patterns onto existing `apps/web` primitives and route contracts.
+**Architecture:** Migrate in place through five independently releasable phases. Keep the Next.js App Router, Clerk/local authentication, server actions, typed FastAPI clients, and existing domain state machines. Treat `Opevo_frontend` as a read-only visual reference and adapt its presentation patterns onto existing `apps/web` primitives and route contracts.
 
 **Tech Stack:** Next.js 16, React 19, TypeScript 5.9, Tailwind CSS 4, shadcn/Base UI primitives, Vitest, Testing Library, Playwright, FastAPI, pytest.
 
 ## Global Constraints
 
-- The approved design is `docs/superpowers/specs/2026-07-29-presvo-ui-migration-design.md`.
+- The approved design is `docs/superpowers/specs/2026-07-29-opevo-ui-migration-design.md`.
 - `apps/web` is the only production frontend; do not add TanStack Router or a second deployment.
 - Preserve the exact template token values, system font stack, 256px sidebar, 16px desktop shell gap, compact header, card borders, radii, and shadows.
 - Preserve French phone-number behavior, five-milestone activation, current plan truth, readiness gating, Clerk, Stripe, Telnyx, LiveKit, and existing FastAPI contracts.
@@ -18,7 +18,7 @@
 - Every unsupported interaction has `status: "preview"` and a visible `Preview` label; preview state is local and never calls a production mutation.
 - Additive backend changes are allowed only when a migrated live screen cannot express an already-approved product behavior through the current contract.
 - Follow red-green-refactor for every behavior change.
-- Do not edit `Presvo_frontend`; it remains a reference.
+- Do not edit `Opevo_frontend`; it remains a reference.
 - Do not update visual snapshots until semantic assertions pass and the rendered result has been inspected at both approved viewports.
 - Commit after every green roadmap task with the commit message specified by the phase plan.
 
@@ -90,7 +90,7 @@ Run the phase-specific Playwright project or spec after starting the documented 
 ## Phase 1: Visual Foundation and Responsive Shell
 
 Detailed plan:
-`docs/superpowers/plans/2026-07-29-presvo-ui-foundation-shell.md`
+`docs/superpowers/plans/2026-07-29-opevo-ui-foundation-shell.md`
 
 - [x] Install exact light/dark visual tokens and system typography.
 - [x] Align shared controls, cards, surfaces, headings, and capability badges.
@@ -113,7 +113,7 @@ Exit criteria:
 ## Phase 2: Public Entry and Activation
 
 Plan filename:
-`docs/superpowers/plans/2026-07-29-presvo-entry-activation.md`
+`docs/superpowers/plans/2026-07-29-opevo-entry-activation.md`
 
 - [x] Inventory landing, Clerk handoff, activation route, actions, and current tests after Phase 1.
 - [x] Write the phase plan against the Phase 1 token and primitive interfaces.
@@ -134,7 +134,7 @@ Exit criteria:
 ## Phase 3: Dashboard, Calls, and Live-Call Preview
 
 Plan filename:
-`docs/superpowers/plans/2026-07-29-presvo-dashboard-calls.md`
+`docs/superpowers/plans/2026-07-29-opevo-dashboard-calls.md`
 
 - [x] Inventory current dashboard/call APIs, view models, actions, and test fixtures after Phase 2.
 - [x] Write the phase plan against the established shell and surface interfaces.
@@ -157,7 +157,7 @@ Exit criteria:
 ## Phase 4: Assistant, Billing, Account, and Preview Extensions
 
 Plan filename:
-`docs/superpowers/plans/2026-07-29-presvo-configuration-billing-account.md`
+`docs/superpowers/plans/2026-07-29-opevo-configuration-billing-account.md`
 
 - [x] Inventory the live agent, billing, account, and lifecycle contracts after Phase 3.
 - [x] Write the phase plan against the established presentation/view-model boundaries.
@@ -181,7 +181,7 @@ Exit criteria:
 ## Phase 5: Production Hardening and Release Gate
 
 Plan filename:
-`docs/superpowers/plans/2026-07-29-presvo-production-hardening.md`
+`docs/superpowers/plans/2026-07-29-opevo-production-hardening.md`
 
 - [x] Write the hardening plan from the accumulated route and component inventory.
 - [x] Audit keyboard order, focus visibility/restoration, landmarks, labels, live regions, contrast, and screen-reader names.

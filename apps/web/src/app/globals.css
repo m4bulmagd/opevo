@@ -65,8 +65,8 @@
   --shadow-card: var(--shadow-card);
   --shadow-raised: var(--shadow-raised);
   --shadow-overlay: var(--shadow-overlay);
-  --ease-presvo-out: var(--motion-ease-out);
-  --ease-presvo-drawer: var(--motion-ease-drawer);
+  --ease-opevo-out: var(--motion-ease-out);
+  --ease-opevo-drawer: var(--motion-ease-drawer);
   --transition-duration-feedback: var(--motion-duration-feedback);
   --transition-duration-state: var(--motion-duration-state);
   --transition-duration-entrance: var(--motion-duration-entrance);

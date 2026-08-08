@@ -52,7 +52,7 @@ UV_CACHE_DIR=/tmp/uv-cache .venv/bin/python -m pytest -q \
 
 Result: **165 passed, zero skipped, 14.70s**.
 
-Disposable services used `COMPOSE_PROJECT_NAME=presvo-account-pg`, PostgreSQL
+Disposable services used `COMPOSE_PROJECT_NAME=opevo-account-pg`, PostgreSQL
 port `55434`, and Redis port `56381`. Both containers, the network, and both
 volumes were stopped and removed after the run.
 

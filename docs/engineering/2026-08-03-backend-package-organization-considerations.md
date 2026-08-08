@@ -8,7 +8,7 @@
 
 ## Purpose
 
-This note preserves why Presvo should reconsider its backend package
+This note preserves why Opevo should reconsider its backend package
 organization as the product grows. It is intentionally not a binding directory
 specification or an implementation plan. The exact package names should be
 re-evaluated against the code and upcoming feature when work begins.
@@ -26,7 +26,7 @@ trees in this note.
 
 ## Current Responsibility Map
 
-Presvo currently has three important backend ownership areas:
+Opevo currently has three important backend ownership areas:
 
 - `apps/api` is the control plane and durable authority. It owns authenticated
   product operations, PostgreSQL state, lifecycle policy, outbox delivery,
@@ -34,7 +34,7 @@ Presvo currently has three important backend ownership areas:
 - `apps/agent` is the real-time voice runtime. It owns LiveKit job admission,
   media/session construction, provider composition, live conversation event
   handling, call limits, transcript forwarding, and runtime finalization.
-- `libs/shared/presvo_contracts` owns typed wire contracts exchanged across
+- `libs/shared/opevo_contracts` owns typed wire contracts exchanged across
   process seams. It should not become a home for application orchestration.
 
 That process-level split is sound. The main issue is the locality of
@@ -230,7 +230,7 @@ apps/agent/agent/
 │   ├── agent_factory.py            # Agent/strategy construction
 │   └── instrumentation.py          # Voice-pipeline diagnostics
 ├── integrations/
-│   ├── presvo_api.py               # Agent-to-API adapter
+│   ├── opevo_api.py               # Agent-to-API adapter
 │   └── realtime.py                 # Optional realtime event adapter
 └── platform/
     ├── settings.py
@@ -296,8 +296,8 @@ Shared libraries should be limited to logic that genuinely runs in more than
 one process or must remain technology-independent:
 
 ```text
-libs/shared/presvo_contracts/        # Versioned wire contracts only
-libs/flow/presvo_flow/               # Future pure flow model and state machine
+libs/shared/opevo_contracts/        # Versioned wire contracts only
+libs/flow/opevo_flow/               # Future pure flow model and state machine
 ```
 
 The future flow library should not import FastAPI, LiveKit, SQLAlchemy, Redis,
@@ -326,7 +326,7 @@ The package layout should be backed by enforceable dependency rules:
   import worker startup code.
 - `main.py` files import only their composition modules and framework CLI/app
   entrypoints.
-- Cross-process communication uses `presvo_contracts`; neither application
+- Cross-process communication uses `opevo_contracts`; neither application
   imports the other application's implementation.
 
 These rules should eventually be checked with an import-boundary tool such as
@@ -344,7 +344,7 @@ apps/agent/agent/calls/customer/flow/
 ├── runner.py                        # Call-facing flow strategy
 ├── livekit_adapter.py               # Flow actions to LiveKit behavior
 └── checkpointing.py                 # Runtime state handoff/persistence adapter
-libs/flow/presvo_flow/               # Pure model, validator, executor, simulator
+libs/flow/opevo_flow/               # Pure model, validator, executor, simulator
 ```
 
 At dispatch time, the API should select either the existing prompt-only

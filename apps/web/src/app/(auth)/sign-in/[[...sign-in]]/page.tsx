@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { AuthEntryShell, PRESVO_CLERK_APPEARANCE } from "@/components/auth/auth-entry-shell";
+import { AuthEntryShell, OPEVO_CLERK_APPEARANCE } from "@/components/auth/auth-entry-shell";
 import { authMode } from "@/lib/auth/clerk-config";
 
 export default async function SignInPage() {
@@ -12,7 +12,7 @@ export default async function SignInPage() {
 
   return (
     <AuthEntryShell description="Continue to your calls, receptionist settings, and account." title="Welcome back">
-      <SignIn appearance={PRESVO_CLERK_APPEARANCE} forceRedirectUrl="/dashboard" signUpUrl="/sign-up" />
+      <SignIn appearance={OPEVO_CLERK_APPEARANCE} forceRedirectUrl="/dashboard" signUpUrl="/sign-up" />
     </AuthEntryShell>
   );
 }

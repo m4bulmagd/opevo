@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-PROJECT_NAME=presvo-e2e
+PROJECT_NAME=opevo-e2e
 COMPOSE_FILE=compose.dev.yaml
 e2e_state_dir=
 
@@ -13,7 +13,7 @@ export MINIO_PORT=59000
 export MINIO_CONSOLE_PORT=59001
 export DASHBOARD_METRICS_REFERENCE_TIME=2026-07-29T12:00:00Z
 export AUTH_MODE=local
-export LOCAL_AUTH_TOKEN=presvo-local-development-token
+export LOCAL_AUTH_TOKEN=opevo-local-development-token
 
 compose() {
   docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"

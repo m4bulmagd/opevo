@@ -14,7 +14,7 @@
 - Preserve mobile and tablet horizontal padding.
 - Preserve vertical padding, content gaps, route composition, API behavior, navigation behavior, and visual tokens.
 - Keep the existing 16-pixel desktop shell gap from the command rail and right viewport edge.
-- Do not modify `Presvo_frontend`.
+- Do not modify `Opevo_frontend`.
 
 ---
 

@@ -7,11 +7,11 @@ production-certified.
 
 ## Decision summary
 
-Presvo now creates one private, durable recording egress operation per normal
+Opevo now creates one private, durable recording egress operation per normal
 customer call before LiveKit recording-start I/O and keeps it separate from the
 customer-facing recording playback projection on `calls`.
 
-When an owner removes a terminal call, Presvo immediately purges customer call
+When an owner removes a terminal call, Opevo immediately purges customer call
 content and hides the call. Provider stop and object deletion continue
 asynchronously from the private operation and a reference-only transactional
 outbox event. A provider or storage outage does not keep the call visible and
@@ -40,7 +40,7 @@ That left this race:
    references, purges the call, and commits its tombstone.
 5. Recording start returns an egress ID after deletion.
 6. Immediate best-effort stop fails or is uncertain.
-7. The fallback call lookup excludes tombstones, so Presvo cannot persist the
+7. The fallback call lookup excludes tombstones, so Opevo cannot persist the
    provider ID or a pending stop.
 
 The provider recording could then outlive the customer-visible call without a
@@ -50,7 +50,7 @@ intentionally cleared on removal and protected from delayed writers.
 
 LiveKit exposes egress lifecycle events and supports listing egresses by room,
 but current API documentation only promises active egress discovery. Those are
-reconciliation signals, not a replacement for Presvo's durable intent:
+reconciliation signals, not a replacement for Opevo's durable intent:
 
 - [LiveKit Egress API](https://docs.livekit.io/reference/other/egress/api/)
 - [LiveKit webhook events](https://docs.livekit.io/intro/basics/rooms-participants-tracks/webhooks-events/)
@@ -181,7 +181,7 @@ means the private database/SQLAlchemy operation record, not an AI model.
 | --- | --- |
 | `id` | UUID primary key and outbox aggregate identity |
 | `call_id` | Unique foreign key to `calls.id`; one operation per normal call |
-| `room_name` | Exact Presvo-owned LiveKit room identity; nullable only for incomplete legacy backfill |
+| `room_name` | Exact Opevo-owned LiveKit room identity; nullable only for incomplete legacy backfill |
 | `legacy_incomplete` | Migration-only marker for a backfilled row whose room identity was absent |
 | `expected_object_key` | Deterministic private object path committed before provider I/O |
 | `provider_egress_id` | Nullable, unique LiveKit egress identity when known |
@@ -189,7 +189,7 @@ means the private database/SQLAlchemy operation record, not an AI model.
 | `start_attempted_at` | Time the operation durably moved to `starting` |
 | `stop_requested_at` | Durable latest intent to make the provider non-running |
 | `delete_requested_at` | Durable owner-removal intent; implies stop intent |
-| `provider_terminal_at` | Time Presvo positively confirmed the known egress was non-running |
+| `provider_terminal_at` | Time Opevo positively confirmed the known egress was non-running |
 | `object_deleted_at` | Time object deletion succeeded or confirmed absence |
 | `last_reconciled_at` | Last completed reconciliation inspection |
 | `last_error_code` | Nullable bounded safe error code; never a raw exception message |
@@ -238,7 +238,7 @@ but still-visible call. It can never restore content after owner removal.
 
 ### States
 
-`prepared` means Presvo durably intends one recording but has not allowed the
+`prepared` means Opevo durably intends one recording but has not allowed the
 provider request to begin. `starting` means the provider request may have been
 sent. `started` means the exact egress ID is known. `not_started` means a typed
 local or provider result conclusively proves no egress was created. `uncertain`
@@ -247,12 +247,12 @@ means the outcome cannot be proven.
 ### Normal sequence
 
 1. Agent join locks and atomically connects the expected pending call.
-2. In the same transaction, Presvo inserts the `prepared` operation and its
+2. In the same transaction, Opevo inserts the `prepared` operation and its
    `recording.reconcile:{operation_id}:start` outbox intent.
-3. Presvo commits the connected call, operation, and outbox event.
+3. Opevo commits the connected call, operation, and outbox event.
 4. A short transaction compare-and-sets `prepared -> starting` and commits
    `start_attempted_at`.
-5. Presvo starts LiveKit Room Composite Egress with no SQL transaction open.
+5. Opevo starts LiveKit Room Composite Egress with no SQL transaction open.
 6. A short transaction records `started` and the returned egress ID, or records
    the classified start error.
 7. The customer playback projection is updated only if the call is not
@@ -358,7 +358,7 @@ reconciliation may idempotently remove an already-visible expected object to
 reduce exposure, but it must continue until the start outcome is resolved and no
 known egress can still write that object.
 
-Multiple exact matches violate the one-start invariant. Presvo fails closed,
+Multiple exact matches violate the one-start invariant. Opevo fails closed,
 records a safe conflict, emits an internal signal, and does not expose any of the
 matches as customer playback. Reconciliation attempts to make every exact match
 returned by LiveKit non-running, but does not touch room egresses whose expected
@@ -589,7 +589,7 @@ This Phase 0 unit was accepted against these criteria:
    or definite non-start plus object absence;
 8. normal visible-call playback and call finalization remain correct;
 9. PostgreSQL race tests and all regression gates pass;
-10. documentation continues to state that Presvo is production-oriented but not
+10. documentation continues to state that Opevo is production-oriented but not
     production-certified.
 
 ## Completion evidence

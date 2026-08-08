@@ -14,7 +14,7 @@ from agent.safe_logging import report_safe_exception
 
 
 logger = logging.getLogger(__name__)
-_AGENT_PROCESS_RUNTIME_KEY = "presvo.agent.process_runtime"
+_AGENT_PROCESS_RUNTIME_KEY = "opevo.agent.process_runtime"
 
 
 class AgentRuntimeConfigurationError(RuntimeError):

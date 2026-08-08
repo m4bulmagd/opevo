@@ -20,7 +20,7 @@
 - `CLERK_AUTHORIZED_PARTIES` remains an exact explicit override; no origin normalization or allowlist widening is allowed.
 - The two retained Telnyx/voice overrides and the live local stack must not be removed or recreated as part of these tasks.
 - Preserve the untracked `apps/api/.venv` symlink.
-- Do not inspect or modify `Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
+- Do not inspect or modify `Opevo_frontend/` or `.worktrees/shadcn-activation-preview`.
 
 ---
 

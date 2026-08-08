@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     app_env: RuntimeEnvironment = "development"
     database_url: str
     redis_url: str
-    otel_service_name: str = "presvo-api"
+    otel_service_name: str = "opevo-api"
     otel_exporter_otlp_endpoint: str | None = None
     realtime_enabled: bool = False
     activation_flow_enabled: bool = False

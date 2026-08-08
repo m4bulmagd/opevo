@@ -24,7 +24,7 @@ function formatActivityDate(value: string) {
 }
 
 export function ActivityChart({ data }: { data: DashboardActivityPoint[] }) {
-  const gradientId = `presvo-activity-${useId().replaceAll(":", "")}`;
+  const gradientId = `opevo-activity-${useId().replaceAll(":", "")}`;
   const maximum = Math.max(...data.map((point) => point.calls), 0);
 
   return (

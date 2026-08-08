@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from presvo_contracts import (
+from opevo_contracts import (
     AGENT_NAME_MAX_LENGTH,
     KNOWLEDGE_BASE_MAX_LENGTH,
     OWNER_CONTEXT_MAX_LENGTH,

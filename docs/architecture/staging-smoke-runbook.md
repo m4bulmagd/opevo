@@ -131,8 +131,8 @@ Expected signals:
 - `api` starts `uvicorn` on port `8000`
 - `worker-lifecycle` and `worker-background` start `arq` without import or
   Redis connection failures; their health keys are
-  `presvo:worker:call-lifecycle:health` and
-  `presvo:worker:background:health`
+  `opevo:worker:call-lifecycle:health` and
+  `opevo:worker:background:health`
 - `agent` registers with LiveKit without credential or import failures
 
 ## Basic Boot Verification
@@ -363,8 +363,8 @@ Expected worker log signals:
 - `worker-lifecycle` runs `call_finalization_job` after the agent receives `202 Accepted` from `/api/agent/calls/{call_id}/complete`
 - no duplicate finalization occurs if the same completion payload is retried
 - `worker-background` processes its separate queue without delaying the
-  lifecycle check; inspect `presvo.worker.queue.depth{queue_class}` and
-  `presvo.worker.queue.oldest_due.age{queue_class}` as bounded diagnostics.
+  lifecycle check; inspect `opevo.worker.queue.depth{queue_class}` and
+  `opevo.worker.queue.oldest_due.age{queue_class}` as bounded diagnostics.
 
 Optional storage verification:
 

@@ -1,6 +1,6 @@
-# Presvo UI Production Handoff
+# Opevo UI Production Handoff
 
-**Status:** The complete Presvo interface is implemented, production-buildable,
+**Status:** The complete Opevo interface is implemented, production-buildable,
 and locally verified. It preserves the approved template's colors, typography,
 spacing, borders, shadows, cards, responsive hierarchy, and light/dark themes.
 France is the first market; the launch copy remains English.
@@ -126,7 +126,7 @@ behavior. When a backend capability is implemented:
 5. remove the Preview label only after browser evidence proves real
    persistence or provider confirmation.
 
-Do not change the Presvo design tokens or page hierarchy as part of backend
+Do not change the Opevo design tokens or page hierarchy as part of backend
 integration.
 
 ## Deployment order

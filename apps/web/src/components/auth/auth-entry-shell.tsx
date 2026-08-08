@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { PhoneCall } from "lucide-react";
 
-export const PRESVO_CLERK_APPEARANCE = {
+export const OPEVO_CLERK_APPEARANCE = {
   variables: {
     colorPrimary: "var(--primary)",
     colorBackground: "var(--card)",
@@ -39,14 +39,14 @@ export function AuthEntryShell({ children, description, title }: AuthEntryShellP
       />
       <div className="relative flex w-full max-w-md flex-col gap-6">
         <Link
-          aria-label="Presvo home"
+          aria-label="Opevo home"
           className="mx-auto inline-flex min-h-11 items-center gap-3 rounded-lg font-semibold tracking-tight outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           href="/"
         >
           <span className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground">
             <PhoneCall aria-hidden="true" className="size-4" />
           </span>
-          Presvo
+          Opevo
         </Link>
         <section
           aria-labelledby="auth-entry-title"

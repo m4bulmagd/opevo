@@ -87,7 +87,7 @@ On wide desktop screens, the complete order is:
 
 `Search → Caller status → Live call → Notifications → Call history → Account/environment → Theme`
 
-The header keeps the existing mobile navigation trigger and Presvo identity.
+The header keeps the existing mobile navigation trigger and Opevo identity.
 At narrower breakpoints, search and caller details may hide progressively so
 the navigation trigger and action controls remain usable without horizontal
 overflow. Their wide-screen order must not change.

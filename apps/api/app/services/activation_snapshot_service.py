@@ -249,7 +249,7 @@ class ActivationSnapshotService:
         return ForwardingInstructionCatalog().for_profile(
             carrier=cast(CarrierCode, profile.confirmed_carrier),
             number_type=number_type,
-            presvo_number=phone.e164,
+            opevo_number=phone.e164,
         )
 
     @staticmethod

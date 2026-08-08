@@ -36,7 +36,7 @@ dependencies = [
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
     { name = "phonenumbers" },
-    { name = "presvo-contracts" },
+    { name = "opevo-contracts" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
     { name = "redis" },
@@ -76,7 +76,7 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.39,<2" },
     { name = "opentelemetry-sdk", specifier = ">=1.39,<2" },
     { name = "phonenumbers", specifier = ">=9.0,<10.0" },
-    { name = "presvo-contracts", directory = "../../libs/shared" },
+    { name = "opevo-contracts", directory = "../../libs/shared" },
     { name = "pydantic-settings", specifier = ">=2.14.2,<3.0" },
     { name = "pyjwt", specifier = ">=2.13,<3.0" },
     { name = "redis", specifier = ">=5.0,<6.0" },
@@ -1369,7 +1369,7 @@ wheels = [
 ]
 
 [[package]]
-name = "presvo-contracts"
+name = "opevo-contracts"
 version = "0.1.0"
 source = { directory = "../../libs/shared" }
 dependencies = [

@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
-describe("Presvo design-system primitives", () => {
+describe("Opevo design-system primitives", () => {
   it("uses scoped feedback transitions instead of animating every property", () => {
     render(
       <>

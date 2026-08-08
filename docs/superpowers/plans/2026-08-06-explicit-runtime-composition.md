@@ -13,9 +13,9 @@
 - Follow the owner-approved contract in `docs/superpowers/specs/2026-08-06-explicit-runtime-composition-design.md`.
 - Implement the approved combined direction **6A-1A + 6A-2A + 6A-3A + 6A-4A + 6A-5A + 6A-6A + 6A-7A**.
 - Use an isolated worktree created through `superpowers:using-git-worktrees` when execution begins.
-- Do not inspect or modify `Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
+- Do not inspect or modify `Opevo_frontend/` or `.worktrees/shadcn-activation-preview`.
 - Do not inspect real `.env` files. This work does not require environment changes.
-- Do not touch `/tmp/presvo-voice-e2e.override.yaml`, `/tmp/presvo-telnyx-e2e.override.yaml`, or `/tmp/presvo-clerk-e2e.override.yaml`.
+- Do not touch `/tmp/opevo-voice-e2e.override.yaml`, `/tmp/opevo-telnyx-e2e.override.yaml`, or `/tmp/opevo-clerk-e2e.override.yaml`.
 - Keep `worker-lifecycle` and `worker-background` as separate processes and queues while retaining their source under `apps/api`.
 - Preserve queue names, worker registrations, concurrency, semantic/hard timeouts, retries, result retention, health keys, and shutdown grace.
 - Preserve API contracts, authentication behavior, database schema/data, transaction and locking boundaries, outbox topics/payloads, call flow, activation, billing, telephony, recording, and provider failure classifications.
@@ -3010,7 +3010,7 @@ recording completion:
 
 ```bash
 ! git diff --name-only c56187794d3c12e0daca833f5f8f2e729e98eead...HEAD | \
-  rg '^(Presvo_frontend/|\.worktrees/shadcn-activation-preview/)|(^|/)\.env$'
+  rg '^(Opevo_frontend/|\.worktrees/shadcn-activation-preview/)|(^|/)\.env$'
 ```
 
 Any protected or real environment file stops the task. The fixed `/tmp`

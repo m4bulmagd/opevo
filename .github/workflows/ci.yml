@@ -400,20 +400,20 @@ jobs:
         run: >-
           docker build
           --file "${{ matrix.dockerfile }}"
-          --tag "presvo-${{ matrix.application }}:${{ github.sha }}"
+          --tag "opevo-${{ matrix.application }}:${{ github.sha }}"
           "${{ matrix.context }}"
       - name: Verify shared package in Python runtime images
         if: matrix.application != 'web'
         run: >-
           docker run --rm
           --entrypoint /app/.venv/bin/python
-          "presvo-${{ matrix.application }}:${{ github.sha }}"
-          -c "import presvo_contracts; assert presvo_contracts.CURRENT_SCHEMA_VERSION == 1"
+          "opevo-${{ matrix.application }}:${{ github.sha }}"
+          -c "import opevo_contracts; assert opevo_contracts.CURRENT_SCHEMA_VERSION == 1"
       - name: Scan agent image with reviewed exceptions
         if: matrix.application == 'agent'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: presvo-${{ matrix.application }}:${{ github.sha }}
+          image-ref: opevo-${{ matrix.application }}:${{ github.sha }}
           scan-type: image
           scanners: vuln
           vuln-type: os,library
@@ -428,7 +428,7 @@ jobs:
         if: matrix.application != 'agent'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: presvo-${{ matrix.application }}:${{ github.sha }}
+          image-ref: opevo-${{ matrix.application }}:${{ github.sha }}
           scan-type: image
           scanners: vuln
           vuln-type: os,library

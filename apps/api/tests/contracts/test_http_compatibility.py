@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from presvo_contracts import (
+from opevo_contracts import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
     TranscriptAppendAcknowledgement,

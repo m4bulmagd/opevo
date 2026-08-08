@@ -51,7 +51,7 @@ export function BusinessFields({
             autoComplete="name"
             maxLength={constraints.name_max_length}
             aria-invalid={Boolean(errors.owner_name)}
-            {...form.register("owner_name", { required: "Add the name Presvo should use for you." })}
+            {...form.register("owner_name", { required: "Add the name Opevo should use for you." })}
           />
           <FieldDescription>
             {count(draft.owner_name)} / {constraints.name_max_length}

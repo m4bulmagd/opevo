@@ -215,7 +215,7 @@ def _canonical_alias_value(
 
 
 def livekit_alias_values_equivalent(left: object, right: object) -> bool:
-    """Compare Presvo's bounded camel/snake vocabulary structurally."""
+    """Compare Opevo's bounded camel/snake vocabulary structurally."""
     traversal = _AliasTraversal()
     canonical_left = _canonical_alias_value(left, traversal=traversal, depth=0)
     canonical_right = _canonical_alias_value(right, traversal=traversal, depth=0)

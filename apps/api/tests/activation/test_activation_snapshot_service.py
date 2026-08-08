@@ -359,7 +359,7 @@ async def test_snapshot_forwarding_uses_stored_detected_number_type() -> None:
     assert snapshot.forwarding is not None
     assert snapshot.forwarding.carrier == "orange"
     assert snapshot.forwarding.number_type == "mobile"
-    assert snapshot.forwarding.presvo_number == ARCEP_TECHNICAL_NUMBER
+    assert snapshot.forwarding.opevo_number == ARCEP_TECHNICAL_NUMBER
     assert all(step.dial_code is None for step in snapshot.forwarding.steps)
 
 

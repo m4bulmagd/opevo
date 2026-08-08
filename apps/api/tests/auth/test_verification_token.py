@@ -15,7 +15,7 @@ from app.core.dispatch_token import (
 
 
 DISPATCH_SECRET = "verification-test-secret-with-enough-entropy-for-hmac-tests"
-AUDIENCE = "presvo-forwarding-verification"
+AUDIENCE = "opevo-forwarding-verification"
 EXPLICIT_SECRET = "explicit-verification-secret-not-from-the-controlled-environment"
 TOKEN_CONFIG = DispatchTokenConfig(secret=DISPATCH_SECRET, ttl_seconds=7200)
 

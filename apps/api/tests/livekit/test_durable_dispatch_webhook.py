@@ -2110,8 +2110,8 @@ async def test_signed_egress_metric_export_failure_keeps_committed_sql_and_202(
     provider_calls = _forbid_provider_and_storage_io(monkeypatch)
     private_failure = "PRIVATE_RECORDING_METRIC_EXPORT_FAILURE"
     telemetry = Observability(
-        meter=metrics.get_meter("presvo-test-livekit-webhook"),
-        tracer=trace.get_tracer("presvo-test-livekit-webhook"),
+        meter=metrics.get_meter("opevo-test-livekit-webhook"),
+        tracer=trace.get_tracer("opevo-test-livekit-webhook"),
     )
     telemetry.recording_webhook_mismatches = _ThrowingCounter(private_failure)
 

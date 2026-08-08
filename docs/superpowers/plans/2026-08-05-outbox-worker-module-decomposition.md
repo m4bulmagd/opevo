@@ -12,9 +12,9 @@
 
 - Follow the approved design in `docs/superpowers/specs/2026-08-05-outbox-worker-module-decomposition-design.md`.
 - Use an isolated worktree created through `superpowers:using-git-worktrees` when execution begins.
-- Do not inspect or modify `Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
+- Do not inspect or modify `Opevo_frontend/` or `.worktrees/shadcn-activation-preview`.
 - Do not inspect real `.env` files; this change does not require environment edits.
-- Do not touch `/tmp/presvo-voice-e2e.override.yaml`, `/tmp/presvo-telnyx-e2e.override.yaml`, or `/tmp/presvo-clerk-e2e.override.yaml`.
+- Do not touch `/tmp/opevo-voice-e2e.override.yaml`, `/tmp/opevo-telnyx-e2e.override.yaml`, or `/tmp/opevo-clerk-e2e.override.yaml`.
 - Preserve every outbox topic string, aggregate type, payload shape, idempotency key, transaction boundary, lock, retryability value, exhaustibility value, provider call, compensation path, and persistence rule.
 - Do not introduce a compatibility facade, deprecated import alias, handler re-export, dynamic registry, DI framework, service locator, strategy hierarchy, or workflow framework.
 - `apps/api/app/workers/outbox/__init__.py` remains empty.
@@ -1216,8 +1216,8 @@ Expected: all selected non-credentialed tests pass.
 First confirm the exact disposable names are unused. If either check prints a container ID, stop and choose different task-specific exact names; do not delete an existing container.
 
 ```bash
-docker ps -aq --filter 'name=^/presvo-issue5a-postgres$'
-docker ps -aq --filter 'name=^/presvo-issue5a-redis$'
+docker ps -aq --filter 'name=^/opevo-issue5a-postgres$'
+docker ps -aq --filter 'name=^/opevo-issue5a-redis$'
 ```
 
 Then run the complete gate in one shell so cleanup always runs:
@@ -1225,26 +1225,26 @@ Then run the complete gate in one shell so cleanup always runs:
 ```bash
 set -eu
 
-cleanup_presvo_issue5a_dependencies() {
-  docker stop presvo-issue5a-postgres presvo-issue5a-redis >/dev/null 2>&1 || true
+cleanup_opevo_issue5a_dependencies() {
+  docker stop opevo-issue5a-postgres opevo-issue5a-redis >/dev/null 2>&1 || true
 }
-trap cleanup_presvo_issue5a_dependencies EXIT HUP INT TERM
+trap cleanup_opevo_issue5a_dependencies EXIT HUP INT TERM
 
 docker run --rm -d \
-  --name presvo-issue5a-postgres \
+  --name opevo-issue5a-postgres \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=ai_call_test \
   -p 127.0.0.1:55432:5432 \
   postgres:17.8-alpine
 docker run --rm -d \
-  --name presvo-issue5a-redis \
+  --name opevo-issue5a-redis \
   -p 127.0.0.1:56379:6379 \
   redis:7.4.7-alpine
 
-until docker exec presvo-issue5a-postgres pg_isready -U postgres -d ai_call_test >/dev/null 2>&1; do
+until docker exec opevo-issue5a-postgres pg_isready -U postgres -d ai_call_test >/dev/null 2>&1; do
   sleep 1
 done
-until docker exec presvo-issue5a-redis redis-cli ping | rg -q '^PONG$'; do
+until docker exec opevo-issue5a-redis redis-cli ping | rg -q '^PONG$'; do
   sleep 1
 done
 
@@ -1653,8 +1653,8 @@ Expected: the exact approved package file list matches, no legacy path/name rema
 First require both exact disposable names to be unused:
 
 ```bash
-docker ps -aq --filter 'name=^/presvo-issue5a-postgres$'
-docker ps -aq --filter 'name=^/presvo-issue5a-redis$'
+docker ps -aq --filter 'name=^/opevo-issue5a-postgres$'
+docker ps -aq --filter 'name=^/opevo-issue5a-redis$'
 ```
 
 Expected: neither command prints a container ID. If a name exists, choose a different task-specific exact name throughout the following block; never delete an existing container to claim the name.
@@ -1664,26 +1664,26 @@ Run the final gate in one shell:
 ```bash
 set -eu
 
-cleanup_presvo_issue5a_dependencies() {
-  docker stop presvo-issue5a-postgres presvo-issue5a-redis >/dev/null 2>&1 || true
+cleanup_opevo_issue5a_dependencies() {
+  docker stop opevo-issue5a-postgres opevo-issue5a-redis >/dev/null 2>&1 || true
 }
-trap cleanup_presvo_issue5a_dependencies EXIT HUP INT TERM
+trap cleanup_opevo_issue5a_dependencies EXIT HUP INT TERM
 
 docker run --rm -d \
-  --name presvo-issue5a-postgres \
+  --name opevo-issue5a-postgres \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=ai_call_test \
   -p 127.0.0.1:55432:5432 \
   postgres:17.8-alpine
 docker run --rm -d \
-  --name presvo-issue5a-redis \
+  --name opevo-issue5a-redis \
   -p 127.0.0.1:56379:6379 \
   redis:7.4.7-alpine
 
-until docker exec presvo-issue5a-postgres pg_isready -U postgres -d ai_call_test >/dev/null 2>&1; do
+until docker exec opevo-issue5a-postgres pg_isready -U postgres -d ai_call_test >/dev/null 2>&1; do
   sleep 1
 done
-until docker exec presvo-issue5a-redis redis-cli ping | rg -q '^PONG$'; do
+until docker exec opevo-issue5a-redis redis-cli ping | rg -q '^PONG$'; do
   sleep 1
 done
 
@@ -1770,7 +1770,7 @@ Run:
 
 ```bash
 git status --short --branch
-docker ps -a --filter 'name=^/presvo-issue5a-postgres$' --filter 'name=^/presvo-issue5a-redis$'
+docker ps -a --filter 'name=^/opevo-issue5a-postgres$' --filter 'name=^/opevo-issue5a-redis$'
 ```
 
-Expected: the implementation worktree has no uncommitted scoped changes; no Issue 5A disposable container remains. Do not inspect, add, delete, or commit the protected `Presvo_frontend/` path if it appears in the shared root worktree.
+Expected: the implementation worktree has no uncommitted scoped changes; no Issue 5A disposable container remains. Do not inspect, add, delete, or commit the protected `Opevo_frontend/` path if it appears in the shared root worktree.

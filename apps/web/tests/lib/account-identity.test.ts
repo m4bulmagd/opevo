@@ -36,12 +36,12 @@ describe("resolveAccountIdentity", () => {
       resolveForMode({
         shouldWrapClerk: true,
         currentUser: async () => ({
-          primaryEmailAddress: { emailAddress: "owner@presvo.test" },
+          primaryEmailAddress: { emailAddress: "owner@opevo.test" },
           emailAddresses: [],
         }),
       }),
     ).resolves.toEqual({
-      email: "owner@presvo.test",
+      email: "owner@opevo.test",
       securityMode: "clerk",
     });
   });

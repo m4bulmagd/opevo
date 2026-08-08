@@ -1,8 +1,8 @@
-# Presvo Dashboard, Calls, and Live-Call Preview Implementation Plan
+# Opevo Dashboard, Calls, and Live-Call Preview Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Port the Presvo overview, call history, call detail, and live-call experience into the production application while preserving tenant-safe backend truth and making every simulated interaction unmistakably Preview-only.
+**Goal:** Port the Opevo overview, call history, call detail, and live-call experience into the production application while preserving tenant-safe backend truth and making every simulated interaction unmistakably Preview-only.
 
 **Architecture:** Keep the existing authenticated Next.js workspace shell, request/session boundaries, call detail retrieval, recording URLs, and confirmed deletion action. Extend the dashboard metrics response with seven tenant-scoped local-day buckets and extend call listing with server-owned status/date filters. Render route state from URL parameters, keep production call data server-backed, and place all simulated live-call behavior inside a client component that owns only in-memory state and imports no API or server action.
 
@@ -10,8 +10,8 @@
 
 ## Global Constraints
 
-- `apps/web` remains the only deployed frontend; `/home/mo/code/ai/bmad-opevo/Presvo_frontend` stays read-only.
-- Preserve the exact Phase 1 Presvo sage/off-white tokens, system typography, spacing, borders, shadows, cards, and hierarchy.
+- `apps/web` remains the only deployed frontend; `/home/mo/code/ai/bmad-opevo/Opevo_frontend` stays read-only.
+- Preserve the exact Phase 1 Opevo sage/off-white tokens, system typography, spacing, borders, shadows, cards, and hierarchy.
 - Preserve the workspace shell, its search action, authentication, activation guard, account state, backend client, and route URLs.
 - Dashboard totals, usage, number, runtime state, calls, transcripts, recording links, and deletion results remain backend-authoritative.
 - All dashboard metrics and call filters must remain tenant-scoped and must exclude soft-deleted calls.
@@ -193,7 +193,7 @@ git commit -m "feat(calls): add production history filters"
 
 ---
 
-## Task 3: Port the Presvo Operational Overview
+## Task 3: Port the Opevo Operational Overview
 
 - [x] **Step 1: Add failing dashboard and chart tests**
 
@@ -226,7 +226,7 @@ npm run check
 - [x] **Step 6: Commit**
 
 ```bash
-git commit -m "feat(web): port Presvo operations overview"
+git commit -m "feat(web): port Opevo operations overview"
 ```
 
 ---
@@ -244,7 +244,7 @@ cd apps/web
 npm run test:ci -- tests/app/calls-page.test.tsx
 ```
 
-- [x] **Step 3: Implement the Presvo filter surface**
+- [x] **Step 3: Implement the Opevo filter surface**
 
 Use native GET controls so reload/back/forward behavior requires no duplicated client state. Keep labels and 44px targets. Pass all normalized filter fields to the backend and redirect out-of-range pages to the last canonical filtered page.
 
@@ -264,7 +264,7 @@ npm run check
 - [x] **Step 6: Commit**
 
 ```bash
-git commit -m "feat(web): port Presvo call history"
+git commit -m "feat(web): port Opevo call history"
 ```
 
 ---
@@ -302,7 +302,7 @@ npm run check
 - [x] **Step 6: Commit**
 
 ```bash
-git commit -m "feat(web): port Presvo call detail"
+git commit -m "feat(web): port Opevo call detail"
 ```
 
 ---
@@ -383,7 +383,7 @@ bash scripts/run-local-e2e.sh
 - [x] **Step 5: Commit**
 
 ```bash
-git commit -m "test(web): lock Presvo dashboard and calls visuals"
+git commit -m "test(web): lock Opevo dashboard and calls visuals"
 ```
 
 ---
@@ -434,14 +434,14 @@ Confirm dashboard chart truth/accessibility, URL-owned filters, tenant-safe resu
 - [x] **Step 5: Mark this plan complete and commit**
 
 ```bash
-git commit -m "docs: complete Presvo dashboard and calls phase"
+git commit -m "docs: complete Opevo dashboard and calls phase"
 ```
 
 ---
 
 ## Phase 3 Completion Checklist
 
-- [x] Dashboard matches the Presvo overview hierarchy without invented production metrics.
+- [x] Dashboard matches the Opevo overview hierarchy without invented production metrics.
 - [x] Seven-day activity is backend-authoritative, tenant-safe, timezone-correct, and accessible as text.
 - [x] Search/status/date/page state is URL-owned and survives reload/back/forward.
 - [x] Call history uses desktop table and mobile cards with truthful empty states.

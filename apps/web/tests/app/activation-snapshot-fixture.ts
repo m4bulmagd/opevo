@@ -5,7 +5,7 @@ export function forwardingGuide(): ForwardingGuide {
     version: "fr-carrier-guidance-v1",
     carrier: "orange",
     number_type: "fixed",
-    presvo_number: "+33187654321",
+    opevo_number: "+33187654321",
     warning: "Use conditional forwarding only.",
     steps: [
       {

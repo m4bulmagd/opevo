@@ -1,8 +1,8 @@
-# Presvo UI Foundation and Shell Implementation Plan
+# Opevo UI Foundation and Shell Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Install the approved Presvo visual contract in `apps/web` and replace the authenticated navigation shell with the template-matched desktop sidebar, compact header, mobile sheet, functional search, and explicit Preview notifications.
+**Goal:** Install the approved Opevo visual contract in `apps/web` and replace the authenticated navigation shell with the template-matched desktop sidebar, compact header, mobile sheet, functional search, and explicit Preview notifications.
 
 **Architecture:** Keep the existing authenticated dashboard layout and server data loading. Restyle shared CSS/primitives, centralize capability-aware route metadata, and compose server-owned account/auth controls with small client islands for pathname state, the mobile sheet, and local notification state. Existing route children remain unchanged in this phase.
 
@@ -10,9 +10,9 @@
 
 ## Global Constraints
 
-- Read `docs/superpowers/specs/2026-07-29-presvo-ui-migration-design.md` before implementation.
-- Use `Presvo_frontend/src/styles.css` and `Presvo_frontend/src/components/layout/*` only as visual references.
-- Do not modify `Presvo_frontend`.
+- Read `docs/superpowers/specs/2026-07-29-opevo-ui-migration-design.md` before implementation.
+- Use `Opevo_frontend/src/styles.css` and `Opevo_frontend/src/components/layout/*` only as visual references.
+- Do not modify `Opevo_frontend`.
 - Do not alter dashboard API calls, authentication gates, or account lifecycle logic.
 - Maintain a visible skip link and 44px minimum touch targets for primary mobile actions.
 - Do not use `transition-all`.
@@ -114,7 +114,7 @@ Expected: failures show the current warm-canvas/cobalt values and font variables
 
 - [x] **Step 3: Port the template tokens without dropping production aliases**
 
-Replace the light and dark color, radius, and shadow values in `globals.css` with the exact values in `Presvo_frontend/src/styles.css`.
+Replace the light and dark color, radius, and shadow values in `globals.css` with the exact values in `Opevo_frontend/src/styles.css`.
 
 Keep these production compatibility aliases:
 
@@ -201,7 +201,7 @@ Expected: all pass.
 
 ```bash
 git add apps/web/src/app/globals.css apps/web/src/app/layout.tsx apps/web/src/components/workspace/workspace-shell.tsx apps/web/src/lib/fonts/registry.ts apps/web/tests/styles/theme-tokens.test.ts apps/web/tests/app/app-shell.test.tsx
-git commit -m "feat(web): install Presvo visual tokens"
+git commit -m "feat(web): install Opevo visual tokens"
 ```
 
 ---
@@ -330,7 +330,7 @@ npm run check
 
 ```bash
 git add apps/web/src/components/ui apps/web/src/components/product apps/web/src/lib/types/capability.ts apps/web/tests/components/design-system-primitives.test.tsx apps/web/tests/components/product-components.test.tsx
-git commit -m "feat(web): align Presvo design primitives"
+git commit -m "feat(web): align Opevo design primitives"
 ```
 
 ---
@@ -457,7 +457,7 @@ Keep the exported component name during this phase to minimize unrelated churn. 
 ```tsx
 <aside aria-label="Workspace sidebar" className="hidden w-64 shrink-0 lg:block">
   <div className="sticky top-4 flex h-[calc(100svh-2rem)] flex-col overflow-hidden rounded-2xl border border-sidebar-border bg-sidebar shadow-card">
-    {/* Presvo brand */}
+    {/* Opevo brand */}
     {/* grouped WorkspaceNavigation */}
     {/* agent runtime/account card */}
   </div>
@@ -468,7 +468,7 @@ Brand geometry:
 
 - outer content `p-4`;
 - logo mark `size-9 rounded-xl bg-primary`;
-- `Presvo` at 14px semibold;
+- `Opevo` at 14px semibold;
 - `AI Call Assistant` at 12px muted.
 
 Runtime card geometry:
@@ -507,7 +507,7 @@ Expected: both new desktop assertions and the unchanged legacy mobile assertions
 
 ```bash
 git add apps/web/src/components/workspace/command-rail.tsx apps/web/src/components/workspace/workspace-navigation.tsx apps/web/tests/app/app-shell.test.tsx
-git commit -m "feat(web): port Presvo desktop sidebar"
+git commit -m "feat(web): port Opevo desktop sidebar"
 ```
 
 ---
@@ -607,7 +607,7 @@ npm run check
 
 ```bash
 git add apps/web/src/components/workspace apps/web/tests/app/app-shell.test.tsx
-git commit -m "feat(web): add responsive Presvo navigation"
+git commit -m "feat(web): add responsive Opevo navigation"
 ```
 
 ---
@@ -801,7 +801,7 @@ Expected: no obsolete shell/font imports, no `transition-all` in the changed pri
 
 ```bash
 git add apps/web/tests/e2e/dashboard-visual.spec.ts apps/web/tests/e2e/dashboard-visual.spec.ts-snapshots
-git commit -m "test(web): lock Presvo shell visuals"
+git commit -m "test(web): lock Opevo shell visuals"
 ```
 
 ---

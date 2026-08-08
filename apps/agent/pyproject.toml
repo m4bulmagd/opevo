@@ -14,13 +14,13 @@ dependencies = [
   "opentelemetry-api>=1.39,<2",
   "opentelemetry-exporter-otlp-proto-http>=1.39,<2",
   "opentelemetry-sdk>=1.39,<2",
-  "presvo-contracts",
+  "opevo-contracts",
   "pydantic-settings>=2.14.2",
   "redis>=5.0,<6.0",
 ]
 
 [tool.uv.sources]
-presvo-contracts = { path = "../../libs/shared" }
+opevo-contracts = { path = "../../libs/shared" }
 
 [dependency-groups]
 dev = [

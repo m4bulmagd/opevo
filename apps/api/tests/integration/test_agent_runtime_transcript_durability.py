@@ -16,7 +16,7 @@ import httpx
 import pytest
 from conftest import install_test_api_runtime
 from fastapi import FastAPI
-from presvo_contracts import CustomerCallDispatch, create_contract
+from opevo_contracts import CustomerCallDispatch, create_contract
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 

@@ -8,7 +8,7 @@
 
 ## Summary
 
-Presvo's authenticated product is functionally mature, but its current visual
+Opevo's authenticated product is functionally mature, but its current visual
 language is split between a bespoke landing page and a largely standard
 component-library dashboard. This redesign gives the logged-in product one
 recognizable, premium visual system without changing its established account,
@@ -32,7 +32,7 @@ their current abstractions prevent a coherent system.
 
 ### Audience
 
-Presvo serves professional individuals and small businesses in France. Owners
+Opevo serves professional individuals and small businesses in France. Owners
 use the product between other responsibilities; they need to understand whether
 their AI receptionist is working, what happened on recent calls, what requires
 attention, and whether their plan is healthy without studying an admin console.
@@ -60,7 +60,7 @@ The logged-in interface must feel:
 
 ## Goals
 
-1. Give the authenticated product a consistent and recognizable Presvo visual
+1. Give the authenticated product a consistent and recognizable Opevo visual
    identity.
 2. Make receptionist state and required action understandable within a few
    seconds.
@@ -115,7 +115,7 @@ Use the approved **Quiet Confidence** direction:
 - deep ink Command Rail;
 - tinted white product surfaces;
 - restrained cobalt for interactive emphasis;
-- muted amber for the Presvo brand mark and limited attention accents;
+- muted amber for the Opevo brand mark and limited attention accents;
 - semantic green, amber, and red for success, warning, and destructive states;
 - subtle borders and controlled shadows;
 - moderate radii rather than fully rounded treatment everywhere.
@@ -126,7 +126,7 @@ blur fields, gradient text, or generic glow effects.
 
 ### Theme policy
 
-Keep one curated Presvo theme with coordinated light and dark palettes.
+Keep one curated Opevo theme with coordinated light and dark palettes.
 Light, dark, and system modes remain valid. Remove user-selectable theme
 presets, font selection, content-layout selection, navbar style, sidebar
 variant, and sidebar-collapse preferences.
@@ -216,7 +216,7 @@ Required token families:
 - radii for control, surface, and shell;
 - motion duration and easing tokens.
 
-The existing default theme variables become the Presvo theme. The
+The existing default theme variables become the Opevo theme. The
 `brutalist`, `soft-pop`, and `tangerine` presets and their imports are removed.
 
 ## Component Architecture
@@ -355,7 +355,7 @@ Use the Operational Ledger composition:
 4. `DataLedger` with recent calls, caller intent, follow-up flag, duration, and
    start time.
 5. A compact **Needs attention** surface showing recent calls flagged for
-   follow-up. It must not imply that Presvo tracks whether follow-up was
+   follow-up. It must not imply that Opevo tracks whether follow-up was
    completed.
 6. A plan-usage surface backed by the existing billing snapshot.
 
@@ -480,7 +480,7 @@ Keep route layouts and pages as React Server Components.
 
 Add small client boundaries for:
 
-- `PresvoMotionProvider`;
+- `OpevoMotionProvider`;
 - pathname-aware desktop and mobile navigation;
 - mobile More sheet;
 - animated badge;
@@ -650,7 +650,7 @@ Add focused tests for:
 ## Implementation Slices
 
 1. **Tokens and product frame**
-   - Add Presvo theme tokens and fixed typography.
+   - Add Opevo theme tokens and fixed typography.
    - Add motion provider and approved motion primitives.
    - Build responsive `WorkspaceShell`.
    - Remove legacy visual controls and preset imports only after the new shell
@@ -681,7 +681,7 @@ Each slice receives focused tests and review before the next slice begins.
 
 The redesign is successful when:
 
-- the authenticated product has one coherent Presvo identity in light and dark
+- the authenticated product has one coherent Opevo identity in light and dark
   modes;
 - a user can identify receptionist health and required action immediately;
 - the dashboard displays accurate, clearly defined balanced operational

@@ -21,11 +21,11 @@ agent gate, not authorization to run a production deployment.
 6. Drain and remove the generic worker.
 
 The services and their checks are fixed: `worker-lifecycle` consumes
-`arq:queue`, reports `presvo:worker:call-lifecycle:health`, and defaults to 10
+`arq:queue`, reports `opevo:worker:call-lifecycle:health`, and defaults to 10
 slots; `worker-background` consumes `arq:queue:background`, reports
-`presvo:worker:background:health`, and defaults to 4 slots. Inspect
-`presvo.worker.queue.depth{queue_class}` and
-`presvo.worker.queue.oldest_due.age{queue_class}` for each class. PostgreSQL
+`opevo:worker:background:health`, and defaults to 4 slots. Inspect
+`opevo.worker.queue.depth{queue_class}` and
+`opevo.worker.queue.oldest_due.age{queue_class}` for each class. PostgreSQL
 outbox/call state is authoritative; Redis is execution and wakeup only.
 
 During this bounded overlap, `worker-lifecycle` can consume and reject a legacy
@@ -39,7 +39,7 @@ zero-delay guarantee.
 
 ## Scope and owners
 
-Use this runbook for staging and production releases of the Presvo application.
+Use this runbook for staging and production releases of the Opevo application.
 It assumes managed PostgreSQL, managed Redis/Valkey, managed object storage, a
 secret store, and an orchestrator that can run both services and one-shot jobs.
 Replace angle-bracket placeholders with values from the approved change record;
@@ -69,12 +69,12 @@ environment: <staging|production>
 change_window_utc: <start/end>
 release_commander: <name or team>
 git_commit: <40-character commit>
-api_image: <registry>/presvo-api@sha256:<64 hex characters>
-agent_image: <registry>/presvo-agent@sha256:<64 hex characters>
-web_image: <registry>/presvo-web@sha256:<64 hex characters>
-previous_api_image: <registry>/presvo-api@sha256:<64 hex characters>
-previous_agent_image: <registry>/presvo-agent@sha256:<64 hex characters>
-previous_web_image: <registry>/presvo-web@sha256:<64 hex characters>
+api_image: <registry>/opevo-api@sha256:<64 hex characters>
+agent_image: <registry>/opevo-agent@sha256:<64 hex characters>
+web_image: <registry>/opevo-web@sha256:<64 hex characters>
+previous_api_image: <registry>/opevo-api@sha256:<64 hex characters>
+previous_agent_image: <registry>/opevo-agent@sha256:<64 hex characters>
+previous_web_image: <registry>/opevo-web@sha256:<64 hex characters>
 expected_alembic_from: <revision>
 expected_alembic_to: <revision>
 migration_class: <backward-compatible|maintenance-required>
@@ -135,8 +135,8 @@ Before the change window, the release commander must confirm:
   for the paid-period end and proration is disabled. A repository test or
   nonblank ID is not evidence of the external configuration.
 - Monitoring pages on every increment of
-  `presvo.account_deactivation.attention` and alerts when
-  `presvo.account_deactivation.oldest_incomplete_age` exceeds
+  `opevo.account_deactivation.attention` and alerts when
+  `opevo.account_deactivation.oldest_incomplete_age` exceeds
   `MAX_CALL_DURATION_SECONDS + 900` seconds. Both rules must be active for the
   configured `MAX_CALL_DURATION_SECONDS`, not a copied default.
 - There is no active incident, credential rotation, data repair, provider
@@ -169,9 +169,9 @@ runbook; do not invent options during a live release.
 
 ```bash
 export RELEASE_ID=<release-id>
-export API_IMAGE=<registry>/presvo-api@sha256:<digest>
-export AGENT_IMAGE=<registry>/presvo-agent@sha256:<digest>
-export WEB_IMAGE=<registry>/presvo-web@sha256:<digest>
+export API_IMAGE=<registry>/opevo-api@sha256:<digest>
+export AGENT_IMAGE=<registry>/opevo-agent@sha256:<digest>
+export WEB_IMAGE=<registry>/opevo-web@sha256:<digest>
 export API_INTERNAL_URL=<non-secret-internal-api-origin>
 export API_PUBLIC_URL=<public-api-origin>
 export WEB_PUBLIC_URL=<public-web-origin>
@@ -238,13 +238,13 @@ this online sequence.
 4. Preserve the job ID and redacted logs under the release retention policy.
 
 ```bash
-<deployctl> job run presvo-migrate \
+<deployctl> job run opevo-migrate \
   --release "$RELEASE_ID" \
   --image "$API_IMAGE" \
   --secret-ref <database-secret-reference> \
   -- /app/.venv/bin/alembic -c /app/alembic.ini upgrade head
 
-<deployctl> job wait presvo-migrate --release "$RELEASE_ID" --expect-exit 0
+<deployctl> job wait opevo-migrate --release "$RELEASE_ID" --expect-exit 0
 <datactl> query-metadata --database <database-id> --query-id alembic-current-head
 ```
 
@@ -280,11 +280,11 @@ evidence references different image digests or an older API contract.
 <deployctl> service status worker-background --release "$RELEASE_ID"
 <deployctl> service status worker-lifecycle --release "$RELEASE_ID"
 
-<deployctl> service deploy-revision presvo-agent --image "$AGENT_IMAGE" --release "$RELEASE_ID" --retain-previous
+<deployctl> service deploy-revision opevo-agent --image "$AGENT_IMAGE" --release "$RELEASE_ID" --retain-previous
 <voicectl> agent wait-available --release "$RELEASE_ID" --image "$AGENT_IMAGE"
 <voicectl> agent drain --revision <previous-agent-revision> --stop-new-dispatches
 <voicectl> agent wait --revision <previous-agent-revision> --active-jobs 0 --timeout-seconds 3900
-<deployctl> service remove-revision presvo-agent --revision <previous-agent-revision> --wait
+<deployctl> service remove-revision opevo-agent --revision <previous-agent-revision> --wait
 ```
 
 Confirm both workers start, can reach PostgreSQL and Redis over their protected
@@ -333,8 +333,8 @@ this gate, so an unproven browser/API contract requires the maintenance path,
 not a rolling API deployment.
 
 ```bash
-<deployctl> service deploy presvo-api --image "$API_IMAGE" --release "$RELEASE_ID" --wait
-<deployctl> service status presvo-api --release "$RELEASE_ID"
+<deployctl> service deploy opevo-api --image "$API_IMAGE" --release "$RELEASE_ID" --wait
+<deployctl> service status opevo-api --release "$RELEASE_ID"
 ```
 
 Stop if the deployment exceeds its deadline, any new replica crash-loops, the
@@ -380,8 +380,8 @@ public runtime configuration points to the approved origins and Clerk
 publishable identifier; never record or expose the Clerk secret.
 
 ```bash
-<deployctl> service deploy presvo-web --image "$WEB_IMAGE" --release "$RELEASE_ID" --wait
-<deployctl> service status presvo-web --release "$RELEASE_ID"
+<deployctl> service deploy opevo-web --image "$WEB_IMAGE" --release "$RELEASE_ID" --wait
+<deployctl> service status opevo-web --release "$RELEASE_ID"
 curl --fail --silent --show-error "$WEB_PUBLIC_URL/"
 ```
 
@@ -451,11 +451,11 @@ Use only value-free operation evidence. For an incomplete operation, observe:
   are the same operation ID;
 - whether an owner-scoped call is still in a nonterminal state; and
 - the five low-cardinality metrics
-  `presvo.account_deactivation.operations`,
-  `presvo.account_deactivation.oldest_incomplete_age`,
-  `presvo.account_deactivation.reconciliation_results`,
-  `presvo.account_deactivation.attention`, and
-  `presvo.account_deactivation.completion_duration`.
+  `opevo.account_deactivation.operations`,
+  `opevo.account_deactivation.oldest_incomplete_age`,
+  `opevo.account_deactivation.reconciliation_results`,
+  `opevo.account_deactivation.attention`, and
+  `opevo.account_deactivation.completion_duration`.
 
 Do not infer provider completion from the request/webhook time. The entry path
 leaves routing and subscription phase timestamps unset; only the reconciler
@@ -469,7 +469,7 @@ conflicts commit `telephony_release_conflict`; other bounded adapter-contract
 failures commit `provider_contract`. These states require operator attention
 and never expose raw Telnyx errors or provider identities to the customer.
 
-On every increment of `presvo.account_deactivation.attention`:
+On every increment of `opevo.account_deactivation.attention`:
 
 1. Open an incident and record the opaque operation ID, trigger, current safe
    phase, bounded code, alert time, and owners. Do not copy raw provider
@@ -489,7 +489,7 @@ On every increment of `presvo.account_deactivation.attention`:
    the incident.
 
 The same recovery boundary applies when
-`presvo.account_deactivation.oldest_incomplete_age` exceeds
+`opevo.account_deactivation.oldest_incomplete_age` exceeds
 `MAX_CALL_DURATION_SECONDS + 900`: determine whether a call is legitimately
 draining or a provider phase is stalled, remediate the exact fault, and requeue
 only the matching failed reference-only event when necessary.

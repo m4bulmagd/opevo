@@ -23,7 +23,7 @@ from agent.safe_logging import report_safe_exception
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_SERVICE_NAME = "presvo-agent"
+_DEFAULT_SERVICE_NAME = "opevo-agent"
 _OTLP_HTTP_TRACE_EXPORTER_LOGGER = (
     "opentelemetry.exporter.otlp.proto.http.trace_exporter"
 )
@@ -61,7 +61,7 @@ class _ObservabilityAdapter:
 class _OtlpHttpTraceFailureFilter(logging.Filter):
     """Rewrite exact stock exporter events that include response content."""
 
-    _presvo_otlp_response_body_filter = True
+    _opevo_otlp_response_body_filter = True
 
     def filter(self, record: logging.LogRecord) -> bool:
         if not (
@@ -130,7 +130,7 @@ class _SafeSpanExporter(SpanExporter):
 def _install_otlp_response_body_filter() -> None:
     exporter_logger = logging.getLogger(_OTLP_HTTP_TRACE_EXPORTER_LOGGER)
     if any(
-        getattr(log_filter, "_presvo_otlp_response_body_filter", False)
+        getattr(log_filter, "_opevo_otlp_response_body_filter", False)
         for log_filter in exporter_logger.filters
     ):
         return
@@ -144,7 +144,7 @@ _adapter: _ObservabilityAdapter | None = None
 
 
 def initialize_observability() -> bool:
-    """Initialize Presvo's private OTLP tracer at most once per process."""
+    """Initialize Opevo's private OTLP tracer at most once per process."""
     global _adapter, _initialization_attempted
 
     with _lock:
@@ -187,7 +187,7 @@ def _build_adapter() -> _ObservabilityAdapter:
         )
     )
     provider.add_span_processor(BatchSpanProcessor(exporter))
-    tracer = provider.get_tracer("presvo.agent")
+    tracer = provider.get_tracer("opevo.agent")
     return _ObservabilityAdapter(provider=provider, tracer=tracer)
 
 
@@ -222,15 +222,15 @@ def agent_lifecycle_span(
     pipeline_mode: str,
 ) -> Iterator[Span | None]:
     attributes: dict[str, str] = {
-        "presvo.agent.pipeline_mode": (
+        "opevo.agent.pipeline_mode": (
             pipeline_mode if pipeline_mode in _PIPELINE_MODES else "unknown"
         )
     }
     normalized_call_id = _validated_call_id(call_id)
     if normalized_call_id is not None:
-        attributes["presvo.call.id"] = normalized_call_id
+        attributes["opevo.call.id"] = normalized_call_id
     with _record_span(
-        "presvo.agent.lifecycle",
+        "opevo.agent.lifecycle",
         attributes,
         kind=SpanKind.INTERNAL,
     ) as span:
@@ -245,16 +245,16 @@ def agent_provider_span(
     call_id: str | None,
 ) -> Iterator[Span | None]:
     attributes = {
-        "presvo.provider.name": provider if provider in _PROVIDERS else "unknown",
-        "presvo.provider.operation": (
+        "opevo.provider.name": provider if provider in _PROVIDERS else "unknown",
+        "opevo.provider.operation": (
             operation if operation in _PROVIDER_OPERATIONS else "unknown"
         ),
     }
     normalized_call_id = _validated_call_id(call_id)
     if normalized_call_id is not None:
-        attributes["presvo.call.id"] = normalized_call_id
+        attributes["opevo.call.id"] = normalized_call_id
     with _record_span(
-        "presvo.agent.provider.request",
+        "opevo.agent.provider.request",
         attributes,
         kind=SpanKind.CLIENT,
     ) as span:
@@ -274,7 +274,7 @@ def _record_span(
         return
 
     try:
-        # Use a fresh context without attaching it. Presvo spans stay independent
+        # Use a fresh context without attaching it. Opevo spans stay independent
         # of LiveKit's dynamic provider and correlate only through validated IDs.
         span = adapter.tracer.start_span(
             name,
@@ -298,12 +298,12 @@ def _record_span(
         _safe_span_action(
             span,
             "record_agent_span_error",
-            lambda: span.set_attribute("presvo.outcome", "error"),
+            lambda: span.set_attribute("opevo.outcome", "error"),
         )
         _safe_span_action(
             span,
             "record_agent_error_class",
-            lambda: span.set_attribute("presvo.error.class", error_class),
+            lambda: span.set_attribute("opevo.error.class", error_class),
         )
         _safe_span_action(
             span,
@@ -315,7 +315,7 @@ def _record_span(
         _safe_span_action(
             span,
             "record_agent_span_success",
-            lambda: span.set_attribute("presvo.outcome", "success"),
+            lambda: span.set_attribute("opevo.outcome", "success"),
         )
     finally:
         _safe_span_action(span, "end_agent_span", span.end)
@@ -440,7 +440,7 @@ def _reset_after_provider_actions(completions: Sequence[threading.Event]) -> Non
         return
     threading.Thread(
         target=reset,
-        name="presvo-otel-reset",
+        name="opevo-otel-reset",
         daemon=True,
     ).start()
 
@@ -482,7 +482,7 @@ async def _run_provider_action(
 
     threading.Thread(
         target=run_action,
-        name="presvo-otel-shutdown",
+        name="opevo-otel-shutdown",
         daemon=True,
     ).start()
     if remaining <= 0:

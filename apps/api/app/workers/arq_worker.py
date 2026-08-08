@@ -133,7 +133,7 @@ class CallLifecycleWorkerSettings:
     poll_delay = 0.5
     job_completion_wait = 60
     health_check_interval = 15
-    health_check_key = "presvo:worker:call-lifecycle:health"
+    health_check_key = "opevo:worker:call-lifecycle:health"
     functions = [
         func(
             policy_call_finalization_job,
@@ -170,7 +170,7 @@ class BackgroundWorkerSettings:
     poll_delay = 0.5
     job_completion_wait = 30
     health_check_interval = 15
-    health_check_key = "presvo:worker:background:health"
+    health_check_key = "opevo:worker:background:health"
     functions = [
         func(
             policy_outbox_delivery_job,

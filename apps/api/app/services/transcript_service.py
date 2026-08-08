@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from presvo_contracts import TranscriptSegment
+from opevo_contracts import TranscriptSegment
 
 from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.call_repository import CallRepository

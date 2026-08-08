@@ -17,7 +17,7 @@ export function CommandRail({ agentName, runtimeState }: CommandRailProps) {
         data-slot="workspace-sidebar-panel"
       >
         <Link
-          aria-label="Presvo overview"
+          aria-label="Opevo overview"
           className="flex min-h-11 items-center gap-3 rounded-lg px-2 py-1.5 outline-none focus-visible:ring-3 focus-visible:ring-sidebar-ring/50"
           href="/dashboard"
           prefetch={false}
@@ -26,7 +26,7 @@ export function CommandRail({ agentName, runtimeState }: CommandRailProps) {
             <PhoneCall aria-hidden="true" className="size-4" />
           </span>
           <span className="min-w-0">
-            <span className="block truncate font-semibold text-sm tracking-tight">Presvo</span>
+            <span className="block truncate font-semibold text-sm tracking-tight">Opevo</span>
             <span className="block truncate text-muted-foreground text-xs">AI Call Assistant</span>
           </span>
         </Link>

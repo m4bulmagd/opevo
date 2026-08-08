@@ -104,7 +104,7 @@ export type ForwardingGuide = {
   version: string;
   carrier: CarrierCode;
   number_type: string | null;
-  presvo_number: string;
+  opevo_number: string;
   warning: string;
   steps: ForwardingStep[];
 };

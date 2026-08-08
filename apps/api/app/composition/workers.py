@@ -168,7 +168,7 @@ async def build_call_lifecycle_worker_runtime(
     cleanup = RuntimeCleanup(stack)
     try:
         observability = observability_factory(
-            service_name="presvo-worker-call-lifecycle",
+            service_name="opevo-worker-call-lifecycle",
             endpoint=settings.otel_exporter_otlp_endpoint,
         )
         stack.push_async_callback(_close_observability, observability)
@@ -240,7 +240,7 @@ async def build_background_worker_runtime(
     cleanup = RuntimeCleanup(stack)
     try:
         observability = observability_factory(
-            service_name="presvo-worker-background",
+            service_name="opevo-worker-background",
             endpoint=settings.otel_exporter_otlp_endpoint,
         )
         stack.push_async_callback(_close_observability, observability)

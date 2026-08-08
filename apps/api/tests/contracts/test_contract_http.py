@@ -7,7 +7,7 @@ from conftest import install_test_api_runtime
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
-from presvo_contracts import TranscriptAppendRequest
+from opevo_contracts import TranscriptAppendRequest
 
 
 def _app() -> FastAPI:

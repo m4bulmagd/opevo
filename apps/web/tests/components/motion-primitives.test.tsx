@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActionState } from "@/components/motion/action-state";
 import { AnimatedStatusBadge } from "@/components/motion/animated-status-badge";
 import { ChangedNumber } from "@/components/motion/changed-number";
-import { PresvoMotionProvider } from "@/components/motion/presvo-motion-provider";
+import { OpevoMotionProvider } from "@/components/motion/opevo-motion-provider";
 
 const motionMocks = vi.hoisted(() => ({
   animate: vi.fn(),
@@ -77,7 +77,7 @@ function containsInfiniteRepeat(value: unknown): boolean {
   );
 }
 
-describe("Presvo motion primitives", () => {
+describe("Opevo motion primitives", () => {
   it("server-renders transform-free status motion before the client preference hydrates", () => {
     motionMocks.reduced = false;
 
@@ -89,9 +89,9 @@ describe("Presvo motion primitives", () => {
 
   it("configures user reduced-motion preferences once for authenticated motion islands", () => {
     render(
-      <PresvoMotionProvider>
+      <OpevoMotionProvider>
         <span>Workspace</span>
-      </PresvoMotionProvider>,
+      </OpevoMotionProvider>,
     );
 
     expect(screen.getByText("Workspace").parentElement).toHaveAttribute("data-reduced-motion", "user");

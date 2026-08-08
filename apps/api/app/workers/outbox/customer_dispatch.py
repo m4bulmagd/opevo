@@ -3,7 +3,7 @@ from collections.abc import Callable
 from datetime import datetime
 from uuid import UUID
 
-from presvo_contracts import (
+from opevo_contracts import (
     ContractError,
     CustomerCallDispatch,
     create_contract,

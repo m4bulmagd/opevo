@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from presvo_contracts import (
+from opevo_contracts import (
     VERIFICATION_MESSAGE,
     ContractError,
     CustomerCallDispatch,

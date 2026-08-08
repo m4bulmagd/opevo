@@ -119,7 +119,7 @@ export function CarrierConfirmation({
           onBlur={checkOnceOnBlur}
         />
         <FieldDescription id="existing-phone-description">
-          French numbers stay on your current line; Presvo only handles the missed-call route you configure later.
+          French numbers stay on your current line; Opevo only handles the missed-call route you configure later.
         </FieldDescription>
         {validationError ? <FieldError id="existing-phone-error">{validationError}</FieldError> : null}
       </Field>

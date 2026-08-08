@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Product market is France; product and receptionist language are English.
-- One user owns one business profile, one activation journey, one receptionist configuration, and one Presvo number.
+- One user owns one business profile, one activation journey, one receptionist configuration, and one Opevo number.
 - Required profile fields are owner name, business name, business type, public description, IANA timezone, structured hours, existing French number, confirmed carrier, and receptionist name.
 - A day is closed or contains one or two non-overlapping local-time intervals.
 - Carrier values are exactly `orange`, `sfr`, `bouygues`, `free`, or `other`.
@@ -519,7 +519,7 @@ def routing_fingerprint(profile: BusinessProfile, phone_number: PhoneNumber | No
     payload = {
         "existing_phone_e164": profile.existing_phone_e164,
         "confirmed_carrier": profile.confirmed_carrier,
-        "presvo_phone_e164": phone_number.e164 if phone_number is not None else None,
+        "opevo_phone_e164": phone_number.e164 if phone_number is not None else None,
         "routing_revision": profile.routing_revision,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -1083,7 +1083,7 @@ may SKIP; no new activation test may skip.
 
 ```bash
 cd apps/api
-env DATABASE_URL=postgresql+asyncpg://migration:password@database.example/presvo \
+env DATABASE_URL=postgresql+asyncpg://migration:password@database.example/opevo \
   UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync alembic -c alembic.ini \
   upgrade head --sql
 ```

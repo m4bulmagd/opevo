@@ -1,8 +1,8 @@
-# Presvo Landing Page Design
+# Opevo Landing Page Design
 
 ## Goal
 
-Replace the current redirecting root route with a public landing page for `Presvo` that closely follows the provided reference layout while aligning the copy to this product's AI voice assistant workflow.
+Replace the current redirecting root route with a public landing page for `Opevo` that closely follows the provided reference layout while aligning the copy to this product's AI voice assistant workflow.
 
 ## Users
 
@@ -49,7 +49,7 @@ The page should include:
 
 ## Copy Direction
 
-Use `Presvo` as the brand name and position it as AI voice assistance for professionals and small businesses. Copy should emphasize:
+Use `Opevo` as the brand name and position it as AI voice assistance for professionals and small businesses. Copy should emphasize:
 
 - missed-call prevention
 - 24/7 coverage
@@ -62,7 +62,7 @@ Use `Presvo` as the brand name and position it as AI voice assistance for profes
 - replace `apps/web/src/app/page.tsx`
 - reuse existing auth session helper
 - reuse current Next.js, Tailwind, shadcn, and Clerk setup
-- update app metadata and visible brand labels to `Presvo`
+- update app metadata and visible brand labels to `Opevo`
 
 ## Verification
 

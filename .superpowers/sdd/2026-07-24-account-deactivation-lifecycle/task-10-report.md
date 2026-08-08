@@ -158,7 +158,7 @@ Web and static gates:
 - No unresolved concern remains. The earlier carrier/profile conflict was
   resolved against the authoritative design: customer profile confirmation and
   existing-line carrier data remain, reactivation resumes directly at fresh
-  number consent, and every Presvo number-cycle artifact is still cleared.
+  number consent, and every Opevo number-cycle artifact is still cleared.
 - Fixture isolation, provider transaction boundaries, restart durability,
   history preservation, token handling, temporary-state cleanup, and
   disposable Docker teardown all have passing regression or acceptance proof.

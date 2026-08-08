@@ -14,8 +14,8 @@ worker.
 
 | Service | Queue | Jobs | Health key | Default slots |
 | --- | --- | --- | --- | ---: |
-| `worker-lifecycle` | `arq:queue` | call finalization; call reconciliation | `presvo:worker:call-lifecycle:health` | 10 |
-| `worker-background` | `arq:queue:background` | outbox delivery/reconciliation; verification expiry | `presvo:worker:background:health` | 4 |
+| `worker-lifecycle` | `arq:queue` | call finalization; call reconciliation | `opevo:worker:call-lifecycle:health` | 10 |
+| `worker-background` | `arq:queue:background` | outbox delivery/reconciliation; verification expiry | `opevo:worker:background:health` | 4 |
 
 PostgreSQL outbox/call state is authoritative. Redis is the execution and
 wakeup mechanism, not a source of truth: a missed wakeup is recovered from the
@@ -29,8 +29,8 @@ retention. Recovery follows the respective reconciliation schedule and is not
 a zero-delay guarantee.
 
 Each worker emits its own health key and snapshots
-`presvo.worker.queue.depth{queue_class}` and
-`presvo.worker.queue.oldest_due.age{queue_class}`. The implemented evidence is
+`opevo.worker.queue.depth{queue_class}` and
+`opevo.worker.queue.oldest_due.age{queue_class}`. The implemented evidence is
 controlled ten-call local/CI evidence: four background slots are deliberately
 blocked while ten lifecycle probes start simultaneously, with local/CI
 queue-delay p95 `<= 2 seconds`. It establishes local queue isolation only; it

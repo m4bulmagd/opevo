@@ -1,6 +1,6 @@
-# Presvo Project Status
+# Opevo Project Status
 
-This document is the canonical source for Presvo's implemented capabilities,
+This document is the canonical source for Opevo's implemented capabilities,
 known limitations, production-readiness gates, and roadmap. Historical specs,
 plans, and audits describe the repository at earlier points in time and may no
 longer match the current implementation.
@@ -10,7 +10,7 @@ longer match the current implementation.
 **Active development; production-oriented and locally verified, not
 production-certified.**
 
-Presvo is a working MVP with a production-oriented architecture. The local
+Opevo is a working MVP with a production-oriented architecture. The local
 five-milestone self-service journey, durable recording lifecycle, and
 reversible account-deactivation/reactivation lifecycle are implemented and
 locally verified. Compliance, recovery evidence, cloud deployment, and
@@ -48,7 +48,7 @@ require a configured real-provider run.
 | Area | Status | Current evidence and limitation |
 |---|---|---|
 | Public landing page and authentication shell | **Implemented** | Next.js landing page, Clerk sign-in/sign-up routes, and protected dashboard routing are present. |
-| Customer dashboard | **Implemented** | The complete Presvo visual system is applied across the responsive dashboard, calls, live assistant settings, billing, account, onboarding status, empty states, and server actions. Exact colors, typography, spacing, borders, shadows, card hierarchy, and light/dark layouts are regression-protected. |
+| Customer dashboard | **Implemented** | The complete Opevo visual system is applied across the responsive dashboard, calls, live assistant settings, billing, account, onboarding status, empty states, and server actions. Exact colors, typography, spacing, borders, shadows, card hierarchy, and light/dark layouts are regression-protected. |
 | Guided onboarding | **Implemented** | A resumable five-milestone web journey covers business/receptionist content, local or Stripe billing, explicit number consent, provisioning, carrier-aware conditional forwarding, a timed test call, and explicit go-live. The disposable Playwright path proves local operation; real-provider certification remains a release gate. |
 | Starter billing | **Implemented** | Stripe Checkout, a pinned Billing Portal configuration, paid-invoice minute grants, subscription lifecycle handling, and PostgreSQL-backed usage accounting are present. Portal subscription-only cancellation remains active until the paid-period end; owner account deactivation cancels immediately without automatic proration or refund. The Portal configuration still requires deployment-time review and real Stripe certification. |
 | French number provisioning | **Implemented** | Queue-backed provisioning, persisted status, retry handling, assignment, and routing gates are present. Payment eligibility and explicit provisioning consent are separate. The fake local path is browser-proven; Telnyx still needs fresh staging certification. |
@@ -107,7 +107,7 @@ require a configured real-provider run.
 
 ## Production-readiness gates
 
-Presvo is intended for production, but it should not be described as
+Opevo is intended for production, but it should not be described as
 production-ready until all of these gates have evidence:
 
 - Real-provider certification of the implemented guided activation workflow
@@ -118,8 +118,8 @@ production-ready until all of these gates have evidence:
   disables proration, and is pinned through
   `STRIPE_BILLING_PORTAL_CONFIGURATION_ID`
 - Production alerts that page on every increment of
-  `presvo.account_deactivation.attention` and alert when
-  `presvo.account_deactivation.oldest_incomplete_age` exceeds
+  `opevo.account_deactivation.attention` and alert when
+  `opevo.account_deactivation.oldest_incomplete_age` exceeds
   `MAX_CALL_DURATION_SECONDS + 900`
 - Approved French legal, privacy, recording, retention, and support surfaces
 - Auditable account export, permanent deletion, and recording access
@@ -161,7 +161,7 @@ production-ready until all of these gates have evidence:
 
 ### Phase 4 — Conversation-flow builder
 
-Presvo will begin with the conversation runtime rather than a canvas:
+Opevo will begin with the conversation runtime rather than a canvas:
 
 1. Typed flow model and business templates
 2. Conversation steps, conditional transitions, fallbacks, and end states
@@ -196,5 +196,5 @@ This direction is inspired by [Retell AI's structured conversation flows](https:
 - [Local self-service activation](architecture/local-self-service-activation.md)
 - [Controlled deployment and account-deactivation recovery](runbooks/deploy.md)
 - [Production-readiness hardening design](superpowers/specs/2026-07-12-production-readiness-hardening-design.md)
-- [Presvo UI production handoff](engineering/2026-07-29-presvo-ui-production-handoff.md)
+- [Opevo UI production handoff](engineering/2026-07-29-opevo-ui-production-handoff.md)
 - [Backend package organization: future considerations](engineering/2026-08-03-backend-package-organization-considerations.md)

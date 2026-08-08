@@ -71,7 +71,7 @@ component boundary. Before its ordinary retryable and business-details failure
 branches, it recognizes `number_assignment_inconsistent` in the snapshot
 blockers and renders a deterministic non-retryable state.
 
-The state explains that Presvo recorded provisioning as complete but could not
+The state explains that Opevo recorded provisioning as complete but could not
 verify the assigned number. It must not:
 
 - render the active-provisioning spinner;

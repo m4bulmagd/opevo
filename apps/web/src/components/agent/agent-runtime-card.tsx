@@ -11,7 +11,7 @@ const DEACTIVATION_PROGRESS_COPY: Record<DeactivationState, string> = {
   disabling_routing: "Stopping new calls",
   canceling_subscription: "Canceling subscription",
   draining_call: "Waiting for an active call to finish",
-  releasing_number: "Releasing your Presvo number",
+  releasing_number: "Releasing your Opevo number",
   finalizing: "Finalizing your account",
   attention_required: "Cleanup needs attention",
 };
@@ -20,7 +20,7 @@ function activeRuntimeStatus(account: AccountStatus, agentName: string, isEnable
   if (!isEnabled) {
     return {
       description:
-        "Call routing is disabled in the saved agent configuration. Presvo will evaluate serving readiness after you enable call routing.",
+        "Call routing is disabled in the saved agent configuration. Opevo will evaluate serving readiness after you enable call routing.",
       icon: <CirclePause />,
       label: "Paused",
       title: `${agentName} is paused`,
@@ -41,7 +41,7 @@ function activeRuntimeStatus(account: AccountStatus, agentName: string, isEnable
 
   return {
     description:
-      "Call routing is enabled in the saved agent configuration. Account readiness currently permits Presvo to serve calls. This does not indicate that a call is in progress.",
+      "Call routing is enabled in the saved agent configuration. Account readiness currently permits Opevo to serve calls. This does not indicate that a call is in progress.",
     icon: <CircleCheck />,
     label: "Enabled",
     title: `${agentName} is enabled`,
@@ -58,7 +58,7 @@ function deactivatingRuntimeStatus(account: AccountStatus): RuntimeStatus {
 
   if (needsAttention) {
     return {
-      description: `Saved agent settings are read-only. Presvo could not finish account cleanup. Current progress: ${progress}. Review the Account page for the latest state.`,
+      description: `Saved agent settings are read-only. Opevo could not finish account cleanup. Current progress: ${progress}. Review the Account page for the latest state.`,
       icon: <CircleAlert />,
       label: "Attention required",
       title: "Account cleanup needs attention",
@@ -67,7 +67,7 @@ function deactivatingRuntimeStatus(account: AccountStatus): RuntimeStatus {
   }
 
   return {
-    description: `Saved agent settings are read-only while Presvo finishes account deactivation. Current progress: ${progress}.`,
+    description: `Saved agent settings are read-only while Opevo finishes account deactivation. Current progress: ${progress}.`,
     icon: <CirclePause />,
     label: "Deactivating",
     title: "Account deactivation is in progress",
@@ -84,7 +84,7 @@ function inactiveRuntimeStatus(account: AccountStatus): RuntimeStatus {
   if (account.blocker === "deactivation_attention_required") {
     return {
       description: withProgress(
-        "Saved agent settings are read-only. Presvo could not finish account cleanup. Review the Account page for the latest state.",
+        "Saved agent settings are read-only. Opevo could not finish account cleanup. Review the Account page for the latest state.",
       ),
       icon: <CircleAlert />,
       label: "Attention required",
@@ -108,7 +108,7 @@ function inactiveRuntimeStatus(account: AccountStatus): RuntimeStatus {
   return {
     description: withProgress(
       account.reactivation_allowed
-        ? "Saved agent settings are read-only until you reactivate Presvo from the Account page."
+        ? "Saved agent settings are read-only until you reactivate Opevo from the Account page."
         : "Saved agent settings are read-only. Reactivation is not currently available.",
     ),
     icon: <CirclePause />,

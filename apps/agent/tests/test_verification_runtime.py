@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-from presvo_contracts import (
+from opevo_contracts import (
     ContractError,
     CustomerCallDispatch,
     ForwardingVerificationDispatch,
@@ -26,7 +26,7 @@ from agent.composition import (
 from agent.config import AgentSettings
 
 
-VERIFICATION_MESSAGE = "Forwarding test successful. Return to Presvo to go live."
+VERIFICATION_MESSAGE = "Forwarding test successful. Return to Opevo to go live."
 VERIFICATION_SETTINGS = AgentSettings(
     speechmatics_api_key="speechmatics-test-key",
     livekit_silero_vad_enabled=False,
@@ -180,7 +180,7 @@ async def test_job_request_accepts_exact_verification_identity_with_safe_name() 
 
     assert request.accepted == [
         {
-            "name": "Presvo forwarding verification",
+            "name": "Opevo forwarding verification",
             "identity": metadata["agent_identity"],
         }
     ]

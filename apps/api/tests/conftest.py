@@ -57,8 +57,8 @@ def install_test_api_runtime(
         redis_client=object(),
         observability=observability
         or Observability(
-            meter=metrics.get_meter("presvo-tests"),
-            tracer=trace.get_tracer("presvo-tests"),
+            meter=metrics.get_meter("opevo-tests"),
+            tracer=trace.get_tracer("opevo-tests"),
         ),
         auth_provider=auth_provider or object(),
         readiness_checks=readiness_checks or object(),
@@ -178,8 +178,8 @@ def observability():
     from app.core.observability import Observability
 
     return Observability(
-        meter=metrics.get_meter("presvo-tests"),
-        tracer=trace.get_tracer("presvo-tests"),
+        meter=metrics.get_meter("opevo-tests"),
+        tracer=trace.get_tracer("opevo-tests"),
     )
 
 

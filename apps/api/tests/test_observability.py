@@ -63,19 +63,19 @@ def test_account_deactivation_instruments_and_attributes_are_bounded() -> None:
     telemetry = _observability(meter=meter)
 
     assert meter.specifications[
-        "presvo.account_deactivation.operations"
+        "opevo.account_deactivation.operations"
     ] == ("gauge", None)
     assert meter.specifications[
-        "presvo.account_deactivation.oldest_incomplete_age"
+        "opevo.account_deactivation.oldest_incomplete_age"
     ] == ("gauge", "s")
     assert meter.specifications[
-        "presvo.account_deactivation.reconciliation_results"
+        "opevo.account_deactivation.reconciliation_results"
     ] == ("counter", None)
     assert meter.specifications[
-        "presvo.account_deactivation.attention"
+        "opevo.account_deactivation.attention"
     ] == ("gauge", None)
     assert meter.specifications[
-        "presvo.account_deactivation.completion_duration"
+        "opevo.account_deactivation.completion_duration"
     ] == ("histogram", "s")
 
     snapshot = SimpleNamespace(
@@ -103,7 +103,7 @@ def test_account_deactivation_instruments_and_attributes_are_bounded() -> None:
     telemetry.record_account_deactivation_completion("owner_request", 12.5)
 
     operations = meter.instruments[
-        "presvo.account_deactivation.operations"
+        "opevo.account_deactivation.operations"
     ].measurements
     assert operations == [
         (
@@ -152,16 +152,16 @@ def test_account_deactivation_instruments_and_attributes_are_bounded() -> None:
         ),
     ]
     assert meter.instruments[
-        "presvo.account_deactivation.oldest_incomplete_age"
+        "opevo.account_deactivation.oldest_incomplete_age"
     ].measurements == [(123.0, {})]
     assert meter.instruments[
-        "presvo.account_deactivation.attention"
+        "opevo.account_deactivation.attention"
     ].measurements == [
         (0, {"trigger": "owner_request"}),
         (1, {"trigger": "subscription_ended"}),
     ]
     assert meter.instruments[
-        "presvo.account_deactivation.reconciliation_results"
+        "opevo.account_deactivation.reconciliation_results"
     ].measurements == [
         (
             1,
@@ -183,7 +183,7 @@ def test_account_deactivation_instruments_and_attributes_are_bounded() -> None:
         ),
     ]
     assert meter.instruments[
-        "presvo.account_deactivation.completion_duration"
+        "opevo.account_deactivation.completion_duration"
     ].measurements == [(12.5, {"trigger": "owner_request"})]
 
 
@@ -191,9 +191,9 @@ def test_authentication_instruments_and_attributes_are_bounded() -> None:
     meter = _SpecificationMeter()
     telemetry = _observability(meter=meter)
 
-    assert meter.specifications["presvo.auth.verifications"] == ("counter", None)
-    assert meter.specifications["presvo.auth.jwks.refreshes"] == ("counter", None)
-    assert meter.specifications["presvo.auth.jwks.refresh.duration"] == (
+    assert meter.specifications["opevo.auth.verifications"] == ("counter", None)
+    assert meter.specifications["opevo.auth.jwks.refreshes"] == ("counter", None)
+    assert meter.specifications["opevo.auth.jwks.refresh.duration"] == (
         "histogram",
         "s",
     )
@@ -204,7 +204,7 @@ def test_authentication_instruments_and_attributes_are_bounded() -> None:
     telemetry.record_jwks_stale_key_use()
     telemetry.record_jwks_refresh_cooldown("rejected")
 
-    assert meter.instruments["presvo.auth.verifications"].measurements == [
+    assert meter.instruments["opevo.auth.verifications"].measurements == [
         (1, {"outcome": "rejected", "reason": "authorized_party"}),
         (1, {"outcome": "other", "reason": "other"}),
     ]
@@ -239,7 +239,7 @@ def test_account_deactivation_snapshot_zeros_vacated_status_and_attention() -> N
     )
 
     operation_measurements = meter.instruments[
-        "presvo.account_deactivation.operations"
+        "opevo.account_deactivation.operations"
     ].measurements
     assert [
         value
@@ -254,7 +254,7 @@ def test_account_deactivation_snapshot_zeros_vacated_status_and_attention() -> N
         == {"trigger": "owner_request", "operation_status": "completed"}
     ] == [0, 1]
     assert meter.instruments[
-        "presvo.account_deactivation.attention"
+        "opevo.account_deactivation.attention"
     ].measurements == [
         (1, {"trigger": "owner_request"}),
         (0, {"trigger": "subscription_ended"}),
@@ -280,12 +280,12 @@ def test_no_endpoint_constructs_no_exporter_and_initialization_is_idempotent() -
 
     reset_observability_for_tests()
     first = initialize_observability(
-        service_name="presvo-api",
+        service_name="opevo-api",
         endpoint=None,
         components_factory=forbidden_factory,
     )
     second = initialize_observability(
-        service_name="presvo-api",
+        service_name="opevo-api",
         endpoint=None,
         components_factory=forbidden_factory,
     )
@@ -500,7 +500,7 @@ def test_service_name_is_normalized_before_resource_construction() -> None:
         components_factory=factory,
     )
 
-    assert observed == ["presvo-api"]
+    assert observed == ["opevo-api"]
 
 
 def test_initialization_flush_shutdown_and_record_failures_are_fail_open_and_redacted(
@@ -522,7 +522,7 @@ def test_initialization_flush_shutdown_and_record_failures_are_fail_open_and_red
     with caplog.at_level(logging.WARNING):
         reset_observability_for_tests()
         telemetry = initialize_observability(
-            service_name="presvo-api-failing",
+            service_name="opevo-api-failing",
             endpoint="https://otel.example/v1/traces",
             components_factory=failing_factory,
         )
@@ -571,7 +571,7 @@ def test_http_metric_uses_route_template_not_raw_path_or_query() -> None:
         assert client.get(f"/items/{raw_id}?credential=QUERY_SECRET").status_code == 200
 
     measurements = meter.instruments[
-        "presvo.http.server.request.duration"
+        "opevo.http.server.request.duration"
     ].measurements
     assert len(measurements) == 1
     assert measurements[0][1] == {
@@ -634,7 +634,7 @@ def test_http_span_extracts_only_w3c_parent_and_uses_route_template() -> None:
         "http.request.method": "GET",
         "http.route": "/calls/{call_id}",
         "http.response.status_code": 200,
-        "presvo.outcome": "success",
+        "opevo.outcome": "success",
     }
     rendered = repr(span.attributes)
     assert raw_id not in rendered
@@ -695,8 +695,8 @@ async def test_provider_metrics_count_once_and_normalize_unknown_without_content
                 "PROMPT_SENTINEL TRANSCRIPT_SENTINEL https://recording.example/private"
             )
 
-    durations = meter.instruments["presvo.provider.request.duration"].measurements
-    errors = meter.instruments["presvo.provider.errors"].measurements
+    durations = meter.instruments["opevo.provider.request.duration"].measurements
+    errors = meter.instruments["opevo.provider.errors"].measurements
     assert len(durations) == 2
     assert durations[0][1] == {
         "provider": "gemini",
@@ -719,13 +719,13 @@ async def test_provider_metrics_count_once_and_normalize_unknown_without_content
             },
         )
     ]
-    assert tracer.spans[0].attributes["presvo.provider.name"] == "gemini"
-    assert tracer.spans[0].attributes["presvo.provider.operation"] == (
+    assert tracer.spans[0].attributes["opevo.provider.name"] == "gemini"
+    assert tracer.spans[0].attributes["opevo.provider.operation"] == (
         "generate_summary"
     )
-    assert "presvo.error.class" not in tracer.spans[0].attributes
-    assert tracer.spans[1].attributes["presvo.error.class"] == "unknown"
-    assert tracer.spans[1].attributes["presvo.failure.kind"] == "internal"
+    assert "opevo.error.class" not in tracer.spans[0].attributes
+    assert tracer.spans[1].attributes["opevo.error.class"] == "unknown"
+    assert tracer.spans[1].attributes["opevo.failure.kind"] == "internal"
     assert tracer.spans[1].status.status_code.name == "ERROR"
     rendered = repr(durations) + repr(errors) + repr(
         [(span.name, span.attributes) for span in tracer.spans]
@@ -759,7 +759,7 @@ async def test_provider_failure_telemetry_uses_exact_provider_failure_kind() -> 
 
     assert caught.value is failure
 
-    assert meter.instruments["presvo.provider.errors"].measurements == [
+    assert meter.instruments["opevo.provider.errors"].measurements == [
         (
             1,
             {
@@ -770,8 +770,8 @@ async def test_provider_failure_telemetry_uses_exact_provider_failure_kind() -> 
             },
         )
     ]
-    assert tracer.spans[0].attributes["presvo.error.class"] == "authentication"
-    assert tracer.spans[0].attributes["presvo.failure.kind"] == "provider"
+    assert tracer.spans[0].attributes["opevo.error.class"] == "authentication"
+    assert tracer.spans[0].attributes["opevo.failure.kind"] == "provider"
 
 
 @pytest.mark.anyio
@@ -787,10 +787,10 @@ async def test_cancelled_provider_operation_is_re_raised_without_error_telemetry
 
     assert caught.value is cancellation
 
-    assert meter.instruments["presvo.provider.errors"].measurements == []
-    assert meter.instruments["presvo.provider.request.duration"].measurements == [
+    assert meter.instruments["opevo.provider.errors"].measurements == []
+    assert meter.instruments["opevo.provider.request.duration"].measurements == [
         (
-            pytest.approx(meter.instruments["presvo.provider.request.duration"].measurements[0][0]),
+            pytest.approx(meter.instruments["opevo.provider.request.duration"].measurements[0][0]),
             {
                 "provider": "gemini",
                 "operation": "generate_summary",
@@ -798,9 +798,9 @@ async def test_cancelled_provider_operation_is_re_raised_without_error_telemetry
             },
         )
     ]
-    assert tracer.spans[0].attributes["presvo.outcome"] == "cancelled"
-    assert "presvo.error.class" not in tracer.spans[0].attributes
-    assert "presvo.failure.kind" not in tracer.spans[0].attributes
+    assert tracer.spans[0].attributes["opevo.outcome"] == "cancelled"
+    assert "opevo.error.class" not in tracer.spans[0].attributes
+    assert "opevo.failure.kind" not in tracer.spans[0].attributes
 
 
 @pytest.mark.anyio
@@ -819,15 +819,15 @@ async def test_non_cancellation_base_exception_preserves_identity_without_error_
 
     assert caught.value is abort
 
-    assert meter.instruments["presvo.provider.errors"].measurements == []
-    assert meter.instruments["presvo.provider.request.duration"].measurements[0][1] == {
+    assert meter.instruments["opevo.provider.errors"].measurements == []
+    assert meter.instruments["opevo.provider.request.duration"].measurements[0][1] == {
         "provider": "livekit",
         "operation": "list_dispatches",
         "outcome": "error",
     }
-    assert tracer.spans[0].attributes["presvo.outcome"] == "error"
-    assert "presvo.error.class" not in tracer.spans[0].attributes
-    assert "presvo.failure.kind" not in tracer.spans[0].attributes
+    assert tracer.spans[0].attributes["opevo.outcome"] == "error"
+    assert "opevo.error.class" not in tracer.spans[0].attributes
+    assert "opevo.failure.kind" not in tracer.spans[0].attributes
 
 
 
@@ -839,17 +839,17 @@ def test_recording_instruments_have_exact_names_types_and_units() -> None:
     assert {
         name: specification
         for name, specification in meter.specifications.items()
-        if name.startswith("presvo.recording.")
+        if name.startswith("opevo.recording.")
     } == {
-        "presvo.recording.operations": ("gauge", None),
-        "presvo.recording.oldest_unresolved.age": ("gauge", "s"),
-        "presvo.recording.pending_stop.operations": ("gauge", None),
-        "presvo.recording.pending_stop.oldest_age": ("gauge", "s"),
-        "presvo.recording.pending_deletion.operations": ("gauge", None),
-        "presvo.recording.pending_deletion.oldest_age": ("gauge", "s"),
-        "presvo.recording.reconciliation.results": ("counter", None),
-        "presvo.recording.webhook_mismatches": ("counter", None),
-        "presvo.recording.multiple_exact_match_conflicts": ("counter", None),
+        "opevo.recording.operations": ("gauge", None),
+        "opevo.recording.oldest_unresolved.age": ("gauge", "s"),
+        "opevo.recording.pending_stop.operations": ("gauge", None),
+        "opevo.recording.pending_stop.oldest_age": ("gauge", "s"),
+        "opevo.recording.pending_deletion.operations": ("gauge", None),
+        "opevo.recording.pending_deletion.oldest_age": ("gauge", "s"),
+        "opevo.recording.reconciliation.results": ("counter", None),
+        "opevo.recording.webhook_mismatches": ("counter", None),
+        "opevo.recording.multiple_exact_match_conflicts": ("counter", None),
     }
 
 
@@ -903,7 +903,7 @@ def test_recording_operation_snapshot_emits_only_fixed_state_and_scalar_gauges()
 
     telemetry.record_recording_operation_snapshot(snapshot)
 
-    assert meter.instruments["presvo.recording.operations"].measurements == [
+    assert meter.instruments["opevo.recording.operations"].measurements == [
         (1, {"state": "prepared"}),
         (2, {"state": "starting"}),
         (3, {"state": "started"}),
@@ -911,25 +911,25 @@ def test_recording_operation_snapshot_emits_only_fixed_state_and_scalar_gauges()
         (5, {"state": "uncertain"}),
     ]
     assert meter.instruments[
-        "presvo.recording.oldest_unresolved.age"
+        "opevo.recording.oldest_unresolved.age"
     ].measurements == [(61.5, {})]
     assert meter.instruments[
-        "presvo.recording.pending_stop.operations"
+        "opevo.recording.pending_stop.operations"
     ].measurements == [(6, {})]
     assert meter.instruments[
-        "presvo.recording.pending_stop.oldest_age"
+        "opevo.recording.pending_stop.oldest_age"
     ].measurements == [(42.25, {})]
     assert meter.instruments[
-        "presvo.recording.pending_deletion.operations"
+        "opevo.recording.pending_deletion.operations"
     ].measurements == [(7, {})]
     assert meter.instruments[
-        "presvo.recording.pending_deletion.oldest_age"
+        "opevo.recording.pending_deletion.oldest_age"
     ].measurements == [(21.125, {})]
     assert private_state_sentinel not in repr(
         {
             name: instrument.measurements
             for name, instrument in meter.instruments.items()
-            if name.startswith("presvo.recording.")
+            if name.startswith("opevo.recording.")
         }
     )
 
@@ -957,23 +957,23 @@ def test_recording_result_and_mismatch_methods_bound_every_attribute() -> None:
     telemetry.record_multiple_exact_match_conflict()
 
     assert meter.instruments[
-        "presvo.recording.reconciliation.results"
+        "opevo.recording.reconciliation.results"
     ].measurements == [
         (1, {"result": result}) for result in reconciliation_results
     ] + [(1, {"result": "recording_unresolved"})]
     assert meter.instruments[
-        "presvo.recording.webhook_mismatches"
+        "opevo.recording.webhook_mismatches"
     ].measurements == [
         (1, {"category": category}) for category in mismatch_categories
     ]
     assert meter.instruments[
-        "presvo.recording.multiple_exact_match_conflicts"
+        "opevo.recording.multiple_exact_match_conflicts"
     ].measurements == [(1, {})]
     rendered = repr(
         {
             name: instrument.measurements
             for name, instrument in meter.instruments.items()
-            if name.startswith("presvo.recording.")
+            if name.startswith("opevo.recording.")
         }
     )
     assert "PRIVATE_RESULT_SENTINEL" not in rendered
@@ -1079,7 +1079,7 @@ async def test_recording_telemetry_excludes_every_private_sentinel(
         "category": {"missing", "mismatch", "conflict"},
     }
     for name, instrument in meter.instruments.items():
-        if not name.startswith("presvo.recording."):
+        if not name.startswith("opevo.recording."):
             continue
         for _value, attributes in instrument.measurements:
             assert set(attributes) <= set(allowed_attributes)
@@ -1111,7 +1111,7 @@ async def test_recording_listing_provider_operation_is_allowlisted_and_private()
     async with telemetry.provider_operation("livekit", "list_recording_egresses"):
         await asyncio.sleep(0)
 
-    assert meter.instruments["presvo.provider.request.duration"].measurements[
+    assert meter.instruments["opevo.provider.request.duration"].measurements[
         0
     ][1] == {
         "provider": "livekit",
@@ -1119,13 +1119,13 @@ async def test_recording_listing_provider_operation_is_allowlisted_and_private()
         "outcome": "success",
     }
     assert tracer.spans[0].attributes == {
-        "presvo.provider.name": "livekit",
-        "presvo.provider.operation": "list_recording_egresses",
-        "presvo.outcome": "success",
+        "opevo.provider.name": "livekit",
+        "opevo.provider.operation": "list_recording_egresses",
+        "opevo.outcome": "success",
     }
     assert room_sentinel not in repr(
         (
-            meter.instruments["presvo.provider.request.duration"].measurements,
+            meter.instruments["opevo.provider.request.duration"].measurements,
             tracer.spans[0].attributes,
         )
     )
@@ -1139,8 +1139,8 @@ async def test_telnyx_release_provider_operation_is_allowlisted() -> None:
     async with telemetry.provider_operation("telnyx", "release_number"):
         await asyncio.sleep(0)
 
-    assert tracer.spans[0].attributes["presvo.provider.name"] == "telnyx"
-    assert tracer.spans[0].attributes["presvo.provider.operation"] == "release_number"
+    assert tracer.spans[0].attributes["opevo.provider.name"] == "telnyx"
+    assert tracer.spans[0].attributes["opevo.provider.operation"] == "release_number"
 
 
 @pytest.mark.anyio
@@ -1162,8 +1162,8 @@ async def test_provider_telemetry_uses_the_shared_bounded_operation_vocabulary(
     async with telemetry.provider_operation(provider, operation):
         await asyncio.sleep(0)
 
-    assert tracer.spans[0].attributes["presvo.provider.name"] == provider
-    assert tracer.spans[0].attributes["presvo.provider.operation"] == operation
+    assert tracer.spans[0].attributes["opevo.provider.name"] == provider
+    assert tracer.spans[0].attributes["opevo.provider.operation"] == operation
 
 
 @pytest.mark.anyio
@@ -1178,15 +1178,15 @@ async def test_telnyx_recover_provisioned_number_operation_is_allowlisted() -> N
     ):
         await asyncio.sleep(0)
 
-    assert meter.instruments["presvo.provider.request.duration"].measurements[0][1] == {
+    assert meter.instruments["opevo.provider.request.duration"].measurements[0][1] == {
         "provider": "telnyx",
         "operation": "recover_provisioned_number",
         "outcome": "success",
     }
     assert tracer.spans[0].attributes == {
-        "presvo.provider.name": "telnyx",
-        "presvo.provider.operation": "recover_provisioned_number",
-        "presvo.outcome": "success",
+        "opevo.provider.name": "telnyx",
+        "opevo.provider.operation": "recover_provisioned_number",
+        "opevo.outcome": "success",
     }
 
 
@@ -1201,8 +1201,8 @@ async def test_recording_not_running_provider_operation_is_allowlisted() -> None
     ):
         await asyncio.sleep(0)
 
-    assert tracer.spans[0].attributes["presvo.provider.name"] == "livekit"
-    assert tracer.spans[0].attributes["presvo.provider.operation"] == (
+    assert tracer.spans[0].attributes["opevo.provider.name"] == "livekit"
+    assert tracer.spans[0].attributes["opevo.provider.operation"] == (
         "ensure_recording_not_running"
     )
 
@@ -1217,7 +1217,7 @@ def test_recording_reconcile_outbox_topic_is_allowlisted_without_identity_labels
     )
 
     assert meter.instruments[
-        "presvo.outbox.terminal_failures"
+        "opevo.outbox.terminal_failures"
     ].measurements == [
         (
             1,
@@ -1267,7 +1267,7 @@ async def test_recording_operation_uuid_is_never_bound_as_call_context() -> None
         ):
             pass
 
-    assert "presvo.call.id" not in tracer.spans[0].attributes
+    assert "opevo.call.id" not in tracer.spans[0].attributes
     assert str(operation_id) not in repr(tracer.spans[0].attributes)
 
 
@@ -1295,7 +1295,7 @@ async def test_provider_telemetry_prefers_allowlisted_structured_error_class() -
         async with telemetry.provider_operation("stripe", "create_portal_session"):
             raise StructuredProviderError()
 
-    assert meter.instruments["presvo.provider.errors"].measurements == [
+    assert meter.instruments["opevo.provider.errors"].measurements == [
         (
             1,
             {
@@ -1306,9 +1306,9 @@ async def test_provider_telemetry_prefers_allowlisted_structured_error_class() -
             },
         )
     ]
-    assert tracer.spans[0].attributes["presvo.error.class"] == "authentication"
+    assert tracer.spans[0].attributes["opevo.error.class"] == "authentication"
     assert "SECRET_MESSAGE_MUST_NOT_BE_READ" not in repr(
-        meter.instruments["presvo.provider.errors"].measurements
+        meter.instruments["opevo.provider.errors"].measurements
     )
 
 
@@ -1321,7 +1321,7 @@ async def test_internal_provider_and_worker_spans_use_semantic_kinds() -> None:
     tracer = _Tracer()
     telemetry = _observability(tracer=tracer)
 
-    async with telemetry.trace_operation("presvo.internal", {}):
+    async with telemetry.trace_operation("opevo.internal", {}):
         pass
     async with telemetry.provider_operation("gemini", "generate_summary"):
         pass
@@ -1351,8 +1351,8 @@ def test_webhook_semantic_outcomes_are_recorded_once_with_fixed_labels() -> None
     telemetry.record_webhook("stripe", "rejected", 0.02)
     telemetry.record_webhook("livekit", "duplicate", 0.03)
 
-    requests = meter.instruments["presvo.webhook.requests"].measurements
-    durations = meter.instruments["presvo.webhook.duration"].measurements
+    requests = meter.instruments["opevo.webhook.requests"].measurements
+    durations = meter.instruments["opevo.webhook.duration"].measurements
     assert requests == [
         (1, {"provider": "clerk", "outcome": "accepted"}),
         (1, {"provider": "stripe", "outcome": "rejected"}),
@@ -1607,8 +1607,8 @@ async def test_instrumented_job_records_queue_delay_duration_and_no_job_id() -> 
     )
 
     assert result == "ok"
-    delay = meter.instruments["presvo.worker.queue.delay"].measurements
-    duration = meter.instruments["presvo.worker.job.duration"].measurements
+    delay = meter.instruments["opevo.worker.queue.delay"].measurements
+    duration = meter.instruments["opevo.worker.job.duration"].measurements
     assert delay[0][0] == pytest.approx(3, abs=0.2)
     assert delay[0][1] == {
         "queue_class": "call_lifecycle",
@@ -1654,7 +1654,7 @@ async def test_instrumented_job_records_bounded_failure_outcomes(
         await job({"observability": telemetry, "job_try": 3})
 
     assert captured.value is error
-    assert meter.instruments["presvo.worker.job.duration"].measurements[0][1] == {
+    assert meter.instruments["opevo.worker.job.duration"].measurements[0][1] == {
         "queue_class": "call_lifecycle",
         "job": "call_finalization",
         "outcome": outcome,
@@ -1690,8 +1690,8 @@ async def test_worker_observability_collapses_unbounded_attributes() -> None:
         }
     )
 
-    delay = meter.instruments["presvo.worker.queue.delay"].measurements
-    duration = meter.instruments["presvo.worker.job.duration"].measurements
+    delay = meter.instruments["opevo.worker.queue.delay"].measurements
+    duration = meter.instruments["opevo.worker.job.duration"].measurements
     assert delay[0][1] == {
         "queue_class": "unknown",
         "job": "unknown",
@@ -1713,8 +1713,8 @@ def test_worker_queue_snapshot_gauges_use_only_bounded_queue_class() -> None:
     meter = _SpecificationMeter()
     telemetry = _observability(meter=meter)
 
-    assert meter.specifications["presvo.worker.queue.depth"] == ("gauge", None)
-    assert meter.specifications["presvo.worker.queue.oldest_due.age"] == ("gauge", "s")
+    assert meter.specifications["opevo.worker.queue.depth"] == ("gauge", None)
+    assert meter.specifications["opevo.worker.queue.oldest_due.age"] == ("gauge", "s")
 
     telemetry.record_worker_queue_snapshot(
         "call_lifecycle",
@@ -1727,11 +1727,11 @@ def test_worker_queue_snapshot_gauges_use_only_bounded_queue_class() -> None:
         oldest_due_age_seconds=99.0,
     )
 
-    assert meter.instruments["presvo.worker.queue.depth"].measurements == [
+    assert meter.instruments["opevo.worker.queue.depth"].measurements == [
         (3, {"queue_class": "call_lifecycle"}),
         (9, {"queue_class": "unknown"}),
     ]
-    assert meter.instruments["presvo.worker.queue.oldest_due.age"].measurements == [
+    assert meter.instruments["opevo.worker.queue.oldest_due.age"].measurements == [
         (2.5, {"queue_class": "call_lifecycle"}),
         (99.0, {"queue_class": "unknown"}),
     ]
@@ -1764,7 +1764,7 @@ async def test_worker_observability_accepts_fixed_job_names(job_name: str) -> No
 
     await job({"observability": telemetry, "job_try": 1})
 
-    duration = meter.instruments["presvo.worker.job.duration"].measurements
+    duration = meter.instruments["opevo.worker.job.duration"].measurements
     assert duration[0][1]["job"] == job_name
 
 
@@ -1797,7 +1797,7 @@ async def test_call_finalization_instrumentation_extracts_only_valid_call_refere
     )
 
     assert result == call_id
-    assert tracer.spans[0].attributes["presvo.call.id"] == call_id
+    assert tracer.spans[0].attributes["opevo.call.id"] == call_id
     assert "PRIVATE_TRANSCRIPT_SENTINEL" not in repr(tracer.spans[0].attributes)
 
 
@@ -1877,8 +1877,8 @@ async def test_validated_outbox_call_reference_correlates_nested_provider_span(
             "retried": 0,
             "failed": 0,
         }
-        assert tracer.spans[0].attributes["presvo.call.id"] == str(call_id)
-        assert "presvo.call.id" not in tracer.spans[1].attributes
+        assert tracer.spans[0].attributes["opevo.call.id"] == str(call_id)
+        assert "opevo.call.id" not in tracer.spans[1].attributes
     finally:
         await engine.dispose()
 
@@ -1921,7 +1921,7 @@ async def test_mismatched_outbox_aggregate_cannot_seed_provider_call_context() -
             await provider.invoke()
 
     assert len(tracer.spans) == 2
-    assert all("presvo.call.id" not in span.attributes for span in tracer.spans)
+    assert all("opevo.call.id" not in span.attributes for span in tracer.spans)
 
 
 @pytest.mark.anyio
@@ -1946,8 +1946,8 @@ async def test_invalid_nested_call_reference_clears_then_restores_parent_context
             await provider.invoke()
         await provider.invoke()
 
-    assert "presvo.call.id" not in tracer.spans[0].attributes
-    assert tracer.spans[1].attributes["presvo.call.id"] == str(outer_call_id)
+    assert "opevo.call.id" not in tracer.spans[0].attributes
+    assert tracer.spans[1].attributes["opevo.call.id"] == str(outer_call_id)
 
 
 def test_reconciliation_metric_records_every_exact_fixed_result() -> None:
@@ -1959,7 +1959,7 @@ def test_reconciliation_metric_records_every_exact_fixed_result() -> None:
     )
 
     assert meter.instruments[
-        "presvo.call_reconciliation.outcomes"
+        "opevo.call_reconciliation.outcomes"
     ].measurements == [
         (7, {"outcome": "scanned"}),
         (4, {"outcome": "recovered"}),
@@ -2094,7 +2094,7 @@ def test_invalid_contract_metric_has_closed_labels() -> None:
         transport="RAW_BODY_SENTINEL",
     )
 
-    assert meter.instruments["presvo.contract.invalid_messages"].measurements == [
+    assert meter.instruments["opevo.contract.invalid_messages"].measurements == [
         (
             1,
             {
@@ -2116,7 +2116,7 @@ def test_invalid_realtime_contract_metric_uses_a_bounded_contract_label() -> Non
         transport="redis",
     )
 
-    assert meter.instruments["presvo.contract.invalid_messages"].measurements == [
+    assert meter.instruments["opevo.contract.invalid_messages"].measurements == [
         (
             1,
             {

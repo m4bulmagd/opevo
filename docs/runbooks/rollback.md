@@ -33,12 +33,12 @@ release_id: <opaque release id>
 incident_id: <opaque incident id>
 first_bad_signal_utc: <timestamp>
 last_known_good_utc: <timestamp>
-current_api_image: <registry>/presvo-api@sha256:<digest>
-current_agent_image: <registry>/presvo-agent@sha256:<digest>
-current_web_image: <registry>/presvo-web@sha256:<digest>
-previous_api_image: <registry>/presvo-api@sha256:<digest>
-previous_agent_image: <registry>/presvo-agent@sha256:<digest>
-previous_web_image: <registry>/presvo-web@sha256:<digest>
+current_api_image: <registry>/opevo-api@sha256:<digest>
+current_agent_image: <registry>/opevo-agent@sha256:<digest>
+current_web_image: <registry>/opevo-web@sha256:<digest>
+previous_api_image: <registry>/opevo-api@sha256:<digest>
+previous_agent_image: <registry>/opevo-agent@sha256:<digest>
+previous_web_image: <registry>/opevo-web@sha256:<digest>
 expected_schema_before: <alembic revision>
 expected_schema_after: <alembic revision>
 migration_job_id: <job id or not-started>
@@ -144,10 +144,10 @@ not a service to create or a replacement service name.
 
 Keep `worker-lifecycle` and `worker-background` running while their respective
 `arq:queue` and `arq:queue:background` work drains. Check
-`presvo:worker:call-lifecycle:health`,
-`presvo:worker:background:health`,
-`presvo.worker.queue.depth{queue_class}`, and
-`presvo.worker.queue.oldest_due.age{queue_class}` before restoring the old
+`opevo:worker:call-lifecycle:health`,
+`opevo:worker:background:health`,
+`opevo.worker.queue.depth{queue_class}`, and
+`opevo.worker.queue.oldest_due.age{queue_class}` before restoring the old
 generic worker. PostgreSQL outbox/call state remains authoritative while Redis
 is execution/wakeup only: outbox and call reconciliation recover orphaned work
 after restoration, with a schedule-bound delay rather than a zero-delay
@@ -161,11 +161,11 @@ explicit queues, restore the legacy generic worker, remove the new worker
 services, and restore the agent one service at a time:
 
 ```bash
-<deployctl> service deploy presvo-web \
+<deployctl> service deploy opevo-web \
   --image <previous-web-image@sha256:digest> \
   --reason <incident-id> --wait
 
-<deployctl> service deploy presvo-api \
+<deployctl> service deploy opevo-api \
   --image <previous-api-image@sha256:digest> \
   --reason <incident-id> --wait
 
@@ -182,7 +182,7 @@ services, and restore the agent one service at a time:
 <deployctl> service remove worker-lifecycle --reason <incident-id> --wait
 <deployctl> service remove worker-background --reason <incident-id> --wait
 
-<deployctl> service deploy presvo-agent \
+<deployctl> service deploy opevo-agent \
   --image <previous-agent-image@sha256:digest> \
   --reason <incident-id> --wait
 ```
@@ -263,13 +263,13 @@ commander must approve the repair artifact and evidence. Run it as a one-shot
 job from the new API image by immutable digest:
 
 ```bash
-<deployctl> job run presvo-forward-fix \
+<deployctl> job run opevo-forward-fix \
   --incident <incident-id> \
   --image <repair-api-image@sha256:digest> \
   --secret-ref <database-secret-reference> \
   -- /app/.venv/bin/alembic -c /app/alembic.ini upgrade head
 
-<deployctl> job wait presvo-forward-fix --incident <incident-id> --expect-exit 0
+<deployctl> job wait opevo-forward-fix --incident <incident-id> --expect-exit 0
 <datactl> query-metadata --database <database-id> --query-id schema-and-invariants
 ```
 

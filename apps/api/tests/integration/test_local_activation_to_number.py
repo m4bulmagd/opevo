@@ -36,7 +36,7 @@ from app.workers.outbox.delivery import deliver_outbox_batch
 from app.workers.outbox.phone import deliver_phone_provision
 
 
-LOCAL_TOKEN = "presvo-local-development-token"
+LOCAL_TOKEN = "opevo-local-development-token"
 # ARCEP reserves the 01 99 00 range for audiovisual fiction and does not
 # assign it to subscribers (national numbering plan, version 2026-01-01).
 ARCEP_FICTIONAL_FIXED_NUMBER = "+33 1 99 00 00 00"
@@ -260,7 +260,7 @@ async def test_provider_free_journey_reaches_forwarding_required(
 
     async with session_factory() as session:
         local_user = await session.scalar(
-            select(User).where(User.clerk_user_id == "local_presvo_user")
+            select(User).where(User.clerk_user_id == "local_opevo_user")
         )
         pre_consent_events = await session.scalar(
             select(func.count(OutboxEvent.id)).where(
@@ -430,7 +430,7 @@ async def test_call_drain_fixture_uses_real_owner_scoped_call_lifecycle(
 
     async with session_factory() as session:
         local_user = await session.scalar(
-            select(User).where(User.clerk_user_id == "local_presvo_user")
+            select(User).where(User.clerk_user_id == "local_opevo_user")
         )
         assert local_user is not None
         session.add(

@@ -7,7 +7,7 @@ from app.core.auth import AuthProvider, UserIdentity
 from app.core.redis import RedisEventBus
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import WebSocketManager
-from presvo_contracts import (
+from opevo_contracts import (
     AgentSessionEndedEvent,
     CallFinalizedEvent,
     CallStartedEvent,

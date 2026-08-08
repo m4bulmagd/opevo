@@ -16,7 +16,7 @@ export async function deleteCallAction(callId: string): Promise<DeleteCallAction
   } catch {
     return {
       status: "error",
-      message: "Presvo could not remove this call right now. Try again.",
+      message: "Opevo could not remove this call right now. Try again.",
     };
   }
 

@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from presvo_contracts import TranscriptSegment
+from opevo_contracts import TranscriptSegment
 from app.services.transcript_service import (
     TranscriptAuthorizationError,
     TranscriptService,

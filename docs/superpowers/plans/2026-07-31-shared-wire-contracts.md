@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace duplicated API/agent JSON shapes with one strict, versioned, comprehensively tested `presvo-contracts` package while keeping realtime disabled and preserving the existing independent application builds.
+**Goal:** Replace duplicated API/agent JSON shapes with one strict, versioned, comprehensively tested `opevo-contracts` package while keeping realtime disabled and preserving the existing independent application builds.
 
 **Architecture:** A small Pydantic v2 package under `libs/shared` owns only cross-process values, safe parsing/serialization, schema-version policy, and golden fixtures. API and agent retain their own domain logic and infrastructure adapters, consume the package through independent uv path dependencies, and validate at every LiveKit, HTTP, and Redis seam. Producers are strict, consumers tolerate only additive unknown fields, and every top-level message requires schema version `1`.
 
@@ -30,7 +30,7 @@
 - Do not weaken either existing API or agent coverage ratchet. Update a
   baseline only if the measured result improves and the repository's baseline
   policy requires recording it.
-- Preserve the user's untracked `Presvo_frontend/` directory. Never add,
+- Preserve the user's untracked `Opevo_frontend/` directory. Never add,
   inspect recursively, modify, delete, or commit it.
 - Use `UV_CACHE_DIR=/tmp/uv-cache` for local uv commands. It redirects uv's
   disposable download/build cache only; it does not alter project dependencies
@@ -58,8 +58,8 @@
 
 - Modify: `libs/shared/pyproject.toml`
 - Add: `libs/shared/uv.lock`
-- Add: `libs/shared/src/presvo_contracts/__init__.py`
-- Add: `libs/shared/src/presvo_contracts/versioning.py`
+- Add: `libs/shared/src/opevo_contracts/__init__.py`
+- Add: `libs/shared/src/opevo_contracts/versioning.py`
 - Add: `libs/shared/tests/test_versioning.py`
 - Delete: `libs/shared/__init__.py`
 
@@ -85,7 +85,7 @@ Use this package configuration:
 
 ```toml
 [project]
-name = "presvo-contracts"
+name = "opevo-contracts"
 version = "0.1.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
@@ -105,7 +105,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/presvo_contracts"]
+packages = ["src/opevo_contracts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -178,7 +178,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest \
   tests/test_versioning.py -q
 ```
 
-Expected: collection fails because `presvo_contracts.versioning` and its public
+Expected: collection fails because `opevo_contracts.versioning` and its public
 symbols do not exist.
 
 - [ ] **Step 3: Implement the explicit version/error boundary**
@@ -301,7 +301,7 @@ text nor representation.
 
 ```bash
 git add libs/shared/pyproject.toml libs/shared/uv.lock \
-  libs/shared/src/presvo_contracts libs/shared/tests/test_versioning.py \
+  libs/shared/src/opevo_contracts libs/shared/tests/test_versioning.py \
   libs/shared/__init__.py
 git commit -m "feat(contracts): add safe versioned package foundation"
 ```
@@ -312,9 +312,9 @@ git commit -m "feat(contracts): add safe versioned package foundation"
 
 **Files:**
 
-- Add: `libs/shared/src/presvo_contracts/dispatch.py`
-- Modify: `libs/shared/src/presvo_contracts/versioning.py`
-- Modify: `libs/shared/src/presvo_contracts/__init__.py`
+- Add: `libs/shared/src/opevo_contracts/dispatch.py`
+- Modify: `libs/shared/src/opevo_contracts/versioning.py`
+- Modify: `libs/shared/src/opevo_contracts/__init__.py`
 - Add: `libs/shared/tests/test_dispatch.py`
 
 **Consumes:**
@@ -373,7 +373,7 @@ OWNER_CONTEXT_MAX_LENGTH = 4_000
 SYSTEM_PROMPT_MAX_LENGTH = 8_000
 KNOWLEDGE_BASE_MAX_LENGTH = 32_000
 VERIFICATION_MESSAGE = (
-    "Forwarding test successful. Return to Presvo to go live."
+    "Forwarding test successful. Return to Opevo to go live."
 )
 
 AgentName = Annotated[
@@ -417,7 +417,7 @@ class ForwardingVerificationDispatch(VersionedContract):
     agent_identity: NonBlankString
     completion_token: str = Field(min_length=1, repr=False)
     message: Literal[
-        "Forwarding test successful. Return to Presvo to go live."
+        "Forwarding test successful. Return to Opevo to go live."
     ]
     tts_provider: Literal["speechmatics", "elevenlabs"]
 ```
@@ -460,7 +460,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy src
 - [ ] **Step 5: Commit dispatch contracts**
 
 ```bash
-git add libs/shared/src/presvo_contracts libs/shared/tests/test_dispatch.py
+git add libs/shared/src/opevo_contracts libs/shared/tests/test_dispatch.py
 git commit -m "feat(contracts): define dispatch wire models"
 ```
 
@@ -470,9 +470,9 @@ git commit -m "feat(contracts): define dispatch wire models"
 
 **Files:**
 
-- Add: `libs/shared/src/presvo_contracts/transcript.py`
-- Add: `libs/shared/src/presvo_contracts/completion.py`
-- Modify: `libs/shared/src/presvo_contracts/__init__.py`
+- Add: `libs/shared/src/opevo_contracts/transcript.py`
+- Add: `libs/shared/src/opevo_contracts/completion.py`
+- Modify: `libs/shared/src/opevo_contracts/__init__.py`
 - Add: `libs/shared/tests/test_transcript.py`
 - Add: `libs/shared/tests/test_completion.py`
 
@@ -608,7 +608,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy src
 - [ ] **Step 7: Commit transcript and completion contracts**
 
 ```bash
-git add libs/shared/src/presvo_contracts \
+git add libs/shared/src/opevo_contracts \
   libs/shared/tests/test_transcript.py libs/shared/tests/test_completion.py
 git commit -m "feat(contracts): define transcript and completion models"
 ```
@@ -619,8 +619,8 @@ git commit -m "feat(contracts): define transcript and completion models"
 
 **Files:**
 
-- Add: `libs/shared/src/presvo_contracts/realtime.py`
-- Modify: `libs/shared/src/presvo_contracts/__init__.py`
+- Add: `libs/shared/src/opevo_contracts/realtime.py`
+- Modify: `libs/shared/src/opevo_contracts/__init__.py`
 - Add: `libs/shared/tests/contract_cases.py`
 - Add: `libs/shared/tests/test_realtime.py`
 - Add: `libs/shared/tests/test_golden_fixtures.py`
@@ -771,7 +771,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy src
 - [ ] **Step 7: Commit realtime contracts and golden fixtures**
 
 ```bash
-git add libs/shared/src/presvo_contracts libs/shared/tests
+git add libs/shared/src/opevo_contracts libs/shared/tests
 git commit -m "feat(contracts): add realtime models and golden fixtures"
 ```
 
@@ -816,8 +816,8 @@ metadata:
 
 ```python
 def test_shared_contract_package_is_installed() -> None:
-    assert importlib.metadata.version("presvo-contracts") == "0.1.0"
-    assert presvo_contracts.CURRENT_SCHEMA_VERSION == 1
+    assert importlib.metadata.version("opevo-contracts") == "0.1.0"
+    assert opevo_contracts.CURRENT_SCHEMA_VERSION == 1
 ```
 
 - [ ] **Step 2: Run both RED tests before declaring the dependency**
@@ -839,14 +839,14 @@ Expected: `ModuleNotFoundError` or missing distribution metadata in both apps.
 Add to each dependency list:
 
 ```toml
-"presvo-contracts",
+"opevo-contracts",
 ```
 
 Add to each project:
 
 ```toml
 [tool.uv.sources]
-presvo-contracts = { path = "../../libs/shared" }
+opevo-contracts = { path = "../../libs/shared" }
 ```
 
 Refresh each lockfile independently:
@@ -897,7 +897,7 @@ instead of a hidden source-path dependency.
 Add a root `.dockerignore` covering at least `.git`, `.worktrees`, `.venv`,
 `**/.venv`, Python caches, uv caches, coverage output, `node_modules`,
 `.env`, `.env.*` except reviewed examples, test output, and
-`Presvo_frontend/`.
+`Opevo_frontend/`.
 
 - [ ] **Step 5: Update Compose and test Docker context hygiene**
 
@@ -926,7 +926,7 @@ context through the probe Dockerfile and assert:
 
 - API, agent, and shared manifests/sources are present;
 - `.git`, `.env.contract-context-probe`, any existing `.env`/`.venv`,
-  `node_modules`, coverage artifacts, and `Presvo_frontend` are absent.
+  `node_modules`, coverage artifacts, and `Opevo_frontend` are absent.
 
 Do not traverse or modify existing ignored directories to create sentinels.
 Remove only `.env.contract-context-probe` and the exact `mktemp -d` output
@@ -974,15 +974,15 @@ Build and tag each matrix entry with:
   run: >-
     docker build
     --file "${{ matrix.dockerfile }}"
-    --tag "presvo-${{ matrix.application }}:${{ github.sha }}"
+    --tag "opevo-${{ matrix.application }}:${{ github.sha }}"
     "${{ matrix.context }}"
 - name: Verify shared package in Python runtime images
   if: matrix.application != 'web'
   run: >-
     docker run --rm
     --entrypoint /app/.venv/bin/python
-    "presvo-${{ matrix.application }}:${{ github.sha }}"
-    -c "import presvo_contracts; assert presvo_contracts.CURRENT_SCHEMA_VERSION == 1"
+    "opevo-${{ matrix.application }}:${{ github.sha }}"
+    -c "import opevo_contracts; assert opevo_contracts.CURRENT_SCHEMA_VERSION == 1"
 ```
 
 Add `shared-contracts` to `CI / Required`'s `needs`, environment, and success
@@ -1006,7 +1006,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest \
   tests/test_package_installation.py -q
 
 cd ../..
-docker compose -f compose.dev.yaml config >/tmp/presvo-compose-contracts.yml
+docker compose -f compose.dev.yaml config >/tmp/opevo-compose-contracts.yml
 ```
 
 Expected: imports pass, both locks are current, and Compose renders without
@@ -1015,13 +1015,13 @@ enabling realtime.
 - [ ] **Step 8: Build both runtime images and verify imports**
 
 ```bash
-docker build --file apps/api/Dockerfile --tag presvo-api:contracts .
-docker run --rm --entrypoint /app/.venv/bin/python presvo-api:contracts \
-  -c "import presvo_contracts"
+docker build --file apps/api/Dockerfile --tag opevo-api:contracts .
+docker run --rm --entrypoint /app/.venv/bin/python opevo-api:contracts \
+  -c "import opevo_contracts"
 
-docker build --file apps/agent/Dockerfile --tag presvo-agent:contracts .
-docker run --rm --entrypoint /app/.venv/bin/python presvo-agent:contracts \
-  -c "import presvo_contracts"
+docker build --file apps/agent/Dockerfile --tag opevo-agent:contracts .
+docker run --rm --entrypoint /app/.venv/bin/python opevo-agent:contracts \
+  -c "import opevo_contracts"
 ```
 
 - [ ] **Step 9: Commit packaging and build integration**
@@ -1167,7 +1167,7 @@ except ContractError as error:
 
 if isinstance(metadata, ForwardingVerificationDispatch):
     expected_identity = f"agent-verification-{metadata.verification_session_id}"
-    display_name = "Presvo forwarding verification"
+    display_name = "Opevo forwarding verification"
 else:
     expected_identity = f"agent-call-{metadata.call_id}"
     display_name = metadata.agent_name
@@ -1373,7 +1373,7 @@ In `Observability.__init__`:
 
 ```python
 self.invalid_contract_messages = meter.create_counter(
-    "presvo.contract.invalid_messages"
+    "opevo.contract.invalid_messages"
 )
 ```
 
@@ -1806,8 +1806,8 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check src tests
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy src
 
-docker build --file apps/api/Dockerfile --tag presvo-api:local .
-docker build --file apps/agent/Dockerfile --tag presvo-agent:local .
+docker build --file apps/api/Dockerfile --tag opevo-api:local .
+docker build --file apps/agent/Dockerfile --tag opevo-agent:local .
 ```
 
 Explain why both app lockfiles must be refreshed when the shared dependency
@@ -1836,7 +1836,7 @@ rg -n "realtime_enabled|NEXT_PUBLIC_REALTIME_ENABLED" \
 git status --short
 ```
 
-Expected: realtime defaults remain false; `Presvo_frontend/` remains the only
+Expected: realtime defaults remain false; `Opevo_frontend/` remains the only
 unrelated untracked path and is not staged.
 
 - [ ] **Step 5: Commit documentation and cleanup evidence**
@@ -1913,16 +1913,16 @@ Do not run or claim the credentialed 11C evaluation as automated evidence.
 
 ```bash
 cd ../..
-docker compose -f compose.dev.yaml config >/tmp/presvo-compose-contracts.yml
+docker compose -f compose.dev.yaml config >/tmp/opevo-compose-contracts.yml
 bash scripts/run-local-e2e.sh
 
-docker build --file apps/api/Dockerfile --tag presvo-api:contracts-final .
+docker build --file apps/api/Dockerfile --tag opevo-api:contracts-final .
 docker run --rm --entrypoint /app/.venv/bin/python \
-  presvo-api:contracts-final -c "import presvo_contracts"
+  opevo-api:contracts-final -c "import opevo_contracts"
 
-docker build --file apps/agent/Dockerfile --tag presvo-agent:contracts-final .
+docker build --file apps/agent/Dockerfile --tag opevo-agent:contracts-final .
 docker run --rm --entrypoint /app/.venv/bin/python \
-  presvo-agent:contracts-final -c "import presvo_contracts"
+  opevo-agent:contracts-final -c "import opevo_contracts"
 ```
 
 Run the Task 5 root-context probe again. Do not describe the provider-free E2E
@@ -1933,7 +1933,7 @@ as a real agent-process test; 12C remains accepted.
 ```bash
 git diff --check
 git status --short
-git grep -n "presvo-contracts" -- \
+git grep -n "opevo-contracts" -- \
   apps/api/pyproject.toml apps/agent/pyproject.toml \
   apps/api/uv.lock apps/agent/uv.lock
 git grep -n "schema_version" -- libs/shared/tests/fixtures/v1

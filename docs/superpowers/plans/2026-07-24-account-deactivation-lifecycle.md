@@ -26,7 +26,7 @@ React 19, TypeScript 5.9, Tailwind CSS 4, Vitest, Playwright, pytest, Ruff, mypy
 - Owner-requested deactivation is effective locally at the first commit,
   immediately cancels Stripe without automatic proration or refund, disables
   routing, drains any already-admitted call, and permanently releases the
-  assigned Presvo number.
+  assigned Opevo number.
 - Subscription-only cancellation stays in the Stripe-hosted Billing Portal and
   remains active until the end of the paid period.
 - The exact owner confirmation is case-sensitive `DEACTIVATE`.
@@ -1086,11 +1086,11 @@ trigger, safe phase/outcome, incomplete count, oldest age, completion latency,
 and attention count; labels must never include IDs.
 
 Use the exact instruments
-`presvo.account_deactivation.operations`,
-`presvo.account_deactivation.oldest_incomplete_age`,
-`presvo.account_deactivation.reconciliation_results`,
-`presvo.account_deactivation.attention`, and
-`presvo.account_deactivation.completion_duration`. Permit only trigger,
+`opevo.account_deactivation.operations`,
+`opevo.account_deactivation.oldest_incomplete_age`,
+`opevo.account_deactivation.reconciliation_results`,
+`opevo.account_deactivation.attention`, and
+`opevo.account_deactivation.completion_duration`. Permit only trigger,
 operation status, safe step, safe outcome, and safe error class as attributes.
 
 - [ ] **Step 4: Run worker, preservation, and regression tests.**
@@ -1313,11 +1313,11 @@ customer exists.
 set -e
 cd /home/mo/code/ai/bmad-opevo
 cleanup_account_pg() {
-  COMPOSE_PROJECT_NAME=presvo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
+  COMPOSE_PROJECT_NAME=opevo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
     docker compose -f compose.dev.yaml down --volumes --remove-orphans
 }
 trap cleanup_account_pg EXIT
-COMPOSE_PROJECT_NAME=presvo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
+COMPOSE_PROJECT_NAME=opevo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
   docker compose -f compose.dev.yaml up -d --wait postgres redis
 cd apps/api
 TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55434/ai_call \
@@ -1411,11 +1411,11 @@ Use row counts and stable IDs for evidence; never compare only HTTP text.
 set -e
 cd /home/mo/code/ai/bmad-opevo
 cleanup_account_pg() {
-  COMPOSE_PROJECT_NAME=presvo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
+  COMPOSE_PROJECT_NAME=opevo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
     docker compose -f compose.dev.yaml down --volumes --remove-orphans
 }
 trap cleanup_account_pg EXIT
-COMPOSE_PROJECT_NAME=presvo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
+COMPOSE_PROJECT_NAME=opevo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
   docker compose -f compose.dev.yaml up -d --wait postgres redis
 cd apps/api
 TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55434/ai_call \
@@ -1454,11 +1454,11 @@ gain a new call.
 set -e
 cd /home/mo/code/ai/bmad-opevo
 cleanup_account_pg() {
-  COMPOSE_PROJECT_NAME=presvo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
+  COMPOSE_PROJECT_NAME=opevo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
     docker compose -f compose.dev.yaml down --volumes --remove-orphans
 }
 trap cleanup_account_pg EXIT
-COMPOSE_PROJECT_NAME=presvo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
+COMPOSE_PROJECT_NAME=opevo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
   docker compose -f compose.dev.yaml up -d --wait postgres redis
 cd apps/api
 TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55434/ai_call \
@@ -1533,7 +1533,7 @@ Assert the dialog button stays disabled until the exact input is
 New calls stop immediately.
 Your subscription is canceled immediately with no automatic prorated refund.
 An active call may finish before cleanup completes.
-Your current Presvo number is permanently released.
+Your current Opevo number is permanently released.
 Your calls, recordings, billing history, and saved configuration are retained.
 Reactivation requires a new subscription and a newly provisioned number.
 ```
@@ -1541,10 +1541,10 @@ Reactivation requires a new subscription and a newly provisioned number.
 Assert:
 
 - active state renders a danger zone;
-- deactivating state renders “Presvo is no longer accepting new calls” and
+- deactivating state renders “Opevo is no longer accepting new calls” and
   “Finishing account deactivation” with no provider IDs;
 - attention state keeps the same truthful non-serving copy;
-- inactive state renders `Reactivate Presvo`, retained-data copy, and never
+- inactive state renders `Reactivate Opevo`, retained-data copy, and never
   presents the old number as assigned;
 - local-development reactivation calls `/api/development/activate-starter` and
   returns to `/activate`, while Stripe mode creates a hosted Checkout URL;
@@ -1612,7 +1612,7 @@ page renders one primary state card and the danger zone only when active.
 Pass `readOnly: boolean` to `AgentSettingsForm`; disable inputs, switches, and
 submit while preserving visible saved values. Guard its server action remains
 API-enforced. Redirect non-active activation pages to Account before rendering
-mutable milestones. Inactive `Reactivate Presvo` calls the existing checkout
+mutable milestones. Inactive `Reactivate Opevo` calls the existing checkout
 or local-development activation boundary selected by the server action; the API
 owns all eligibility checks. Add scheduled-cancellation fields to the billing
 type/card.
@@ -1718,7 +1718,7 @@ Use `mktemp -d` for the state directory, export:
 ```bash
 export E2E_STATE_FILE="${e2e_state_dir}/account-lifecycle.json"
 export E2E_API_BASE_URL="http://127.0.0.1:${API_PORT}"
-export E2E_LOCAL_AUTH_TOKEN="presvo-local-development-token"
+export E2E_LOCAL_AUTH_TOKEN="opevo-local-development-token"
 ```
 
 Run `activation.spec.ts` and `deactivation-start.spec.ts`, restart API and
@@ -1782,8 +1782,8 @@ Document:
   proration;
 - Telnyx release error/attention behavior and operator observations.
 - alerting instructions: page on every increment of
-  `presvo.account_deactivation.attention`, and alert when
-  `presvo.account_deactivation.oldest_incomplete_age` exceeds
+  `opevo.account_deactivation.attention`, and alert when
+  `opevo.account_deactivation.oldest_incomplete_age` exceeds
   `MAX_CALL_DURATION_SECONDS + 900` seconds.
 - operator recovery: remediate the credential/contract/identity fault, requeue
   only the failed reference-only outbox event for the recorded operation ID,
@@ -1803,11 +1803,11 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync mypy app
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
 cd ../..
 cleanup_account_pg() {
-  COMPOSE_PROJECT_NAME=presvo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
+  COMPOSE_PROJECT_NAME=opevo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
     docker compose -f compose.dev.yaml down --volumes --remove-orphans
 }
 trap cleanup_account_pg EXIT
-COMPOSE_PROJECT_NAME=presvo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
+COMPOSE_PROJECT_NAME=opevo-account-pg POSTGRES_PORT=55434 REDIS_PORT=56381 \
   docker compose -f compose.dev.yaml up -d --wait postgres redis
 cd apps/api
 TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55434/ai_call \

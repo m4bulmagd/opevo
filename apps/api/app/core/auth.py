@@ -31,8 +31,8 @@ from app.repositories.user_repository import UserRepository
 from app.services.user_bootstrap_service import UserBootstrapService
 
 logger = logging.getLogger(__name__)
-LOCAL_USER_EXTERNAL_ID = "local_presvo_user"
-LOCAL_USER_EMAIL = "local@presvo.invalid"
+LOCAL_USER_EXTERNAL_ID = "local_opevo_user"
+LOCAL_USER_EMAIL = "local@opevo.invalid"
 
 
 @dataclass(slots=True)

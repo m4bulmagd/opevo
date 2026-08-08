@@ -25,9 +25,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PRODUCTION_COMPOSE_ENVIRONMENT = {
     "ACTIVATION_FLOW_ENABLED": "true",
     "AGENT_DISPATCH_JWT_SECRET": "test-only-test-only-test-only-test-only",
-    "AGENT_IMAGE": "presvo-agent:verification",
+    "AGENT_IMAGE": "opevo-agent:verification",
     "API_BASE_URL": "https://api.example.invalid",
-    "API_IMAGE": "presvo-api:verification",
+    "API_IMAGE": "opevo-api:verification",
     "CLERK_AUTHORIZED_PARTIES": "https://app.example.com",
     "CLERK_ISSUER": "https://clerk.example.com",
     "CLERK_JWT_KEY": "",
@@ -64,7 +64,7 @@ PRODUCTION_COMPOSE_ENVIRONMENT = {
     "TELNYX_API_KEY": "disposable-telnyx-key",
     "TELNYX_DISABLED_CONNECTION_ID": "disposable-disabled-connection",
     "TELNYX_ORDERING_ENABLED": "true",
-    "WEB_IMAGE": "presvo-web:verification",
+    "WEB_IMAGE": "opevo-web:verification",
 }
 CLERK_SESSION_VERIFIER_SETTINGS = (
     "CLERK_AUTHORIZED_PARTIES",
@@ -314,7 +314,7 @@ def test_compose_render_can_skip_service_env_file_resolution(tmp_path: Path) -> 
         """\
 services:
   api:
-    image: example.invalid/presvo/api:test
+    image: example.invalid/opevo/api:test
     env_file:
       - ./service.env
     environment:
@@ -937,7 +937,7 @@ def test_alembic_offline_requires_only_database_url(tmp_path: Path) -> None:
         if key not in {"REDIS_URL", "TEST_REDIS_URL"}
     }
     environment["DATABASE_URL"] = (
-        "postgresql+asyncpg://migration:pa%25ss@database.example/presvo"
+        "postgresql+asyncpg://migration:pa%25ss@database.example/opevo"
     )
 
     result = subprocess.run(
@@ -1792,7 +1792,7 @@ def test_local_e2e_runner_is_disposable_and_never_starts_voice_agent() -> None:
     runner = (REPO_ROOT / "scripts" / "run-local-e2e.sh").read_text()
 
     assert runner.startswith("#!/bin/sh\nset -eu\n")
-    assert "presvo-e2e" in runner
+    assert "opevo-e2e" in runner
     for port in ("3300", "5800", "55432", "56379", "59000", "59001"):
         assert port in runner
     assert "trap cleanup" in runner
@@ -2102,13 +2102,13 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
         "worker-lifecycle": (
             "arq:queue",
             "call finalization; call reconciliation",
-            "presvo:worker:call-lifecycle:health",
+            "opevo:worker:call-lifecycle:health",
             "10",
         ),
         "worker-background": (
             "arq:queue:background",
             "outbox delivery/reconciliation; verification expiry",
-            "presvo:worker:background:health",
+            "opevo:worker:background:health",
             "4",
         ),
     }
@@ -2171,13 +2171,13 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     assert "not a service to create" in rollback
 
     for metric in (
-        "presvo.worker.queue.depth{queue_class}",
-        "presvo.worker.queue.oldest_due.age{queue_class}",
+        "opevo.worker.queue.depth{queue_class}",
+        "opevo.worker.queue.oldest_due.age{queue_class}",
     ):
         assert metric in incident
 
     for document in (readme, local_activation, deploy, rollback, incident):
-        assert "presvo-worker" not in document
+        assert "opevo-worker" not in document
         assert "api worker web" not in document
     assert "the ARQ worker" not in contributing
     assert "worker-lifecycle" in contributing
@@ -2195,7 +2195,7 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     assert staging_log_commands
     for command in staging_log_commands:
         tokens = shlex.split(command)
-        assert "presvo-worker" not in command
+        assert "opevo-worker" not in command
         assert re.search(r"(?<![-\w])worker(?![-\w])", command) is None
         assert "worker-lifecycle" in tokens
         assert "worker-background" in tokens

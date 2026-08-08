@@ -193,7 +193,7 @@ describe("activation page", () => {
 
     expect(getActivationSnapshotMock).toHaveBeenCalledTimes(1);
     expect(getDevelopmentCapabilitiesMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("heading", { name: /Choose your Presvo number/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Choose your Opevo number/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Start starter plan/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Prepare to go live/i })).not.toBeInTheDocument();
     expect(screen.getByRole("main")).toHaveClass("max-w-3xl", "px-4", "sm:px-6");
@@ -202,13 +202,13 @@ describe("activation page", () => {
     expect(activationStepCard().getByRole("button", { name: /Start starter plan/i })).toBeVisible();
   });
 
-  it("uses a minimal Presvo header before activation is complete", async () => {
+  it("uses a minimal Opevo header before activation is complete", async () => {
     const { default: ActivationLayout } = await import("@/app/(activation)/activate/layout");
 
     render(await ActivationLayout({ children: <div>Activation content</div> }));
 
     expect(screen.getByRole("banner")).toHaveClass("bg-background/90", "backdrop-blur");
-    expect(screen.getByRole("link", { name: "Presvo home" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Opevo home" })).toHaveAttribute("href", "/");
     expect(screen.getByText("Local development")).toBeVisible();
     expect(screen.queryByRole("navigation", { name: "Account navigation" })).not.toBeInTheDocument();
   });
@@ -319,10 +319,10 @@ describe("activation page", () => {
 
     render(await Page({ searchParams: Promise.resolve({ milestone: "forwarding" }) }));
 
-    expect(screen.getByRole("heading", { name: /Forward missed calls to Presvo/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Forward missed calls to Opevo/i })).toBeInTheDocument();
     expect(screen.getByText("+33 1 87 65 43 21")).toBeInTheDocument();
     expect(activationStepCard().getByRole("button", { name: /Start 10-minute test/i })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: /Choose your Presvo number/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Choose your Opevo number/i })).not.toBeInTheDocument();
   });
 
   it("renders the server-owned verification window and guarded local simulator in launch", async () => {
@@ -416,7 +416,7 @@ describe("activation route feedback", () => {
 
     render(await ActivationLayout({ children: <div id="activation-content">Activation form</div> }));
 
-    expect(screen.getByRole("link", { name: "Presvo home" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Opevo home" })).toHaveAttribute("href", "/");
     expect(screen.queryByRole("navigation", { name: "Account navigation" })).not.toBeInTheDocument();
     expect(screen.getByText(/Local development/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Skip to activation/i })).toHaveAttribute("href", "#activation-content");

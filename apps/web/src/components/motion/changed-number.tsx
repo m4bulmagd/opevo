@@ -1,7 +1,7 @@
 "use client";
 
 // Adapted from https://beui.dev/components/motion/number
-// Presvo renders the authoritative initial value and animates updates only.
+// Opevo renders the authoritative initial value and animates updates only.
 
 import { useEffect, useRef, useState } from "react";
 

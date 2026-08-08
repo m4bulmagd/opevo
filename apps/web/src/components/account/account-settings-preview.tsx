@@ -43,7 +43,7 @@ const NOTIFICATIONS: ReadonlyArray<{
   { id: "callSummaries", label: "Call summaries", hint: "Preview an email after every answered call." },
   { id: "missedCalls", label: "Missed calls", hint: "Preview an alert when a caller hangs up early." },
   { id: "usageAlerts", label: "Usage alerts", hint: "Preview an alert near the monthly allowance." },
-  { id: "productUpdates", label: "Product updates", hint: "Preview occasional Presvo product news." },
+  { id: "productUpdates", label: "Product updates", hint: "Preview occasional Opevo product news." },
 ];
 
 function PreferenceRow({

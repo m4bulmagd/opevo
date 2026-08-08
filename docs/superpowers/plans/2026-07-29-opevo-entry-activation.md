@@ -1,8 +1,8 @@
-# Presvo Public Entry and Activation Implementation Plan
+# Opevo Public Entry and Activation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Migrate the public entry, hosted-auth handoff, and five authoritative activation milestones into the approved Presvo visual system without changing France-first product truth or backend behavior.
+**Goal:** Migrate the public entry, hosted-auth handoff, and five authoritative activation milestones into the approved Opevo visual system without changing France-first product truth or backend behavior.
 
 **Architecture:** Keep the existing Next.js routes, session resolution, Clerk/local-mode gates, activation API clients, server actions, and stage router. Move the public landing markup into a focused presentation component, add a shared auth presentation shell, and recompose activation around a template-matched progress header and surface card. Existing milestone forms and commands remain the only owners of mutations.
 
@@ -10,8 +10,8 @@
 
 ## Global Constraints
 
-- `apps/web` remains the only deployed frontend; `/home/mo/code/ai/bmad-opevo/Presvo_frontend` is read-only visual reference material.
-- Preserve the exact Phase 1 Presvo tokens, system typography, spacing, borders, shadows, card styles, and visual hierarchy.
+- `apps/web` remains the only deployed frontend; `/home/mo/code/ai/bmad-opevo/Opevo_frontend` is read-only visual reference material.
+- Preserve the exact Phase 1 Opevo tokens, system typography, spacing, borders, shadows, card styles, and visual hierarchy.
 - Keep `/`, `/sign-in/[[...sign-in]]`, `/sign-up/[[...sign-up]]`, and `/activate` as the production routes.
 - Preserve the existing five milestones: Business, Receptionist, Number, Forwarding, Launch.
 - Preserve autosave, first-invalid-field focus, carrier confirmation, starter-plan checkout, explicit number-provisioning consent, conditional-forwarding verification, go-live confirmation, restart, and resume.
@@ -28,7 +28,7 @@
 
 ### Create
 
-- `apps/web/src/components/landing/presvo-landing-page.tsx`
+- `apps/web/src/components/landing/opevo-landing-page.tsx`
 - `apps/web/src/components/auth/auth-entry-shell.tsx`
 - `apps/web/tests/app/auth-entry.test.tsx`
 - `apps/web/tests/e2e/entry-activation-visual.spec.ts`
@@ -67,18 +67,18 @@
 
 ---
 
-## Task 1: Replace the Blue Landing Page with the Presvo Public Entry
+## Task 1: Replace the Blue Landing Page with the Opevo Public Entry
 
 **Files:**
 
-- Create: `apps/web/src/components/landing/presvo-landing-page.tsx`
+- Create: `apps/web/src/components/landing/opevo-landing-page.tsx`
 - Modify: `apps/web/src/app/page.tsx`
 - Modify: `apps/web/tests/app/root-page.test.tsx`
 
 **Interfaces:**
 
 - Consumes: `isAuthenticated: boolean`, Phase 1 `Button`, `Badge`, `Card`, `CapabilityBadge`, and landing motion primitives.
-- Produces: `PresvoLandingPage({ isAuthenticated }: { isAuthenticated: boolean })`.
+- Produces: `OpevoLandingPage({ isAuthenticated }: { isAuthenticated: boolean })`.
 
 - [x] **Step 1: Add failing semantic and visual-contract tests**
 
@@ -112,23 +112,23 @@ cd apps/web
 npm run test:ci -- tests/app/root-page.test.tsx
 ```
 
-Expected: the old blue/slate landing and missing Presvo surface contract fail.
+Expected: the old blue/slate landing and missing Opevo surface contract fail.
 
 - [x] **Step 3: Extract the presentation component**
 
 Reduce `app/page.tsx` to session ownership:
 
 ```tsx
-import { PresvoLandingPage } from "@/components/landing/presvo-landing-page";
+import { OpevoLandingPage } from "@/components/landing/opevo-landing-page";
 import { getServerSessionState } from "@/lib/auth/server-session";
 
 export default async function Page() {
   const session = await getServerSessionState();
-  return <PresvoLandingPage isAuthenticated={session.isAuthenticated} />;
+  return <OpevoLandingPage isAuthenticated={session.isAuthenticated} />;
 }
 ```
 
-Create `PresvoLandingPage` with these exact public sections and anchors:
+Create `OpevoLandingPage` with these exact public sections and anchors:
 
 ```ts
 const PUBLIC_NAVIGATION = [
@@ -143,12 +143,12 @@ const ENTRY_STEPS = [
     description: "Add your hours, services, existing French number, and the details callers need.",
   },
   {
-    title: "Provision your Presvo line",
+    title: "Provision your Opevo line",
     description: "Activate the starter plan, then explicitly approve one French number for conditional forwarding.",
   },
   {
     title: "Verify before going live",
-    description: "Test missed-call forwarding and choose when Presvo may begin answering.",
+    description: "Test missed-call forwarding and choose when Opevo may begin answering.",
   },
 ] as const;
 ```
@@ -161,7 +161,7 @@ The page structure is:
     Skip to main content
   </a>
   <header className="border-b border-border bg-background/90 backdrop-blur">
-    {/* Presvo mark, PUBLIC_NAVIGATION, auth-aware actions */}
+    {/* Opevo mark, PUBLIC_NAVIGATION, auth-aware actions */}
   </header>
   <div id="landing-content">
     <section className="mx-auto grid w-full max-w-6xl gap-10 px-5 py-16 sm:px-8 lg:grid-cols-[1fr_0.88fr] lg:py-24">
@@ -189,13 +189,13 @@ npm run check
 - [x] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/app/page.tsx apps/web/src/components/landing/presvo-landing-page.tsx apps/web/tests/app/root-page.test.tsx
-git commit -m "feat(web): migrate Presvo public entry"
+git add apps/web/src/app/page.tsx apps/web/src/components/landing/opevo-landing-page.tsx apps/web/tests/app/root-page.test.tsx
+git commit -m "feat(web): migrate Opevo public entry"
 ```
 
 ---
 
-## Task 2: Add the Presvo Hosted-Auth Handoff
+## Task 2: Add the Opevo Hosted-Auth Handoff
 
 **Files:**
 
@@ -223,7 +223,7 @@ Mock Clerk and the auth configuration for configured Clerk mode. Assert:
 
 ```tsx
 expect(screen.getByRole("main")).toHaveClass("bg-background");
-expect(screen.getByRole("link", { name: "Presvo home" })).toHaveAttribute("href", "/");
+expect(screen.getByRole("link", { name: "Opevo home" })).toHaveAttribute("href", "/");
 expect(screen.getByRole("heading", { name: "Welcome back" })).toBeVisible();
 expect(screen.getByTestId("clerk-sign-in")).toBeVisible();
 expect(signInMock).toHaveBeenCalledWith(
@@ -235,7 +235,7 @@ expect(signInMock).toHaveBeenCalledWith(
 );
 ```
 
-Repeat for sign-up with title `Create your Presvo account`, `signInUrl="/sign-in"`, and the existing dashboard redirect. Keep local mode redirect assertions.
+Repeat for sign-up with title `Create your Opevo account`, `signInUrl="/sign-in"`, and the existing dashboard redirect. Keep local mode redirect assertions.
 
 - [x] **Step 2: Run the auth test and confirm failure**
 
@@ -252,8 +252,8 @@ Render:
 <main className="relative grid min-h-screen place-items-center overflow-hidden bg-background px-4 py-10 sm:px-6">
   <div aria-hidden="true" className="absolute inset-x-0 top-0 h-72 bg-[radial-gradient(circle_at_top,var(--color-primary-soft),transparent_68%)] opacity-70" />
   <div className="relative flex w-full max-w-md flex-col gap-6">
-    <Link aria-label="Presvo home" href="/" className="mx-auto inline-flex min-h-11 items-center gap-3 ...">
-      {/* Phase 1 Presvo phone mark */}
+    <Link aria-label="Opevo home" href="/" className="mx-auto inline-flex min-h-11 items-center gap-3 ...">
+      {/* Phase 1 Opevo phone mark */}
     </Link>
     <section aria-labelledby="auth-entry-title" className="rounded-2xl border border-border bg-card p-5 shadow-raised sm:p-7">
       <div className="mb-5 text-center">
@@ -272,7 +272,7 @@ Render:
 Both routes pass:
 
 ```ts
-const PRESVO_CLERK_APPEARANCE = {
+const OPEVO_CLERK_APPEARANCE = {
   variables: {
     colorPrimary: "var(--primary)",
     colorBackground: "var(--card)",
@@ -355,7 +355,7 @@ Keep the skip link and account control, but replace the pre-activation dashboard
   <a href="#activation-content" className="sr-only ... focus:not-sr-only">Skip to activation</a>
   <header className="border-border border-b bg-background/90 backdrop-blur">
     <div className="mx-auto flex min-h-16 w-full max-w-5xl items-center justify-between gap-3 px-4 sm:px-6">
-      {/* Presvo home mark */}
+      {/* Opevo home mark */}
       <div className="flex items-center gap-2">{accountControl}</div>
     </div>
   </header>
@@ -648,7 +648,7 @@ Expected: the complete lifecycle and both visual suites pass against committed i
 
 ```bash
 git add apps/web/tests/e2e/entry-activation-visual.spec.ts apps/web/tests/e2e/entry-activation-visual.spec.ts-snapshots apps/web/tests/e2e/activation.spec.ts scripts/run-local-e2e.sh
-git commit -m "test(web): lock Presvo entry and activation visuals"
+git commit -m "test(web): lock Opevo entry and activation visuals"
 ```
 
 ---
@@ -657,7 +657,7 @@ git commit -m "test(web): lock Presvo entry and activation visuals"
 
 **Files:**
 
-- Modify: `docs/superpowers/plans/2026-07-29-presvo-entry-activation.md`
+- Modify: `docs/superpowers/plans/2026-07-29-opevo-entry-activation.md`
 
 - [x] **Step 1: Scan for migration regressions**
 
@@ -705,15 +705,15 @@ Confirm from tests and browser output:
 Mark every Phase 2 checkbox complete, then:
 
 ```bash
-git add docs/superpowers/plans/2026-07-29-presvo-entry-activation.md
-git commit -m "docs: complete Presvo entry and activation phase"
+git add docs/superpowers/plans/2026-07-29-opevo-entry-activation.md
+git commit -m "docs: complete Opevo entry and activation phase"
 ```
 
 ---
 
 ## Phase 2 Completion Checklist
 
-- [x] Public entry uses the exact Presvo design system and France-first truth.
+- [x] Public entry uses the exact Opevo design system and France-first truth.
 - [x] Signed-out and signed-in calls to action keep their correct production routes.
 - [x] Hosted auth is visually contained without changing Clerk/local-mode gates.
 - [x] Activation uses the centered template hierarchy and five visible milestones.

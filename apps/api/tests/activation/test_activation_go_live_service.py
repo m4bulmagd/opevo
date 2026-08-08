@@ -35,7 +35,7 @@ from app.workers.outbox.phone import deliver_phone_routing
 
 FIXED_NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
 SOURCE_NUMBER = "+33199000100"
-PRESVO_NUMBER = "+33999000100"
+OPEVO_NUMBER = "+33999000100"
 
 
 class _Pool:
@@ -202,7 +202,7 @@ def _sip_join(*, room: str) -> dict:
             "kind": "SIP",
             "attributes": {
                 "sip.phoneNumber": "+33123456789",
-                "sip.trunkPhoneNumber": PRESVO_NUMBER,
+                "sip.trunkPhoneNumber": OPEVO_NUMBER,
             },
         },
     }
@@ -244,7 +244,7 @@ async def _seed_ready_customer(db_session, user):
     )
     phone = PhoneNumber(
         user_id=user.id,
-        e164=PRESVO_NUMBER,
+        e164=OPEVO_NUMBER,
         country_code="FR",
         provider="fake",
         provider_number_id="fake-number-go-live",

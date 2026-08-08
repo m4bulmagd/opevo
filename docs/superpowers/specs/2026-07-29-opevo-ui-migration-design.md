@@ -1,4 +1,4 @@
-# Presvo UI Migration and Production Hardening Design
+# Opevo UI Migration and Production Hardening Design
 
 **Date:** 2026-07-29
 
@@ -6,12 +6,12 @@
 
 **Target application:** `apps/web`
 
-**Visual reference:** `Presvo_frontend`
+**Visual reference:** `Opevo_frontend`
 
 ## 1. Objective
 
-Adopt the `Presvo_frontend` template as the visual and interaction language for
-the entire Presvo web experience while keeping `apps/web` as the sole
+Adopt the `Opevo_frontend` template as the visual and interaction language for
+the entire Opevo web experience while keeping `apps/web` as the sole
 production frontend.
 
 The migration must:
@@ -29,10 +29,10 @@ The migration must:
 
 ## 2. Product Truth and Scope
 
-Presvo remains France-first. The migrated UI uses the real product's content and
+Opevo remains France-first. The migrated UI uses the real product's content and
 contracts:
 
-- French Presvo-provided phone numbers;
+- French Opevo-provided phone numbers;
 - the current five-milestone activation journey;
 - the currently supported starter plan;
 - readiness-gated call routing;
@@ -72,7 +72,7 @@ Use a phased in-place migration inside `apps/web`.
 - Vitest and Playwright coverage;
 - the existing activation and account lifecycle state machines.
 
-`Presvo_frontend` is a visual and component reference. It does not become a
+`Opevo_frontend` is a visual and component reference. It does not become a
 second deployed application, router, state store, or API client.
 
 This strategy avoids a big-bang rewrite and allows each migrated vertical slice
@@ -247,7 +247,7 @@ FastAPI response
   → typed API client
   → domain/view-model mapper
   → server component or server action
-  → Presvo presentation component
+  → Opevo presentation component
 ```
 
 The existing API clients remain organized by domain:

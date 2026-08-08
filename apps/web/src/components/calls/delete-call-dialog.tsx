@@ -54,7 +54,7 @@ export function DeleteCallDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Remove this call?</AlertDialogTitle>
           <AlertDialogDescription>
-            This removes the recording, transcript, summary, and caller details from your active Presvo account.
+            This removes the recording, transcript, summary, and caller details from your active Opevo account.
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error ? (

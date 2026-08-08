@@ -37,9 +37,9 @@ function humanizeBlocker(blocker: string): string {
 
 function recoveryGuidance(blocker: string): string {
   if (blocker === "user_inactive") {
-    return "Sign out, then sign back in with an active Presvo account.";
+    return "Sign out, then sign back in with an active Opevo account.";
   }
-  return "Refresh the snapshot before retrying. Presvo will remain offline while this check is unresolved.";
+  return "Refresh the snapshot before retrying. Opevo will remain offline while this check is unresolved.";
 }
 
 export function ReadinessReview({ blockers }: { blockers: string[] }) {
@@ -49,7 +49,7 @@ export function ReadinessReview({ blockers }: { blockers: string[] }) {
     return (
       <Alert role="region" aria-label="Readiness review">
         <AlertTitle>Ready for your approval</AlertTitle>
-        <AlertDescription>Presvo has the verified forwarding and setup details needed to start.</AlertDescription>
+        <AlertDescription>Opevo has the verified forwarding and setup details needed to start.</AlertDescription>
       </Alert>
     );
   }

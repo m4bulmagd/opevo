@@ -46,18 +46,18 @@ async function completeReceptionistMilestone(page: Page) {
   await page.getByLabel("Escalation notes").fill("Escalate urgent leaks to the owner.");
 
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Choose your Presvo number" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose your Opevo number" })).toBeVisible();
 }
 
 async function applyForwardingGuidance(page: Page) {
-  await expect(page.getByRole("heading", { name: "Forward missed calls to Presvo" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Forward missed calls to Opevo" })).toBeVisible();
   await expect(page.getByText("Forward unanswered calls", { exact: true })).toBeVisible();
   await expect(page.getByText("Forward calls when your line is busy", { exact: true })).toBeVisible();
   await expect(page.getByText("Forward calls when your line is unreachable", { exact: true })).toBeVisible();
   await expect(page.getByText(/unconditional/i)).toHaveCount(0);
 }
 
-test("local owner activates Presvo without external providers", async ({ page }) => {
+test("local owner activates Opevo without external providers", async ({ page }) => {
   await page.goto("/activate");
   await expect(page.getByText("Local development").first()).toBeVisible();
 
@@ -77,7 +77,7 @@ test("local owner activates Presvo without external providers", async ({ page })
   const oldNumber = normalizeDisplayedNumber(await assignedNumber.innerText());
   await expect(page.getByText(/conditionally forward unanswered, busy, and unreachable calls/i)).toBeVisible();
   await page.getByRole("link", { name: "Continue to forwarding" }).click();
-  await expect(page.getByRole("heading", { name: "Forward missed calls to Presvo" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Forward missed calls to Opevo" })).toBeVisible();
 
   await page.reload();
   await applyForwardingGuidance(page);

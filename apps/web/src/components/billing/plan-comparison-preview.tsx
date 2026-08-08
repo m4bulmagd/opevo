@@ -26,7 +26,7 @@ const PLANS: ReadonlyArray<PreviewPlan> = [
   {
     id: "starter",
     name: "Starter",
-    description: "The only tier currently connected to Presvo billing.",
+    description: "The only tier currently connected to Opevo billing.",
     features: {
       minutes: ["Live allowance comes from your billing record", "Live balance appears above"],
       capabilities: ["Hosted Stripe Checkout", "One France-first launch workspace", "Usage ledger"],

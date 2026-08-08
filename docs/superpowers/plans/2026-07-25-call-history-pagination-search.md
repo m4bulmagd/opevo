@@ -23,7 +23,7 @@
 - A positive total with an out-of-range page redirects to the final valid page while retaining `q`; a zero total stays on page 1 and renders an empty state.
 - The dashboard recent-calls view requests exactly five unfiltered rows and remains visually unchanged.
 - Inactive customers retain read-only call list/detail/playback access.
-- Use the existing Presvo dashboard components and visual language; do not redesign call cards or the detail page.
+- Use the existing Opevo dashboard components and visual language; do not redesign call cards or the detail page.
 - Search and page controls remain server-rendered, keyboard-operable, explicitly labelled, and fully available at narrow widths.
 - Add no database migration, dependency, search extension, search index, client-side debounce, status/date filter, transcript search, tags, notes, cursor pagination, or live updates.
 - Node must satisfy the repository engine range `>=22.12 <23`; use the installed Node 22.23.1 binary for verification.
@@ -723,7 +723,7 @@ by default:
 Start a disposable PostgreSQL container:
 
 ```bash
-docker run --detach --rm --name presvo-call-search-postgres \
+docker run --detach --rm --name opevo-call-search-postgres \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD=postgres \
   --env POSTGRES_DB=ai_call_test \
@@ -735,7 +735,7 @@ docker run --detach --rm --name presvo-call-search-postgres \
   postgres:17.8-bookworm
 ```
 
-Wait until `docker inspect --format '{{.State.Health.Status}}' presvo-call-search-postgres` prints `healthy`, then run:
+Wait until `docker inspect --format '{{.State.Health.Status}}' opevo-call-search-postgres` prints `healthy`, then run:
 
 ```bash
 cd apps/api
@@ -755,7 +755,7 @@ Expected: all selected tests PASS, the API tests use PostgreSQL through
 Remove the disposable container:
 
 ```bash
-docker rm --force presvo-call-search-postgres
+docker rm --force opevo-call-search-postgres
 ```
 
 - [ ] **Step 13: Update the public API documentation**
@@ -1757,7 +1757,7 @@ Expected: lock check, Ruff, mypy, and the complete SQLite-oriented API suite PAS
 Start disposable services:
 
 ```bash
-docker run --detach --rm --name presvo-api-test-postgres \
+docker run --detach --rm --name opevo-api-test-postgres \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD=postgres \
   --env POSTGRES_DB=ai_call_test \
@@ -1767,7 +1767,7 @@ docker run --detach --rm --name presvo-api-test-postgres \
   --health-timeout=5s \
   --health-retries=30 \
   postgres:17.8-bookworm
-docker run --detach --rm --name presvo-api-test-redis \
+docker run --detach --rm --name opevo-api-test-redis \
   --publish 6379:6379 \
   --health-cmd='redis-cli ping' \
   --health-interval=1s \
@@ -1793,7 +1793,7 @@ Expected: the complete API suite PASS and the terminal summary reports zero skip
 Always clean up the disposable services after the test command, whether it passes or fails:
 
 ```bash
-docker rm --force presvo-api-test-postgres presvo-api-test-redis
+docker rm --force opevo-api-test-postgres opevo-api-test-redis
 ```
 
 - [ ] **Step 11: Run the complete web quality and production-build gate**

@@ -1,8 +1,8 @@
-# Presvo Open-Source Documentation Design
+# Opevo Open-Source Documentation Design
 
 ## Summary
 
-Presvo will be presented as a portfolio-first, contributor-friendly open-source
+Opevo will be presented as a portfolio-first, contributor-friendly open-source
 project. The public documentation will show the product and its engineering
 depth quickly, while remaining explicit that it is a working pre-production
 MVP progressing toward a controlled beta.
@@ -15,7 +15,7 @@ private security-reporting process.
 
 ## Goals
 
-- Give a first-time visitor a clear understanding of Presvo within a few
+- Give a first-time visitor a clear understanding of Opevo within a few
   minutes.
 - Demonstrate the implemented product and the repository's strongest
   engineering work without overstating production readiness.
@@ -29,7 +29,7 @@ private security-reporting process.
 ## Non-Goals
 
 - Changing application behavior or implementing roadmap features.
-- Claiming that Presvo is ready for unattended production deployment.
+- Claiming that Opevo is ready for unattended production deployment.
 - Converting the existing documentation into a full documentation website.
 - Deleting historical design specifications, implementation plans, or audits.
 - Promising roadmap dates or compatibility with providers that are not present
@@ -38,7 +38,7 @@ private security-reporting process.
 
 ## Public Positioning
 
-The project name is **Presvo**. “AI voice assistant platform” may be used as a
+The project name is **Opevo**. “AI voice assistant platform” may be used as a
 descriptive subtitle, but “AI Call Assistant” and “Opevo” will not be presented
 as competing public product names.
 
@@ -49,7 +49,7 @@ The README will describe the repository as:
 
 Its status language will be:
 
-> **Status:** Active development. Presvo is a working pre-production MVP with a
+> **Status:** Active development. Opevo is a working pre-production MVP with a
 > production-oriented architecture. Work is progressing toward a controlled
 > beta, with onboarding, compliance, recovery testing, and real-provider
 > certification still in progress.
@@ -64,7 +64,7 @@ material remain available but do not displace the product story.
 
 The README is the public landing page. Its information order is:
 
-1. Presvo name, purpose, and status.
+1. Opevo name, purpose, and status.
 2. Existing optimized landing-page screenshot.
 3. Implemented product capabilities.
 4. Concise limitations and a link to the canonical status document.
@@ -270,14 +270,14 @@ without fabricating a fresh local pass.
 
 The documentation work is complete when:
 
-1. The README explains Presvo's purpose, current state, architecture, strongest
+1. The README explains Opevo's purpose, current state, architecture, strongest
    implemented capabilities, and local setup without relying on other files.
 2. The existing product screenshot is visible near the top of the README.
 3. `docs/PROJECT_STATUS.md` accurately separates implemented, partial, planned,
    and exploratory work.
 4. Guided onboarding is the next product milestone and the conversation-flow
    builder is clearly later work.
-5. Presvo is the consistent public product name.
+5. Opevo is the consistent public product name.
 6. Production ambition is clear without claiming current production readiness.
 7. The repository contains the MIT License, contribution guidance, and a
    private security-reporting policy.

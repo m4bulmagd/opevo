@@ -2,8 +2,8 @@ from uuid import UUID
 
 import pytest
 
-from presvo_contracts import ContractError, create_contract, dump_contract
-from presvo_contracts.realtime import (
+from opevo_contracts import ContractError, create_contract, dump_contract
+from opevo_contracts.realtime import (
     AgentSessionEndedEvent,
     CallFinalizedEvent,
     CallStartedEvent,

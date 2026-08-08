@@ -20,7 +20,7 @@ The shared package, golden fixtures, and migrated API/agent seam tests have
 been completed. Focused shared, API, and agent suites passed in the task
 reports; each application lockfile was checked independently; and both
 root-context production images built and passed an import smoke test for
-`presvo_contracts`. The final duplication scans found no app-local mapped wire
+`opevo_contracts`. The final duplication scans found no app-local mapped wire
 model, manual acknowledgement parser, duplicate realtime channel prefix, or
 legacy realtime producer discriminator.
 
@@ -99,7 +99,7 @@ not parse even though the repository's source-text test remained green.
 
 ## Selected Approach
 
-Use Pydantic v2 models in a local package named `presvo-contracts`.
+Use Pydantic v2 models in a local package named `opevo-contracts`.
 
 This is preferred over standard-library dataclasses because both applications
 already depend on Pydantic and require runtime validation. It is preferred over
@@ -108,9 +108,9 @@ would add build and review complexity without current leverage.
 
 The package version and the wire schema version are separate:
 
-- Distribution name: `presvo-contracts`
+- Distribution name: `opevo-contracts`
 - Initial package version: `0.1.0`
-- Python import package: `presvo_contracts`
+- Python import package: `opevo_contracts`
 - Python requirement: `>=3.13,<3.14`
 - Runtime dependency: `pydantic>=2.12,<3`
 - Build backend: Hatchling
@@ -122,7 +122,7 @@ The package version and the wire schema version are separate:
 libs/shared/
 ├── pyproject.toml
 ├── src/
-│   └── presvo_contracts/
+│   └── opevo_contracts/
 │       ├── __init__.py
 │       ├── versioning.py
 │       ├── dispatch.py
@@ -154,7 +154,7 @@ No module may import from either application.
 
 ## Packaging and Build Design
 
-Both applications declare `presvo-contracts` as a normal runtime dependency and
+Both applications declare `opevo-contracts` as a normal runtime dependency and
 resolve it from `../../libs/shared` through `tool.uv.sources`. Each application
 records the local source in its own lockfile.
 
@@ -177,7 +177,7 @@ A root `.dockerignore` excludes, at minimum:
 - dependency caches
 - `node_modules`
 - environment files and secrets
-- unrelated local directories such as `Presvo_frontend`
+- unrelated local directories such as `Opevo_frontend`
 
 Docker Compose build declarations and the CI container-scan matrix identify the
 root context and the application-specific Dockerfile explicitly. The web build
@@ -500,7 +500,7 @@ The shared package does not decide HTTP status codes, retries, alerts, or
 shutdown policy.
 
 The API records invalid messages through a
-`presvo.contract.invalid_messages` counter. Its bounded attributes are
+`opevo.contract.invalid_messages` counter. Its bounded attributes are
 `contract_name`, `code`, and `transport`; it never includes identifiers or
 payload content. The agent's existing observability lifecycle is deliberately
 trace-only, so the agent records the same bounded fields through safe structured
@@ -592,7 +592,7 @@ shared package and the same golden artifacts.
 - Redis publish/subscribe handles each event variant.
 - One malformed Redis event does not terminate later valid fanout.
 - API and agent lockfiles resolve independently.
-- API and agent runtime images import `presvo_contracts`.
+- API and agent runtime images import `opevo_contracts`.
 - Docker Compose configuration remains valid.
 - Root build context exclusions prevent environment files, virtual
   environments, repository history, and unrelated local directories from

@@ -16,28 +16,28 @@ const SUBSCRIPTION_BLOCKERS = new Set<ReadinessBlocker>([
 
 function pausedReason(onboardingStatus: OnboardingStatus) {
   if (onboardingStatus.blockers.includes("minutes_exhausted")) {
-    return "No minutes remain. Add minutes before Presvo can answer another call.";
+    return "No minutes remain. Add minutes before Opevo can answer another call.";
   }
   if (onboardingStatus.blockers.some((blocker) => SUBSCRIPTION_BLOCKERS.has(blocker))) {
-    return "Your subscription needs attention before Presvo can answer calls.";
+    return "Your subscription needs attention before Opevo can answer calls.";
   }
   if (onboardingStatus.stage === "routing_pending") {
-    return "Routing is still updating. Presvo will resume when the update completes.";
+    return "Routing is still updating. Opevo will resume when the update completes.";
   }
   if (onboardingStatus.blockers.includes("phone_missing")) {
-    return "Your Presvo number is not ready yet.";
+    return "Your Opevo number is not ready yet.";
   }
   if (
     onboardingStatus.blockers.includes("agent_config_missing") ||
     onboardingStatus.blockers.includes("agent_setup_incomplete") ||
     onboardingStatus.blockers.includes("agent_content_invalid")
   ) {
-    return "Finish activation details before Presvo can answer calls.";
+    return "Finish activation details before Opevo can answer calls.";
   }
   if (onboardingStatus.blockers.includes("agent_disabled")) {
     return "Call answering is turned off for this account.";
   }
-  return "Account readiness needs attention before Presvo can answer calls.";
+  return "Account readiness needs attention before Opevo can answer calls.";
 }
 
 export function AnsweringStatusBanner({

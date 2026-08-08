@@ -20,7 +20,7 @@ PostgreSQL 17, and Redis 7.
   deployment, external accounts, database contracts, and worker source layout.
 - Never inspect or modify real `.env` files or the fixed `/tmp` voice, Telnyx,
   and Clerk override files.
-- Do not touch `Presvo_frontend/` or
+- Do not touch `Opevo_frontend/` or
   `.worktrees/shadcn-activation-preview`.
 - Use test-first characterization, explicit code, aggressive but genuine DRY,
   and no compatibility alias.

@@ -212,7 +212,7 @@ describe("profile form", () => {
 
     fireEvent.change(screen.getByLabelText(/Owner name/i), { target: { value: "Maya" } });
     await act(() => vi.advanceTimersByTimeAsync(700));
-    fireEvent.change(screen.getByLabelText(/Business name/i), { target: { value: "Presvo" } });
+    fireEvent.change(screen.getByLabelText(/Business name/i), { target: { value: "Opevo" } });
     await act(() => vi.advanceTimersByTimeAsync(700));
     fireEvent.change(screen.getByLabelText(/Business name/i), { target: { value: "Newest" } });
     await act(() => vi.advanceTimersByTimeAsync(700));

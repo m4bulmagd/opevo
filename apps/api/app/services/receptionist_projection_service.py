@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from app.models.agent_config import AgentConfig
 from app.models.business_profile import BusinessProfile
-from presvo_contracts import (
+from opevo_contracts import (
     KNOWLEDGE_BASE_MAX_LENGTH,
     OWNER_CONTEXT_MAX_LENGTH,
 )

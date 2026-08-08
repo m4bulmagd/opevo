@@ -10,7 +10,7 @@ from agent.api_client import (
     AgentApiClient,
     TranscriptAppendPermanentError,
 )
-from presvo_contracts import (
+from opevo_contracts import (
     AgentSessionEndedEvent,
     CallCompletionAcknowledgement,
     CallCompletionRequest,

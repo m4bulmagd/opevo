@@ -6,7 +6,7 @@
 
 ## Context
 
-Presvo currently runs every API background job through one ARQ worker class and
+Opevo currently runs every API background job through one ARQ worker class and
 one Redis queue. `WorkerSettings` registers call finalization, call
 reconciliation, outbox delivery, outbox reconciliation, and forwarding-
 verification expiry together. The same worker process therefore combines short
@@ -145,8 +145,8 @@ to 30 seconds during shutdown, and has a 45-second stop grace.
 Each class has a distinct ARQ health key and a 15-second health update interval:
 
 ```text
-presvo:worker:call-lifecycle:health
-presvo:worker:background:health
+opevo:worker:call-lifecycle:health
+opevo:worker:background:health
 ```
 
 Compose healthchecks invoke ARQ's supported `--check` command against the exact
@@ -211,10 +211,10 @@ work.
 The metrics are:
 
 ```text
-presvo.worker.queue.depth{queue_class}
-presvo.worker.queue.oldest_due.age{queue_class}
-presvo.worker.queue.delay{queue_class, job, attempt}
-presvo.worker.job.duration{queue_class, job, outcome, attempt}
+opevo.worker.queue.depth{queue_class}
+opevo.worker.queue.oldest_due.age{queue_class}
+opevo.worker.queue.delay{queue_class, job, attempt}
+opevo.worker.job.duration{queue_class, job, outcome, attempt}
 ```
 
 Allowed queue classes, job names, outcomes, and bounded attempt values are

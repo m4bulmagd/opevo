@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
-from presvo_contracts import ContractError
+from opevo_contracts import ContractError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import report_safe_exception

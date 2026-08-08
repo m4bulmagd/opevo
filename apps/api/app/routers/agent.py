@@ -41,7 +41,7 @@ from app.services.transcript_service import (
 )
 from app.workers.call_finalization_queue import CallFinalizationQueue
 from app.workers.queueing import enqueue_outbox_wakeup
-from presvo_contracts import (
+from opevo_contracts import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
     TranscriptAppendAcknowledgement,

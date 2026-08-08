@@ -1,6 +1,6 @@
 # Incident Response Runbook
 
-This runbook covers the first-response signals for the Presvo API,
+This runbook covers the first-response signals for the Opevo API,
 `worker-lifecycle`, `worker-background`, and
 voice agent. The production telemetry interface is OpenTelemetry Protocol
 (OTLP) push export; there is intentionally no public `/metrics` endpoint.
@@ -18,8 +18,8 @@ voice agent. The production telemetry interface is OpenTelemetry Protocol
   must not restart a process, remove an instance from traffic, reject a call,
   or change provider, webhook, or worker behavior.
 - Worker health is separate by service: inspect
-  `presvo:worker:call-lifecycle:health` for `worker-lifecycle` and
-  `presvo:worker:background:health` for `worker-background`. The lifecycle
+  `opevo:worker:call-lifecycle:health` for `worker-lifecycle` and
+  `opevo:worker:background:health` for `worker-background`. The lifecycle
   queue is `arq:queue`; the background queue is `arq:queue:background`.
 
 ## Beta alert thresholds
@@ -28,31 +28,31 @@ voice agent. The production telemetry interface is OpenTelemetry Protocol
 | --- | --- | --- |
 | Readiness unavailable | `/readyz` fails for 2 consecutive minutes | Identify whether `database` or `redis` is unavailable; check dependency health and recent deployment/configuration changes. |
 | Webhook failures | `error` outcomes exceed 2% for 5 minutes | Break down by the fixed Clerk, Stripe, and LiveKit provider label; check provider status and signature-secret rotation history. |
-| Outbox terminal failure | Any `presvo.outbox.terminal_failures` increment | Inspect the fixed topic and normalized error class; confirm the durable row is `failed` and determine whether a safe replay is supported. |
-| Calls beyond lifecycle deadlines | More than 5 stale calls | Break down `presvo.calls.stale` by state and compare with reconciliation outcomes. |
+| Outbox terminal failure | Any `opevo.outbox.terminal_failures` increment | Inspect the fixed topic and normalized error class; confirm the durable row is `failed` and determine whether a safe replay is supported. |
+| Calls beyond lifecycle deadlines | More than 5 stale calls | Break down `opevo.calls.stale` by state and compare with reconciliation outcomes. |
 | Queue oldest-job age | Durable outbox oldest-unfinished age exceeds 2 minutes | Inspect pending versus processing depth, worker availability, and PostgreSQL locking. This alert is based on the durable outbox age, not ARQ start delay. |
-| Worker queue depth or oldest due | A class-specific depth or oldest-due signal is unexpectedly nonzero | Check the matching worker health key and `presvo.worker.queue.depth{queue_class}` plus `presvo.worker.queue.oldest_due.age{queue_class}` before changing capacity. |
+| Worker queue depth or oldest due | A class-specific depth or oldest-due signal is unexpectedly nonzero | Check the matching worker health key and `opevo.worker.queue.depth{queue_class}` plus `opevo.worker.queue.oldest_due.age{queue_class}` before changing capacity. |
 | Provider errors | Error rate exceeds 10% for 5 minutes | Break down by fixed provider and operation; compare timeout, rate-limit, unavailable, authentication, validation, conflict, and unknown classes. |
-| Recording failures | `livekit` recording-operation errors exceed 5% of matching recording operations for 10 minutes | Break down `presvo.provider.errors` and `presvo.provider.request.duration` by the fixed LiveKit recording operations; check egress, object-storage bucket availability, credentials, lifecycle policy, and recent configuration changes. |
+| Recording failures | `livekit` recording-operation errors exceed 5% of matching recording operations for 10 minutes | Break down `opevo.provider.errors` and `opevo.provider.request.duration` by the fixed LiveKit recording operations; check egress, object-storage bucket availability, credentials, lifecycle policy, and recent configuration changes. |
 | Backup freshness | No successful backup within 24 hours | Confirm the backup scheduler and destination, restore the backup pipeline, and perform a restore verification after recovery. |
 
 ## Signal interpretation
 
-- `presvo.http.server.request.duration` uses HTTP method, matched route template,
+- `opevo.http.server.request.duration` uses HTTP method, matched route template,
   and status class. It never contains raw paths or query strings.
-- `presvo.webhook.requests` and `presvo.webhook.duration` describe semantic
+- `opevo.webhook.requests` and `opevo.webhook.duration` describe semantic
   `accepted`, `duplicate`, `rejected`, or `error` outcomes. HTTP 202 alone does
   not imply acceptance.
-- `presvo.outbox.events` and `presvo.outbox.oldest_unfinished.age` come from a
-  once-per-minute durable repository snapshot. `presvo.worker.queue.delay` is a
+- `opevo.outbox.events` and `opevo.outbox.oldest_unfinished.age` come from a
+  once-per-minute durable repository snapshot. `opevo.worker.queue.delay` is a
   separate, unlabeled ARQ execution-start signal.
-- `presvo.worker.queue.depth{queue_class}` and
-  `presvo.worker.queue.oldest_due.age{queue_class}` are separate bounded queue
+- `opevo.worker.queue.depth{queue_class}` and
+  `opevo.worker.queue.oldest_due.age{queue_class}` are separate bounded queue
   snapshots for `call_lifecycle` and `background`. They are diagnostic metrics,
   not a production SLO or an alerting-certification claim.
-- `presvo.calls.current`, `presvo.calls.stale`, and
-  `presvo.call_reconciliation.outcomes` use the existing call lifecycle policy.
-- `presvo.provider.request.duration` and `presvo.provider.errors` count one
+- `opevo.calls.current`, `opevo.calls.stale`, and
+  `opevo.call_reconciliation.outcomes` use the existing call lifecycle policy.
+- `opevo.provider.request.duration` and `opevo.provider.errors` count one
   logical operation at the Telnyx, S3, LiveKit, Gemini, or Stripe boundary.
   LiveKit `EGRESS_FAILED`, `EGRESS_ABORTED`, and `EGRESS_LIMIT_REACHED` terminal
   states are errors; only `EGRESS_COMPLETE` is a successful terminal recording.
@@ -68,7 +68,7 @@ voice agent. The production telemetry interface is OpenTelemetry Protocol
 
 HTTP server spans accept only W3C `traceparent`; caller-supplied `tracestate`,
 baggage, headers, paths, and queries are ignored. Worker and agent spans are
-independently rooted and correlate through `presvo.call.id` only when a UUID
+independently rooted and correlate through `opevo.call.id` only when a UUID
 call reference is directly available. Outbox provider spans inherit that value
 only after the fixed call topic, expected aggregate type, payload UUID, and
 aggregate UUID agree. The current durable outbox schema does not carry W3C
@@ -84,7 +84,7 @@ SDK exposes it as a direct, bounded field. The current adapters do not expose
 this consistently, so it is not a guaranteed signal, and exception text must
 never be parsed to manufacture one.
 
-The LiveKit Agents runtime can place caller text on built-in spans. Presvo uses
+The LiveKit Agents runtime can place caller text on built-in spans. Opevo uses
 its own private tracer and does not replace or augment LiveKit's dynamic tracer
 provider. LiveKit SDK transcript, log, trace, and audio recording are explicitly
 disabled; the existing room-composite egress path remains the product's call
@@ -118,7 +118,7 @@ recording locations, raw event/job/request IDs, or exception messages. Use only
 validated call references on traces, fixed provider/topic/state/operation
 labels, normalized outcomes, and normalized error classes.
 
-Collector HTTP response bodies and retry reasons are untrusted. Presvo replaces
+Collector HTTP response bodies and retry reasons are untrusted. Opevo replaces
 the four stock OTLP HTTP exporter diagnostics that interpolate those fields with
 a fixed message. It emits a separate fixed `observability_export_failed` event
 only when the export call ultimately raises or returns failure; a transient

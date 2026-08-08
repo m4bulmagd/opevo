@@ -20,7 +20,7 @@ export function AccountLifecycleBanner({ account }: { account: AccountStatus }) 
         <CircleAlert />
         <AlertTitle>Account cleanup needs attention</AlertTitle>
         <AlertDescription>
-          <p className="font-medium text-foreground">Presvo is no longer accepting new calls</p>
+          <p className="font-medium text-foreground">Opevo is no longer accepting new calls</p>
           <p>Your retained data remains available. Open Account for the latest cleanup guidance.</p>
         </AlertDescription>
         <AlertAction>
@@ -36,7 +36,7 @@ export function AccountLifecycleBanner({ account }: { account: AccountStatus }) 
     return (
       <Alert aria-live="polite">
         <CirclePause />
-        <AlertTitle>Presvo is no longer accepting new calls</AlertTitle>
+        <AlertTitle>Opevo is no longer accepting new calls</AlertTitle>
         <AlertDescription>
           <p className="font-medium text-foreground">Finishing account deactivation</p>
           <p>Your history remains available while subscription and number cleanup completes.</p>
@@ -53,7 +53,7 @@ export function AccountLifecycleBanner({ account }: { account: AccountStatus }) 
   return (
     <Alert aria-live="polite">
       <CircleAlert />
-      <AlertTitle>Presvo is inactive</AlertTitle>
+      <AlertTitle>Opevo is inactive</AlertTitle>
       <AlertDescription>
         Historical calls, recordings, billing, and saved configuration remain available.
       </AlertDescription>

@@ -1,9 +1,9 @@
-# Presvo Configuration, Billing, and Account Implementation Plan
+# Opevo Configuration, Billing, and Account Implementation Plan
 
 > **Execution:** Follow the repository TDD workflow task by task. Keep
-> `Presvo_frontend` read-only and adapt its presentation into `apps/web`.
+> `Opevo_frontend` read-only and adapt its presentation into `apps/web`.
 
-**Goal:** Finish the authenticated Presvo experience by migrating assistant
+**Goal:** Finish the authenticated Opevo experience by migrating assistant
 configuration, billing, and account surfaces while keeping every live mutation
 backend-confirmed and every unsupported extension visibly local-only.
 
@@ -13,9 +13,9 @@ Client components own only drafts, accessibility state, unsaved-change guards,
 and explicit Preview simulations. No Preview component imports production API
 clients, server actions, billing, telephony, or account lifecycle modules.
 
-**Visual source:** `Presvo_frontend/src/routes/assistant.tsx`,
-`Presvo_frontend/src/routes/billing.tsx`,
-`Presvo_frontend/src/routes/settings.tsx`, and their assistant/billing common
+**Visual source:** `Opevo_frontend/src/routes/assistant.tsx`,
+`Opevo_frontend/src/routes/billing.tsx`,
+`Opevo_frontend/src/routes/settings.tsx`, and their assistant/billing common
 components.
 
 **Product truth:**
@@ -56,7 +56,7 @@ Preview.
 - [x] **Step 3: Commit this plan**
 
 ```bash
-git commit -m "docs: plan Presvo configuration and account migration"
+git commit -m "docs: plan Opevo configuration and account migration"
 ```
 
 ---
@@ -74,7 +74,7 @@ git commit -m "docs: plan Presvo configuration and account migration"
 Cover:
 
 - no bar or navigation warning when clean;
-- sticky Presvo save bar when dirty;
+- sticky Opevo save bar when dirty;
 - discard callback and pending lockout;
 - `beforeunload` warning while dirty;
 - same-origin anchor confirmation while dirty;
@@ -93,7 +93,7 @@ cd apps/web
 npm run test:ci -- tests/components/unsaved-changes.test.tsx
 npm run check
 npm run typecheck
-git commit -m "feat(web): add Presvo unsaved-change guard"
+git commit -m "feat(web): add Opevo unsaved-change guard"
 ```
 
 ---
@@ -112,7 +112,7 @@ git commit -m "feat(web): add Presvo unsaved-change guard"
 Require:
 
 - one `Assistant` page heading with the configured agent name as context;
-- the Presvo runtime banner and horizontal tab hierarchy;
+- the Opevo runtime banner and horizontal tab hierarchy;
 - live General, Instructions, and Knowledge controls;
 - no exposed runtime architecture selector;
 - dirty bar only after real edits;
@@ -134,7 +134,7 @@ cd apps/web
 npm run test:ci -- tests/app/agent-page.test.tsx tests/app/agent-actions.test.ts
 npm run check
 npm run typecheck
-git commit -m "feat(web): port Presvo assistant configuration"
+git commit -m "feat(web): port Opevo assistant configuration"
 ```
 
 ---
@@ -200,7 +200,7 @@ Cover:
 - extra plans are visibly Preview, non-purchasable, and local-only;
 - Preview comparison controls reset locally and make no billing request.
 
-- [x] **Step 2: Implement the Presvo billing composition**
+- [x] **Step 2: Implement the Opevo billing composition**
 
 Use the template's current-plan card, usage progress, comparison-card rhythm,
 status treatment, and responsive ledger. Do not display invented prices,
@@ -213,7 +213,7 @@ cd apps/web
 npm run test:ci -- tests/app/billing-page.test.tsx
 npm run check
 npm run typecheck
-git commit -m "feat(web): port Presvo billing workspace"
+git commit -m "feat(web): port Opevo billing workspace"
 ```
 
 ---
@@ -240,7 +240,7 @@ Require:
 - deactivation remains separate and exact;
 - inactive/reactivation presentations remain unchanged.
 
-- [x] **Step 2: Implement the Presvo settings composition**
+- [x] **Step 2: Implement the Opevo settings composition**
 
 Use the template's two-column settings hierarchy where space permits, compact
 preference rows, right-side account context, and separate danger card. Keep
@@ -253,7 +253,7 @@ cd apps/web
 npm run test:ci -- tests/app/account-page.test.tsx tests/app/account-actions.test.ts
 npm run check
 npm run typecheck
-git commit -m "feat(web): port Presvo account settings"
+git commit -m "feat(web): port Opevo account settings"
 ```
 
 ---
@@ -292,7 +292,7 @@ contrast.
 
 ```bash
 bash scripts/run-local-e2e.sh
-git commit -m "test(web): lock Presvo configuration visuals"
+git commit -m "test(web): lock Opevo configuration visuals"
 ```
 
 ---
@@ -335,7 +335,7 @@ explicit Preview labels, local reset behavior, and zero Preview mutation.
 - [x] **Step 4: Complete and commit**
 
 ```bash
-git commit -m "docs: complete Presvo configuration and account phase"
+git commit -m "docs: complete Opevo configuration and account phase"
 ```
 
 ---

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rebuild Presvo's authenticated dashboard, Calls, configured-agent, Billing, and Account surfaces into the approved premium “Quiet Confidence” product while preserving every existing functional, lifecycle, billing, security, and accessibility contract.
+**Goal:** Rebuild Opevo's authenticated dashboard, Calls, configured-agent, Billing, and Account surfaces into the approved premium “Quiet Confidence” product while preserving every existing functional, lifecycle, billing, security, and accessibility contract.
 
 **Architecture:** Keep authenticated layouts and pages server rendered, add one owner-scoped aggregate metrics endpoint, and isolate pathname state, sheets, forms, and restrained Motion effects in small client components. Introduce a reusable product layer (`WorkspaceShell`, `PageIntro`, `StatusSurface`, `MetricBand`, `ProductSurface`, `DataLedger`, `SettingsSection`, and `ActionState`) above the existing accessible UI primitives. Use one request-scoped cached agent read for the shell and pages, one curated light/dark theme, and no dashboard-wide client store.
 
@@ -19,7 +19,7 @@
 - Use the configured `agent_name` in customer-facing navigation and headings; normalize a blank value to `Receptionist`.
 - Keep complete agent names in accessible labels and tooltips even when the visual label truncates.
 - Keep server data authoritative. Do not fetch route data in effects and do not add a global dashboard client store.
-- Copy only the approved BeUI patterns, retain the `beui.dev` source attribution comments, and adapt them to Presvo tokens and accessibility requirements.
+- Copy only the approved BeUI patterns, retain the `beui.dev` source attribution comments, and adapt them to Opevo tokens and accessibility requirements.
 - Import Motion from `motion/react`. Wrap authenticated motion with `MotionConfig reducedMotion="user"` and give every bespoke transform animation a reduced-motion fallback.
 - Never animate metrics from zero on first render. Animate only a value that changes after the component has mounted.
 - Use opacity and transform for motion; avoid bounce, elastic overshoot, parallax, continuous effects, card-by-card entrances, and layout-property animation.
@@ -262,7 +262,7 @@ git commit -m "feat(dashboard): expose metrics contract"
 - Modify: `apps/web/src/scripts/theme-boot.tsx`
 - Modify: `apps/web/tests/lib/preferences-store.test.ts`
 - Create: `apps/web/src/lib/motion/tokens.ts`
-- Create: `apps/web/src/components/motion/presvo-motion-provider.tsx`
+- Create: `apps/web/src/components/motion/opevo-motion-provider.tsx`
 - Create: `apps/web/src/components/motion/animated-status-badge.tsx`
 - Create: `apps/web/src/components/motion/changed-number.tsx`
 - Create: `apps/web/src/components/motion/action-state.tsx`
@@ -279,7 +279,7 @@ git commit -m "feat(dashboard): expose metrics contract"
   - legacy DOM attributes/cookies such as `data-theme-preset`, `data-font`, and `sidebar_variant` are ignored;
   - changing theme mode still toggles `.dark`, updates `color-scheme`, follows the system media query in system mode, and persists `theme_mode`.
 - [ ] Add motion tests asserting:
-  - `PresvoMotionProvider` renders a `MotionConfig` with `reducedMotion="user"`;
+  - `OpevoMotionProvider` renders a `MotionConfig` with `reducedMotion="user"`;
   - `AnimatedStatusBadge` renders icon plus text and has no pulse/loop animation;
   - `ChangedNumber` shows the initial value immediately and calls no numeric animation on mount;
   - a later value prop change animates from the previous value, while mocked reduced motion swaps immediately;
@@ -294,7 +294,7 @@ npm run test:ci -- tests/lib/preferences-store.test.ts \
 
 - [ ] Reduce the font registry to `Inter`, `Figtree`, and `Geist_Mono`.
   Keep Inter as the public/global body font so the landing page is not redesigned; export a Figtree variable that `WorkspaceShell` will apply only to authenticated product content.
-- [ ] Replace preset imports and generic default colors in `globals.css` with the approved semantic Presvo tokens in coordinated light/dark blocks:
+- [ ] Replace preset imports and generic default colors in `globals.css` with the approved semantic Opevo tokens in coordinated light/dark blocks:
   `surface`, `surface-elevated`, `surface-subtle`, `sidebar`, `sidebar-foreground`, `sidebar-active`, `brand-detail`, `success`, `warning`, destructive subtle surfaces, three text tiers, two restrained shadows, shell/surface/control radii, and motion durations/easings.
 - [ ] Map legacy shadcn variables such as `card`, `popover`, `muted`, `accent`, and `sidebar-*` onto those semantic tokens so activation and public primitives remain compatible.
 - [ ] Remove every preset import, `[data-theme-preset]` shadow override, and `[data-font]` selector. Keep public body typography unchanged.
@@ -313,7 +313,7 @@ export const SPRING_LAYOUT = {
 } as const;
 ```
 
-- [ ] Implement `PresvoMotionProvider` as the single authenticated `MotionConfig reducedMotion="user"` boundary.
+- [ ] Implement `OpevoMotionProvider` as the single authenticated `MotionConfig reducedMotion="user"` boundary.
 - [ ] Adapt BeUI `animated-badge` into the smaller `AnimatedStatusBadge` API:
 
 ```ts
@@ -369,7 +369,7 @@ git add apps/web/src/app/globals.css apps/web/src/app/layout.tsx \
   apps/web/src/scripts/theme-boot.tsx apps/web/src/components/motion \
   apps/web/src/styles/presets apps/web/tests/lib/preferences-store.test.ts \
   apps/web/tests/components/motion-primitives.test.tsx
-git commit -m "feat(web): establish Presvo product theme"
+git commit -m "feat(web): establish Opevo product theme"
 ```
 
 ---
@@ -505,7 +505,7 @@ export function dashboardItems(agentName: string): NavItem[] {
   - `padding-bottom: calc(command-bar-height + env(safe-area-inset-bottom))` on mobile;
   - account lifecycle banner above page content;
   - Figtree applied to the authenticated wrapper only;
-  - `PresvoMotionProvider` around motion islands;
+  - `OpevoMotionProvider` around motion islands;
   - theme switcher and existing account/session control in the compact header.
 - [ ] Preserve tooltips for compact icons and complete screen-reader labels. Use at least 44-pixel hit targets.
 - [ ] Simplify the dashboard layout to fetch `account` and cached agent config, normalize the name, and pass both to `WorkspaceShell`; remove cookies and visual-preference server reads.
@@ -908,7 +908,7 @@ Expected commit sequence:
 1. `docs: plan premium dashboard redesign`
 2. `feat(api): aggregate dashboard metrics`
 3. `feat(dashboard): expose metrics contract`
-4. `feat(web): establish Presvo product theme`
+4. `feat(web): establish Opevo product theme`
 5. `feat(web): add reusable product surfaces`
 6. `feat(web): add responsive workspace shell`
 7. `feat(web): recompose operational dashboard`
@@ -927,7 +927,7 @@ Expected commit sequence:
 - [ ] Metrics failure is isolated; critical dashboard data still uses established error behavior.
 - [ ] Theme presets/font/layout customization are gone; light/dark/system remain.
 - [ ] Figtree is limited to the authenticated product so public/activation scope is preserved.
-- [ ] BeUI-derived components retain source attribution and are adapted to Presvo semantics.
+- [ ] BeUI-derived components retain source attribution and are adapted to Opevo semantics.
 - [ ] Motion is restrained, initial metrics do not count up, and reduced-motion behavior is complete.
 - [ ] Search, pagination, call detail, recordings, transcripts, and removal behavior are preserved.
 - [ ] Billing continues to distinguish paid-period cancellation from immediate account deactivation.

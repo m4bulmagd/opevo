@@ -1,4 +1,4 @@
-"""Public API for Presvo's versioned wire contracts."""
+"""Public API for Opevo's versioned wire contracts."""
 
 from .dispatch import (
     AGENT_NAME_MAX_LENGTH,

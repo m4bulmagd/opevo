@@ -50,7 +50,7 @@ describe("assigned number card", () => {
   it("keeps an unassigned number truthful and links to number setup", () => {
     render(<AssignedNumberCard forwarding={null} number={null} />);
 
-    expect(screen.getByText("No Presvo number is assigned yet.")).toBeVisible();
+    expect(screen.getByText("No Opevo number is assigned yet.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Copy assigned number" })).toBeNull();
     const setupLink = screen.getByRole("link", { name: "Review number setup" });
     expect(setupLink).toHaveClass("min-h-11");

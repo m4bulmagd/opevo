@@ -21,14 +21,14 @@ describe("server session selection", () => {
   it("returns the fixed local session only on the server", async () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("AUTH_MODE", "local");
-    vi.stubEnv("LOCAL_AUTH_TOKEN", "presvo-local-development-token");
+    vi.stubEnv("LOCAL_AUTH_TOKEN", "opevo-local-development-token");
 
     const { getServerSessionState } = await importServerSession();
     const session = await getServerSessionState();
 
     expect(session.isAuthenticated).toBe(true);
-    expect(session.userId).toBe("local_presvo_user");
-    expect(await session.getToken()).toBe("presvo-local-development-token");
+    expect(session.userId).toBe("local_opevo_user");
+    expect(await session.getToken()).toBe("opevo-local-development-token");
     expect(clerkAuthMock).not.toHaveBeenCalled();
   });
 

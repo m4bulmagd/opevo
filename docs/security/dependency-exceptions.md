@@ -9,7 +9,7 @@ take a fixed version.
 ## Agent `transformers==4.57.1`
 
 - **Status:** temporarily accepted for the beta
-- **Owner:** Presvo engineering
+- **Owner:** Opevo engineering
 - **Accepted:** 2026-07-14
 - **Last reviewed:** 2026-08-08
 - **Review by:** 2026-08-12
@@ -70,10 +70,10 @@ model-loading operation is isolated in a separately sandboxed service.
 ```bash
 cd apps/agent
 UV_CACHE_DIR=/tmp/uv-cache uv export --frozen --all-groups --no-emit-project --no-emit-local \
-  --format requirements-txt --output-file /tmp/presvo-agent-requirements.txt
+  --format requirements-txt --output-file /tmp/opevo-agent-requirements.txt
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync pip-audit \
   --disable-pip --require-hashes --no-deps --progress-spinner=off \
-  --requirement /tmp/presvo-agent-requirements.txt \
+  --requirement /tmp/opevo-agent-requirements.txt \
   --ignore-vuln PYSEC-2025-217 \
   --ignore-vuln PYSEC-2025-218 \
   --ignore-vuln PYSEC-2026-2290 \

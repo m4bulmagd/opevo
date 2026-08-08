@@ -14,7 +14,7 @@ const DEACTIVATION_PROGRESS_COPY: Record<NonNullable<AccountStatus["deactivation
   disabling_routing: "Stopping new calls",
   canceling_subscription: "Canceling subscription",
   draining_call: "Waiting for an active call to finish",
-  releasing_number: "Releasing your Presvo number",
+  releasing_number: "Releasing your Opevo number",
   finalizing: "Finalizing your account",
   attention_required: "Cleanup needs additional time",
 };
@@ -42,7 +42,7 @@ export function getAccountLifecyclePresentation(account: AccountStatus): Account
       label: "Attention required",
       tone: "attention",
       title: "Account cleanup needs attention",
-      description: account.status === "inactive" ? "Presvo is inactive" : "Presvo is no longer accepting new calls",
+      description: account.status === "inactive" ? "Opevo is inactive" : "Opevo is no longer accepting new calls",
       progress,
     };
   }
@@ -52,8 +52,8 @@ export function getAccountLifecyclePresentation(account: AccountStatus): Account
       return {
         label: "Active",
         tone: "live",
-        title: "Presvo is active",
-        description: "Presvo can accept new calls.",
+        title: "Opevo is active",
+        description: "Opevo can accept new calls.",
         progress: null,
       };
     }
@@ -61,8 +61,8 @@ export function getAccountLifecyclePresentation(account: AccountStatus): Account
     return {
       label: "Action needed",
       tone: "warning",
-      title: "Presvo needs account attention",
-      description: "Presvo is not accepting new calls yet.",
+      title: "Opevo needs account attention",
+      description: "Opevo is not accepting new calls yet.",
       progress: null,
     };
   }
@@ -72,7 +72,7 @@ export function getAccountLifecyclePresentation(account: AccountStatus): Account
       label: "Deactivating",
       tone: "processing",
       title: "Finishing account deactivation",
-      description: "Presvo is no longer accepting new calls",
+      description: "Opevo is no longer accepting new calls",
       progress,
     };
   }
@@ -80,7 +80,7 @@ export function getAccountLifecyclePresentation(account: AccountStatus): Account
   return {
     label: "Inactive",
     tone: "inactive",
-    title: "Presvo is inactive",
+    title: "Opevo is inactive",
     description: INACTIVE_CYCLE_COPY,
     progress,
   };
@@ -120,7 +120,7 @@ function AccountLifecycleDetail({
               : "Your retained data remains available while account cleanup finishes."}
           </p>
           <p className="font-medium text-text-primary">
-            Refresh this page. If cleanup still needs attention, contact Presvo support.
+            Refresh this page. If cleanup still needs attention, contact Opevo support.
           </p>
         </div>
       ) : null}

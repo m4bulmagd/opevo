@@ -84,7 +84,7 @@ def _add_agent_config(
     db_session.add(
         AgentConfig(
             user_id=user_id,
-            agent_name="Presvo Front Desk" if complete else "Assistant",
+            agent_name="Opevo Front Desk" if complete else "Assistant",
             owner_context="Dental office reception" if complete else "",
             system_prompt=(
                 "Answer missed calls and capture the caller's requested outcome."

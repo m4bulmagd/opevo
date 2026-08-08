@@ -58,7 +58,7 @@ test("starts deactivation and stops service while an owner call drains", async (
 
   await page.goto("/dashboard/account");
   const openDeactivation = page.getByRole("button", {
-    name: "Deactivate Presvo",
+    name: "Deactivate Opevo",
   });
   const confirmation = page.getByLabel("Type DEACTIVATE to confirm");
   await expect(async () => {
@@ -71,7 +71,7 @@ test("starts deactivation and stops service while an owner call drains", async (
   await page.getByRole("button", { name: "Deactivate account" }).click();
 
   await expect(page).toHaveURL(/\/dashboard\/account$/);
-  await expect(page.getByText("Presvo is no longer accepting new calls", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Opevo is no longer accepting new calls", { exact: true }).first()).toBeVisible();
   await expect
     .poll(
       async () => {
@@ -102,5 +102,5 @@ test("starts deactivation and stops service while an owner call drains", async (
 
   await page.goto("/activate");
   await expect(page).toHaveURL(/\/dashboard\/account$/);
-  await expect(page.getByText("Presvo is no longer accepting new calls", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Opevo is no longer accepting new calls", { exact: true }).first()).toBeVisible();
 });

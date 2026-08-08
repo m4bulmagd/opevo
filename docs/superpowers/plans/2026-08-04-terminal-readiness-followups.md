@@ -22,7 +22,7 @@
 - `LOCAL_AUTH_TOKEN` remains exact secret material. Reject leading/trailing whitespace in API runtime validation and the server-only web session boundary; do not trim, expose, log, or echo it.
 - Do not add a provider retry, number order, compensation, repair command, support subsystem, route, dependency, cache, or migration.
 - Do not read or print `.env` files, credentials, provider identifiers, real phone numbers, transcripts, recordings, or private runtime overrides.
-- Do not inspect or modify `Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
+- Do not inspect or modify `Opevo_frontend/` or `.worktrees/shadcn-activation-preview`.
 - Preserve the untracked `apps/api/.venv` symlink and the retained `/tmp` voice/Telnyx/Clerk overrides.
 - Do not recreate API, worker, agent, web, PostgreSQL, Redis, or MinIO services.
 - Deferred documentation Issues 33–35, realtime, and recording remain outside this plan.
@@ -233,7 +233,7 @@ In `ProvisioningStatus`, after the active `provisioning` branch and before `retr
         <Alert variant="destructive">
           <AlertTitle>We couldn't verify your assigned number</AlertTitle>
           <AlertDescription>
-            Presvo recorded provisioning as complete, but the assigned number no longer matches the completed request.
+            Opevo recorded provisioning as complete, but the assigned number no longer matches the completed request.
             Refresh once. If this continues, contact support and share the reference below.
           </AlertDescription>
         </Alert>
@@ -521,12 +521,12 @@ Expected: all commands exit zero. Do not create another worktree-local agent vir
 
 - [ ] **Step 5: Prove first-bootstrap concurrency against one exact disposable PostgreSQL database**
 
-Use the exact database name `presvo_codex_verify_terminal_readiness_20260804`. First require this query to print `0`; stop without creating or dropping anything if it does not:
+Use the exact database name `opevo_codex_verify_terminal_readiness_20260804`. First require this query to print `0`; stop without creating or dropping anything if it does not:
 
 ```bash
 docker exec bmad-opevo-postgres-1 \
   psql -U postgres -d postgres -tAc \
-  "SELECT count(*) FROM pg_database WHERE datname = 'presvo_codex_verify_terminal_readiness_20260804'"
+  "SELECT count(*) FROM pg_database WHERE datname = 'opevo_codex_verify_terminal_readiness_20260804'"
 ```
 
 Create only that database, run the concurrency case, then drop only that database even if pytest fails:
@@ -534,14 +534,14 @@ Create only that database, run the concurrency case, then drop only that databas
 ```bash
 docker exec bmad-opevo-postgres-1 \
   psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \
-  "CREATE DATABASE presvo_codex_verify_terminal_readiness_20260804"
-env TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/presvo_codex_verify_terminal_readiness_20260804 \
+  "CREATE DATABASE opevo_codex_verify_terminal_readiness_20260804"
+env TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/opevo_codex_verify_terminal_readiness_20260804 \
   .venv/bin/python -m pytest \
   tests/auth/test_local_auth.py::test_concurrent_first_bootstrap_creates_one_complete_aggregate \
   -q
 docker exec bmad-opevo-postgres-1 \
   psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \
-  "DROP DATABASE IF EXISTS presvo_codex_verify_terminal_readiness_20260804 WITH (FORCE)"
+  "DROP DATABASE IF EXISTS opevo_codex_verify_terminal_readiness_20260804 WITH (FORCE)"
 ```
 
 Repeat the absence query and require `0`. Record test and cleanup results without touching the live `ai_call` database.

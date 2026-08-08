@@ -131,7 +131,7 @@ async def test_onboarding_routes_only_with_central_subscription_access(
     phone_number, provisioning = _provisioned_phone_pair(is_active=True)
     config = SimpleNamespace(
         is_enabled=True,
-        agent_name="Presvo Front Desk",
+        agent_name="Opevo Front Desk",
         owner_context="Dental office reception",
         system_prompt="Handle inbound calls professionally.",
         knowledge_base="Open weekdays.",
@@ -194,7 +194,7 @@ async def test_onboarding_is_not_live_when_routing_flags_diverge(
     phone_number, provisioning = _provisioned_phone_pair(is_active=phone_active)
     config = SimpleNamespace(
         is_enabled=config_enabled,
-        agent_name="Presvo Front Desk",
+        agent_name="Opevo Front Desk",
         owner_context="Dental office reception",
         system_prompt="Handle inbound calls professionally.",
         knowledge_base="Open weekdays.",

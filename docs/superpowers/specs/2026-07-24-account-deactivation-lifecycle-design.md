@@ -1,10 +1,10 @@
-# Presvo Account Deactivation Lifecycle Design
+# Opevo Account Deactivation Lifecycle Design
 
 **Status:** Approved on 2026-07-24
 
 ## Purpose
 
-Presvo needs a reversible account-deactivation workflow that stops service and
+Opevo needs a reversible account-deactivation workflow that stops service and
 provider costs without deleting the customer or their historical data.
 Deactivation is not account deletion. An inactive owner can still sign in,
 review prior calls and billing, and later reactivate with a new subscription
@@ -24,7 +24,7 @@ retention, and backup-erasure policy remain separate future work.
   paid period.
 - A final period-end Stripe cancellation automatically starts account
   deactivation.
-- Deactivation disables routing and releases the Presvo-provided phone number.
+- Deactivation disables routing and releases the Opevo-provided phone number.
   An account without an active subscription does not retain a number.
 - A call already in progress may finish normally. The number is released only
   after the active call reaches a terminal state.
@@ -37,7 +37,7 @@ retention, and backup-erasure policy remain separate future work.
 - Reactivation reuses the saved business and receptionist configuration. It
   requires a new subscription, fresh number-provisioning consent, a newly
   provisioned number, forwarding verification, and explicit go-live approval.
-- The old released number is not recoverable through the Presvo workflow.
+- The old released number is not recoverable through the Opevo workflow.
 - The owner must type `DEACTIVATE` after reviewing the consequences.
 
 ## Scope
@@ -76,15 +76,15 @@ service, cancels the current subscription, and releases the assigned number
 while preserving the customer and historical data.
 
 **Effective deactivation** begins when the local account becomes
-`deactivating`. From that commit onward, Presvo admits no new customer calls
+`deactivating`. From that commit onward, Opevo admits no new customer calls
 even if provider cleanup is incomplete.
 
 **Inactive account** is an account whose deactivation cleanup is complete. It
-has no active subscription and no assigned Presvo number, but its owner retains
+has no active subscription and no assigned Opevo number, but its owner retains
 read-only historical access and may reactivate.
 
 **Subscription-only cancellation** is a Stripe Billing Portal action scheduled
-for the paid-period end. It does not deactivate Presvo before Stripe reports
+for the paid-period end. It does not deactivate Opevo before Stripe reports
 the final cancellation.
 
 **Deactivation operation** is the private durable coordinator for one
@@ -254,7 +254,7 @@ trigger `subscription_ended`. Stripe cancellation is already complete for this
 operation. The account becomes `deactivating` in the same transaction, so new
 call admission stops before asynchronous Telnyx cleanup.
 
-If Stripe reports an immediate final cancellation, Presvo must still fail
+If Stripe reports an immediate final cancellation, Opevo must still fail
 closed and start deactivation. Production readiness requires verifying that the
 customer portal is configured for period-end cancellation.
 
@@ -336,7 +336,7 @@ delivery and duplicate Stripe webhooks are idempotent.
 
 ## Reactivation
 
-An inactive owner sees `Reactivate Presvo`. The action uses the existing Stripe
+An inactive owner sees `Reactivate Opevo`. The action uses the existing Stripe
 Checkout boundary, with these additional preconditions:
 
 - account status is `inactive`;
@@ -409,7 +409,7 @@ Add an authenticated Account page with:
 The danger-zone dialog requires exact typed confirmation and presents all
 approved consequences before enabling the action.
 
-While deactivating, global dashboard messaging states that Presvo is no longer
+While deactivating, global dashboard messaging states that Opevo is no longer
 accepting new calls and is finishing provider cleanup. Controls that mutate the
 profile, receptionist, number, forwarding, or go-live state are disabled and
 their server actions still enforce the same boundary.

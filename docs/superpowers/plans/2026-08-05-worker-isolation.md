@@ -11,9 +11,9 @@
 ## Global Constraints
 
 - Work only in `/home/mo/code/ai/bmad-opevo/.worktrees/worker-isolation` on `codex/worker-isolation`.
-- Do not inspect or modify `Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
+- Do not inspect or modify `Opevo_frontend/` or `.worktrees/shadcn-activation-preview`.
 - Do not read actual `.env` files; modify only `apps/api/.env.example` when documenting safe settings.
-- Do not modify `/tmp/presvo-voice-e2e.override.yaml`, `/tmp/presvo-telnyx-e2e.override.yaml`, or `/tmp/presvo-clerk-e2e.override.yaml`.
+- Do not modify `/tmp/opevo-voice-e2e.override.yaml`, `/tmp/opevo-telnyx-e2e.override.yaml`, or `/tmp/opevo-clerk-e2e.override.yaml`.
 - Do not alter the main API virtual environment at `/home/mo/code/ai/bmad-opevo/apps/api/.venv`.
 - Do not deploy, recreate, restart, or otherwise alter the user's live local services. A separately named disposable Redis container is allowed only for the isolated acceptance test and must be removed afterward.
 - Keep production API and worker telephony on Telnyx; do not add fake-provider or database shortcuts.
@@ -392,8 +392,8 @@ Expected: FAIL because the observer and queue gauges do not exist.
 Create gauges:
 
 ```text
-presvo.worker.queue.depth
-presvo.worker.queue.oldest_due.age
+opevo.worker.queue.depth
+opevo.worker.queue.oldest_due.age
 ```
 
 Each carries only `{"queue_class": safe_queue_class}`. `sample()` reads the cardinality and one `(member, score)` tuple, ignores the member bytes, and computes `max(0.0, now() - score / 1000.0)`. `_run()` samples immediately, catches ordinary Redis exceptions with the fixed safe warning `worker queue observation failed queue_class=%s error_type=unknown`, then retries after the interval. It must re-raise `CancelledError`. `aclose()` cancels and awaits its owned task once without closing Redis.
@@ -450,7 +450,7 @@ assert cron_names(BackgroundWorkerSettings.cron_jobs) == {
 assert not hasattr(arq_worker, "WorkerSettings")
 ```
 
-Add literal assertions for queues, max jobs, 0.5-second polling, completion waits 60/30, health update interval 15, health keys `presvo:worker:call-lifecycle:health` and `presvo:worker:background:health`, and every registered function/cron's `timeout_s` and `max_tries`. Reload the module after setting each concurrency environment value and prove 10/4 defaults plus valid overrides are consumed by the correct class.
+Add literal assertions for queues, max jobs, 0.5-second polling, completion waits 60/30, health update interval 15, health keys `opevo:worker:call-lifecycle:health` and `opevo:worker:background:health`, and every registered function/cron's `timeout_s` and `max_tries`. Reload the module after setting each concurrency environment value and prove 10/4 defaults plus valid overrides are consumed by the correct class.
 
 Assert the owner-approved 4B-M-A result-retention contract at both levels. In
 the settings lists, direct call finalization and outbox delivery retain
@@ -484,7 +484,7 @@ class CallLifecycleWorkerSettings:
     poll_delay = 0.5
     job_completion_wait = 60
     health_check_interval = 15
-    health_check_key = "presvo:worker:call-lifecycle:health"
+    health_check_key = "opevo:worker:call-lifecycle:health"
 
 
 class BackgroundWorkerSettings:
@@ -493,10 +493,10 @@ class BackgroundWorkerSettings:
     poll_delay = 0.5
     job_completion_wait = 30
     health_check_interval = 15
-    health_check_key = "presvo:worker:background:health"
+    health_check_key = "opevo:worker:background:health"
 ```
 
-Use telemetry service names `presvo-worker-call-lifecycle` and `presvo-worker-background`, adding both to the observability service allowlist. Startup must use ARQ's existing `ctx["redis"]`; it must not create or close a second Redis pool. Only background startup constructs the outbox handler registry.
+Use telemetry service names `opevo-worker-call-lifecycle` and `opevo-worker-background`, adding both to the observability service allowlist. Startup must use ARQ's existing `ctx["redis"]`; it must not create or close a second Redis pool. Only background startup constructs the outbox handler registry.
 
 - [ ] **Step 5: Run worker registry/lifecycle tests and verify GREEN**
 
@@ -577,9 +577,9 @@ docker compose -f compose.dev.yaml config --no-env-resolution >/dev/null
 env \
   ACTIVATION_FLOW_ENABLED=true \
   AGENT_DISPATCH_JWT_SECRET=test-only-test-only-test-only-test-only \
-  AGENT_IMAGE=presvo-agent:verification \
+  AGENT_IMAGE=opevo-agent:verification \
   API_BASE_URL=https://api.example.invalid \
-  API_IMAGE=presvo-api:verification \
+  API_IMAGE=opevo-api:verification \
   CLERK_AUTHORIZED_PARTIES=https://app.example.invalid \
   CLERK_ISSUER=https://clerk.example.invalid \
   CLERK_SECRET_KEY=disposable \
@@ -613,7 +613,7 @@ env \
   TELNYX_API_KEY=disposable \
   TELNYX_DISABLED_CONNECTION_ID=disposable \
   TELNYX_ORDERING_ENABLED=true \
-  WEB_IMAGE=presvo-web:verification \
+  WEB_IMAGE=opevo-web:verification \
   docker compose -f compose.yaml config >/dev/null
 ```
 
@@ -659,10 +659,10 @@ Expected: one explicit skip stating that dedicated Redis is required; no connect
 
 - [ ] **Step 3: Run against a separately named disposable Redis**
 
-Use a free non-live host port and a unique test-only container name. Start Redis 7.4.7, run the test with `TEST_REDIS_URL` pointing to that loopback port, and stop only that named disposable container in a cleanup trap. Do not use the running Presvo Compose Redis service.
+Use a free non-live host port and a unique test-only container name. Start Redis 7.4.7, run the test with `TEST_REDIS_URL` pointing to that loopback port, and stop only that named disposable container in a cleanup trap. Do not use the running Opevo Compose Redis service.
 
 ```bash
-test_redis_container="presvo-worker-isolation-test-${PPID}"
+test_redis_container="opevo-worker-isolation-test-${PPID}"
 test_redis_id=$(docker run --detach --rm \
   --name "$test_redis_container" \
   --publish 127.0.0.1:56380:6379 \
@@ -721,7 +721,7 @@ In `test_deployment_readiness.py`, require current architecture/runbooks to cont
 
 Run: `cd apps/api && uv run --frozen --no-sync python -m pytest tests/test_deployment_readiness.py -q`
 
-Expected: FAIL because current documents still describe `presvo-worker` and a single worker process.
+Expected: FAIL because current documents still describe `opevo-worker` and a single worker process.
 
 - [ ] **Step 3: Write the exact operational contract**
 
@@ -729,8 +729,8 @@ Add this ownership table to backend/deployment documentation:
 
 | Service | Queue | Jobs | Health key | Default slots |
 | --- | --- | --- | --- | ---: |
-| `worker-lifecycle` | `arq:queue` | call finalization; call reconciliation | `presvo:worker:call-lifecycle:health` | 10 |
-| `worker-background` | `arq:queue:background` | outbox delivery/reconciliation; verification expiry | `presvo:worker:background:health` | 4 |
+| `worker-lifecycle` | `arq:queue` | call finalization; call reconciliation | `opevo:worker:call-lifecycle:health` | 10 |
+| `worker-background` | `arq:queue:background` | outbox delivery/reconciliation; verification expiry | `opevo:worker:background:health` | 4 |
 
 Document the deploy order exactly:
 
@@ -743,7 +743,7 @@ Document the deploy order exactly:
 
 Document rollback as previous API routing first, explicit queue drain second, generic worker restoration third, and new worker removal last. State that an orphaned outbox wakeup is recovered by durable outbox reconciliation within its schedule and an orphaned lifecycle attempt by call reconciliation after service restoration; neither path is a zero-delay guarantee.
 
-In incident response, add separate checks for worker health, `presvo.worker.queue.depth{queue_class}`, and `presvo.worker.queue.oldest_due.age{queue_class}`. In project status and the decision ledger, mark 4A+4B implemented with a bounded ten-call controlled test, but keep representative cloud load, alert routing, recovery drills, and production SLO selection open under Issue 16A.
+In incident response, add separate checks for worker health, `opevo.worker.queue.depth{queue_class}`, and `opevo.worker.queue.oldest_due.age{queue_class}`. In project status and the decision ledger, mark 4A+4B implemented with a bounded ten-call controlled test, but keep representative cloud load, alert routing, recovery drills, and production SLO selection open under Issue 16A.
 
 - [ ] **Step 4: Run documentation/deployment contracts and verify GREEN**
 

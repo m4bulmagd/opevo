@@ -59,7 +59,7 @@ export function AssignedNumberCard({
 
       <CardContent className="flex flex-col gap-3">
         <p className="font-medium text-base text-text-primary">
-          {number ? formatFrenchNumber(number) : "No Presvo number is assigned yet."}
+          {number ? formatFrenchNumber(number) : "No Opevo number is assigned yet."}
         </p>
 
         {forwarding ? (

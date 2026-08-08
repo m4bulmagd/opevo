@@ -27,7 +27,7 @@ const PRODUCT_FEATURES = [
   {
     icon: ShieldCheck,
     title: "Choose when it goes live",
-    description: "Presvo stays off until your forwarding test succeeds and you explicitly approve activation.",
+    description: "Opevo stays off until your forwarding test succeeds and you explicitly approve activation.",
   },
 ] as const;
 
@@ -37,23 +37,23 @@ const ENTRY_STEPS = [
     description: "Add your hours, services, existing French number, and the details callers need.",
   },
   {
-    title: "Provision your Presvo line",
+    title: "Provision your Opevo line",
     description: "Activate the starter plan, then explicitly approve one French number for conditional forwarding.",
   },
   {
     title: "Verify before going live",
-    description: "Test missed-call forwarding and choose when Presvo may begin answering.",
+    description: "Test missed-call forwarding and choose when Opevo may begin answering.",
   },
 ] as const;
 
 const QUESTIONS = [
   {
-    question: "Does Presvo replace my existing number?",
+    question: "Does Opevo replace my existing number?",
     answer:
-      "No. Your existing French business number stays with your carrier. You conditionally forward only unanswered, busy, and unreachable calls to Presvo.",
+      "No. Your existing French business number stays with your carrier. You conditionally forward only unanswered, busy, and unreachable calls to Opevo.",
   },
   {
-    question: "When does Presvo start answering?",
+    question: "When does Opevo start answering?",
     answer:
       "Only after your profile, plan, French number, and forwarding test are ready—and after you explicitly choose Go live.",
   },
@@ -64,7 +64,7 @@ const QUESTIONS = [
   },
 ] as const;
 
-function PresvoMark() {
+function OpevoMark() {
   return (
     <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground">
       <PhoneCall aria-hidden="true" className="size-4" />
@@ -76,14 +76,14 @@ function PrimaryEntryAction({ isAuthenticated }: { isAuthenticated: boolean }) {
   return (
     <Button asChild className="min-h-11">
       <Link href={isAuthenticated ? "/dashboard" : "/sign-up"}>
-        {isAuthenticated ? "Open dashboard" : "Start with Presvo"}
+        {isAuthenticated ? "Open dashboard" : "Start with Opevo"}
         <ArrowRight aria-hidden="true" data-icon="inline-end" />
       </Link>
     </Button>
   );
 }
 
-export function PresvoLandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
+export function OpevoLandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
   return (
     <main className="min-h-screen bg-background text-foreground">
       <a
@@ -99,8 +99,8 @@ export function PresvoLandingPage({ isAuthenticated }: { isAuthenticated: boolea
             className="inline-flex min-h-11 items-center gap-3 rounded-lg font-semibold tracking-tight outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
             href="/"
           >
-            <PresvoMark />
-            Presvo
+            <OpevoMark />
+            Opevo
           </Link>
 
           <nav aria-label="Public navigation" className="hidden items-center gap-1 md:flex">
@@ -146,7 +146,7 @@ export function PresvoLandingPage({ isAuthenticated }: { isAuthenticated: boolea
             </LandingMotionItem>
             <LandingMotionItem>
               <p className="mt-5 max-w-xl text-base text-muted-foreground leading-7 sm:text-lg sm:leading-8">
-                Presvo answers the calls you cannot take, gives callers a consistent reception, and returns the
+                Opevo answers the calls you cannot take, gives callers a consistent reception, and returns the
                 conversation to you with clear follow-up context.
               </p>
             </LandingMotionItem>
@@ -163,7 +163,7 @@ export function PresvoLandingPage({ isAuthenticated }: { isAuthenticated: boolea
             <LandingMotionItem>
               <ul className="mt-7 grid gap-2 text-muted-foreground text-sm sm:grid-cols-2">
                 {[
-                  "One French Presvo number",
+                  "One French Opevo number",
                   "Explicit go-live approval",
                   "Conditional forwarding only",
                   "60-minute starter allowance",
@@ -186,9 +186,9 @@ export function PresvoLandingPage({ isAuthenticated }: { isAuthenticated: boolea
             >
               <div className="flex items-center justify-between gap-3 border-border border-b pb-4">
                 <div className="flex min-w-0 items-center gap-3">
-                  <PresvoMark />
+                  <OpevoMark />
                   <div className="min-w-0">
-                    <p className="truncate font-semibold text-sm">Your Presvo receptionist</p>
+                    <p className="truncate font-semibold text-sm">Your Opevo receptionist</p>
                     <p className="truncate text-muted-foreground text-xs">Missed-call coverage</p>
                   </div>
                 </div>
@@ -259,8 +259,7 @@ export function PresvoLandingPage({ isAuthenticated }: { isAuthenticated: boolea
               <p className="text-label">Product</p>
               <h2 className="mt-2 font-semibold text-3xl tracking-tight">A calm front line for the calls you miss.</h2>
               <p className="mt-3 text-muted-foreground leading-7">
-                Presvo keeps call handling focused: reliable reception, useful context, and explicit operational
-                control.
+                Opevo keeps call handling focused: reliable reception, useful context, and explicit operational control.
               </p>
             </div>
           </LandingMotionFade>
@@ -307,7 +306,7 @@ export function PresvoLandingPage({ isAuthenticated }: { isAuthenticated: boolea
             <p className="text-label">Questions</p>
             <h2 className="mt-2 font-semibold text-3xl tracking-tight">Know what changes before you activate.</h2>
             <p className="mt-3 text-muted-foreground text-sm leading-6">
-              Presvo keeps your existing number, separates payment from provisioning consent, and waits for your go-live
+              Opevo keeps your existing number, separates payment from provisioning consent, and waits for your go-live
               approval.
             </p>
           </LandingMotionFade>
@@ -350,7 +349,7 @@ export function PresvoLandingPage({ isAuthenticated }: { isAuthenticated: boolea
             <Clock3 aria-hidden="true" className="size-4" />
             France-first activation with explicit operational consent.
           </div>
-          <p>© {new Date().getFullYear()} Presvo</p>
+          <p>© {new Date().getFullYear()} Opevo</p>
         </div>
       </footer>
     </main>

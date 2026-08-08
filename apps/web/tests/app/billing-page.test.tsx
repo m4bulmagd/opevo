@@ -154,7 +154,7 @@ describe("billing page", () => {
     );
   });
 
-  it("presents the backend-authoritative plan and minutes in a Presvo usage card", async () => {
+  it("presents the backend-authoritative plan and minutes in a Opevo usage card", async () => {
     await renderBillingPage();
 
     const usage = screen.getByRole("region", { name: "Current period usage" });

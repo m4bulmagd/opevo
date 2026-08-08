@@ -27,7 +27,7 @@
 - Preserve decision **11C**: credentialed LiveKit behavior evaluations remain manual. Give those tests a longer explicit timeout so the global unit-test deadline does not disable them.
 - Preserve decision **12C**: do not add a real agent process to E2E in this wave.
 - Keep focused local pytest commands free of global coverage enforcement. Coverage gates run only on complete app suites.
-- Do not edit or stage the existing untracked `Presvo_frontend/` tree.
+- Do not edit or stage the existing untracked `Opevo_frontend/` tree.
 - Do not commit until implementation is explicitly authorized. The commit commands below are checkpoints for the later implementation turn.
 
 ---
@@ -1144,7 +1144,7 @@ Expected:
 
 - coverage data files are ignored;
 - both `coverage-baseline.json` files are tracked;
-- `Presvo_frontend/` is untouched;
+- `Opevo_frontend/` is untouched;
 - no whitespace errors exist.
 
 - [ ] **Step 5: Review scope and failure semantics**
@@ -1207,4 +1207,4 @@ git commit -m "test: harden Python runtime and coverage gates"
 - Coverage decreases fail CI; baseline decreases are prohibited, and baseline
   raises require repeatable improvements attributable to code or test changes.
 - Focused test runs remain fast and do not invoke whole-app coverage gates.
-- No unrelated code or `Presvo_frontend/` file is changed.
+- No unrelated code or `Opevo_frontend/` file is changed.

@@ -1,4 +1,4 @@
-from presvo_contracts import RealtimeEvent, dump_contract_json, realtime_channel
+from opevo_contracts import RealtimeEvent, dump_contract_json, realtime_channel
 from redis.asyncio import Redis
 
 

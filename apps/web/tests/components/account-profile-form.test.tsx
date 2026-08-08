@@ -21,7 +21,7 @@ const initialProfile = {
 function renderProfile(overrides: Partial<React.ComponentProps<typeof AccountProfileForm>> = {}) {
   return render(
     <AccountProfileForm
-      email="maya@presvo.test"
+      email="maya@opevo.test"
       initialProfile={initialProfile}
       nameMaxLength={60}
       readOnly={false}
@@ -53,7 +53,7 @@ describe("account profile form", () => {
 
     expect(screen.getByRole("region", { name: "Profile" })).toBeInTheDocument();
     expect(screen.getByLabelText("Full name")).toHaveValue("Maya Martin");
-    expect(screen.getByLabelText("Email")).toHaveValue("maya@presvo.test");
+    expect(screen.getByLabelText("Email")).toHaveValue("maya@opevo.test");
     expect(screen.getByLabelText("Personal phone")).toHaveValue("+33612345678");
     expect(screen.getByLabelText("Business name")).toHaveValue("Atelier Martin");
     expect(screen.getByLabelText("Timezone")).toHaveValue("Europe/Paris");
@@ -114,7 +114,7 @@ describe("account profile form", () => {
   it("shows its existing unsaved changes status after a supported edit", () => {
     renderProfile();
 
-    fireEvent.change(screen.getByLabelText("Business name"), { target: { value: "Atelier Presvo" } });
+    fireEvent.change(screen.getByLabelText("Business name"), { target: { value: "Atelier Opevo" } });
 
     expect(screen.getByRole("status", { name: "Unsaved changes" })).toBeInTheDocument();
   });
@@ -122,7 +122,7 @@ describe("account profile form", () => {
   it("restores the confirmed baseline when the draft is discarded", () => {
     renderProfile();
     const businessName = screen.getByLabelText("Business name");
-    fireEvent.change(businessName, { target: { value: "Atelier Presvo" } });
+    fireEvent.change(businessName, { target: { value: "Atelier Opevo" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
 
@@ -186,7 +186,7 @@ describe("account profile form", () => {
     saveAccountProfileMock.mockReturnValueOnce(pending.promise);
     renderProfile();
     const businessName = screen.getByLabelText("Business name");
-    fireEvent.change(businessName, { target: { value: "Atelier Presvo" } });
+    fireEvent.change(businessName, { target: { value: "Atelier Opevo" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
@@ -199,13 +199,13 @@ describe("account profile form", () => {
     businessName.focus();
     fireEvent.keyDown(businessName, { key: "x" });
     expect(businessName).not.toHaveFocus();
-    expect(businessName).toHaveValue("Atelier Presvo");
+    expect(businessName).toHaveValue("Atelier Opevo");
 
     await act(async () => {
       pending.resolve({
         status: "success",
         message: "Profile saved.",
-        profile: { ...initialProfile, business_name: "Atelier Presvo" },
+        profile: { ...initialProfile, business_name: "Atelier Opevo" },
       });
     });
   });

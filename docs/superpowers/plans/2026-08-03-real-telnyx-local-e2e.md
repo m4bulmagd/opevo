@@ -19,7 +19,7 @@
 - Perform a read-only Telnyx identity and exact connection-classification preflight before any provider mutation. This account must classify as the configured active connection; an unknown connection stops execution.
 - Go live must run through the existing browser/API/outbox path; do not call `enable_number` directly.
 - Do not retry Go live while its latest `phone.enable` event is pending or processing.
-- Keep `/tmp/presvo-voice-e2e.override.yaml` and the new Telnyx override until the final provider state is explicitly resolved.
+- Keep `/tmp/opevo-voice-e2e.override.yaml` and the new Telnyx override until the final provider state is explicitly resolved.
 - Do not disable Telnyx directly while leaving the application projection active. The current reversible product workflow has no Go-offline action; if the owner does not keep the number live, stop and review account deactivation or a new Go-offline feature as a separate issue.
 - Issue 26C is accepted: LiveKit Cloud recording egress to Docker-only `http://minio:9000` is unsupported for this session, and no external HTTPS S3-compatible bucket will be configured now.
 - Issue 27C is accepted: the premature call recording projection remains a documented deferred defect; do not patch or manually rewrite the failed call's recording state in this plan.
@@ -29,14 +29,14 @@
 ### Task 1: Prepare and validate the real-provider runtime
 
 **Files:**
-- Create privately: `/tmp/presvo-telnyx-e2e.override.yaml`
-- Create privately: `/tmp/presvo-telnyx-preflight.py`
+- Create privately: `/tmp/opevo-telnyx-e2e.override.yaml`
+- Create privately: `/tmp/opevo-telnyx-preflight.py`
 - Reference: `apps/api/app/providers/telephony/telnyx.py:100-568`
 - Reference: `apps/api/app/workers/jobs/outbox_topics.py:288-470`
 - Do not modify tracked repository files.
 
 **Interfaces:**
-- Consumes: the current PostgreSQL activation/phone projection, existing API credentials, and `/tmp/presvo-voice-e2e.override.yaml`.
+- Consumes: the current PostgreSQL activation/phone projection, existing API credentials, and `/tmp/opevo-voice-e2e.override.yaml`.
 - Produces: healthy `bmad-opevo-api-1` and `bmad-opevo-worker-1` containers, both reporting `TELEPHONY_MODE=telnyx`, with every unrelated container preserved.
 
 - [ ] **Step 1: Record the current service identities without environment output**
@@ -51,7 +51,7 @@ Record only container ID/name pairs in the task report. The later comparison mus
 
 - [ ] **Step 2: Create the masked read-only preflight script**
 
-Create `/tmp/presvo-telnyx-preflight.py` with exactly this behavior:
+Create `/tmp/opevo-telnyx-preflight.py` with exactly this behavior:
 
 ```python
 import asyncio
@@ -135,7 +135,7 @@ The exception path deliberately suppresses exception details because SDK errors 
 Run:
 
 ```bash
-docker exec -i bmad-opevo-worker-1 /app/.venv/bin/python - < /tmp/presvo-telnyx-preflight.py
+docker exec -i bmad-opevo-worker-1 /app/.venv/bin/python - < /tmp/opevo-telnyx-preflight.py
 ```
 
 Expected exact boolean outcome:
@@ -152,7 +152,7 @@ Stop without creating or applying the override if the command exits nonzero.
 
 - [ ] **Step 4: Create the private provider-mode override**
 
-Create `/tmp/presvo-telnyx-e2e.override.yaml` with:
+Create `/tmp/opevo-telnyx-e2e.override.yaml` with:
 
 ```yaml
 services:
@@ -173,7 +173,7 @@ Do not add credentials or connection identifiers to this file.
 Run the syntax-only validation:
 
 ```bash
-docker compose -p bmad-opevo -f compose.dev.yaml -f /tmp/presvo-voice-e2e.override.yaml -f /tmp/presvo-telnyx-e2e.override.yaml config --quiet
+docker compose -p bmad-opevo -f compose.dev.yaml -f /tmp/opevo-voice-e2e.override.yaml -f /tmp/opevo-telnyx-e2e.override.yaml config --quiet
 ```
 
 Expected: exit code 0 and no rendered configuration output.
@@ -181,7 +181,7 @@ Expected: exit code 0 and no rendered configuration output.
 Then recreate only API and worker:
 
 ```bash
-docker compose -p bmad-opevo -f compose.dev.yaml -f /tmp/presvo-voice-e2e.override.yaml -f /tmp/presvo-telnyx-e2e.override.yaml up -d --no-deps --force-recreate api worker
+docker compose -p bmad-opevo -f compose.dev.yaml -f /tmp/opevo-voice-e2e.override.yaml -f /tmp/opevo-telnyx-e2e.override.yaml up -d --no-deps --force-recreate api worker
 ```
 
 - [ ] **Step 6: Verify mode, credentials, health, and container preservation**
@@ -240,7 +240,7 @@ the only authorized Telnyx mutation in this task.
 Run immediately before asking for the click:
 
 ```bash
-date -u +'%Y-%m-%dT%H:%M:%SZ' | tee /tmp/presvo-go-live-observation-start.utc
+date -u +'%Y-%m-%dT%H:%M:%SZ' | tee /tmp/opevo-go-live-observation-start.utc
 ```
 
 - [ ] **Step 2: Observe the durable event without retrying it manually**
@@ -252,7 +252,7 @@ idempotency keys, routing targets, or provider identifiers.
 Print only the count of safe outbox batch summaries since the marker:
 
 ```bash
-docker logs --since "$(tr -d '\n' < /tmp/presvo-go-live-observation-start.utc)" bmad-opevo-worker-1 2>&1 | awk '/outbox batch finished/{count++} END{print "outbox_batch_summary_count=" count+0}'
+docker logs --since "$(tr -d '\n' < /tmp/opevo-go-live-observation-start.utc)" bmad-opevo-worker-1 2>&1 | awk '/outbox batch finished/{count++} END{print "outbox_batch_summary_count=" count+0}'
 ```
 
 Run the following query repeatedly without modifying the event:
@@ -299,8 +299,8 @@ be true.
 
 **Files:**
 - Modify: none.
-- Retain until resolved: `/tmp/presvo-voice-e2e.override.yaml`
-- Retain until resolved: `/tmp/presvo-telnyx-e2e.override.yaml`
+- Retain until resolved: `/tmp/opevo-voice-e2e.override.yaml`
+- Retain until resolved: `/tmp/opevo-telnyx-e2e.override.yaml`
 
 **Interfaces:**
 - Consumes: the active Task 2 account and one real inbound call placed by the account owner.
@@ -314,7 +314,7 @@ call to the assigned number, speak with the receptionist, and hang up normally.
 Run immediately before asking for the call:
 
 ```bash
-date -u +'%Y-%m-%dT%H:%M:%SZ' | tee /tmp/presvo-call-observation-start.utc
+date -u +'%Y-%m-%dT%H:%M:%SZ' | tee /tmp/opevo-call-observation-start.utc
 ```
 
 - [ ] **Step 2: Verify the call path with logs and durable state**
@@ -334,9 +334,9 @@ Inspect API, worker, and agent logs only from the recorded UTC start. Confirm:
 Print only safe counts, not matching log lines:
 
 ```bash
-docker logs --since "$(tr -d '\n' < /tmp/presvo-call-observation-start.utc)" bmad-opevo-api-1 2>&1 | awk '/POST \/webhooks\/livekit HTTP\/1.1" 202/{webhooks++} /POST \/api\/agent\/calls\/.*\/transcript HTTP\/1.1" 2[0-9][0-9]/{transcripts++} /POST \/api\/agent\/calls\/.*\/complete HTTP\/1.1" 2[0-9][0-9]/{completions++} END{print "accepted_livekit_webhook_count=" webhooks+0; print "successful_transcript_request_count=" transcripts+0; print "successful_completion_request_count=" completions+0}'
-docker logs --since "$(tr -d '\n' < /tmp/presvo-call-observation-start.utc)" bmad-opevo-agent-1 2>&1 | awk '/job_request_rejected|Traceback|level=(ERROR|CRITICAL)/{errors++} END{print "agent_rejection_or_error_count=" errors+0}'
-docker logs --since "$(tr -d '\n' < /tmp/presvo-call-observation-start.utc)" bmad-opevo-worker-1 2>&1 | awk '/provider_(terminal|retryable)|Traceback|level=(ERROR|CRITICAL)/{errors++} END{print "worker_provider_or_runtime_error_count=" errors+0}'
+docker logs --since "$(tr -d '\n' < /tmp/opevo-call-observation-start.utc)" bmad-opevo-api-1 2>&1 | awk '/POST \/webhooks\/livekit HTTP\/1.1" 202/{webhooks++} /POST \/api\/agent\/calls\/.*\/transcript HTTP\/1.1" 2[0-9][0-9]/{transcripts++} /POST \/api\/agent\/calls\/.*\/complete HTTP\/1.1" 2[0-9][0-9]/{completions++} END{print "accepted_livekit_webhook_count=" webhooks+0; print "successful_transcript_request_count=" transcripts+0; print "successful_completion_request_count=" completions+0}'
+docker logs --since "$(tr -d '\n' < /tmp/opevo-call-observation-start.utc)" bmad-opevo-agent-1 2>&1 | awk '/job_request_rejected|Traceback|level=(ERROR|CRITICAL)/{errors++} END{print "agent_rejection_or_error_count=" errors+0}'
+docker logs --since "$(tr -d '\n' < /tmp/opevo-call-observation-start.utc)" bmad-opevo-worker-1 2>&1 | awk '/provider_(terminal|retryable)|Traceback|level=(ERROR|CRITICAL)/{errors++} END{print "worker_provider_or_runtime_error_count=" errors+0}'
 docker inspect bmad-opevo-api-1 bmad-opevo-worker-1 bmad-opevo-agent-1 --format '{{.Name}}|running={{.State.Running}}|restart_count={{.RestartCount}}'
 ```
 
@@ -355,7 +355,7 @@ Pass the exact recorded ISO-8601 UTC marker from the file as the
 `observation_start` psql variable and run:
 
 ```bash
-docker exec bmad-opevo-postgres-1 psql -U postgres -d ai_call -v observation_start="$(tr -d '\n' < /tmp/presvo-call-observation-start.utc)" -At -F '|' -c "WITH target AS (SELECT p.user_id FROM phone_numbers AS p WHERE p.provider = 'telnyx' AND p.provider_number_id !~ '^fake-'), recent AS (SELECT c.id, c.status, c.started_at, c.ended_at, c.failure_code, c.duration_seconds, c.summary_text, c.summary_data FROM calls AS c WHERE c.user_id IN (SELECT user_id FROM target) AND c.created_at >= :'observation_start'::timestamptz) SELECT 'new_call_count', count(*)::text FROM recent UNION ALL SELECT 'call_connected', coalesce(bool_and(started_at IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'call_ended', coalesce(bool_and(ended_at IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'call_completed', coalesce(bool_and(status = 'completed')::text, 'false') FROM recent UNION ALL SELECT 'failure_code_present', coalesce(bool_or(failure_code IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'duration_recorded', coalesce(bool_and(duration_seconds IS NOT NULL AND duration_seconds >= 0)::text, 'false') FROM recent UNION ALL SELECT 'dispatch_delivered', coalesce(bool_and(EXISTS (SELECT 1 FROM outbox_events AS o WHERE o.aggregate_type = 'call' AND o.aggregate_id = recent.id AND o.topic = 'livekit.dispatch' AND o.status = 'delivered'))::text, 'false') FROM recent UNION ALL SELECT 'transcript_present', coalesce(bool_and(EXISTS (SELECT 1 FROM call_messages AS m WHERE m.call_id = recent.id))::text, 'false') FROM recent UNION ALL SELECT 'summary_present', coalesce(bool_and(summary_text IS NOT NULL AND btrim(summary_text) <> '' AND summary_data IS NOT NULL)::text, 'false') FROM recent;"
+docker exec bmad-opevo-postgres-1 psql -U postgres -d ai_call -v observation_start="$(tr -d '\n' < /tmp/opevo-call-observation-start.utc)" -At -F '|' -c "WITH target AS (SELECT p.user_id FROM phone_numbers AS p WHERE p.provider = 'telnyx' AND p.provider_number_id !~ '^fake-'), recent AS (SELECT c.id, c.status, c.started_at, c.ended_at, c.failure_code, c.duration_seconds, c.summary_text, c.summary_data FROM calls AS c WHERE c.user_id IN (SELECT user_id FROM target) AND c.created_at >= :'observation_start'::timestamptz) SELECT 'new_call_count', count(*)::text FROM recent UNION ALL SELECT 'call_connected', coalesce(bool_and(started_at IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'call_ended', coalesce(bool_and(ended_at IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'call_completed', coalesce(bool_and(status = 'completed')::text, 'false') FROM recent UNION ALL SELECT 'failure_code_present', coalesce(bool_or(failure_code IS NOT NULL)::text, 'false') FROM recent UNION ALL SELECT 'duration_recorded', coalesce(bool_and(duration_seconds IS NOT NULL AND duration_seconds >= 0)::text, 'false') FROM recent UNION ALL SELECT 'dispatch_delivered', coalesce(bool_and(EXISTS (SELECT 1 FROM outbox_events AS o WHERE o.aggregate_type = 'call' AND o.aggregate_id = recent.id AND o.topic = 'livekit.dispatch' AND o.status = 'delivered'))::text, 'false') FROM recent UNION ALL SELECT 'transcript_present', coalesce(bool_and(EXISTS (SELECT 1 FROM call_messages AS m WHERE m.call_id = recent.id))::text, 'false') FROM recent UNION ALL SELECT 'summary_present', coalesce(bool_and(summary_text IS NOT NULL AND btrim(summary_text) <> '' AND summary_data IS NOT NULL)::text, 'false') FROM recent;"
 ```
 
 Expected values are `new_call_count|1`, `call_connected|true`,

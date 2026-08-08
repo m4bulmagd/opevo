@@ -5,8 +5,8 @@ set -euo pipefail
 invoked_name=$(basename -- "$0")
 
 if [ "$invoked_name" = docker ]; then
-  control_directory=${PRESVO_OWNERSHIP_TEST_CONTROL_DIRECTORY:?}
-  repository_root=${PRESVO_OWNERSHIP_TEST_REPOSITORY_ROOT:?}
+  control_directory=${OPEVO_OWNERSHIP_TEST_CONTROL_DIRECTORY:?}
+  repository_root=${OPEVO_OWNERSHIP_TEST_REPOSITORY_ROOT:?}
   output_directory=""
   previous_argument=""
   for argument in "$@"; do
@@ -65,23 +65,23 @@ if [ "$invoked_name" = docker ]; then
 fi
 
 if [ "$invoked_name" = rm ]; then
-  control_directory=${PRESVO_OWNERSHIP_TEST_CONTROL_DIRECTORY:?}
-  real_rm=${PRESVO_OWNERSHIP_TEST_REAL_RM:?}
-  test_mode=${PRESVO_OWNERSHIP_TEST_MODE:-}
+  control_directory=${OPEVO_OWNERSHIP_TEST_CONTROL_DIRECTORY:?}
+  real_rm=${OPEVO_OWNERSHIP_TEST_REAL_RM:?}
+  test_mode=${OPEVO_OWNERSHIP_TEST_MODE:-}
   target=${!#}
 
   if [ "$test_mode" != post_validation ] && [ "$test_mode" != root_redirect ]; then
     exec "$real_rm" "$@"
   fi
 
-  repository_root=${PRESVO_OWNERSHIP_TEST_REPOSITORY_ROOT:?}
+  repository_root=${OPEVO_OWNERSHIP_TEST_REPOSITORY_ROOT:?}
   case "$target" in
     "$repository_root/.env.contract-context-probe" | \
     "$repository_root/tests/docker/.root-context-env."* | \
-    /tmp/presvo-contract-context.* | \
+    /tmp/opevo-contract-context.* | \
     "$repository_root/tests/docker/.root-context-cleanup."*/sentinel | \
     "$repository_root/tests/docker/.root-context-cleanup."*/fixture | \
-    /tmp/presvo-contract-context-cleanup.*/output | \
+    /tmp/opevo-contract-context-cleanup.*/output | \
     ./sentinel | ./fixture | ./output)
       ;;
     *)
@@ -160,7 +160,7 @@ path_identity() {
 new_marker() {
   local marker
   IFS= read -r marker </proc/sys/kernel/random/uuid
-  printf 'presvo-ownership-test:%s\n' "$marker"
+  printf 'opevo-ownership-test:%s\n' "$marker"
 }
 
 promote_cleanup_failure() {
@@ -420,9 +420,9 @@ repo_cleanup_directory=$(mktemp -d \
   "$repository_root/tests/docker/.root-context-ownership-cleanup.XXXXXX")
 repo_cleanup_identity=$(path_identity "$repo_cleanup_directory")
 tmp_cleanup_directory=$(mktemp -d \
-  /tmp/presvo-root-context-ownership-cleanup.XXXXXX)
+  /tmp/opevo-root-context-ownership-cleanup.XXXXXX)
 tmp_cleanup_identity=$(path_identity "$tmp_cleanup_directory")
-control_directory=$(mktemp -d /tmp/presvo-root-context-ownership.XXXXXX)
+control_directory=$(mktemp -d /tmp/opevo-root-context-ownership.XXXXXX)
 control_marker=$(new_marker)
 printf '%s\n' "$control_marker" >"$control_directory/.ownership-test-marker"
 control_identity=$(path_identity "$control_directory")
@@ -455,10 +455,10 @@ start_probe() {
   clear_barriers
   printf '%s\n' "$docker_status" >"$control_directory/docker-status"
   PATH="$control_directory/bin:$PATH" \
-    PRESVO_OWNERSHIP_TEST_CONTROL_DIRECTORY="$control_directory" \
-    PRESVO_OWNERSHIP_TEST_REPOSITORY_ROOT="$repository_root" \
-    PRESVO_OWNERSHIP_TEST_REAL_RM="$real_rm" \
-    PRESVO_OWNERSHIP_TEST_MODE="$mode" \
+    OPEVO_OWNERSHIP_TEST_CONTROL_DIRECTORY="$control_directory" \
+    OPEVO_OWNERSHIP_TEST_REPOSITORY_ROOT="$repository_root" \
+    OPEVO_OWNERSHIP_TEST_REAL_RM="$real_rm" \
+    OPEVO_OWNERSHIP_TEST_MODE="$mode" \
     "$repository_root/tests/docker/test_root_context_hygiene.sh" \
     >"$probe_output_path" 2>&1 &
   probe_pid=$!
@@ -476,7 +476,7 @@ start_probe() {
     *) printf 'unsafe fixture path %s.\n' "$fixture_path" >&2; return 1 ;;
   esac
   case "$output_path" in
-    /tmp/presvo-contract-context.*) ;;
+    /tmp/opevo-contract-context.*) ;;
     *) printf 'unsafe output path %s.\n' "$output_path" >&2; return 1 ;;
   esac
   if [ ! -f "$sentinel_path" ] || [ -L "$sentinel_path" ] ||
@@ -642,7 +642,7 @@ classify_delete_target() {
     case "$expected_kind:$delete_cwd" in
       sentinel:"$repository_root/tests/docker/.root-context-cleanup."* | \
       fixture:"$repository_root/tests/docker/.root-context-cleanup."* | \
-      output:/tmp/presvo-contract-context-cleanup.*)
+      output:/tmp/opevo-contract-context-cleanup.*)
         ;;
       *)
         printf 'unexpected anchored %s delete cwd %s.\n' \
@@ -668,7 +668,7 @@ classify_delete_target() {
   case "$expected_kind:$target" in
     sentinel:"$repository_root/tests/docker/.root-context-cleanup."*/sentinel | \
     fixture:"$repository_root/tests/docker/.root-context-cleanup."*/fixture | \
-    output:/tmp/presvo-contract-context-cleanup.*/output)
+    output:/tmp/opevo-contract-context-cleanup.*/output)
       ;;
     *)
       printf 'unexpected %s delete target %s.\n' "$expected_kind" "$target" >&2
@@ -836,7 +836,7 @@ release_redirected_delete() {
     "$repository_root/tests/docker/.root-context-cleanup."*)
       moved_root="$repo_cleanup_directory/$case_name.redirected-$kind-root"
       ;;
-    /tmp/presvo-contract-context-cleanup.*)
+    /tmp/opevo-contract-context-cleanup.*)
       moved_root="$tmp_cleanup_directory/$case_name.redirected-$kind-root"
       ;;
     *)

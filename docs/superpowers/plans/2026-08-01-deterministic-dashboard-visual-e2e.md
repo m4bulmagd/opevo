@@ -21,7 +21,7 @@
 - Keep realtime disabled and preserve accepted review choices 11C, 12C, and 18A.
 - Refresh only snapshots proven stale because of the fixed-time correction or already-approved workspace header/navigation changes. Entry/activation snapshots remain byte-for-byte unchanged. The original expectation that every configuration snapshot remain unchanged is superseded only for the four images named in the approved execution addendum below.
 - Do not weaken API, agent, or shared-library coverage ratchets.
-- Preserve the user's untracked `Presvo_frontend/` directory. Never add, inspect recursively, modify, delete, or commit it.
+- Preserve the user's untracked `Opevo_frontend/` directory. Never add, inspect recursively, modify, delete, or commit it.
 - Use `UV_CACHE_DIR=/tmp/uv-cache` for local uv commands; this changes only uv's disposable cache location.
 - Commit after each task only when its focused tests and static checks pass.
 
@@ -312,7 +312,7 @@ git commit -m "test(e2e): pin dashboard metrics reference time"
 Run from the repository root:
 
 ```bash
-NPM_CONFIG_CACHE=/tmp/presvo-npm-cache \
+NPM_CONFIG_CACHE=/tmp/opevo-npm-cache \
   npm exec --yes --package=node@22.22.0 -- \
   node /home/mo/.nvm/versions/node/v26.3.0/lib/node_modules/npm/bin/npm-cli.js \
   ci --prefix apps/web
@@ -325,7 +325,7 @@ This uses Node 22.22 for the install without changing `package.json` or the lock
 Run:
 
 ```bash
-NPM_CONFIG_CACHE=/tmp/presvo-npm-cache \
+NPM_CONFIG_CACHE=/tmp/opevo-npm-cache \
   npm exec --yes --package=node@22.22.0 -- sh scripts/run-local-e2e.sh
 ```
 
@@ -340,7 +340,7 @@ For each Playwright failure, inspect the expected, actual, and diff PNGs. Reject
 Run:
 
 ```bash
-E2E_UPDATE_SNAPSHOTS=1 NPM_CONFIG_CACHE=/tmp/presvo-npm-cache \
+E2E_UPDATE_SNAPSHOTS=1 NPM_CONFIG_CACHE=/tmp/opevo-npm-cache \
   npm exec --yes --package=node@22.22.0 -- sh scripts/run-local-e2e.sh
 ```
 
@@ -368,7 +368,7 @@ Do not stage or retain any update outside the ten workspace snapshot paths liste
 Run the full command again without either update environment variable:
 
 ```bash
-NPM_CONFIG_CACHE=/tmp/presvo-npm-cache \
+NPM_CONFIG_CACHE=/tmp/opevo-npm-cache \
   npm exec --yes --package=node@22.22.0 -- sh scripts/run-local-e2e.sh
 ```
 
@@ -463,10 +463,10 @@ Expected: the existing 184-test shared suite passes with no coverage or static-a
 First confirm the exact names are unused. Then start only:
 
 ```bash
-docker run --rm -d --name presvo-contracts-test-postgres \
+docker run --rm -d --name opevo-contracts-test-postgres \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=ai_call \
   -p 127.0.0.1:55432:5432 postgres:17.8-bookworm
-docker run --rm -d --name presvo-contracts-test-redis \
+docker run --rm -d --name opevo-contracts-test-redis \
   -p 127.0.0.1:56379:6379 redis:7.4.7-alpine
 ```
 
@@ -542,9 +542,9 @@ git commit -m "docs: record deterministic dashboard e2e decision"
 
 - [ ] **Step 9: Clean only disposable artifacts created by this plan**
 
-Stop and remove the exact two temporary test containers after confirming their names. Verify the `presvo-e2e` Compose project has no remaining containers, networks, or volumes. Remove only the task-created `apps/web/node_modules`, Playwright output, `/tmp/presvo-npm-cache`, and task-specific temporary Docker images if they are no longer needed.
+Stop and remove the exact two temporary test containers after confirming their names. Verify the `opevo-e2e` Compose project has no remaining containers, networks, or volumes. Remove only the task-created `apps/web/node_modules`, Playwright output, `/tmp/opevo-npm-cache`, and task-specific temporary Docker images if they are no longer needed.
 
-Do not use a global Docker prune. Do not remove user containers, images, volumes, caches, or `Presvo_frontend/`.
+Do not use a global Docker prune. Do not remove user containers, images, volumes, caches, or `Opevo_frontend/`.
 
 - [ ] **Step 10: Final invariant and worktree checks**
 

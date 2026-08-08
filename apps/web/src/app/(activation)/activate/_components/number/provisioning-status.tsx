@@ -64,7 +64,7 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
           Number ready
         </Badge>
         <div>
-          <p className="text-muted-foreground text-sm">Your French Presvo number</p>
+          <p className="text-muted-foreground text-sm">Your French Opevo number</p>
           <p className="mt-1 font-semibold text-3xl tabular-nums tracking-tight">
             {formatAssignedNumber(assignedNumber)}
           </p>
@@ -102,7 +102,7 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
         <Alert variant="destructive">
           <AlertTitle>We couldn't verify your assigned number</AlertTitle>
           <AlertDescription>
-            Presvo recorded provisioning as complete, but the assigned number no longer matches the completed request.
+            Opevo recorded provisioning as complete, but the assigned number no longer matches the completed request.
             Refresh once. If this continues, contact support and share the reference below.
           </AlertDescription>
         </Alert>
@@ -140,7 +140,7 @@ export function ProvisioningStatus({ snapshot }: ProvisioningStatusProps) {
       <Alert variant="destructive">
         <AlertTitle>Review your business details</AlertTitle>
         <AlertDescription>
-          Presvo could not provision a number from the current details. Correct the profile, then return here.
+          Opevo could not provision a number from the current details. Correct the profile, then return here.
         </AlertDescription>
       </Alert>
       <p className="font-mono text-muted-foreground text-xs">Reference: number_provisioning_failed</p>

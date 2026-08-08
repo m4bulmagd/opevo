@@ -21,7 +21,7 @@ from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
 from app.models.user import User
 from app.providers.livekit_dispatch.base import LiveKitDispatch, LiveKitDispatchProvider
-from presvo_contracts import (
+from opevo_contracts import (
     AGENT_NAME_MAX_LENGTH,
     CustomerCallDispatch,
     ForwardingVerificationDispatch,
@@ -227,7 +227,7 @@ def test_customer_reconciliation_requires_a_valid_matching_customer_contract() -
             user_id=snapshot.user_id,
             agent_identity="agent-verification-test",
             completion_token="private-token",
-            message="Forwarding test successful. Return to Presvo to go live.",
+            message="Forwarding test successful. Return to Opevo to go live.",
             tts_provider="speechmatics",
         )
     )

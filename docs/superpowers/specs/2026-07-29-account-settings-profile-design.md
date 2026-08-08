@@ -7,7 +7,7 @@
 
 Refocus `/dashboard/account` on the signed-in user and account-level settings.
 The page should follow the compact, two-column settings hierarchy established
-by the Presvo reference while continuing to present only backend-authoritative
+by the Opevo reference while continuing to present only backend-authoritative
 data as live.
 
 The current `Receptionist profile` and `Billing and subscription` destination
@@ -19,7 +19,7 @@ those controls already live in the workspace header.
 
 The page title becomes `Settings`, with the description:
 
-> Your profile, Presvo number, and account preferences.
+> Your profile, Opevo number, and account preferences.
 
 At desktop sizes, the leading content uses a two-column layout:
 
@@ -74,7 +74,7 @@ account-profile save.
 
 ### Assigned number
 
-The Assigned number card shows the real provisioned Presvo number from
+The Assigned number card shows the real provisioned Opevo number from
 `ActivationSnapshot.number.assigned_e164`.
 
 When a number is available, the card provides:
@@ -122,7 +122,7 @@ Preview changes:
 
 The Security card provides a real Clerk-owned action for managing password and
 sign-in methods when Clerk is available. An inline MFA toggle remains Preview
-until Presvo has an approved production integration. Local development uses
+until Opevo has an approved production integration. Local development uses
 honest guidance instead of pretending to open a hosted security flow.
 
 ## 6. Data and Component Boundaries
@@ -202,8 +202,8 @@ snapshots and checks overflow at the existing supported viewport set.
 - moving or duplicating Billing controls on the Account page;
 - a new notification-preferences backend;
 - a new recording-retention backend;
-- a Presvo-owned password or MFA system;
+- a Opevo-owned password or MFA system;
 - changing Clerk identity data through the business-profile API;
 - changing account deactivation semantics;
 - changing provisioning or forwarding workflows;
-- copying US fixture data or unsupported behaviors from `Presvo_frontend`.
+- copying US fixture data or unsupported behaviors from `Opevo_frontend`.

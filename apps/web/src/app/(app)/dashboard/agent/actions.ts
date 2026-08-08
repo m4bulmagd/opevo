@@ -36,7 +36,7 @@ export async function saveAgentSettingsAction(payload: AgentConfigPatch): Promis
       if (detail?.code === "account_inactive") {
         return {
           status: "error",
-          message: "Reactivate Presvo before changing agent settings.",
+          message: "Reactivate Opevo before changing agent settings.",
         };
       }
 

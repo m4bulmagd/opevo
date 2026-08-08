@@ -24,9 +24,9 @@ FIXED_NOW = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
 # technical/internal lines. These numbers cannot identify a real subscriber.
 SOURCE_NUMBER = "+33199000000"
 ALTERNATE_SOURCE_NUMBER = "+33199000001"
-PRESVO_NUMBER = "+33999000000"
-ALTERNATE_PRESVO_NUMBER = "+33999000001"
-WRONG_PRESVO_NUMBER = "+33999000002"
+OPEVO_NUMBER = "+33999000000"
+ALTERNATE_OPEVO_NUMBER = "+33999000001"
+WRONG_OPEVO_NUMBER = "+33999000002"
 
 
 def _service(db_session, *, now: datetime = FIXED_NOW) -> ForwardingVerificationService:
@@ -60,7 +60,7 @@ async def _seed_provisioned_customer(
     )
     phone = PhoneNumber(
         user_id=user.id,
-        e164=PRESVO_NUMBER,
+        e164=OPEVO_NUMBER,
         country_code="FR",
         provider="fake",
         provider_number_id="fake_number_owner",
@@ -255,7 +255,7 @@ async def test_stale_success_can_be_reopened_after_assigned_number_changes(
     activation.verification_routing_fingerprint = verified_fingerprint
     activation.verified_routing_fingerprint = verified_fingerprint
     activation.forwarding_verified_at = FIXED_NOW - timedelta(minutes=1)
-    phone.e164 = ALTERNATE_PRESVO_NUMBER
+    phone.e164 = ALTERNATE_OPEVO_NUMBER
     await db_session.commit()
 
     reopened = await _service(db_session).open_window(active_user.id)
@@ -395,14 +395,14 @@ async def test_claim_normalizes_french_number_and_persists_single_use_identity(
     ("called_number", "at", "expected_code"),
     [
         ("not-a-number", FIXED_NOW, "verification_called_number_invalid"),
-        (WRONG_PRESVO_NUMBER, FIXED_NOW, "verification_window_not_found"),
+        (WRONG_OPEVO_NUMBER, FIXED_NOW, "verification_window_not_found"),
         (
-            PRESVO_NUMBER,
+            OPEVO_NUMBER,
             FIXED_NOW + timedelta(minutes=10),
             "verification_window_expired",
         ),
         (
-            PRESVO_NUMBER,
+            OPEVO_NUMBER,
             FIXED_NOW - timedelta(microseconds=1),
             "verification_window_not_open",
         ),
@@ -436,13 +436,13 @@ async def test_duplicate_claim_is_rejected_without_second_event(
     await _seed_provisioned_customer(db_session, active_user)
     await _service(db_session).open_window(active_user.id)
     first = await _service(db_session).claim(
-        called_number=PRESVO_NUMBER,
+        called_number=OPEVO_NUMBER,
         room_name="verification-room-first",
     )
 
     with pytest.raises(ForwardingVerificationConflictError) as exc_info:
         await _service(db_session).claim(
-            called_number=PRESVO_NUMBER,
+            called_number=OPEVO_NUMBER,
             room_name="verification-room-second",
         )
 
@@ -505,7 +505,7 @@ async def test_content_only_profile_change_does_not_stale_claim(
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "routing_change",
-    ["existing_number", "carrier", "presvo_number", "routing_revision"],
+    ["existing_number", "carrier", "opevo_number", "routing_revision"],
 )
 async def test_routing_change_blocks_completion_with_safe_conflict(
     db_session,
@@ -524,8 +524,8 @@ async def test_routing_change_blocks_completion_with_safe_conflict(
         profile.existing_phone_e164 = ALTERNATE_SOURCE_NUMBER
     elif routing_change == "carrier":
         profile.confirmed_carrier = "sfr"
-    elif routing_change == "presvo_number":
-        phone.e164 = ALTERNATE_PRESVO_NUMBER
+    elif routing_change == "opevo_number":
+        phone.e164 = ALTERNATE_OPEVO_NUMBER
     else:
         profile.routing_revision += 1
     await db_session.commit()
@@ -634,7 +634,7 @@ async def test_claim_preserves_user_activation_profile_phone_lock_order() -> Non
     )
     phone = SimpleNamespace(
         user_id=user_id,
-        e164=PRESVO_NUMBER,
+        e164=OPEVO_NUMBER,
         provider_number_id="provider-number",
     )
     activation = SimpleNamespace(
@@ -682,7 +682,7 @@ async def test_claim_preserves_user_activation_profile_phone_lock_order() -> Non
 
     class Phones:
         async def get_by_e164(self, e164):
-            assert e164 == PRESVO_NUMBER
+            assert e164 == OPEVO_NUMBER
             events.append("resolve_owner")
             return phone
 
@@ -706,7 +706,7 @@ async def test_claim_preserves_user_activation_profile_phone_lock_order() -> Non
     )
 
     await service.claim(
-        called_number=PRESVO_NUMBER,
+        called_number=OPEVO_NUMBER,
         room_name="verification-room-locks",
     )
 
@@ -734,7 +734,7 @@ async def test_transaction_owned_claim_seam_flushes_without_committing() -> None
     )
     phone = SimpleNamespace(
         user_id=user_id,
-        e164=PRESVO_NUMBER,
+        e164=OPEVO_NUMBER,
         provider_number_id="provider-number",
     )
     activation = SimpleNamespace(
@@ -801,7 +801,7 @@ async def test_transaction_owned_claim_seam_flushes_without_committing() -> None
     )
 
     claim = await service.claim_in_transaction(
-        called_number=PRESVO_NUMBER,
+        called_number=OPEVO_NUMBER,
         room_name="verification-room-owned-transaction",
     )
 

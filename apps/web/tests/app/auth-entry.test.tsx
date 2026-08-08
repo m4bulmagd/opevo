@@ -50,13 +50,13 @@ beforeEach(() => {
 });
 
 describe("hosted auth entry", () => {
-  it("contains sign-in in the Presvo entry surface", async () => {
+  it("contains sign-in in the Opevo entry surface", async () => {
     const { default: SignInPage } = await import("@/app/(auth)/sign-in/[[...sign-in]]/page");
 
     render(await SignInPage());
 
     expect(screen.getByRole("main")).toHaveClass("bg-background");
-    expect(screen.getByRole("link", { name: "Presvo home" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Opevo home" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("heading", { name: "Welcome back" })).toBeVisible();
     expect(screen.getByTestId("clerk-sign-in")).toBeVisible();
     expect(authState.signInMock.mock.calls.at(-1)?.[0]).toEqual(
@@ -68,12 +68,12 @@ describe("hosted auth entry", () => {
     );
   });
 
-  it("contains sign-up in the same Presvo entry surface", async () => {
+  it("contains sign-up in the same Opevo entry surface", async () => {
     const { default: SignUpPage } = await import("@/app/(auth)/sign-up/[[...sign-up]]/page");
 
     render(await SignUpPage());
 
-    expect(screen.getByRole("heading", { name: "Create your Presvo account" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Create your Opevo account" })).toBeVisible();
     expect(screen.getByTestId("clerk-sign-up")).toBeVisible();
     expect(authState.signUpMock.mock.calls.at(-1)?.[0]).toEqual(
       expect.objectContaining({

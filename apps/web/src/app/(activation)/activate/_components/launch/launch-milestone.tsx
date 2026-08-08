@@ -69,7 +69,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
             {localVerification ? <Badge variant="secondary">Local development</Badge> : null}
           </div>
           <p className="max-w-2xl text-muted-foreground text-sm leading-6">
-            Call your existing business number from another phone and leave it unanswered. Presvo will detect the
+            Call your existing business number from another phone and leave it unanswered. Opevo will detect the
             conditionally forwarded call.
           </p>
         </div>
@@ -118,7 +118,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
       <div className="flex items-start gap-3" role="status" aria-live="polite">
         <Spinner className="mt-1" aria-hidden="true" />
         <div>
-          <p className="font-semibold text-lg">Bringing Presvo live</p>
+          <p className="font-semibold text-lg">Bringing Opevo live</p>
           <p className="mt-1 text-muted-foreground text-sm leading-6">
             We are applying the verified routing configuration. This page refreshes while the change completes.
           </p>
@@ -131,7 +131,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
     return (
       <div className="flex flex-col gap-5">
         <Alert variant="destructive">
-          <AlertTitle>Presvo is not active</AlertTitle>
+          <AlertTitle>Opevo is not active</AlertTitle>
           <AlertDescription>
             The latest snapshot does not prove that call routing is live. Refresh before taking any further action.
           </AlertDescription>
@@ -152,7 +152,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
           <div>
             <p className="font-semibold">Forwarding verified</p>
             <p className="mt-1 text-muted-foreground text-sm">
-              The test call reached Presvo. Your receptionist is still off until you approve launch.
+              The test call reached Opevo. Your receptionist is still off until you approve launch.
             </p>
           </div>
         </div>
@@ -160,7 +160,7 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
 
       {snapshot.activation.last_failure_code ? (
         <Alert variant="destructive">
-          <AlertTitle>We couldn't bring Presvo live</AlertTitle>
+          <AlertTitle>We couldn't bring Opevo live</AlertTitle>
           <AlertDescription>Nothing was marked active. Review the checks below, then try again.</AlertDescription>
         </Alert>
       ) : null}
@@ -184,14 +184,14 @@ export function LaunchMilestone({ snapshot, localVerification }: LaunchMilestone
             size="lg"
             disabled={pending}
             onClick={() =>
-              void runCommand(() => goLiveAction({}), "We couldn't bring Presvo live. Refresh and try again.")
+              void runCommand(() => goLiveAction({}), "We couldn't bring Opevo live. Refresh and try again.")
             }
           >
             {pending ? <Spinner /> : null}
             Go live
           </Button>
           <p className="max-w-xl text-muted-foreground text-xs leading-5">
-            This is the explicit launch step. Presvo will not answer forwarded calls before activation completes.
+            This is the explicit launch step. Opevo will not answer forwarded calls before activation completes.
           </p>
         </div>
       ) : null}

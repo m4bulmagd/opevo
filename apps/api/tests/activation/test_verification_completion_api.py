@@ -25,7 +25,7 @@ from tests.dispatch_token_config import TEST_DISPATCH_TOKEN_CONFIG
 
 SOURCE_NUMBER = "+33199000000"
 ALTERNATE_SOURCE_NUMBER = "+33199000001"
-PRESVO_NUMBER = "+33999000000"
+OPEVO_NUMBER = "+33999000000"
 FIXTURES = Path(__file__).parents[4] / "libs/shared/tests/fixtures/v1"
 
 
@@ -70,7 +70,7 @@ async def _seed_claimed_verification(
                 ),
                 PhoneNumber(
                     user_id=user.id,
-                    e164=PRESVO_NUMBER,
+                    e164=OPEVO_NUMBER,
                     country_code="FR",
                     provider="fake",
                     provider_number_id="fake_completion_number",
@@ -84,7 +84,7 @@ async def _seed_claimed_verification(
             session,
             now_provider=lambda: now,
         ).claim(
-            called_number=PRESVO_NUMBER,
+            called_number=OPEVO_NUMBER,
             room_name="verification-completion-room",
         )
         session_id = claim.session_id

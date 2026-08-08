@@ -50,9 +50,9 @@ describe("activation proxy protection", () => {
     vi.stubEnv("CLERK_SECRET_KEY", "sk_test_proxy");
 
     const { default: proxy } = await import("@/proxy");
-    await proxy({ url: `https://presvo.test${path}` } as never, {} as never);
+    await proxy({ url: `https://opevo.test${path}` } as never, {} as never);
 
-    expect(clerkProxyInvocationMock).toHaveBeenCalledWith(`https://presvo.test${path}`);
+    expect(clerkProxyInvocationMock).toHaveBeenCalledWith(`https://opevo.test${path}`);
     expect(protectMock).toHaveBeenCalledOnce();
     expect(createRouteMatcherMock).toHaveBeenCalledWith(["/activate(.*)", "/dashboard(.*)"]);
     expect(nextResponseMock).not.toHaveBeenCalled();
@@ -65,7 +65,7 @@ describe("activation proxy protection", () => {
     vi.stubEnv("CLERK_SECRET_KEY", "");
 
     const { default: proxy } = await import("@/proxy");
-    const response = await proxy({ url: "https://presvo.test/activate" } as never, {} as never);
+    const response = await proxy({ url: "https://opevo.test/activate" } as never, {} as never);
 
     expect(response).toEqual({ kind: "next-response" });
     expect(nextResponseMock).toHaveBeenCalledOnce();

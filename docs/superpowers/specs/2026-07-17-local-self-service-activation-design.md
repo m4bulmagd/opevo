@@ -31,10 +31,10 @@ this design.
 
 ## Goal
 
-Allow an SME owner or independent professional in France to configure Presvo,
-pay, explicitly order one French Presvo number, set conditional call forwarding,
+Allow an SME owner or independent professional in France to configure Opevo,
+pay, explicitly order one French Opevo number, set conditional call forwarding,
 verify that forwarding works, and deliberately activate the receptionist without
-Presvo staff or database intervention.
+Opevo staff or database intervention.
 
 The complete journey must be buildable and testable locally. Real Stripe,
 Telnyx, and LiveKit operations are opt-in. No cloud deployment or infrastructure
@@ -45,13 +45,13 @@ mutation is part of this slice.
 ### Target customer
 
 - An SME owner or independent professional operating in France.
-- One owner managing one business, one receptionist, and one Presvo number.
+- One owner managing one business, one receptionist, and one Opevo number.
 - A customer who wants missed calls answered and expects normal setup and
-  recovery to require little or no Presvo support.
+  recovery to require little or no Opevo support.
 
 ### Launch job
 
-Presvo answers calls that the owner cannot take. After a normal call, the owner
+Opevo answers calls that the owner cannot take. After a normal call, the owner
 can quickly understand what happened through the original recording, a concise
 summary, and an obvious outcome.
 
@@ -81,7 +81,7 @@ builder remain later product work.
 - Launch carrier guidance for Orange, SFR, Bouygues Telecom, Free, and Other.
 - Profile-first, payment-second ordering eligibility.
 - Explicit, idempotent provisioning consent.
-- One French Presvo number per user.
+- One French Opevo number per user.
 - Durable asynchronous provisioning with safe retry.
 - Conditional-forwarding guidance for unanswered, busy, and unreachable calls.
 - A user-opened ten-minute forwarding-verification window.
@@ -124,32 +124,32 @@ builder remain later product work.
 
 ## Golden Activation Journey
 
-1. The owner creates or signs into a Presvo account.
-2. Presvo creates the local user, default receptionist configuration, business
+1. The owner creates or signs into a Opevo account.
+2. Opevo creates the local user, default receptionist configuration, business
    profile draft, and activation record idempotently.
 3. The owner completes the required business and receptionist fields.
 4. The owner enters an existing French business number.
-5. Presvo attempts carrier lookup. The owner confirms the result or selects a
+5. Opevo attempts carrier lookup. The owner confirms the result or selects a
    supported carrier or Other manually.
 6. The owner reviews and confirms the profile.
 7. The owner activates the starter subscription.
-8. Presvo shows a number-order review. No order has occurred yet.
+8. Opevo shows a number-order review. No order has occurred yet.
 9. The owner selects **Confirm and provision my number**.
-10. A durable job orders and configures one French Presvo number.
-11. Presvo presents conditional-forwarding instructions for the confirmed
+10. A durable job orders and configures one French Opevo number.
+11. Opevo presents conditional-forwarding instructions for the confirmed
     carrier.
 12. After applying the instructions, the owner opens a ten-minute verification
     window.
 13. The owner calls the existing business number from another phone and allows
     the call to forward.
-14. Presvo plays a versioned fixed success message and hangs up. It does not run
+14. Opevo plays a versioned fixed success message and hangs up. It does not run
     the receptionist or persist a normal call, recording, transcript, summary,
     or usage charge.
-15. Presvo marks forwarding verified only after successful verification-session
+15. Opevo marks forwarding verified only after successful verification-session
     completion.
 16. The owner reviews the final readiness status and selects **Go live**.
 17. The central readiness policy and real provider projection both succeed
-    before Presvo reports the receptionist as active.
+    before Opevo reports the receptionist as active.
 18. The owner enters the normal dashboard, where real calls expose a concise
     summary, outcome, follow-up state, and original recording.
 
@@ -217,16 +217,16 @@ workflow facts rather than copies of Stripe or Telnyx truth:
 - normal timestamps.
 
 The routing fingerprint is derived from routing-sensitive facts, including the
-existing business number, confirmed carrier, and assigned Presvo number. A
+existing business number, confirmed carrier, and assigned Opevo number. A
 change to any of these facts invalidates forwarding verification and final
 go-live approval. Content-only changes such as hours, FAQs, or receptionist
 wording do not require forwarding verification.
 
 ### `PhoneNumber`
 
-The existing model remains the source for the assigned Presvo number and its
+The existing model remains the source for the assigned Opevo number and its
 provider projection. Add a database uniqueness constraint on `user_id` so an
-account cannot hold multiple Presvo numbers through races or retries.
+account cannot hold multiple Opevo numbers through races or retries.
 
 ### `PhoneNumberProvisioning`
 
@@ -372,7 +372,7 @@ the explicit confirm-provisioning command.
 
 Every command:
 
-- authenticates the Presvo user and enforces ownership;
+- authenticates the Opevo user and enforces ownership;
 - validates the canonical current state;
 - locks the user or activation ordering boundary as appropriate;
 - performs its database changes atomically;
@@ -414,7 +414,7 @@ reference or idempotency key so reconciliation cannot create a second order.
 
 ### Forwarding instructions
 
-`ForwardingInstructionCatalog` is Presvo-owned content keyed by confirmed
+`ForwardingInstructionCatalog` is Opevo-owned content keyed by confirmed
 carrier and forwarding condition. It provides instructions for:
 
 - unanswered calls;
@@ -423,7 +423,7 @@ carrier and forwarding condition. It provides instructions for:
 
 Unconditional forwarding is not the default journey. The Other path uses safe
 generic guidance and clearly states that exact codes may vary by plan or
-carrier. Instruction content is versioned so Presvo can identify which guidance
+carrier. Instruction content is versioned so Opevo can identify which guidance
 the customer saw.
 
 ### Billing
@@ -434,13 +434,13 @@ Stripe. Fake billing is available only in local and test environments.
 
 ### Forwarding verification
 
-The verification workflow belongs to Presvo's inbound-call path, not to an SMS
+The verification workflow belongs to Opevo's inbound-call path, not to an SMS
 or voice-OTP product.
 
 Opening a window creates a durable start and expiry time. Only one window may be
 active per customer. The window lasts ten minutes according to server time.
 
-When a SIP participant arrives for the assigned Presvo number, inbound routing
+When a SIP participant arrives for the assigned Opevo number, inbound routing
 checks for a valid verification window before normal receptionist dispatch. If
 one exists, it atomically claims a verification session and emits a dedicated
 verification dispatch intent. This path requires a provider-ready assigned
@@ -450,7 +450,7 @@ The verification session:
 
 - contains no customer-authored prompt or knowledge;
 - plays the versioned fixed message, "Forwarding test successful. Return to
-  Presvo to go live," without invoking an LLM;
+  Opevo to go live," without invoking an LLM;
 - does not create a normal `Call` row;
 - does not start recording or transcription;
 - does not enqueue summary generation or usage charging;
@@ -490,7 +490,7 @@ selected. The local credential is never accepted when Clerk mode is active.
 Selecting real Telnyx, Stripe, or LiveKit behavior requires explicit settings
 and credentials. Credentialed provider evaluations remain optional during local
 development and become pre-release certification work. This slice does not
-create cloud resources or deploy Presvo.
+create cloud resources or deploy Opevo.
 
 ## Runtime Readiness Integration
 
@@ -549,9 +549,9 @@ design; the UI must not become a nested grid of generic cards.
    - Receptionist name.
    - Public description.
    - FAQs, special instructions, and escalation notes.
-   - Plain-language preview of what Presvo knows.
+   - Plain-language preview of what Opevo knows.
 
-3. **Your Presvo number**
+3. **Your Opevo number**
    - Subscription/payment.
    - Explicit provisioning review and consent.
    - Waiting, success, correction, and retry states.
@@ -569,7 +569,7 @@ design; the UI must not become a nested grid of generic cards.
    - Explicit **Go live** action.
 
 The current product copy that describes an "Irish number" is incorrect and must
-be changed to a French Presvo number. Ireland is not presented as a customer
+be changed to a French Opevo number. Ireland is not presented as a customer
 number country.
 
 ### Error and recovery behavior
@@ -589,7 +589,7 @@ number country.
 
 ### Post-activation handoff
 
-After activation, the normal dashboard leads with whether Presvo is answering.
+After activation, the normal dashboard leads with whether Opevo is answering.
 The recent-calls surface must show, when available:
 
 - caller identity or masked number;

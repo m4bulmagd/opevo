@@ -53,7 +53,7 @@ const consequences = [
   "New calls stop immediately.",
   "Your subscription is canceled immediately with no automatic prorated refund.",
   "An active call may finish before cleanup completes.",
-  "Your current Presvo number is permanently released.",
+  "Your current Opevo number is permanently released.",
   "Your calls, recordings, billing history, and saved configuration are retained.",
   "Reactivation requires a new subscription and a newly provisioned number.",
 ] as const;
@@ -72,7 +72,7 @@ describe("account page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getActivationSnapshotMock.mockResolvedValue(activationSnapshot());
-    resolveAccountIdentityMock.mockResolvedValue({ email: "maya@presvo.test", securityMode: "clerk" });
+    resolveAccountIdentityMock.mockResolvedValue({ email: "maya@opevo.test", securityMode: "clerk" });
     deactivateAccountMock.mockResolvedValue(undefined);
     reactivateAccountMock.mockResolvedValue({
       status: "success",
@@ -203,14 +203,14 @@ describe("account page", () => {
       caseName: "serving active account",
       account: activeAccount,
       label: "Active",
-      title: "Presvo is active",
+      title: "Opevo is active",
       action: null,
     },
     {
       caseName: "non-serving active account",
       account: { ...activeAccount, serving: false, blocker: "customer_not_ready" as const },
       label: "Action needed",
-      title: "Presvo needs account attention",
+      title: "Opevo needs account attention",
       action: "Review Overview",
     },
   ])("renders the compact lifecycle summary for a $caseName", ({ account, label, title, action }) => {
@@ -234,7 +234,7 @@ describe("account page", () => {
     ["disabling_routing", "Stopping new calls"],
     ["canceling_subscription", "Canceling subscription"],
     ["draining_call", "Waiting for an active call to finish"],
-    ["releasing_number", "Releasing your Presvo number"],
+    ["releasing_number", "Releasing your Opevo number"],
     ["finalizing", "Finalizing your account"],
   ] as const)("maps compact %s deactivation progress without exposing internal state", (state, progressCopy) => {
     render(
@@ -278,7 +278,7 @@ describe("account page", () => {
     const status = screen.getByRole("region", { name: "Account status" });
     expect(within(status).getByText("Attention required")).toBeVisible();
     expect(within(status).getByText("Account cleanup needs attention")).toBeVisible();
-    expect(status).toHaveTextContent("contact Presvo support");
+    expect(status).toHaveTextContent("contact Opevo support");
     expect(status).not.toHaveTextContent(/attention_required|deactivation_attention_required|account_deactivating/);
   });
 
@@ -298,8 +298,8 @@ describe("account page", () => {
 
     const status = screen.getByRole("region", { name: "Account status" });
     expect(within(status).getByText("Inactive")).toBeVisible();
-    expect(within(status).getByText("Presvo is inactive")).toBeVisible();
-    const reactivate = within(status).getByRole("button", { name: "Reactivate Presvo" });
+    expect(within(status).getByText("Opevo is inactive")).toBeVisible();
+    const reactivate = within(status).getByRole("button", { name: "Reactivate Opevo" });
     expect(reactivate).toHaveClass("min-h-11");
     if (reactivationAllowed) {
       expect(reactivate).toBeEnabled();
@@ -315,7 +315,7 @@ describe("account page", () => {
     const danger = screen.getByRole("region", { name: "Danger zone" });
     expect(danger).toHaveAttribute("data-slot", "product-surface");
     expect(danger).toHaveAttribute("data-tone", "danger");
-    expect(within(danger).getByRole("button", { name: "Deactivate Presvo" })).toHaveClass("min-h-11");
+    expect(within(danger).getByRole("button", { name: "Deactivate Opevo" })).toHaveClass("min-h-11");
 
     unmount();
     await renderAccountPage(inactiveAccount);
@@ -324,7 +324,7 @@ describe("account page", () => {
 
   it("preserves the exact case-sensitive deactivation confirmation and consequences", async () => {
     await renderAccountPage();
-    fireEvent.click(screen.getByRole("button", { name: "Deactivate Presvo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Deactivate Opevo" }));
 
     const consequenceList = screen.getByRole("list", { name: "Account deactivation consequences" });
     expect(Array.from(consequenceList.children, (item) => item.textContent)).toEqual(consequences);
@@ -340,7 +340,7 @@ describe("account page", () => {
 
   it("keeps the confirmation workflow viewport-bounded and internally scrollable", async () => {
     await renderAccountPage();
-    fireEvent.click(screen.getByRole("button", { name: "Deactivate Presvo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Deactivate Opevo" }));
 
     const dialog = screen.getByRole("alertdialog");
     const scrollRegion = dialog.querySelector('[data-slot="deactivation-dialog-scroll-region"]');
@@ -351,7 +351,7 @@ describe("account page", () => {
 
   it("traps dialog focus and restores it after escape and keep-active actions", async () => {
     await renderAccountPage();
-    const trigger = screen.getByRole("button", { name: "Deactivate Presvo" });
+    const trigger = screen.getByRole("button", { name: "Deactivate Opevo" });
     const backgroundLink = screen.getByRole("link", { name: "Review forwarding setup" });
 
     fireEvent.click(trigger);
@@ -367,7 +367,7 @@ describe("account page", () => {
     fireEvent.click(trigger);
     const secondDialog = screen.getByRole("alertdialog");
     await waitFor(() => expect(secondDialog).toContainElement(document.activeElement as HTMLElement));
-    fireEvent.click(within(secondDialog).getByRole("button", { name: "Keep Presvo active" }));
+    fireEvent.click(within(secondDialog).getByRole("button", { name: "Keep Opevo active" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     expect(trigger).toHaveFocus();
   });

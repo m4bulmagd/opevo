@@ -6,7 +6,7 @@ from arq.connections import ArqRedis
 from arq.connections import RedisSettings
 from redis.asyncio import Redis
 
-from presvo_contracts import (
+from opevo_contracts import (
     REALTIME_CHANNEL_PREFIX,
     RealtimeEvent,
     dump_contract_json,

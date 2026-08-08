@@ -2,8 +2,8 @@ from uuid import UUID
 
 import pytest
 
-from presvo_contracts import ContractError, create_contract, dump_contract
-from presvo_contracts.dispatch import (
+from opevo_contracts import ContractError, create_contract, dump_contract
+from opevo_contracts.dispatch import (
     AGENT_NAME_MAX_LENGTH,
     KNOWLEDGE_BASE_MAX_LENGTH,
     OWNER_CONTEXT_MAX_LENGTH,
@@ -43,7 +43,7 @@ def valid_verification_dispatch() -> dict[str, object]:
         "user_id": "22345678-1234-5678-1234-567812345678",
         "agent_identity": "agent-identity",
         "completion_token": "completion-secret",
-        "message": "Forwarding test successful. Return to Presvo to go live.",
+        "message": "Forwarding test successful. Return to Opevo to go live.",
         "tts_provider": "speechmatics",
     }
 

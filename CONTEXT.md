@@ -1,6 +1,6 @@
-# Presvo Domain Language
+# Opevo Domain Language
 
-Presvo answers calls forwarded from a customer's existing business number. This
+Opevo answers calls forwarded from a customer's existing business number. This
 glossary fixes the product-specific language used across the API, agent, web app,
 tests, and design documents.
 
@@ -25,12 +25,12 @@ call content.
 _Avoid_: Deleted call, archived call
 
 **Recording playback projection**:
-The recording references on a visible call that allow Presvo to report
+The recording references on a visible call that allow Opevo to report
 availability and mint short-lived customer playback access.
 _Avoid_: Recording operation, stored audio
 
 **Recording egress operation**:
-The private durable record of Presvo's attempt to start, stop, reconcile, and,
+The private durable record of Opevo's attempt to start, stop, reconcile, and,
 when requested, delete one LiveKit recording and its expected storage object.
 _Avoid_: Recording playback projection, call recording row
 

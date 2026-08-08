@@ -190,14 +190,14 @@ describe("call handoff", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove call" }));
 
     expect(screen.getByRole("heading", { name: /Remove this call/i })).toBeInTheDocument();
-    expect(screen.getByText(/active Presvo account/i)).toBeInTheDocument();
+    expect(screen.getByText(/active Opevo account/i)).toBeInTheDocument();
     expect(screen.queryByText(/backup/i)).not.toBeInTheDocument();
   });
 
   it("keeps the dialog actionable when deletion must be retried", async () => {
     const deleteHandler = vi.fn().mockResolvedValue({
       status: "error",
-      message: "Presvo could not remove this call right now. Try again.",
+      message: "Opevo could not remove this call right now. Try again.",
     });
     render(<DeleteCallDialog callId="call-1" deleteHandler={deleteHandler} />);
 

@@ -88,9 +88,9 @@ No provider was contacted.
 |---|---|---|
 | active and serving | active card; danger zone available | agent controls editable; exact-confirmation deactivation available |
 | active but not serving | active card says setup is still required | account remains active; lifecycle copy does not call it inactive |
-| deactivating | global “Presvo is no longer accepting new calls”; page “Finishing account deactivation”; safe current-progress label | no danger zone; all agent fields, routing switch, and save disabled |
+| deactivating | global “Opevo is no longer accepting new calls”; page “Finishing account deactivation”; safe current-progress label | no danger zone; all agent fields, routing switch, and save disabled |
 | attention required | same truthful non-serving and finishing copy; “Cleanup needs additional time” | still read-only; no provider/error internals |
-| inactive, cleanup ready | retained-data explanation and `Reactivate Presvo` | history/navigation remain; reactivation enabled |
+| inactive, cleanup ready | retained-data explanation and `Reactivate Opevo` | history/navigation remain; reactivation enabled |
 | inactive, cleanup unresolved | retained-data explanation and disabled reactivation with visible reason | no checkout/local activation call can be started from the UI |
 
 Inactive Account UI has no assigned-number field and never receives a phone
@@ -141,7 +141,7 @@ state.
   directly.
 - Lifecycle alerts use `role=alert`/polite live updates. Headings preserve page
   hierarchy. Status-card title/badge layout stacks on narrow screens and
-  returns to a row at `sm`; the dialog and page retain existing Presvo
+  returns to a row at `sm`; the dialog and page retain existing Opevo
   responsive primitives.
 
 ## Exact copy proof
@@ -151,7 +151,7 @@ The dialog renders these six complete sentences and no shortened variants:
 1. `New calls stop immediately.`
 2. `Your subscription is canceled immediately with no automatic prorated refund.`
 3. `An active call may finish before cleanup completes.`
-4. `Your current Presvo number is permanently released.`
+4. `Your current Opevo number is permanently released.`
 5. `Your calls, recordings, billing history, and saved configuration are retained.`
 6. `Reactivation requires a new subscription and a newly provisioned number.`
 

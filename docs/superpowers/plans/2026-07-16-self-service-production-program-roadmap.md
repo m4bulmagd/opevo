@@ -1,8 +1,8 @@
-# Presvo Self-Service Production Program Roadmap
+# Opevo Self-Service Production Program Roadmap
 
 **Approved design:** `docs/superpowers/specs/2026-07-16-self-service-production-launch-design.md`
 
-**Program goal:** Release Presvo as a production-grade, self-service missed-call receptionist for English-speaking SMEs and independent professionals in France, with a Presvo-provided French number, conditional call forwarding, useful post-call outcomes, and minimal Presvo support.
+**Program goal:** Release Opevo as a production-grade, self-service missed-call receptionist for English-speaking SMEs and independent professionals in France, with a Opevo-provided French number, conditional call forwarding, useful post-call outcomes, and minimal Opevo support.
 
 **Delivery model:** Build launch-focused vertical slices. Each slice must leave the product in a deployable, testable state and pass its exit gate before the next dependent slice begins.
 
@@ -12,9 +12,9 @@
 - Hosting region: AWS Ireland (`eu-west-1`).
 - Product language: English at launch; French is post-launch.
 - Core job: answer missed calls and produce a useful call record.
-- Telephony: one Presvo-provided French number per account, reached through conditional forwarding from the customer's existing number.
-- Account model: one owner, one business, one receptionist, and one Presvo number per account.
-- Call result: original audio, summary, and structured outcomes stay inside Presvo.
+- Telephony: one Opevo-provided French number per account, reached through conditional forwarding from the customer's existing number.
+- Account model: one owner, one business, one receptionist, and one Opevo number per account.
+- Call result: original audio, summary, and structured outcomes stay inside Opevo.
 - Call control: the owner can permanently delete a call and its owned artifacts.
 - Retention: user-triggered deletion is launch scope; automatic 30-day retention follows unless legal review makes it a launch blocker.
 - Conversation fallback: ask one clarification, then acknowledge uncertainty and collect name, callback number, reason, urgency, and preferred callback time without promising an action or response time.
@@ -25,18 +25,18 @@
 
 | Order | Implementation plan | Primary outcome | Depends on | Exit gate |
 |---:|---|---|---|---|
-| 1 | `2026-07-16-runtime-correctness-and-voice-safety.md` | Presvo has one authoritative readiness decision, safe bounded prompt inputs, reliable production ordering, and a tested receptionist fallback | Approved design | Gate 1: safe authoritative state |
+| 1 | `2026-07-16-runtime-correctness-and-voice-safety.md` | Opevo has one authoritative readiness decision, safe bounded prompt inputs, reliable production ordering, and a tested receptionist fallback | Approved design | Gate 1: safe authoritative state |
 | 2 | `2026-07-16-aws-ireland-staging-foundation.md` | A reproducible, observable, recoverable staging platform exists in `eu-west-1` | Plan 1 interfaces | Staging deploy, restore, rollback, and provider smoke tests pass |
-| 3 | `2026-07-16-self-service-activation.md` | A customer can configure the business, provision a number, receive carrier-specific forwarding help, verify forwarding, and go live without Presvo support | Plans 1–2 | Gate 2: support-free activation |
+| 3 | `2026-07-16-self-service-activation.md` | A customer can configure the business, provision a number, receive carrier-specific forwarding help, verify forwarding, and go live without Opevo support | Plans 1–2 | Gate 2: support-free activation |
 | 4 | `2026-07-16-useful-call-review-and-deletion.md` | Every completed call exposes audio, an obvious summary, structured outcomes, and durable deletion | Plans 1–3 | Gate 3: useful and controllable calls |
 | 5 | `2026-07-16-production-hardening-and-certification.md` | Security, privacy, operations, accessibility, performance, and end-to-end release evidence are complete | Plans 1–4 | Gates 4–5: operable and certifiable platform |
-| 6 | `2026-07-16-progressive-release.md` | Presvo moves through internal, 5–10, 25–50, and public cohorts with measured stop/go decisions | Plans 1–5 | Gate 6: public self-service |
+| 6 | `2026-07-16-progressive-release.md` | Opevo moves through internal, 5–10, 25–50, and public cohorts with measured stop/go decisions | Plans 1–5 | Gate 6: public self-service |
 
 Only Plan 1 is executable from this roadmap today. Write each later detailed plan after the preceding interface gate passes so it reflects the implemented contracts rather than stale assumptions.
 
 ## Slice 1: Runtime Correctness and Voice Safety
 
-The first slice removes contradictions that can tell the customer Presvo is live when dispatch or telephony will reject the call. It also makes customer-authored prompt content bounded and subordinate to mandatory Presvo behavior.
+The first slice removes contradictions that can tell the customer Opevo is live when dispatch or telephony will reject the call. It also makes customer-authored prompt content bounded and subordinate to mandatory Opevo behavior.
 
 Deliverables:
 
@@ -93,7 +93,7 @@ Write the detailed plan after Slice 2. It must cover:
 
 Exit evidence:
 
-- A new customer completes signup through a successful forwarded test call without Presvo intervention.
+- A new customer completes signup through a successful forwarded test call without Opevo intervention.
 - Refreshing or signing out never loses onboarding progress.
 - Unsupported carrier, provisioning delay, and failed verification all show a self-service recovery path.
 - No account can provision or activate more than one launch number or receptionist.
@@ -142,7 +142,7 @@ Exit evidence:
 
 Write the detailed plan after Slice 5. It must define cohort criteria and explicit stop/go thresholds for:
 
-1. Internal Presvo traffic.
+1. Internal Opevo traffic.
 2. Five to ten design-partner customers.
 3. Twenty-five to fifty controlled customers.
 4. Public self-service availability.
@@ -168,7 +168,7 @@ These are the initial measurable stop/go thresholds for later detailed plans. Th
 | Observation window | At least 14 days and 50 eligible calls | At least 30 days and 250 eligible calls | The 25–50 cohort window passes in full |
 | Signup to required profile completion | At least 75% | At least 80% | At least 80% |
 | Paid account to number ready | 95% within 30 minutes | 97% within 30 minutes | 97% within 30 minutes and 99% within 24 hours |
-| Activation completed without Presvo staff action | At least 80% | At least 90% | At least 90% |
+| Activation completed without Opevo staff action | At least 80% | At least 90% | At least 90% |
 | Forwarding test passed within two attempts | At least 85% | At least 90% | At least 90%, with no supported carrier below 80% |
 | Eligible inbound calls admitted and dispatched | At least 99.0% | At least 99.5% | At least 99.5% |
 | Dispatched calls produce playable audio and outcomes | At least 98.0% | At least 99.0% | At least 99.0% |
@@ -180,7 +180,7 @@ These are the initial measurable stop/go thresholds for later detailed plans. Th
 | Support contacts per activated account | At most 0.75 | At most 0.30 | At most 0.20 during the final observation window |
 | Backup restore and release rollback drills | 100% of scheduled drills pass | 100% pass | Most recent restore and rollback evidence is less than 30 days old |
 
-Measure provider-caused and Presvo-caused failures separately, but do not exclude provider failures from the customer-facing availability thresholds. Exclude customer hang-ups before the disclosure completes, deliberate internal fault-injection calls, and calls rejected for correctly enforced ineligibility; keep those events in a separate safety report.
+Measure provider-caused and Opevo-caused failures separately, but do not exclude provider failures from the customer-facing availability thresholds. Exclude customer hang-ups before the disclosure completes, deliberate internal fault-injection calls, and calls rejected for correctly enforced ineligibility; keep those events in a separate safety report.
 
 ## Cross-Program Rules
 
@@ -195,4 +195,4 @@ Measure provider-caused and Presvo-caused failures separately, but do not exclud
 
 ## Program Completion
 
-Presvo is production-ready only when all six slices pass. “Deployed,” “works in a demo,” or “handles a happy-path call” is not sufficient. Public release requires a new customer to activate without Presvo support, a forwarded call to be answered safely, a useful and playable call result to appear, deletion to complete durably, and operators to detect and recover failures using documented procedures.
+Opevo is production-ready only when all six slices pass. “Deployed,” “works in a demo,” or “handles a happy-path call” is not sufficient. Public release requires a new customer to activate without Opevo support, a forwarded call to be answered safely, a useful and playable call result to appear, deletion to complete durably, and operators to detect and recover failures using documented procedures.

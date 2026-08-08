@@ -13,14 +13,14 @@ Where they differ, this design establishes the current target:
 - the release must be self-service for SMEs and independent professionals;
 - the primary job is answering missed inbound calls;
 - the production region is AWS Europe (Ireland), `eu-west-1`;
-- the release is staged, but normal activation must not require Presvo staff.
+- the release is staged, but normal activation must not require Opevo staff.
 
 ## Goal
 
 Enable an SME owner or independent professional in France to create an account,
-subscribe, receive a Presvo number, configure an English-speaking AI
+subscribe, receive a Opevo number, configure an English-speaking AI
 receptionist, forward missed calls, verify the setup, and review useful call
-results without Presvo manually configuring or repairing the account.
+results without Opevo manually configuring or repairing the account.
 
 The product is ready for public self-service only when it can safely answer a
 missed call, preserve the original audio, produce a useful summary and
@@ -29,19 +29,19 @@ the customer's request.
 
 ## Product Position
 
-Presvo's launch product is an AI receptionist for missed calls. It is not a
+Opevo's launch product is an AI receptionist for missed calls. It is not a
 general contact center or a visual agent-building platform.
 
 The launch promise is:
 
-> Forward the calls you cannot answer to Presvo. Your AI receptionist handles
-> the conversation, and Presvo gives you the recording, summary, and outcome.
+> Forward the calls you cannot answer to Opevo. Your AI receptionist handles
+> the conversation, and Opevo gives you the recording, summary, and outcome.
 
 ### Target customer
 
 - SMEs operating in France.
 - Independent professionals operating in France.
-- One owner managing one business, one receptionist, and one Presvo number.
+- One owner managing one business, one receptionist, and one Opevo number.
 - Customers who expect setup and normal recovery to work without support.
 
 ### Launch language
@@ -62,13 +62,13 @@ The production launch includes:
 - one `starter` subscription plan;
 - inbound customer calls only, plus a controlled system verification call;
 - missed-call routing through conditional call forwarding;
-- one business, owner, agent configuration, and Presvo number per account;
+- one business, owner, agent configuration, and Opevo number per account;
 - a guided, resumable onboarding workflow;
 - automatic carrier and number-type lookup with manual confirmation;
 - carrier-aware forwarding instructions;
 - a required end-to-end test call before activation;
 - an English AI receptionist with mandatory disclosure and safety policy;
-- original audio playback in Presvo;
+- original audio playback in Opevo;
 - transcript, concise summary, and structured call outcomes;
 - permanent user-triggered deletion across database and object storage;
 - self-service retry and recovery for expected provider failures;
@@ -184,36 +184,36 @@ Deepen one customer journey incrementally. Every slice includes domain logic,
 API, frontend, tests, observability, and the production-platform work necessary
 to exercise it.
 
-This is the selected approach. It gives Presvo customer feedback without
+This is the selected approach. It gives Opevo customer feedback without
 postponing correctness or production engineering.
 
 ## Golden Customer Journey
 
 1. The owner creates a Clerk account.
-2. Presvo creates or recovers the local account without exposing a webhook race.
+2. Opevo creates or recovers the local account without exposing a webhook race.
 3. The owner enters their name, business details, existing business number, and
    other required profile information.
-4. Presvo looks up the existing number's carrier and type. The owner confirms or
+4. Opevo looks up the existing number's carrier and type. The owner confirms or
    corrects the result.
 5. The owner purchases the single starter subscription.
-6. A durable provisioning workflow orders and assigns a French Presvo number.
+6. A durable provisioning workflow orders and assigns a French Opevo number.
 7. The owner configures the receptionist through guided business fields rather
    than a raw system prompt.
-8. Presvo previews the greeting and recording disclosure, and records the
+8. Opevo previews the greeting and recording disclosure, and records the
    accepted disclosure version.
-9. Presvo shows instructions matched to the confirmed carrier and forwarding
+9. Opevo shows instructions matched to the confirmed carrier and forwarding
    condition.
 10. An automated test call proves forwarding, routing, disclosure, agent
     behavior, audio storage, transcript, summary, and structured outcomes.
 11. The central readiness policy allows activation only after every launch
     prerequisite passes.
 12. Real missed calls are handled by the receptionist.
-13. Completed calls appear in Presvo with inline audio, transcript, summary, and
+13. Completed calls appear in Opevo with inline audio, transcript, summary, and
     outcomes.
 14. The owner may permanently delete a call and all associated customer data.
 
 Every expected failure state must provide a safe retry, correction, or next step.
-Normal recovery must not require a database edit or Presvo employee action.
+Normal recovery must not require a database edit or Opevo employee action.
 
 ## Domain Architecture
 
@@ -238,7 +238,7 @@ Add one business profile per user containing at least:
 - callback expectations;
 - prohibited topics.
 
-Clerk-owned identity fields should not be copied unless Presvo needs an
+Clerk-owned identity fields should not be copied unless Opevo needs an
 authoritative product value. Fields must have explicit length, format, and item
 limits shared by API schemas and frontend validation.
 
@@ -339,18 +339,18 @@ One telephony setup module coordinates:
 
 - Telnyx number lookup for carrier and type;
 - manual correction when lookup is missing or wrong;
-- France-only Presvo number ordering;
+- France-only Opevo number ordering;
 - durable provider-side connection projection;
 - carrier-aware conditional-forwarding instructions;
 - test-call issuance and verification;
 - idempotent retries and reconciliation.
 
-Launch forwarding conditions are unanswered, busy, and unreachable. Presvo does
+Launch forwarding conditions are unanswered, busy, and unreachable. Opevo does
 not initially manage customer schedules or PBX rules.
 
 The automated forwarding test may originate one controlled verification call to
 the customer's existing number and correlate the forwarded leg with the assigned
-Presvo number. This is the only launch-time outbound-call exception. It cannot be
+Opevo number. This is the only launch-time outbound-call exception. It cannot be
 used to contact arbitrary recipients or exposed as a customer outbound feature.
 
 ### Call review
@@ -487,7 +487,7 @@ Next.js 16, React 19, Tailwind 4, and the repository's `radix-vega` setup.
 ## Data and Privacy Decisions
 
 The original audio is a launch feature because owners need to hear calls.
-Transcripts, summaries, and outcomes remain visible only inside Presvo; launch
+Transcripts, summaries, and outcomes remain visible only inside Opevo; launch
 does not send them by email, SMS, or push notification.
 
 The caller disclosure must be delivered before the recorded business
@@ -503,7 +503,7 @@ security, and cost risk. Before public launch:
 - existing object-store lifecycle configuration must be reconciled with the
   approved behavior so audio is not deleted or retained accidentally;
 - the product must record who accessed or deleted a recording;
-- Presvo must define and implement minimization for stored webhook payloads.
+- Opevo must define and implement minimization for stored webhook payloads.
 
 Legal review may elevate automatic retention into launch scope. The engineering
 plan must treat that outcome as a launch-gate change, not a documentation-only

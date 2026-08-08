@@ -130,7 +130,7 @@ def test_explicit_test_environment_ignores_dotenv(
 
     assert settings.database_url == "sqlite+aiosqlite://"
     assert settings.redis_url == "redis://localhost:6379/0"
-    assert settings.otel_service_name == "presvo-api"
+    assert settings.otel_service_name == "opevo-api"
     assert settings.activation_flow_enabled is False
     assert settings.clerk_jwt_key == "constructor-static-key"
     assert settings.clerk_jwks_url is None
@@ -150,7 +150,7 @@ def test_process_test_environment_makes_settings_ignore_dotenv(
     monkeypatch.delenv("CLERK_JWKS_URL", raising=False)
     settings = Settings()
 
-    assert settings.otel_service_name == "presvo-api"
+    assert settings.otel_service_name == "opevo-api"
     assert settings.activation_flow_enabled is False
     assert settings.clerk_jwt_key == "process-static-key"
     assert settings.clerk_jwks_url is None

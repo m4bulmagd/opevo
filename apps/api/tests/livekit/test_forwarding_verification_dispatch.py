@@ -27,9 +27,9 @@ from app.services.outbox_service import OutboxService
 
 FIXED_NOW = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
 SOURCE_NUMBER = "+33199000000"
-PRESVO_NUMBER = "+33999000000"
+OPEVO_NUMBER = "+33999000000"
 ALTERNATE_SOURCE_NUMBER = "+33199000001"
-ALTERNATE_PRESVO_NUMBER = "+33999000001"
+ALTERNATE_OPEVO_NUMBER = "+33999000001"
 
 
 class _Realtime:
@@ -81,7 +81,7 @@ async def _seed_open_window(db_session, active_user) -> CustomerActivation:
     )
     phone = PhoneNumber(
         user_id=active_user.id,
-        e164=PRESVO_NUMBER,
+        e164=OPEVO_NUMBER,
         country_code="FR",
         provider="fake",
         provider_number_id="fake_verification_number",
@@ -106,7 +106,7 @@ def _sip_join(*, attributes: dict[str, object] | None = None) -> dict:
                 if attributes is not None
                 else {
                     "sip.phoneNumber": SOURCE_NUMBER,
-                    "sip.trunkPhoneNumber": PRESVO_NUMBER,
+                    "sip.trunkPhoneNumber": OPEVO_NUMBER,
                     "sip.diversion": SOURCE_NUMBER,
                 }
             ),
@@ -120,7 +120,7 @@ async def _seed_normal_dispatch_state(db_session, active_user) -> None:
         [
             PhoneNumber(
                 user_id=active_user.id,
-                e164=PRESVO_NUMBER,
+                e164=OPEVO_NUMBER,
                 country_code="FR",
                 provider="fake",
                 provider_number_id="fake_normal_number",
@@ -223,7 +223,7 @@ async def test_present_mismatched_diversion_does_not_claim(
         _sip_join(
             attributes={
                 "sip.phoneNumber": SOURCE_NUMBER,
-                "sip.trunkPhoneNumber": PRESVO_NUMBER,
+                "sip.trunkPhoneNumber": OPEVO_NUMBER,
                 "sip.diversion": ALTERNATE_SOURCE_NUMBER,
             }
         )
@@ -260,7 +260,7 @@ async def test_malformed_diversion_value_does_not_escape_verification_admission(
         _sip_join(
             attributes={
                 "sip.phoneNumber": SOURCE_NUMBER,
-                "sip.trunkPhoneNumber": PRESVO_NUMBER,
+                "sip.trunkPhoneNumber": OPEVO_NUMBER,
                 "sip.diversion": malformed_diversion,
             }
         )
@@ -289,7 +289,7 @@ async def test_missing_diversion_is_allowed(db_session, active_user) -> None:
         _sip_join(
             attributes={
                 "sip.phoneNumber": SOURCE_NUMBER,
-                "sip.trunkPhoneNumber": PRESVO_NUMBER,
+                "sip.trunkPhoneNumber": OPEVO_NUMBER,
             }
         )
     )
@@ -357,7 +357,7 @@ async def test_deactivation_commit_prevents_later_customer_call_admission(
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "called_number",
-    ["not-a-number", ALTERNATE_PRESVO_NUMBER],
+    ["not-a-number", ALTERNATE_OPEVO_NUMBER],
 )
 async def test_malformed_or_wrong_called_number_does_not_claim(
     db_session,
@@ -509,7 +509,7 @@ async def test_duplicate_webhook_id_claims_and_dispatches_exactly_once(
                 ),
                 PhoneNumber(
                     user_id=user.id,
-                    e164=PRESVO_NUMBER,
+                    e164=OPEVO_NUMBER,
                     country_code="FR",
                     provider="fake",
                     provider_number_id="fake_webhook_number",

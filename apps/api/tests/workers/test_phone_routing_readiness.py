@@ -70,7 +70,7 @@ async def test_routing_stays_disabled_without_current_financial_access(
     db_session.add(
         AgentConfig(
             user_id=active_user.id,
-            agent_name="Presvo Front Desk",
+            agent_name="Opevo Front Desk",
             owner_context="Dental office reception",
             system_prompt="Handle inbound calls professionally.",
             knowledge_base="Open weekdays.",
@@ -135,7 +135,7 @@ async def test_routing_uses_explicit_fake_provider(
             ),
             AgentConfig(
                 user_id=user_id,
-                agent_name="Presvo Front Desk",
+                agent_name="Opevo Front Desk",
                 owner_context="Dental office reception",
                 system_prompt="Handle inbound calls professionally.",
                 knowledge_base="Open weekdays.",
@@ -331,7 +331,7 @@ async def test_claimed_phone_enable_rechecks_account_before_provider_io(
             ),
             AgentConfig(
                 user_id=user_id,
-                agent_name="Presvo Front Desk",
+                agent_name="Opevo Front Desk",
                 owner_context="Dental office reception",
                 system_prompt="Handle inbound calls professionally.",
                 knowledge_base="Open weekdays.",
@@ -433,7 +433,7 @@ async def test_stale_account_generation_never_enables_phone(
             ),
             AgentConfig(
                 user_id=user_id,
-                agent_name="Presvo Front Desk",
+                agent_name="Opevo Front Desk",
                 owner_context="Dental office reception",
                 system_prompt="Handle inbound calls professionally.",
                 knowledge_base="Open weekdays.",

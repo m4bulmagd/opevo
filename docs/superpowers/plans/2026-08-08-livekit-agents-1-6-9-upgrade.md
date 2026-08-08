@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task by task.
 
-**Goal:** Upgrade the Presvo voice agent from the coherent LiveKit Agents 1.4.4 package family to 1.6.9 while preserving its current voice behavior and replacing private or deprecated SDK integrations with supported public APIs.
+**Goal:** Upgrade the Opevo voice agent from the coherent LiveKit Agents 1.4.4 package family to 1.6.9 while preserving its current voice behavior and replacing private or deprecated SDK integrations with supported public APIs.
 
 **Architecture:** Keep the existing pipeline factories, provider selection, prompts, dispatch, and text-based multilingual endpointing. Move lifecycle ownership back to the LiveKit SDK, express endpointing through TurnHandlingOptions, and use the SDK's public asset downloader in the container build. Resolve and verify the dependency graph at a non-yanked 1.5.17 checkpoint before moving to 1.6.9.
 
@@ -256,8 +256,8 @@ Expected: image build succeeds, including the public asset-download layer. If Do
 - [ ] **Step 1: Audit without exceptions**
 
     cd apps/agent
-    UV_CACHE_DIR=/tmp/uv-cache uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file /tmp/presvo-agent-requirements.txt
-    UV_CACHE_DIR=/tmp/uv-cache uv run --with pip-audit pip-audit -r /tmp/presvo-agent-requirements.txt
+    UV_CACHE_DIR=/tmp/uv-cache uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file /tmp/opevo-agent-requirements.txt
+    UV_CACHE_DIR=/tmp/uv-cache uv run --with pip-audit pip-audit -r /tmp/opevo-agent-requirements.txt
 
 Expected: capture the exact finding set for the 1.6.9 lock.
 
@@ -345,4 +345,4 @@ Repeat the complete agent quality gate from Step 1 and run:
     git status --short
     git log --oneline --decorate -8
 
-Expected: all gates succeed and the only unrelated worktree entry remains the user's pre-existing Presvo_frontend/.
+Expected: all gates succeed and the only unrelated worktree entry remains the user's pre-existing Opevo_frontend/.

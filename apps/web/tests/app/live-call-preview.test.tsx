@@ -17,7 +17,7 @@ describe("live call preview", () => {
   it("keeps the complete interactive experience visibly local-only", async () => {
     const { default: Page, metadata } = await import("@/app/(app)/dashboard/live-call/page");
 
-    expect(metadata.title).toBe("Live call preview — Presvo");
+    expect(metadata.title).toBe("Live call preview — Opevo");
     render(<Page />);
 
     expect(screen.getByRole("heading", { level: 1, name: "Live call" })).toBeInTheDocument();

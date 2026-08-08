@@ -1635,9 +1635,9 @@ git commit -m "ci: enforce tests builds and security scans"
 Assert the API startup code contains no migration invocation. Build each image and inspect its configured user:
 
 ```bash
-docker inspect --format '{{.Config.User}}' presvo-api:test
-docker inspect --format '{{.Config.User}}' presvo-agent:test
-docker inspect --format '{{.Config.User}}' presvo-web:test
+docker inspect --format '{{.Config.User}}' opevo-api:test
+docker inspect --format '{{.Config.User}}' opevo-agent:test
+docker inspect --format '{{.Config.User}}' opevo-web:test
 ```
 
 Expected: each output is a nonzero numeric UID.
@@ -1672,11 +1672,11 @@ Release order: backup verification → migration job → worker/agent deployment
 - [x] **Step 6: Verify images and commit**
 
 ```bash
-docker build -t presvo-api:test apps/api
-docker build -t presvo-agent:test apps/agent
-docker build -t presvo-web:test apps/web
-API_IMAGE=presvo-api:test DATABASE_URL=postgresql+asyncpg://migration:secret@database/presvo docker compose -f compose.migrate.yaml config --quiet
-docker compose --env-file /secure/path/presvo.production.env -f compose.yaml config --quiet
+docker build -t opevo-api:test apps/api
+docker build -t opevo-agent:test apps/agent
+docker build -t opevo-web:test apps/web
+API_IMAGE=opevo-api:test DATABASE_URL=postgresql+asyncpg://migration:secret@database/opevo docker compose -f compose.migrate.yaml config --quiet
+docker compose --env-file /secure/path/opevo.production.env -f compose.yaml config --quiet
 docker compose -f compose.dev.yaml up -d --build
 curl --fail http://localhost:8000/healthz
 ```
@@ -2126,9 +2126,9 @@ npm run build
 npx playwright test
 
 cd ../..
-docker build -t presvo-api:release-candidate apps/api
-docker build -t presvo-agent:release-candidate apps/agent
-docker build -t presvo-web:release-candidate apps/web
+docker build -t opevo-api:release-candidate apps/api
+docker build -t opevo-agent:release-candidate apps/agent
+docker build -t opevo-web:release-candidate apps/web
 ```
 
 Expected:

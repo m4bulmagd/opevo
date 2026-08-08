@@ -24,7 +24,7 @@ OWNER_NAME_MAX_LENGTH = 255
 OWNER_CONTEXT_MAX_LENGTH = 4_000
 SYSTEM_PROMPT_MAX_LENGTH = 8_000
 KNOWLEDGE_BASE_MAX_LENGTH = 32_000
-VERIFICATION_MESSAGE = "Forwarding test successful. Return to Presvo to go live."
+VERIFICATION_MESSAGE = "Forwarding test successful. Return to Opevo to go live."
 
 AgentName = Annotated[
     str,
@@ -101,7 +101,7 @@ class ForwardingVerificationDispatch(VersionedContract):
     user_id: UUID
     agent_identity: NonBlankString
     completion_token: str = Field(min_length=1, repr=False)
-    message: Literal["Forwarding test successful. Return to Presvo to go live."]
+    message: Literal["Forwarding test successful. Return to Opevo to go live."]
     tts_provider: Literal["speechmatics", "elevenlabs"]
 
     @field_validator("completion_token", mode="before")

@@ -65,14 +65,14 @@ def test_worker_settings_use_exact_runtime_limits() -> None:
     assert lifecycle.poll_delay == 0.5
     assert lifecycle.job_completion_wait == 60
     assert lifecycle.health_check_interval == 15
-    assert lifecycle.health_check_key == "presvo:worker:call-lifecycle:health"
+    assert lifecycle.health_check_key == "opevo:worker:call-lifecycle:health"
 
     assert background.queue_name == "arq:queue:background"
     assert background.max_jobs == 4
     assert background.poll_delay == 0.5
     assert background.job_completion_wait == 30
     assert background.health_check_interval == 15
-    assert background.health_check_key == "presvo:worker:background:health"
+    assert background.health_check_key == "opevo:worker:background:health"
 
 
 def test_enqueued_function_policies_and_result_retention_are_explicit() -> None:
@@ -415,7 +415,7 @@ async def test_worker_startup_rejects_unsafe_runtime_before_resources(
 
 @pytest.mark.parametrize(
     "service_name",
-    ["presvo-worker-call-lifecycle", "presvo-worker-background"],
+    ["opevo-worker-call-lifecycle", "opevo-worker-background"],
 )
 def test_worker_service_names_are_preserved_by_observability_allowlist(
     service_name: str,

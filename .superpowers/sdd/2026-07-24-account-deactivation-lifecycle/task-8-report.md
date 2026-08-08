@@ -164,8 +164,8 @@ that same stable call ID.
 
 ## Teardown
 
-All disposable projects (`presvo-task8-red`, `presvo-task8-final`, and
-`presvo-task8-lockorder`) were torn down with
+All disposable projects (`opevo-task8-red`, `opevo-task8-final`, and
+`opevo-task8-lockorder`) were torn down with
 `down --volumes --remove-orphans`. PostgreSQL and Redis
 containers, networks, and named volumes were all reported removed.
 
@@ -274,7 +274,7 @@ fields and one expectation contradicted the service's existing fail-closed
 behavior when account repositories are absent. The test-only fixture and
 expectation were aligned; no billing production behavior changed.
 
-The disposable `presvo-task8-fix1` PostgreSQL and Redis containers, network,
+The disposable `opevo-task8-fix1` PostgreSQL and Redis containers, network,
 and named volumes were removed with `down --volumes --remove-orphans`.
 No plan, design, ledger, migration, unrelated documentation, or web file was
 changed. Remaining concerns: none.
@@ -347,7 +347,7 @@ before/after test passed (`1 passed in 1.14s`). A new user-scoped
   `Success: no issues found in 3 source files`.
 - `git diff --check`: exit `0`.
 
-The disposable `presvo-task8-fix2` and `presvo-task8-fix2-final` PostgreSQL
+The disposable `opevo-task8-fix2` and `opevo-task8-fix2-final` PostgreSQL
 and Redis containers, networks, and named volumes were removed with
 `down --volumes --remove-orphans`.
 No plan, design, ledger, migration, unrelated documentation, production, or

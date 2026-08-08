@@ -4,7 +4,7 @@ from uuid import UUID
 
 import pytest
 
-from presvo_contracts import (
+from opevo_contracts import (
     CURRENT_SCHEMA_VERSION,
     ContractError,
     VersionedContract,
@@ -13,7 +13,7 @@ from presvo_contracts import (
     dump_contract_json,
     parse_contract,
 )
-from presvo_contracts.versioning import WireValue
+from opevo_contracts.versioning import WireValue
 
 
 class ProbeContract(VersionedContract):

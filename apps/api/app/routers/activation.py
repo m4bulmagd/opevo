@@ -50,7 +50,7 @@ from app.services.forwarding_verification_service import (
 from app.services.receptionist_projection_service import (
     ReceptionistProjectionTooLargeError,
 )
-from presvo_contracts import (
+from opevo_contracts import (
     VerificationCompletionAcknowledgement,
     VerificationCompletionRequest,
     create_contract,

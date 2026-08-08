@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from presvo_contracts import ContractError, VersionedContract, dump_contract
+from opevo_contracts import ContractError, VersionedContract, dump_contract
 
 import agent.main as agent_main
 from agent.composition import (
@@ -132,7 +132,7 @@ class FakeRuntime:
         ),
         (
             "forwarding_verification_dispatch.json",
-            "Presvo forwarding verification",
+            "Opevo forwarding verification",
             "agent-verification-44444444-4444-4444-8444-444444444444",
         ),
     ],

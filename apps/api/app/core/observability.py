@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _instance: "Observability | None" = None
 _instance_lock = threading.Lock()
 _call_id_context: ContextVar[str | None] = ContextVar(
-    "presvo_observability_call_id",
+    "opevo_observability_call_id",
     default=None,
 )
 
@@ -146,10 +146,10 @@ SAFE_ERROR_CLASSES = frozenset(
 )
 _SERVICE_NAMES = frozenset(
     {
-        "presvo-api",
-        "presvo-worker",
-        "presvo-worker-background",
-        "presvo-worker-call-lifecycle",
+        "opevo-api",
+        "opevo-worker",
+        "opevo-worker-background",
+        "opevo-worker-call-lifecycle",
     }
 )
 _HTTP_METHODS = frozenset(
@@ -436,109 +436,109 @@ class Observability:
         self.tracer = tracer
         self.lifecycle = lifecycle
         self.http_duration = meter.create_histogram(
-            "presvo.http.server.request.duration",
+            "opevo.http.server.request.duration",
             unit="s",
         )
-        self.webhook_requests = meter.create_counter("presvo.webhook.requests")
+        self.webhook_requests = meter.create_counter("opevo.webhook.requests")
         self.webhook_duration = meter.create_histogram(
-            "presvo.webhook.duration",
+            "opevo.webhook.duration",
             unit="s",
         )
-        self.outbox_events = meter.create_gauge("presvo.outbox.events")
+        self.outbox_events = meter.create_gauge("opevo.outbox.events")
         self.outbox_oldest_age = meter.create_gauge(
-            "presvo.outbox.oldest_unfinished.age",
+            "opevo.outbox.oldest_unfinished.age",
             unit="s",
         )
         self.outbox_terminal_failures = meter.create_counter(
-            "presvo.outbox.terminal_failures"
+            "opevo.outbox.terminal_failures"
         )
         self.worker_queue_delay = meter.create_histogram(
-            "presvo.worker.queue.delay",
+            "opevo.worker.queue.delay",
             unit="s",
         )
-        self.worker_queue_depth = meter.create_gauge("presvo.worker.queue.depth")
+        self.worker_queue_depth = meter.create_gauge("opevo.worker.queue.depth")
         self.worker_queue_oldest_due_age = meter.create_gauge(
-            "presvo.worker.queue.oldest_due.age",
+            "opevo.worker.queue.oldest_due.age",
             unit="s",
         )
         self.worker_job_duration = meter.create_histogram(
-            "presvo.worker.job.duration",
+            "opevo.worker.job.duration",
             unit="s",
         )
-        self.calls_current = meter.create_gauge("presvo.calls.current")
-        self.calls_stale = meter.create_gauge("presvo.calls.stale")
+        self.calls_current = meter.create_gauge("opevo.calls.current")
+        self.calls_stale = meter.create_gauge("opevo.calls.stale")
         self.reconciliation_outcomes = meter.create_counter(
-            "presvo.call_reconciliation.outcomes"
+            "opevo.call_reconciliation.outcomes"
         )
         self.recording_operations = meter.create_gauge(
-            "presvo.recording.operations"
+            "opevo.recording.operations"
         )
         self.recording_oldest_unresolved_age = meter.create_gauge(
-            "presvo.recording.oldest_unresolved.age",
+            "opevo.recording.oldest_unresolved.age",
             unit="s",
         )
         self.recording_pending_stop_operations = meter.create_gauge(
-            "presvo.recording.pending_stop.operations"
+            "opevo.recording.pending_stop.operations"
         )
         self.recording_pending_stop_oldest_age = meter.create_gauge(
-            "presvo.recording.pending_stop.oldest_age",
+            "opevo.recording.pending_stop.oldest_age",
             unit="s",
         )
         self.recording_pending_deletion_operations = meter.create_gauge(
-            "presvo.recording.pending_deletion.operations"
+            "opevo.recording.pending_deletion.operations"
         )
         self.recording_pending_deletion_oldest_age = meter.create_gauge(
-            "presvo.recording.pending_deletion.oldest_age",
+            "opevo.recording.pending_deletion.oldest_age",
             unit="s",
         )
         self.recording_reconciliation_results = meter.create_counter(
-            "presvo.recording.reconciliation.results"
+            "opevo.recording.reconciliation.results"
         )
         self.recording_webhook_mismatches = meter.create_counter(
-            "presvo.recording.webhook_mismatches"
+            "opevo.recording.webhook_mismatches"
         )
         self.recording_multiple_exact_match_conflicts = meter.create_counter(
-            "presvo.recording.multiple_exact_match_conflicts"
+            "opevo.recording.multiple_exact_match_conflicts"
         )
         self.provider_duration = meter.create_histogram(
-            "presvo.provider.request.duration",
+            "opevo.provider.request.duration",
             unit="s",
         )
-        self.provider_errors = meter.create_counter("presvo.provider.errors")
+        self.provider_errors = meter.create_counter("opevo.provider.errors")
         self.account_deactivation_operations = meter.create_gauge(
-            "presvo.account_deactivation.operations"
+            "opevo.account_deactivation.operations"
         )
         self.account_deactivation_oldest_incomplete_age = meter.create_gauge(
-            "presvo.account_deactivation.oldest_incomplete_age",
+            "opevo.account_deactivation.oldest_incomplete_age",
             unit="s",
         )
         self.account_deactivation_reconciliation_results = meter.create_counter(
-            "presvo.account_deactivation.reconciliation_results"
+            "opevo.account_deactivation.reconciliation_results"
         )
         self.account_deactivation_attention = meter.create_gauge(
-            "presvo.account_deactivation.attention"
+            "opevo.account_deactivation.attention"
         )
         self.account_deactivation_completion_duration = meter.create_histogram(
-            "presvo.account_deactivation.completion_duration",
+            "opevo.account_deactivation.completion_duration",
             unit="s",
         )
         self.invalid_contract_messages = meter.create_counter(
-            "presvo.contract.invalid_messages"
+            "opevo.contract.invalid_messages"
         )
-        self.auth_verifications = meter.create_counter("presvo.auth.verifications")
-        self.jwks_refreshes = meter.create_counter("presvo.auth.jwks.refreshes")
+        self.auth_verifications = meter.create_counter("opevo.auth.verifications")
+        self.jwks_refreshes = meter.create_counter("opevo.auth.jwks.refreshes")
         self.jwks_refresh_duration = meter.create_histogram(
-            "presvo.auth.jwks.refresh.duration",
+            "opevo.auth.jwks.refresh.duration",
             unit="s",
         )
         self.jwks_coalesced_waits = meter.create_counter(
-            "presvo.auth.jwks.coalesced_waits"
+            "opevo.auth.jwks.coalesced_waits"
         )
         self.jwks_stale_key_uses = meter.create_counter(
-            "presvo.auth.jwks.stale_key_uses"
+            "opevo.auth.jwks.stale_key_uses"
         )
         self.jwks_refresh_cooldowns = meter.create_counter(
-            "presvo.auth.jwks.refresh_cooldowns"
+            "opevo.auth.jwks.refresh_cooldowns"
         )
 
     def record_invalid_contract(
@@ -696,7 +696,7 @@ class Observability:
                 _safe_trace_call(
                     "set_span_error_class",
                     lambda: span.set_attribute(
-                        "presvo.error.class",
+                        "opevo.error.class",
                         error_class,
                     ),
                 )
@@ -711,7 +711,7 @@ class Observability:
             if span is not None:
                 _safe_trace_call(
                     "set_span_outcome",
-                    lambda: span.set_attribute("presvo.outcome", outcome),
+                    lambda: span.set_attribute("opevo.outcome", outcome),
                 )
             if span_context is not None:
                 try:
@@ -740,12 +740,12 @@ class Observability:
         provider, operation = _provider_labels(provider, operation)
         started = time.monotonic()
         attributes: dict[str, Any] = {
-            "presvo.provider.name": provider,
-            "presvo.provider.operation": operation,
+            "opevo.provider.name": provider,
+            "opevo.provider.operation": operation,
         }
         parsed_call_id = _validated_call_id(call_id) or _call_id_context.get()
         if parsed_call_id is not None:
-            attributes["presvo.call.id"] = parsed_call_id
+            attributes["opevo.call.id"] = parsed_call_id
         span_context = None
         span = None
         try:
@@ -781,14 +781,14 @@ class Observability:
                 _safe_trace_call(
                     "set_provider_span_error_class",
                     lambda: span.set_attribute(
-                        "presvo.error.class",
+                        "opevo.error.class",
                         error_class,
                     ),
                 )
                 _safe_trace_call(
                     "set_provider_span_failure_kind",
                     lambda: span.set_attribute(
-                        "presvo.failure.kind",
+                        "opevo.failure.kind",
                         failure_kind,
                     ),
                 )
@@ -817,7 +817,7 @@ class Observability:
             if span is not None:
                 _safe_trace_call(
                     "set_provider_span_outcome",
-                    lambda: span.set_attribute("presvo.outcome", outcome),
+                    lambda: span.set_attribute("opevo.outcome", outcome),
                 )
             if span_context is not None:
                 try:
@@ -1228,7 +1228,7 @@ def _run_independent_signal_actions(
         thread = threading.Thread(
             target=run,
             args=(signal, action),
-            name=f"presvo-otel-{operation_prefix}-{signal}",
+            name=f"opevo-otel-{operation_prefix}-{signal}",
             daemon=True,
         )
         thread.start()
@@ -1294,8 +1294,8 @@ def _build_components(
         )
     meter_provider = MeterProvider(resource=resource, metric_readers=readers)
     return (
-        meter_provider.get_meter("presvo"),
-        tracer_provider.get_tracer("presvo"),
+        meter_provider.get_meter("opevo"),
+        tracer_provider.get_tracer("opevo"),
         _Lifecycle(tracer_provider, meter_provider),
     )
 
@@ -1314,7 +1314,7 @@ def initialize_observability(
             return _instance
         service_name = _safe_label(service_name, _SERVICE_NAMES)
         if service_name == "unknown":
-            service_name = "presvo-api"
+            service_name = "opevo-api"
         disabled = os.getenv("OTEL_SDK_DISABLED", "").strip().lower() in {
             "true",
             "1",
@@ -1330,8 +1330,8 @@ def initialize_observability(
                     metric_endpoint,
                 )
             else:
-                meter = metrics.get_meter("presvo")
-                tracer = trace.get_tracer("presvo")
+                meter = metrics.get_meter("opevo")
+                tracer = trace.get_tracer("opevo")
                 lifecycle = None
             _instance = Observability(
                 meter=meter,
@@ -1341,8 +1341,8 @@ def initialize_observability(
         except Exception as error:
             _safe_failure("observability_initialize_failed", "initialize", error)
             _instance = Observability(
-                meter=metrics.get_meter("presvo"),
-                tracer=trace.get_tracer("presvo"),
+                meter=metrics.get_meter("opevo"),
+                tracer=trace.get_tracer("opevo"),
             )
         return _instance
 
@@ -1375,7 +1375,7 @@ def install_http_observability(app) -> None:
             carrier["traceparent"] = traceparent
         parent_context = TraceContextTextMapPropagator().extract(carrier=carrier)
         async with telemetry.trace_operation(
-            "presvo.http.server",
+            "opevo.http.server",
             {"http.request.method": method},
             parent_context=parent_context,
             kind=SpanKind.SERVER,
@@ -1427,16 +1427,16 @@ def instrument_job(
                     max(0.0, (datetime.now(UTC) - enqueue_time).total_seconds()),
                 )
             span_attributes = {
-                "presvo.queue.class": queue_class,
-                "presvo.job.name": job_name,
-                "presvo.job.attempt": attempt,
+                "opevo.queue.class": queue_class,
+                "opevo.job.name": job_name,
+                "opevo.job.attempt": attempt,
             }
             call_id = _reference_call_id(args, kwargs)
             if call_id is not None:
-                span_attributes["presvo.call.id"] = call_id
+                span_attributes["opevo.call.id"] = call_id
             with bind_call_id(call_id):
                 async with telemetry.trace_operation(
-                    "presvo.worker.job",
+                    "opevo.worker.job",
                     span_attributes,
                     kind=SpanKind.CONSUMER,
                 ):
@@ -1555,7 +1555,7 @@ async def _run_lifecycle_action(
 
     threading.Thread(
         target=run_action,
-        name="presvo-otel-shutdown",
+        name="opevo-otel-shutdown",
         daemon=True,
     ).start()
     try:

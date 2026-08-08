@@ -9,7 +9,7 @@ from app.core.dispatch_token import (
 )
 
 
-VERIFICATION_AUDIENCE = "presvo-forwarding-verification"
+VERIFICATION_AUDIENCE = "opevo-forwarding-verification"
 DEFAULT_VERIFICATION_TOKEN_TTL_SECONDS = 900
 MAX_VERIFICATION_TOKEN_TTL_SECONDS = 900
 REQUIRED_VERIFICATION_CLAIMS = ("aud", "sub", "user_id", "iat", "exp")

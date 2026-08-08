@@ -5,7 +5,7 @@
 > `superpowers:executing-plans` to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make every normal Presvo call's LiveKit recording start, stop, and
+**Goal:** Make every normal Opevo call's LiveKit recording start, stop, and
 owner-deletion intent durable so a late or ambiguous provider result cannot
 leave an untracked recording, while terminal-call removal remains an immediate
 local `204` operation.
@@ -1200,10 +1200,10 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q \
 set -e
 cd /home/mo/code/ai/bmad-opevo
 cleanup_recording_pg() {
-  COMPOSE_PROJECT_NAME=presvo-recording-pg POSTGRES_PORT=55434 REDIS_PORT=56381 docker compose -f compose.dev.yaml down --volumes --remove-orphans
+  COMPOSE_PROJECT_NAME=opevo-recording-pg POSTGRES_PORT=55434 REDIS_PORT=56381 docker compose -f compose.dev.yaml down --volumes --remove-orphans
 }
 trap cleanup_recording_pg EXIT
-COMPOSE_PROJECT_NAME=presvo-recording-pg POSTGRES_PORT=55434 REDIS_PORT=56381 docker compose -f compose.dev.yaml up -d --wait postgres redis
+COMPOSE_PROJECT_NAME=opevo-recording-pg POSTGRES_PORT=55434 REDIS_PORT=56381 docker compose -f compose.dev.yaml up -d --wait postgres redis
 cd apps/api
 TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55434/ai_call TEST_REDIS_URL=redis://127.0.0.1:56381/0 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q tests/integration/test_recording_egress_concurrency.py tests/test_recording_egress_operation_migration.py
 cd ../..
@@ -1240,7 +1240,7 @@ readiness from production certification, plus fresh full-regression evidence.
 
 - [ ] Update README and architecture docs to say:
 
-  - Presvo is production-oriented and locally verified, not
+  - Opevo is production-oriented and locally verified, not
     production-certified;
   - normal calls commit a private recording operation before provider start;
   - call completion requests `recording.reconcile` regardless of whether an
@@ -1291,10 +1291,10 @@ marked PostgreSQL-only skips and the already-known upstream warning.
 set -e
 cd /home/mo/code/ai/bmad-opevo
 cleanup_recording_pg() {
-  COMPOSE_PROJECT_NAME=presvo-recording-pg POSTGRES_PORT=55434 REDIS_PORT=56381 docker compose -f compose.dev.yaml down --volumes --remove-orphans
+  COMPOSE_PROJECT_NAME=opevo-recording-pg POSTGRES_PORT=55434 REDIS_PORT=56381 docker compose -f compose.dev.yaml down --volumes --remove-orphans
 }
 trap cleanup_recording_pg EXIT
-COMPOSE_PROJECT_NAME=presvo-recording-pg POSTGRES_PORT=55434 REDIS_PORT=56381 docker compose -f compose.dev.yaml up -d --wait postgres redis
+COMPOSE_PROJECT_NAME=opevo-recording-pg POSTGRES_PORT=55434 REDIS_PORT=56381 docker compose -f compose.dev.yaml up -d --wait postgres redis
 cd apps/api
 TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55434/ai_call TEST_REDIS_URL=redis://127.0.0.1:56381/0 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -m pytest -q
 cd ../..

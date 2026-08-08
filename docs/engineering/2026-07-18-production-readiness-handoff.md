@@ -1,13 +1,13 @@
-# Presvo production-readiness handoff
+# Opevo production-readiness handoff
 
 ## Purpose
 
-This document is the durable continuation point for Presvo's local-first
+This document is the durable continuation point for Opevo's local-first
 production-readiness work through the account-deactivation lifecycle completed
 in July 2026. It complements the canonical capability matrix in
 `docs/PROJECT_STATUS.md`.
 
-Presvo is production-oriented and locally verified, but it is not
+Opevo is production-oriented and locally verified, but it is not
 production-certified. This implementation did not deploy anything, contact or
 mutate live providers, use real credentials, change provider accounts, push, or
 publish externally.
@@ -75,7 +75,7 @@ authenticated read-only access to historical Calls and Billing surfaces.
 After release, the old active phone assignment and obsolete provisioning row
 are removed. Provisioning consent, verification window/session/result,
 forwarding verification, go-live approval, and activation time are reset. The
-agent remains disabled. The old number is not recoverable through Presvo.
+agent remains disabled. The old number is not recoverable through Opevo.
 
 A generation-matched replacement subscription reactivates the account with the
 confirmed profile/carrier and receptionist configuration intact. The activation
@@ -107,15 +107,15 @@ contract, not the real Stripe configuration.
 
 The implemented low-cardinality metrics are:
 
-- `presvo.account_deactivation.operations`
-- `presvo.account_deactivation.oldest_incomplete_age`
-- `presvo.account_deactivation.reconciliation_results`
-- `presvo.account_deactivation.attention`
-- `presvo.account_deactivation.completion_duration`
+- `opevo.account_deactivation.operations`
+- `opevo.account_deactivation.oldest_incomplete_age`
+- `opevo.account_deactivation.reconciliation_results`
+- `opevo.account_deactivation.attention`
+- `opevo.account_deactivation.completion_duration`
 
 Before release, configure paging for every increment of
-`presvo.account_deactivation.attention`, and alert when
-`presvo.account_deactivation.oldest_incomplete_age` exceeds
+`opevo.account_deactivation.attention`, and alert when
+`opevo.account_deactivation.oldest_incomplete_age` exceeds
 `MAX_CALL_DURATION_SECONDS + 900` seconds.
 
 For an attention incident, use the operation ID and bounded trigger/phase/code

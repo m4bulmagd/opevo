@@ -16,7 +16,7 @@ from livekit.agents import (
     cli,
     room_io,
 )
-from presvo_contracts import (
+from opevo_contracts import (
     ContractError,
     CustomerCallDispatch,
     ForwardingVerificationDispatch,
@@ -278,7 +278,7 @@ async def handle_job_request(request: JobRequest) -> None:
         metadata = parse_dispatch(request.job.metadata or "{}")
         if isinstance(metadata, ForwardingVerificationDispatch):
             expected_identity = f"agent-verification-{metadata.verification_session_id}"
-            display_name = "Presvo forwarding verification"
+            display_name = "Opevo forwarding verification"
         else:
             expected_identity = f"agent-call-{metadata.call_id}"
             display_name = metadata.agent_name

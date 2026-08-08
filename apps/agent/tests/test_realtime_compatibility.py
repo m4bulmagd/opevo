@@ -10,7 +10,7 @@ from agent.composition import build_event_publisher
 from agent.config import AgentSettings
 from agent.event_publisher import EventPublisher, RedisEventBus
 from agent.session_runtime import SessionRuntime
-from presvo_contracts import (
+from opevo_contracts import (
     CustomerCallDispatch,
     TranscriptObservedEvent,
     create_contract,

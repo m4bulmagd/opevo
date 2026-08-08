@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver Presvo's complete five-milestone self-service activation journey in the Next.js app, enable the deterministic local journey, and hand active customers into a dashboard with obvious answering state, structured call outcomes, playable original audio, and dependable deletion.
+**Goal:** Deliver Opevo's complete five-milestone self-service activation journey in the Next.js app, enable the deterministic local journey, and hand active customers into a dashboard with obvious answering state, structured call outcomes, playable original audio, and dependable deletion.
 
 **Architecture:** The FastAPI activation snapshot remains the only workflow authority. Next.js Server Components read it, authenticated Server Actions issue explicit commands, and small Client Components handle autosave, pending transitions, clipboard behavior, countdowns, and server refreshes. The dashboard consumes a bounded structured-summary projection; call deletion removes active storage and customer content before hiding the row.
 
@@ -67,11 +67,11 @@ it("accepts local auth only in development", () => {
 it("returns the fixed local session only on the server", async () => {
   vi.stubEnv("NODE_ENV", "development")
   vi.stubEnv("AUTH_MODE", "local")
-  vi.stubEnv("LOCAL_AUTH_TOKEN", "presvo-local-development-token")
+  vi.stubEnv("LOCAL_AUTH_TOKEN", "opevo-local-development-token")
   const session = await getServerSessionState()
   expect(session.isAuthenticated).toBe(true)
-  expect(session.userId).toBe("local_presvo_user")
-  expect(await session.getToken()).toBe("presvo-local-development-token")
+  expect(session.userId).toBe("local_opevo_user")
+  expect(await session.getToken()).toBe("opevo-local-development-token")
 })
 ```
 
@@ -114,7 +114,7 @@ module so `proxy.ts` cannot accidentally serialize it.
 - [ ] **Step 4: Select the local session only inside the server session module**
 
 In local development, require a nonblank `LOCAL_AUTH_TOKEN` and return the fixed
-external identity `local_presvo_user`. In Clerk mode, keep the dynamic Clerk
+external identity `local_opevo_user`. In Clerk mode, keep the dynamic Clerk
 import and current behavior. Add `requireServerSession()` for Server Actions:
 
 ```ts
@@ -380,7 +380,7 @@ const [snapshot, capabilities] = await Promise.all([
 ```
 
 `error.tsx` is a Client Component with an accessible retry button. `loading.tsx`
-uses existing `Skeleton`. The layout includes the Presvo wordmark, milestone
+uses existing `Skeleton`. The layout includes the Opevo wordmark, milestone
 progress, account/billing/calls links, and sign-out where Clerk supplies it;
 local mode shows a non-interactive `Local development` badge.
 
@@ -462,7 +462,7 @@ and the components already exist. Do not run `add` unless `info` proves a
 required component is absent; preview any addition with `--dry-run`/`--diff`.
 
 Use the official shadcn and Tailwind Plus block URLs in Global Constraints as
-visual references, then implement with the existing Presvo tokens and source
+visual references, then implement with the existing Opevo tokens and source
 components.
 
 - [ ] **Step 2: Write failing form, hours, carrier, and autosave tests**
@@ -611,7 +611,7 @@ number.
 
 - [ ] **Step 4: Require a destructive-style review before number ordering**
 
-Use `AlertDialog` titled `Provision your French Presvo number`. Show country,
+Use `AlertDialog` titled `Provision your French Opevo number`. Show country,
 one-number limit, the fact that forwarding is configured next, and the exact
 button `Confirm and provision my number`. Compose `Spinner` and disable the
 trigger while pending. The server's idempotency remains the final double-click
@@ -696,7 +696,7 @@ Expected: FAIL with missing forwarding/launch components.
 
 - [ ] **Step 3: Render carrier guidance as one readable instruction surface**
 
-Show the assigned Presvo number once, then the three ordered conditions from
+Show the assigned Opevo number once, then the three ordered conditions from
 the API. Use `Accordion` only on small screens and a simple description list on
 larger screens; do not wrap each line in a card. Copy buttons exist only when
 `dial_code` is non-null and use `navigator.clipboard` with an accessible live
@@ -865,7 +865,7 @@ history operations.
 Remove `mc ilm rule import` and its mounted lifecycle file from
 `compose.dev.yaml`, then delete `infra/minio/recording-lifecycle.json`. Keep the
 bucket private and keep signed access. Replace the old lifecycle assertion with
-a regression test/source check proving Presvo's local stack does not configure
+a regression test/source check proving Opevo's local stack does not configure
 automatic expiration. This deliberately implements the approved "delete now,
 retention later" decision.
 
@@ -891,7 +891,7 @@ fallback.
 
 - [ ] **Step 6: Implement the concise dashboard handoff**
 
-Lead the dashboard with `Presvo is answering` or `Presvo is paused`, not setup
+Lead the dashboard with `Opevo is answering` or `Opevo is paused`, not setup
 cards. For each call, show one-sentence summary, caller intent as the outcome,
 follow-up badge, up to three action items plus a count, time/duration, and
 recording availability. The detail page uses native `<audio controls
@@ -902,7 +902,7 @@ Rename the misleading web `archiveCall`/`archiveCallAction` functions to
 `deleteCall`/`deleteCallAction`. The deletion Server Action authenticates,
 calls the backend, revalidates call routes, and redirects only after success
 outside its catch block. Customer copy
-says `Remove call` and explains removal from the active Presvo account without
+says `Remove call` and explains removal from the active Opevo account without
 making a backup-erasure promise.
 
 Replace the legacy onboarding/setup copy with links to `/activate` where still
@@ -978,7 +978,7 @@ the shared deterministic account.
 - [ ] **Step 2: Write the failing full browser journey**
 
 ```ts
-test("local owner activates Presvo without external providers", async ({ page }) => {
+test("local owner activates Opevo without external providers", async ({ page }) => {
   await page.goto("/activate")
   await completeBusinessMilestone(page)
   await page.reload()
@@ -994,7 +994,7 @@ test("local owner activates Presvo without external providers", async ({ page })
   await page.getByRole("button", { name: "Simulate forwarded call" }).click()
   await page.getByRole("button", { name: "Go live" }).click()
   await expect(page).toHaveURL(/\/dashboard/)
-  await expect(page.getByText("Presvo is answering")).toBeVisible()
+  await expect(page.getByText("Opevo is answering")).toBeVisible()
 })
 ```
 
@@ -1010,7 +1010,7 @@ and separate MinIO ports. Set these explicit development service values:
 
 ```yaml
 AUTH_MODE: local
-LOCAL_AUTH_TOKEN: presvo-local-development-token
+LOCAL_AUTH_TOKEN: opevo-local-development-token
 BILLING_MODE: fake
 CARRIER_LOOKUP_MODE: fake
 TELEPHONY_MODE: fake
@@ -1029,7 +1029,7 @@ Production Compose explicitly selects Clerk/Stripe/Telnyx modes and requires
 
 - [ ] **Step 4: Add a disposable runner with cleanup**
 
-`scripts/run-local-e2e.sh` uses `set -eu`, project name `presvo-e2e`, the
+`scripts/run-local-e2e.sh` uses `set -eu`, project name `opevo-e2e`, the
 alternate ports, and a trap that runs `docker compose ... down --volumes`.
 It builds/starts Postgres, Redis, MinIO, migrate, API, worker, and web; waits for
 health; runs Playwright from `apps/web`; and always cleans up. It does not start

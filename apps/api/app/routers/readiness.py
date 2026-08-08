@@ -27,10 +27,10 @@ class ReadinessChecks:
 
     async def check_database(self) -> bool:
         async with self.observability.trace_operation(
-            "presvo.dependency.check",
+            "opevo.dependency.check",
             {
-                "presvo.dependency": "database",
-                "presvo.operation": "readiness",
+                "opevo.dependency": "database",
+                "opevo.operation": "readiness",
             },
             kind=SpanKind.CLIENT,
         ):
@@ -40,10 +40,10 @@ class ReadinessChecks:
 
     async def check_redis(self) -> bool:
         async with self.observability.trace_operation(
-            "presvo.dependency.check",
+            "opevo.dependency.check",
             {
-                "presvo.dependency": "redis",
-                "presvo.operation": "readiness",
+                "opevo.dependency": "redis",
+                "opevo.operation": "readiness",
             },
             kind=SpanKind.CLIENT,
         ):

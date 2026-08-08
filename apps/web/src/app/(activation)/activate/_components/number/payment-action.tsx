@@ -70,11 +70,11 @@ export function PaymentAction({ localBilling, navigate = defaultNavigate }: Paym
       <div className="flex flex-col gap-2">
         <p className="font-semibold text-lg">Starter plan</p>
         <p className="max-w-2xl text-muted-foreground text-sm leading-6">
-          Payment activates your Presvo plan. It does not order a phone number; you review that separately next.
+          Payment activates your Opevo plan. It does not order a phone number; you review that separately next.
         </p>
         {!localBilling ? (
           <p className="text-muted-foreground text-sm">
-            Cancel checkout before completing payment and Presvo will not charge you.
+            Cancel checkout before completing payment and Opevo will not charge you.
           </p>
         ) : (
           <p className="text-muted-foreground text-sm">

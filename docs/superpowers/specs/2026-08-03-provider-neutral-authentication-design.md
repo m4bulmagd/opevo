@@ -5,16 +5,16 @@
 
 ## Summary
 
-Presvo will refactor its complete browser-to-API authentication path around a
+Opevo will refactor its complete browser-to-API authentication path around a
 provider-neutral seam while retaining Clerk as the only hosted authentication
 adapter in phase one. The existing development-only local adapter remains
-available. Supabase, or a future Presvo-owned authentication system, can be
+available. Supabase, or a future Opevo-owned authentication system, can be
 added later by implementing the same interfaces without changing routes,
 business logic, persistence relationships, Stripe ownership, or realtime
 delivery.
 
 Exactly one authentication provider is selected for an entire deployment.
-Presvo does not support different providers for different users, concurrent
+Opevo does not support different providers for different users, concurrent
 hosted providers, account linking, or identity merging. The final hosted
 provider will be selected before production launch, so this work optimizes for
 a clean global provider choice rather than a live user migration.
@@ -53,11 +53,11 @@ but active application terminology and configuration can change cleanly.
    semantics in phase one.
 3. Preserve deterministic development-only local authentication.
 4. Keep exactly one active provider per deployment.
-5. Make the internal Presvo UUID the only user identifier consumed by routes,
+5. Make the internal Opevo UUID the only user identifier consumed by routes,
    business logic, Stripe, and realtime.
 6. Confine Clerk SDK imports, claims, payloads, settings, copy, and behavior to
    Clerk adapters, Clerk configuration, and Clerk-specific tests.
-7. Make a future Supabase or Presvo-owned adapter additive rather than another
+7. Make a future Supabase or Opevo-owned adapter additive rather than another
    cross-codebase refactor.
 8. Keep configuration and authentication failures fail-closed and
    value-redacted.
@@ -67,7 +67,7 @@ but active application terminology and configuration can change cleanly.
 - Implementing Supabase authentication in phase one.
 - Adding a placeholder Supabase adapter or Supabase dependency.
 - Supporting more than one hosted provider in a deployment.
-- Supporting multiple external identities for one Presvo user.
+- Supporting multiple external identities for one Opevo user.
 - Supporting account linking, identity merging, or provider selection per
   request or per user.
 - Migrating production users, passwords, sessions, or provider identifiers.
@@ -81,9 +81,9 @@ but active application terminology and configuration can change cleanly.
 
 ### Provider adapters around neutral interfaces
 
-Presvo will retain a small token-verification interface and place provider
+Opevo will retain a small token-verification interface and place provider
 behavior behind adapters. Shared authentication code will map a verified
-external identity to the internal Presvo user before returning control to a
+external identity to the internal Opevo user before returning control to a
 route or realtime caller. The frontend will expose provider-neutral session,
 route-protection, and authentication-control modules whose leaf adapters own
 provider SDKs and UI.
@@ -102,7 +102,7 @@ neutral names. Adding Supabase would require a second structural refactor.
 ### Rejected: full identity subsystem
 
 An `auth_identities` table, provider registry, generic webhook dispatcher,
-account linking, and concurrent-provider support solve requirements Presvo does
+account linking, and concurrent-provider support solve requirements Opevo does
 not have. They would increase schema, lifecycle, testing, and security
 complexity without improving the planned single-provider deployment.
 
@@ -489,7 +489,7 @@ A future Supabase phase adds:
 It does not alter the `users` relationship model, authenticated route types,
 business modules, Stripe ownership, or realtime identifiers.
 
-A future Presvo-owned auth system follows the same pattern. The seam isolates
+A future Opevo-owned auth system follows the same pattern. The seam isolates
 application integration, but it does not reduce the inherent security and
 operational work of passwords, recovery, verification, MFA, revocation, abuse
 prevention, and signing-key lifecycle management.
@@ -505,7 +505,7 @@ prevention, and signing-key lifecycle management.
    development-only.
 4. Active persistence uses `users.external_user_id`; there is no per-user
    provider column or multi-identity table.
-5. REST routes and realtime receive only an internal Presvo user UUID after
+5. REST routes and realtime receive only an internal Opevo user UUID after
    authentication.
 6. All foreign keys, Stripe ownership metadata, WebSocket keys, Redis channels,
    and realtime contracts use the internal UUID.

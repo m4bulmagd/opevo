@@ -163,8 +163,8 @@ decisions 11C, 12C, or 18A.
   all entry/activation images remain byte-for-byte unchanged.
 - **23A — semantic lifecycle state and repeated history defect.** The inactive
   copy is a paragraph within the `Account status` region, not a heading. The
-  restart/resume journey therefore scopes exact `Inactive`, `Presvo is
-  inactive`, and `Reactivate Presvo` assertions to that region. The initially
+  restart/resume journey therefore scopes exact `Inactive`, `Opevo is
+  inactive`, and `Reactivate Opevo` assertions to that region. The initially
   intermittent browser-history failure repeated: after `page.goBack()`, URL
   props reset while the controlled status draft stayed `completed`. Production
   `CallHistorySearch` now synchronizes its query, status, and range drafts from

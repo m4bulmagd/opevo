@@ -65,9 +65,9 @@ export function ProvisioningConsent() {
         </AlertDialogTrigger>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Provision your French Presvo number</AlertDialogTitle>
+            <AlertDialogTitle>Provision your French Opevo number</AlertDialogTitle>
             <AlertDialogDescription>
-              Presvo will order one French number for this account. Your existing business number stays with your
+              Opevo will order one French number for this account. Your existing business number stays with your
               carrier, and conditional forwarding is configured in the next step.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -79,7 +79,7 @@ export function ProvisioningConsent() {
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-muted-foreground">Account limit</dt>
-                <dd className="font-medium">One Presvo number</dd>
+                <dd className="font-medium">One Opevo number</dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-muted-foreground">Next</dt>

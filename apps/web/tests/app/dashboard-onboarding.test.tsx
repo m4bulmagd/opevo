@@ -42,7 +42,7 @@ vi.mock("@/lib/api/dashboard", () => ({
 
 function buildAgentConfig(overrides: Record<string, unknown> = {}) {
   return {
-    agent_name: "Presvo Front Desk",
+    agent_name: "Opevo Front Desk",
     owner_context: "Reception for North Clinic",
     system_prompt: "Answer inbound calls professionally.",
     knowledge_base: "Open weekdays",
@@ -177,7 +177,7 @@ describe("dashboard onboarding", () => {
     render(await Page());
 
     expect(screen.getByText(/Number provisioning in progress/i)).toBeInTheDocument();
-    expect(screen.getByText(/assigning your Presvo number now/i)).toBeInTheDocument();
+    expect(screen.getByText(/assigning your Opevo number now/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Retry provisioning/i })).not.toBeInTheDocument();
   });
 
@@ -263,7 +263,7 @@ describe("dashboard onboarding", () => {
     const { default: Page } = await import("@/app/(app)/dashboard/page");
     render(await Page());
 
-    expect(screen.getByText(/Presvo Front Desk is answering calls/i)).toBeInTheDocument();
+    expect(screen.getByText(/Opevo Front Desk is answering calls/i)).toBeInTheDocument();
     expect(screen.queryByText(/Ready to go live/i)).not.toBeInTheDocument();
   });
 });

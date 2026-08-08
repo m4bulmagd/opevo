@@ -332,10 +332,10 @@ Implementation now uses `worker-lifecycle` on `arq:queue` for call finalization
 and call reconciliation (10 default slots), and `worker-background` on
 `arq:queue:background` for outbox delivery/reconciliation and verification
 expiry (4 default slots). They report
-`presvo:worker:call-lifecycle:health` and
-`presvo:worker:background:health`, respectively, plus
-`presvo.worker.queue.depth{queue_class}` and
-`presvo.worker.queue.oldest_due.age{queue_class}`. PostgreSQL outbox/call state
+`opevo:worker:call-lifecycle:health` and
+`opevo:worker:background:health`, respectively, plus
+`opevo.worker.queue.depth{queue_class}` and
+`opevo.worker.queue.oldest_due.age{queue_class}`. PostgreSQL outbox/call state
 remains authoritative; Redis is execution and wakeup only.
 
 The implemented proof is controlled ten-call local/CI evidence: four
@@ -770,8 +770,8 @@ Final controller verification at `5bd13d8`:
   searches found no legacy API provider exception family and confirmed the
   agent transport exception family remains separate.
 - The isolated PostgreSQL and Redis verification containers
-  `presvo-7a-provider-failures-postgres` and
-  `presvo-7a-provider-failures-redis` were stopped, auto-removed, and verified
+  `opevo-7a-provider-failures-postgres` and
+  `opevo-7a-provider-failures-redis` were stopped, auto-removed, and verified
   absent. No user compose container was changed.
 - Realtime and activation defaults remain disabled. There was no deploy, push,
   PR, schema/migration, dependency, lockfile, or agent transport-type change.
@@ -1594,7 +1594,7 @@ byte-for-byte unchanged.
 
 #### Concrete problem and evidence
 
-The restart/resume journey looked for `Presvo is inactive` as a heading, but
+The restart/resume journey looked for `Opevo is inactive` as a heading, but
 production correctly renders it as a paragraph inside the `Account status`
 region. Separately, the calls browser-history check failed once and passed on
 an immediate retry. Per the approved decision, the assertion was retained and
@@ -1612,8 +1612,8 @@ status draft remained `completed` for 30 seconds.
 
 #### Recorded decision and implemented solution — 23A
 
-The lifecycle journey scopes exact `Inactive`, exact `Presvo is inactive`, and
-the `Reactivate Presvo` button to the semantic `Account status` region.
+The lifecycle journey scopes exact `Inactive`, exact `Opevo is inactive`, and
+the `Reactivate Opevo` button to the semantic `Account status` region.
 
 The repeated browser-history failure was a production defect, not a visual
 test accommodation. `CallHistorySearch` initializes draft query/status/range
@@ -1668,7 +1668,7 @@ threshold was weakened.
 Cleanup removed only the exact disposable PostgreSQL and Redis containers, the
 two explicitly tagged verification images, `apps/web/node_modules`, the task's
 npm/Playwright/uv caches and snapshot-review directory, and generated coverage
-reports. No `presvo-e2e` container, network, or volume remains. No global Docker
+reports. No `opevo-e2e` container, network, or volume remains. No global Docker
 prune or user-resource cleanup was performed.
 
 ## Clerk Authentication Implementation Evidence — 3A + 13A
@@ -1701,7 +1701,7 @@ Final verification evidence:
   verifier settings are API-only; local Compose contains no Clerk verifier
   settings; every realtime setting/default remains false.
 - The monorepo-root API runtime image built successfully and imported both
-  `httpx` and the installed `presvo_contracts` package.
+  `httpx` and the installed `opevo_contracts` package.
 
 Task 6 also repaired two stale test harnesses that bypassed FastAPI lifespan:
 they now construct, attach, and always close one scoped verifier instead of

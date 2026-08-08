@@ -64,7 +64,7 @@ function getSuspendedPresentation(onboardingStatus: OnboardingStatus) {
 
   return {
     title: "Your receptionist is safely offline",
-    description: "Presvo found an account condition that needs attention before calls can go live.",
+    description: "Opevo found an account condition that needs attention before calls can go live.",
     badgeLabel: "Offline",
     badgeVariant: "secondary" as const,
     icon: CirclePause,
@@ -77,7 +77,7 @@ function getStatusPresentation(onboardingStatus: OnboardingStatus) {
     case "number_provisioning":
       return {
         title: "Number provisioning in progress",
-        description: "We’re assigning your Presvo number now. This usually finishes automatically.",
+        description: "We’re assigning your Opevo number now. This usually finishes automatically.",
         badgeLabel: "Provisioning",
         badgeVariant: "secondary" as const,
         icon: LoaderCircle,
@@ -113,7 +113,7 @@ function getStatusPresentation(onboardingStatus: OnboardingStatus) {
     case "routing_pending":
       return {
         title: "Routing update in progress",
-        description: "Presvo is applying your routing update. Calls stay safely offline until every check passes.",
+        description: "Opevo is applying your routing update. Calls stay safely offline until every check passes.",
         badgeLabel: "Updating",
         badgeVariant: "secondary" as const,
         icon: LoaderCircle,
@@ -122,7 +122,7 @@ function getStatusPresentation(onboardingStatus: OnboardingStatus) {
     case "live":
       return {
         title: "Your receptionist is live",
-        description: "Calls to your Presvo number can now be answered by your receptionist.",
+        description: "Calls to your Opevo number can now be answered by your receptionist.",
         badgeLabel: "Live",
         badgeVariant: "default" as const,
         icon: ShieldCheck,
@@ -131,7 +131,7 @@ function getStatusPresentation(onboardingStatus: OnboardingStatus) {
     case "subscription_required":
       return {
         title: "Choose your plan",
-        description: "Activate the starter plan to begin Presvo number provisioning.",
+        description: "Activate the starter plan to begin Opevo number provisioning.",
         badgeLabel: "Plan required",
         badgeVariant: "secondary" as const,
         icon: CreditCard,

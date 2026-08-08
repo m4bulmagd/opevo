@@ -440,9 +440,9 @@ def test_routing_fingerprint_changes_for_every_routing_sensitive_value() -> None
     changed_carrier.confirmed_carrier = "sfr"
     changed_revision = profile_for_fingerprint()
     changed_revision.routing_revision += 1
-    changed_presvo_profile = profile_for_fingerprint()
-    changed_presvo_number = phone_for_fingerprint(changed_presvo_profile)
-    changed_presvo_number.e164 = "+33123456789"
+    changed_opevo_profile = profile_for_fingerprint()
+    changed_opevo_number = phone_for_fingerprint(changed_opevo_profile)
+    changed_opevo_number.e164 = "+33123456789"
 
     assert (
         routing_fingerprint(changed_number, phone_for_fingerprint(changed_number))
@@ -457,6 +457,6 @@ def test_routing_fingerprint_changes_for_every_routing_sensitive_value() -> None
         != baseline
     )
     assert (
-        routing_fingerprint(changed_presvo_profile, changed_presvo_number) != baseline
+        routing_fingerprint(changed_opevo_profile, changed_opevo_number) != baseline
     )
     assert routing_fingerprint(baseline_profile, None) != baseline

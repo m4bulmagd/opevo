@@ -78,7 +78,7 @@ describe("dashboard action revalidation", () => {
     deleteCallMock.mockRejectedValueOnce(new Error("delete failed"));
     await expect(deleteCallAction("call-2")).resolves.toEqual({
       status: "error",
-      message: "Presvo could not remove this call right now. Try again.",
+      message: "Opevo could not remove this call right now. Try again.",
     });
     expect(revalidatePathMock).not.toHaveBeenCalled();
     expect(redirectMock).not.toHaveBeenCalled();

@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from presvo_contracts import (
+from opevo_contracts import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
     CustomerCallDispatch,
@@ -14,14 +14,14 @@ from presvo_contracts import (
     parse_contract,
     parse_dispatch,
 )
-from presvo_contracts.realtime import (
+from opevo_contracts.realtime import (
     AgentSessionEndedEvent,
     CallFinalizedEvent,
     CallStartedEvent,
     TranscriptObservedEvent,
     parse_realtime_event,
 )
-from presvo_contracts.versioning import VersionedContract
+from opevo_contracts.versioning import VersionedContract
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,7 @@ CONTRACT_CASES = (
             user_id="22222222-2222-4222-8222-222222222222",
             agent_identity="agent-verification-44444444-4444-4444-8444-444444444444",
             completion_token="fixture-completion-token",
-            message="Forwarding test successful. Return to Presvo to go live.",
+            message="Forwarding test successful. Return to Opevo to go live.",
             tts_provider="speechmatics",
         ),
         parse_dispatch,

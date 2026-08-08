@@ -74,7 +74,7 @@ def _sanitize_http_client_record(
 class _SafeHttpClientDiagnosticFilter(logging.Filter):
     """Remove URLs and wire details from third-party HTTP diagnostics."""
 
-    _presvo_http_client_diagnostic_filter = True
+    _opevo_http_client_diagnostic_filter = True
 
     def filter(self, record: logging.LogRecord) -> bool:
         _sanitize_http_client_record(record)
@@ -84,7 +84,7 @@ class _SafeHttpClientDiagnosticFilter(logging.Filter):
 class _SafeHttpClientLogRecordFactory:
     """Sanitize future HTTPcore child loggers before handlers see them."""
 
-    _presvo_http_client_diagnostic_factory = True
+    _opevo_http_client_diagnostic_factory = True
 
     def __init__(self, delegate: Any) -> None:
         self.delegate = delegate
@@ -94,12 +94,12 @@ class _SafeHttpClientLogRecordFactory:
 
 
 def install_safe_http_client_logging() -> None:
-    """Sanitize verbose HTTPX/HTTPCore records without muting Presvo logs."""
+    """Sanitize verbose HTTPX/HTTPCore records without muting Opevo logs."""
     with _HTTP_CLIENT_LOGGING_LOCK:
         current_factory = logging.getLogRecordFactory()
         if not getattr(
             current_factory,
-            "_presvo_http_client_diagnostic_factory",
+            "_opevo_http_client_diagnostic_factory",
             False,
         ):
             logging.setLogRecordFactory(
@@ -123,7 +123,7 @@ def install_safe_http_client_logging() -> None:
             if any(
                 getattr(
                     log_filter,
-                    "_presvo_http_client_diagnostic_filter",
+                    "_opevo_http_client_diagnostic_filter",
                     False,
                 )
                 for log_filter in http_logger.filters

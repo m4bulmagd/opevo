@@ -119,7 +119,7 @@ def test_offline_upgrade_generates_full_chain_through_recording_egress_head() ->
     environment = {
         **os.environ,
         "DATABASE_URL": (
-            "postgresql+asyncpg://migration:password@database.example/presvo"
+            "postgresql+asyncpg://migration:password@database.example/opevo"
         ),
     }
     completed = subprocess.run(

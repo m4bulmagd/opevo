@@ -25,7 +25,7 @@ class ForwardingGuide(BaseModel):
     version: str
     carrier: CarrierCode
     number_type: str | None
-    presvo_number: str
+    opevo_number: str
     warning: str
     steps: list[ForwardingStep]
 

@@ -26,9 +26,9 @@ from app.models.customer_activation import CustomerActivation
 from app.models.user import User
 
 
-LOCAL_TOKEN = "presvo-local-development-token"
-LOCAL_EXTERNAL_USER_ID = "local_presvo_user"
-LOCAL_EMAIL = "local@presvo.invalid"
+LOCAL_TOKEN = "opevo-local-development-token"
+LOCAL_EXTERNAL_USER_ID = "local_opevo_user"
+LOCAL_EMAIL = "local@opevo.invalid"
 
 
 @pytest_asyncio.fixture

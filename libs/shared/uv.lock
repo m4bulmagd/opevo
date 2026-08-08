@@ -361,7 +361,7 @@ wheels = [
 ]
 
 [[package]]
-name = "presvo-contracts"
+name = "opevo-contracts"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

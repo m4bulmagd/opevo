@@ -18,7 +18,7 @@
 - Keep the configured agent name in header status, sidebar runtime status, Agent page context, and other runtime descriptions.
 - Do not add contacts storage, upload, matching, polling, WebSockets, or realtime claims.
 - Preserve existing routes, Preview labels, account controls, keyboard behavior, accessible names, and minimum touch targets.
-- Do not modify `Presvo_frontend`.
+- Do not modify `Opevo_frontend`.
 
 ---
 
@@ -611,7 +611,7 @@ Change the header to a flex container:
 <header className="sticky top-0 z-20 flex items-center gap-2 border-border border-b bg-background/90 px-4 py-3 backdrop-blur lg:rounded-2xl lg:border lg:bg-card lg:shadow-card">
 ```
 
-Keep the existing mobile navigation and Presvo identity first without a
+Keep the existing mobile navigation and Opevo identity first without a
 `data-header-item` attribute. Then render the wide-header items in this exact
 source order:
 
@@ -712,7 +712,7 @@ git status --short
 git diff -- apps/web/src apps/web/tests
 ```
 
-Expected: no whitespace errors, no `Presvo_frontend` changes, and only the
+Expected: no whitespace errors, no `Opevo_frontend` changes, and only the
 approved header, caller-status, navigation, and test files differ.
 
 - [ ] **Step 10: Commit the integrated header change**

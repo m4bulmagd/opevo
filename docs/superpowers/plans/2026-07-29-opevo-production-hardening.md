@@ -1,10 +1,10 @@
-# Presvo Production Hardening and Release Plan
+# Opevo Production Hardening and Release Plan
 
 > **Execution:** Audit the completed migration as one product. Preserve the
-> approved Presvo visual language; hardening changes may improve semantics,
+> approved Opevo visual language; hardening changes may improve semantics,
 > resilience, and loading behavior but must not restyle the interface.
 
-**Goal:** Prove that the complete France-first Presvo frontend is accessible,
+**Goal:** Prove that the complete France-first Opevo frontend is accessible,
 responsive, production-buildable, backend-integrable, and honest about every
 live and Preview capability.
 
@@ -45,7 +45,7 @@ existing automated test proves the behavior is bounded and accessible.
 Use component tests for semantics and keyboard behavior, and Playwright only
 where browser layout, focus, or reduced-motion behavior is material.
 
-- [x] **Step 2: Implement minimal Presvo-preserving corrections**
+- [x] **Step 2: Implement minimal Opevo-preserving corrections**
 
 Keep exact tokens, typography, spacing, borders, shadows, card hierarchy, and
 responsive composition. Use semantic elements and scoped transitions.
@@ -129,7 +129,7 @@ stack.
 - [x] **Step 2: Verify repository state**
 
 Require a clean worktree, no uncommitted generated files, no accidental
-`Presvo_frontend` edits, and a reviewable commit sequence.
+`Opevo_frontend` edits, and a reviewable commit sequence.
 
 - [x] **Step 3: Complete roadmap and handoff**
 
@@ -140,7 +140,7 @@ fresh evidence.
 
 ## Completion Checklist
 
-- [x] Presvo visual tokens and hierarchy remain regression-protected.
+- [x] Opevo visual tokens and hierarchy remain regression-protected.
 - [x] All live features are backend-confirmed and all Preview features are visibly local-only.
 - [x] Keyboard, focus, landmarks, labels, live regions, contrast, and reduced motion are verified.
 - [x] No dead link, fake success, stale current date, or internal metadata remains in production UI.

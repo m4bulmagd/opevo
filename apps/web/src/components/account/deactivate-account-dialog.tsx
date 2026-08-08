@@ -25,7 +25,7 @@ const CONSEQUENCES = [
   "New calls stop immediately.",
   "Your subscription is canceled immediately with no automatic prorated refund.",
   "An active call may finish before cleanup completes.",
-  "Your current Presvo number is permanently released.",
+  "Your current Opevo number is permanently released.",
   "Your calls, recordings, billing history, and saved configuration are retained.",
   "Reactivation requires a new subscription and a newly provisioned number.",
 ] as const;
@@ -63,14 +63,14 @@ export function DeactivateAccountDialog() {
       <AlertDialogTrigger asChild>
         <Button className="min-h-11" variant="destructive">
           <TriangleAlert data-icon="inline-start" />
-          Deactivate Presvo
+          Deactivate Opevo
         </Button>
       </AlertDialogTrigger>
       <AlertDialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[minmax(0,1fr)_auto] gap-0 overflow-hidden overscroll-contain p-0">
         <div data-slot="deactivation-dialog-scroll-region" className="min-h-0 overflow-y-auto overscroll-contain p-6">
           <div className="grid gap-6">
             <AlertDialogHeader>
-              <AlertDialogTitle>Deactivate Presvo?</AlertDialogTitle>
+              <AlertDialogTitle>Deactivate Opevo?</AlertDialogTitle>
               <AlertDialogDescription>
                 Review each consequence. Deactivation preserves your data but ends the current service cycle.
               </AlertDialogDescription>
@@ -112,7 +112,7 @@ export function DeactivateAccountDialog() {
 
         <AlertDialogFooter className="shrink-0 border-t bg-popover px-6 py-4">
           <AlertDialogCancel className="min-h-11" disabled={isPending}>
-            Keep Presvo active
+            Keep Opevo active
           </AlertDialogCancel>
           <AlertDialogAction
             className="min-h-11"

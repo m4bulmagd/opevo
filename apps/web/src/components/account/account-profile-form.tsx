@@ -130,9 +130,7 @@ export function AccountProfileForm({
         <h2 className="font-semibold text-lg text-text-primary" id="account-profile-heading">
           Profile
         </h2>
-        <p className="mt-1 text-sm text-text-secondary">
-          Keep the details Presvo uses to serve your business accurate.
-        </p>
+        <p className="mt-1 text-sm text-text-secondary">Keep the details Opevo uses to serve your business accurate.</p>
       </div>
 
       <FieldGroup>

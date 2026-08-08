@@ -1,6 +1,6 @@
 # CI and Branch Protection
 
-This document records Presvo's current GitHub Actions checks and the repository
+This document records Opevo's current GitHub Actions checks and the repository
 ruleset required for `main`. The workflow file remains authoritative; update
 this guide whenever [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
 changes.

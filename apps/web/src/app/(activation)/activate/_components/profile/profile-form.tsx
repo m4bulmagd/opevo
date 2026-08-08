@@ -110,7 +110,7 @@ export function ProfileForm({ snapshot, milestone }: ProfileFormProps) {
   const requireBusinessFields = (): boolean => {
     const values = form.getValues();
     const required: Array<["owner_name" | "business_name" | "business_type", string]> = [
-      ["owner_name", "Add the name Presvo should use for you."],
+      ["owner_name", "Add the name Opevo should use for you."],
       ["business_name", "Add the business name callers know."],
       ["business_type", "Add a short business type."],
     ];

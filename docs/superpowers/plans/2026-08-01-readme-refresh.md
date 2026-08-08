@@ -11,11 +11,11 @@
 ## Global Constraints
 
 - Target approximately 100–130 lines in `README.md`.
-- Keep the current product name during this documentation-only change; the broader Presvo-to-Opevo rename remains separate work.
+- Keep the current product name during this documentation-only change; the broader Opevo-to-Opevo rename remains separate work.
 - Keep `docs/dashboard.png` as the README screenshot.
 - Treat `docs/PROJECT_STATUS.md` as canonical for status and roadmap claims.
 - Preserve the current Docker Compose core-stack and disposable browser-proof commands.
-- Do not inspect recursively, modify, delete, stage, or commit the user's untracked `Presvo_frontend/` directory.
+- Do not inspect recursively, modify, delete, stage, or commit the user's untracked `Opevo_frontend/` directory.
 - Do not modify the linked `feat/shadcn-activation-preview` worktree.
 
 ---
@@ -44,24 +44,24 @@ test -f docs/PROJECT_STATUS.md
 docker compose -f compose.dev.yaml config --services
 ```
 
-Expected: Git reports only the user's untracked `Presvo_frontend/` outside the committed planning documents; both referenced files exist; Compose lists `postgres`, `redis`, `minio`, `minio-init`, `migrate`, `api`, `worker`, `agent`, and `web`.
+Expected: Git reports only the user's untracked `Opevo_frontend/` outside the committed planning documents; both referenced files exist; Compose lists `postgres`, `redis`, `minio`, `minio-init`, `migrate`, `api`, `worker`, `agent`, and `web`.
 
 - [ ] **Step 2: Replace `README.md` with the approved concise content**
 
 Write this exact document:
 
 ````markdown
-# Presvo
+# Opevo
 
 > An open-source, France-first AI voice assistant for handling inbound business calls.
 
 **Status:** Working MVP in active development. Locally verified, but not yet production-certified.
 
-![Presvo Dashboard](docs/dashboard.png)
+![Opevo Dashboard](docs/dashboard.png)
 
-## What Presvo does
+## What Opevo does
 
-Presvo gives professionals and small businesses a configurable AI receptionist and a dedicated French phone number. It can:
+Opevo gives professionals and small businesses a configurable AI receptionist and a dedicated French phone number. It can:
 
 - answer conditionally forwarded calls with business-specific context;
 - manage subscriptions, number setup, forwarding verification, and go-live;
@@ -180,7 +180,7 @@ For real-provider configuration, follow the
 - [Contributing guide](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
-Presvo is available under the [MIT License](LICENSE).
+Opevo is available under the [MIT License](LICENSE).
 ````
 
 - [ ] **Step 3: Verify length, required sections, and removed detail**
@@ -189,7 +189,7 @@ Run:
 
 ```bash
 wc -l README.md
-rg -n '^## (What Presvo does|Project progress|Architecture|Run locally|Technology|Documentation)$|^### (Done|In progress|Planned)$' README.md
+rg -n '^## (What Opevo does|Project progress|Architecture|Run locally|Technology|Documentation)$|^### (Done|In progress|Planned)$' README.md
 rg -n 'Inbound call lifecycle|Engineering highlights|Repository structure|An authenticated owner can use' README.md
 ```
 
@@ -224,4 +224,4 @@ git add README.md
 git commit -m "docs: simplify project readme"
 ```
 
-Expected: the commit includes only `README.md`; `Presvo_frontend/` remains untracked and untouched.
+Expected: the commit includes only `README.md`; `Opevo_frontend/` remains untracked and untouched.

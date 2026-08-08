@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import WebSocket
 
-from presvo_contracts import (
+from opevo_contracts import (
     CallFinalizedEvent,
     CallStartedEvent,
     ContractError,

@@ -50,7 +50,7 @@ export function WorkspaceHeader({ accountControls, activeCaller, agentName }: Wo
       <div className="flex min-w-0 items-center gap-2">
         <MobileWorkspaceNavigation accountControl={accountControls.mobile} />
         <Link
-          aria-label="Presvo overview"
+          aria-label="Opevo overview"
           className="hidden min-h-11 min-w-0 items-center gap-2 rounded-md font-semibold tracking-tight outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:inline-flex lg:hidden"
           href="/dashboard"
           prefetch={false}
@@ -58,7 +58,7 @@ export function WorkspaceHeader({ accountControls, activeCaller, agentName }: Wo
           <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
             <PhoneCall aria-hidden="true" />
           </span>
-          <span className="truncate">Presvo</span>
+          <span className="truncate">Opevo</span>
         </Link>
       </div>
       <form

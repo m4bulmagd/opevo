@@ -122,7 +122,7 @@ export default async function DashboardPage() {
           <ProductSurface
             action={<Badge variant={onboardingStatus.phone_number ? "default" : "secondary"}>France · +33</Badge>}
             as="div"
-            description="The Presvo line used for conditional forwarding."
+            description="The Opevo line used for conditional forwarding."
             title={
               <span className="flex items-center gap-2">
                 <PhoneForwarded aria-hidden className="size-4 text-text-tertiary" />

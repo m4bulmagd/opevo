@@ -173,7 +173,7 @@ inherit a developer dotenv file. The owner approved **54A**: direct
    paths in the main worktree before removing the owned feature worktree.
 5. Remove only the owned `issue-6a-runtime-composition` worktree, prune its
    registration, and delete only the merged local feature branch. Preserve the
-   protected frontend worktree and the untracked `Presvo_frontend/` directory.
+   protected frontend worktree and the untracked `Opevo_frontend/` directory.
 
 The failed final8 agent run is valid RED evidence for test isolation only:
 `730 passed`, four approved skips, and two production-variant failures whose
@@ -233,7 +233,7 @@ exact containers were removed; name, listener, network, and volume filters were
 empty afterward. The original seven running services and two exited-success
 one-shots matched preflight by container ID and state. Locks and coverage
 baselines retained their hashes. Tracked main remained clean except for the
-opaque protected `Presvo_frontend/`, which was never inspected or touched. The
+opaque protected `Opevo_frontend/`, which was never inspected or touched. The
 protected frontend worktree, feature worktree/branch, and six ignored Task 3-8
 reports remained intact pending the final preservation and cleanup step.
 

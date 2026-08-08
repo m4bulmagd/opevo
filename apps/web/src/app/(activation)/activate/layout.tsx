@@ -39,14 +39,14 @@ export default function ActivationLayout({ children }: Readonly<{ children: Reac
       <header className="border-border border-b bg-background/90 backdrop-blur">
         <div className="mx-auto flex min-h-16 w-full max-w-5xl items-center justify-between gap-3 px-4 sm:px-6">
           <Link
-            aria-label="Presvo home"
+            aria-label="Opevo home"
             className="inline-flex items-center gap-2 rounded-md font-semibold tracking-tight outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
             href="/"
           >
             <span className="inline-flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
               <PhoneCall aria-hidden="true" className="size-4" />
             </span>
-            Presvo
+            Opevo
           </Link>
           <div className="flex items-center gap-2">{accountControl}</div>
         </div>

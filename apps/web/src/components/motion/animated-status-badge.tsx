@@ -1,7 +1,7 @@
 "use client";
 
 // Adapted from https://beui.dev/components/motion/animated-badge
-// Continuous pulse/spin behavior was intentionally removed for Presvo.
+// Continuous pulse/spin behavior was intentionally removed for Opevo.
 
 import type { ReactNode } from "react";
 

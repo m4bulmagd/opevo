@@ -4,7 +4,7 @@
 
 **Goal:** Give customers safe carrier-aware conditional-forwarding guidance, verify forwarding through a single-use fixed-message system call, and require an explicit readiness-checked go-live action before normal calls can dispatch.
 
-**Architecture:** A versioned Presvo instruction catalog supplies safe carrier content. `ForwardingVerificationService` owns durable windows and sessions; the LiveKit webhook checks it before normal call admission and emits a distinct outbox dispatch with a distinct JWT audience. The agent parses a typed job union and runs a TTS-only fixed-message path that cannot create normal call data. `ActivationGoLiveService` records approval and reconciles provider routing through the existing central readiness/outbox boundary.
+**Architecture:** A versioned Opevo instruction catalog supplies safe carrier content. `ForwardingVerificationService` owns durable windows and sessions; the LiveKit webhook checks it before normal call admission and emits a distinct outbox dispatch with a distinct JWT audience. The agent parses a typed job union and runs a TTS-only fixed-message path that cannot create normal call data. `ActivationGoLiveService` records approval and reconciles provider routing through the existing central readiness/outbox boundary.
 
 **Tech Stack:** Python 3.13, FastAPI, SQLAlchemy 2, transactional outbox, LiveKit API, LiveKit Agents, Pydantic 2, pytest 9
 
@@ -18,12 +18,12 @@
 
 - Forward only unanswered, busy, and unreachable calls; unconditional forwarding is never the default.
 - The verification window lasts exactly ten minutes according to server UTC time.
-- The fixed English message is exactly: `Forwarding test successful. Return to Presvo to go live.`
+- The fixed English message is exactly: `Forwarding test successful. Return to Opevo to go live.`
 - Verification invokes no LLM, accepts no customer prompt, and enables no caller conversation.
 - Verification creates no normal `Call`, recording, transcript, summary, notification, or usage charge.
 - Forwarding is marked verified only after successful message playback acknowledgement.
 - Redirect/diversion metadata is validated when available; the flow is an operational check, not cryptographic ownership proof.
-- A changed existing number, confirmed carrier, assigned Presvo number, or routing revision invalidates verification and go-live.
+- A changed existing number, confirmed carrier, assigned Opevo number, or routing revision invalidates verification and go-live.
 - No normal call can dispatch without current verification and explicit go-live approval.
 - All LiveKit Agents changes require deterministic tests; credentialed LiveKit evaluation remains optional pre-release work.
 - No cloud deployment or external call is authorized by this plan.
@@ -41,7 +41,7 @@
 - Modify: `apps/api/tests/activation/test_activation_snapshot_service.py`
 
 **Interfaces:**
-- Produces: `ForwardingInstructionCatalog.for_profile(carrier, number_type, presvo_number) -> ForwardingGuide`.
+- Produces: `ForwardingInstructionCatalog.for_profile(carrier, number_type, opevo_number) -> ForwardingGuide`.
 - Extends: activation snapshot `forwarding` field with a versioned customer guide.
 
 - [ ] **Step 1: Write failing catalog tests for conditional-only guidance**
@@ -52,7 +52,7 @@ def test_every_carrier_has_three_conditional_sections(carrier: CarrierCode) -> N
     guide = ForwardingInstructionCatalog().for_profile(
         carrier=carrier,
         number_type="fixed",
-        presvo_number="+33912345678",
+        opevo_number="+33912345678",
     )
     assert [step.condition for step in guide.steps] == ["unanswered", "busy", "unreachable"]
     assert all("unconditional" not in step.title.lower() for step in guide.steps)
@@ -98,7 +98,7 @@ class ForwardingGuide(BaseModel):
     version: str
     carrier: CarrierCode
     number_type: str | None
-    presvo_number: str
+    opevo_number: str
     warning: str
     steps: list[ForwardingStep]
 ```
@@ -155,10 +155,10 @@ line-type-specific official source is later versioned and tested.
 - [ ] **Step 5: Include the guide only after number assignment**
 
 `ActivationSnapshotService` calls the catalog only when `confirmed_carrier` and
-an assigned Presvo number exist. It passes lookup `number_type` when available.
+an assigned Opevo number exist. It passes lookup `number_type` when available.
 If lookup did not return a type, classify the existing French business number
 locally with `phonenumbers.number_type` as `fixed`, `mobile`, or `unknown`; do
-not infer the source line type from the assigned `+339` Presvo destination. The
+not infer the source line type from the assigned `+339` Opevo destination. The
 returned source URLs are public provider help pages, not user-specific links.
 
 - [ ] **Step 6: Run catalog and snapshot tests**
@@ -221,7 +221,7 @@ async def test_window_is_exactly_ten_minutes(db_session, provisioned_user) -> No
 @pytest.mark.anyio
 async def test_complete_requires_claimed_current_routing_fingerprint(db_session, open_window) -> None:
     claimed = await service.claim(
-        called_number=open_window.presvo_number,
+        called_number=open_window.opevo_number,
         room_name="verification-room-1",
     )
     await service.complete(session_id=claimed.session_id)
@@ -401,7 +401,7 @@ def create_verification_token(*, session_id: str, user_id: str, ttl_seconds: int
     now = datetime.now(UTC)
     return jwt.encode(
         {
-            "aud": "presvo-forwarding-verification",
+            "aud": "opevo-forwarding-verification",
             "sub": session_id,
             "user_id": user_id,
             "iat": now,
@@ -450,7 +450,7 @@ class VerificationDispatchMetadata(BaseModel):
     user_id: str
     agent_identity: str
     completion_token: str
-    message: Literal["Forwarding test successful. Return to Presvo to go live."]
+    message: Literal["Forwarding test successful. Return to Opevo to go live."]
     tts_provider: Literal["speechmatics", "elevenlabs"] = "speechmatics"
 ```
 
@@ -530,7 +530,7 @@ async def test_verification_runtime_plays_exact_message_without_stt_or_llm() -> 
         session_factory=lambda: session,
         api_client=FakeApiClient(),
     )
-    assert session.say_calls == [("Forwarding test successful. Return to Presvo to go live.", False)]
+    assert session.say_calls == [("Forwarding test successful. Return to Opevo to go live.", False)]
     assert session.stt is None
     assert session.llm is None
     assert session.record == {"audio": False, "transcript": False, "traces": False, "logs": False}
@@ -563,7 +563,7 @@ class ForwardingVerificationDispatchMetadata(BaseModel):
     user_id: str = Field(min_length=1)
     agent_identity: str = Field(min_length=1)
     completion_token: str = Field(min_length=1)
-    message: Literal["Forwarding test successful. Return to Presvo to go live."]
+    message: Literal["Forwarding test successful. Return to Opevo to go live."]
     tts_provider: Literal["speechmatics", "elevenlabs"]
 
 
@@ -813,7 +813,7 @@ async def test_verification_lifecycle_creates_no_customer_call_data(verification
     assert after.activation_events == before.activation_events + 3
 ```
 
-Also assert that no log contains the verification token, caller number, Presvo
+Also assert that no log contains the verification token, caller number, Opevo
 number, or customer profile content.
 
 - [ ] **Step 2: Run complete API and agent deterministic verification**

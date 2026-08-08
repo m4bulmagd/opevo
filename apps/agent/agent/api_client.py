@@ -3,7 +3,7 @@ import logging
 from uuid import UUID
 
 import httpx
-from presvo_contracts import (
+from opevo_contracts import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
     ContractError,

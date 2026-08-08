@@ -1,7 +1,7 @@
 import pytest
 
-from presvo_contracts import ContractError, create_contract, dump_contract, parse_contract
-from presvo_contracts.transcript import (
+from opevo_contracts import ContractError, create_contract, dump_contract, parse_contract
+from opevo_contracts.transcript import (
     TRANSCRIPT_TEXT_MAX_LENGTH,
     TranscriptAppendAcknowledgement,
     TranscriptAppendRequest,

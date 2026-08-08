@@ -7,7 +7,7 @@ import { toast } from "sonner";
 
 import { createCheckoutSessionAction, createPortalSessionAction } from "@/app/(app)/dashboard/billing/actions";
 import { type ActionPhase, ActionState } from "@/components/motion/action-state";
-import { PresvoMotionProvider } from "@/components/motion/presvo-motion-provider";
+import { OpevoMotionProvider } from "@/components/motion/opevo-motion-provider";
 import { ProductSurface } from "@/components/product/product-surface";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -66,7 +66,7 @@ export function BillingActionsCard({ subscription, navigate = defaultNavigate }:
     >
       <div className="flex flex-col items-start gap-4">
         <Button className="min-h-11 px-4" disabled={isPending} onClick={handleAction}>
-          <PresvoMotionProvider>
+          <OpevoMotionProvider>
             <ActionState
               error={
                 <>
@@ -84,7 +84,7 @@ export function BillingActionsCard({ subscription, navigate = defaultNavigate }:
               phase={actionPhase}
               success={actionCopy.idle}
             />
-          </PresvoMotionProvider>
+          </OpevoMotionProvider>
         </Button>
         <p
           aria-atomic="true"

@@ -80,9 +80,9 @@ export function ForwardingMilestone({ snapshot }: { snapshot: ActivationSnapshot
           <Badge variant="outline">Guide {guide.version}</Badge>
         </div>
         <div>
-          <p className="text-muted-foreground text-sm">Your Presvo number</p>
+          <p className="text-muted-foreground text-sm">Your Opevo number</p>
           <p className="mt-1 font-semibold text-3xl tabular-nums tracking-tight">
-            {formatFrenchNumber(guide.presvo_number)}
+            {formatFrenchNumber(guide.opevo_number)}
           </p>
         </div>
         <p className="max-w-2xl text-muted-foreground text-sm leading-6">{guide.warning}</p>
@@ -113,7 +113,7 @@ export function ForwardingMilestone({ snapshot }: { snapshot: ActivationSnapshot
             <p className="font-semibold text-lg">Test your missed-call forwarding</p>
             <p className="max-w-2xl text-muted-foreground text-sm leading-6">
               Start a ten-minute window, then call your existing business number from another phone. Do not answer the
-              call; Presvo will verify that the missed call reached your new line.
+              call; Opevo will verify that the missed call reached your new line.
             </p>
           </div>
           {error ? (

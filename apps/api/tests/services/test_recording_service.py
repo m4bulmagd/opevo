@@ -81,8 +81,8 @@ async def test_recording_download_span_binds_call_id_only_around_provider_call()
     await provider.get_download_url(object_key="outside/RECORDING_OBJECT_SECRET.mp3")
 
     assert result == "https://storage.example.test/signed"
-    assert tracer.spans[0].attributes["presvo.call.id"] == str(call_id)
-    assert "presvo.call.id" not in tracer.spans[1].attributes
+    assert tracer.spans[0].attributes["opevo.call.id"] == str(call_id)
+    assert "opevo.call.id" not in tracer.spans[1].attributes
     rendered = repr([span.attributes for span in tracer.spans])
     assert str(user_id) not in rendered
     assert "RECORDING_OBJECT_SECRET" not in rendered
@@ -104,8 +104,8 @@ async def test_missing_recording_resets_bound_call_id_after_provider_error() -> 
         )
 
     assert result is None
-    assert tracer.spans[0].attributes["presvo.call.id"] == str(call_id)
-    assert "presvo.call.id" not in tracer.spans[1].attributes
+    assert tracer.spans[0].attributes["opevo.call.id"] == str(call_id)
+    assert "opevo.call.id" not in tracer.spans[1].attributes
     assert "RECORDING_OBJECT_SECRET" not in repr(
         [span.attributes for span in tracer.spans]
     )

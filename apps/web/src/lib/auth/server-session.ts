@@ -2,7 +2,7 @@ import "server-only";
 
 import { authMode } from "@/lib/auth/clerk-config";
 
-const LOCAL_USER_ID = "local_presvo_user";
+const LOCAL_USER_ID = "local_opevo_user";
 
 export class ServerSessionRequiredError extends Error {
   constructor() {

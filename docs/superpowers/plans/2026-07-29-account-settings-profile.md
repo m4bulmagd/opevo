@@ -6,7 +6,7 @@
 
 **Architecture:** Keep `/dashboard/account` server-first: load mandatory account lifecycle state and independently resolve activation/profile and Clerk identity context. Save the four editable business-profile fields through a narrow account server action that re-reads and merges the complete backend profile before calling the replacement-style profile `PUT`; client components receive focused view models rather than full API snapshots.
 
-**Tech Stack:** Next.js 16 App Router, React 19, TypeScript, Clerk, Zod, shadcn-style Presvo primitives, Vitest/Testing Library, Playwright, Biome.
+**Tech Stack:** Next.js 16 App Router, React 19, TypeScript, Clerk, Zod, shadcn-style Opevo primitives, Vitest/Testing Library, Playwright, Biome.
 
 ## Global Constraints
 
@@ -19,11 +19,11 @@
 - Password and sign-in management is Clerk-owned; local development must present honest unavailable guidance.
 - Preserve all existing account lifecycle and exact deactivation behavior.
 - Remove `Receptionist profile`, `Billing and subscription`, and `Theme and session` from the Account page.
-- Do not copy US fixture values or unsupported behavior from `Presvo_frontend`.
+- Do not copy US fixture values or unsupported behavior from `Opevo_frontend`.
 - Do not add new profile, notification, retention, password, or MFA backend endpoints.
 - Keep the France launch constraint and canonical `Europe/Paris` timezone option.
 - Keep minimum interactive target height at `min-h-11`, semantic named regions, one page `h1`, field-associated errors, and no horizontal overflow at 390, 768, 1024, or 1440 pixels.
-- `Presvo_frontend/` is an untracked visual reference and must never be edited or staged.
+- `Opevo_frontend/` is an untracked visual reference and must never be edited or staged.
 - The main worktree currently contains a user-owned one-line `pt-6` edit in `apps/web/src/app/(app)/dashboard/account/page.tsx`. Execute in an isolated worktree, preserve the intent as top spacing in the new service-context column, and never reset or overwrite the main-worktree edit without explicit user direction.
 
 ---
@@ -109,7 +109,7 @@ for local mode, and:
 
 ```ts
 expect(await resolveAccountIdentity()).toEqual({
-  email: "owner@presvo.test",
+  email: "owner@opevo.test",
   securityMode: "clerk",
 });
 ```
@@ -471,7 +471,7 @@ Mock `navigator.clipboard.writeText` and cover success and failure status
 announcements. Cover a null number with:
 
 ```ts
-expect(screen.getByText("No Presvo number is assigned yet.")).toBeVisible();
+expect(screen.getByText("No Opevo number is assigned yet.")).toBeVisible();
 expect(screen.queryByRole("button", { name: "Copy assigned number" })).toBeNull();
 expect(screen.getByRole("link", { name: "Review number setup" })).toHaveAttribute(
   "href",
@@ -668,7 +668,7 @@ Render:
 
 ```tsx
 <PageIntro
-  description="Your profile, Presvo number, and account preferences."
+  description="Your profile, Opevo number, and account preferences."
   eyebrow="Account settings"
   title="Settings"
 />
@@ -829,7 +829,7 @@ git diff --stat
 git diff
 ```
 
-Confirm no `Presvo_frontend/` file, unrelated snapshot, local secret, provider
+Confirm no `Opevo_frontend/` file, unrelated snapshot, local secret, provider
 identifier, or main-worktree user edit is staged.
 
 - [ ] **Step 8: Commit Task 5**

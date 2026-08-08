@@ -61,8 +61,8 @@ The target deployment must preserve these boundaries regardless of provider:
 
 | Service | Queue | Jobs | Health key | Default slots |
 | --- | --- | --- | --- | ---: |
-| `worker-lifecycle` | `arq:queue` | call finalization; call reconciliation | `presvo:worker:call-lifecycle:health` | 10 |
-| `worker-background` | `arq:queue:background` | outbox delivery/reconciliation; verification expiry | `presvo:worker:background:health` | 4 |
+| `worker-lifecycle` | `arq:queue` | call finalization; call reconciliation | `opevo:worker:call-lifecycle:health` | 10 |
+| `worker-background` | `arq:queue:background` | outbox delivery/reconciliation; verification expiry | `opevo:worker:background:health` | 4 |
 
 PostgreSQL outbox/call state is authoritative. Redis supplies execution and
 wakeup only, so a Redis or worker interruption is repaired from durable state:
@@ -125,7 +125,7 @@ cannot compensate for an unmet recovery or security control.
 | managed Redis TLS | **5** — ElastiCache supports TLS for client and node traffic in a VPC. | **5** — Managed Redis can generate a TLS certificate and attach to a Private Network. | **3** — the managed Redis-compatible service supports `rediss://` externally, but the documented internal private URL is `redis://` and unauthenticated by default. |
 | private networking | **5** — VPC-native application, database, cache, endpoints, and routing controls. | **5** — VPC/Private Networks integrate with Kapsule and both managed database products. | **5** — each region has an automatic private network and environment boundaries can block cross-environment private traffic. |
 | secret management | **5** — Secrets Manager provides encryption, IAM access, versioning, and rotation integration. | **5** — Secret Manager uses KMS encryption, IAM, and versioning and integrates with Kubernetes. | **3** — environment variables/groups and secret files are managed, but the product documentation does not expose a customer-managed KMS/rotation control comparable to the other two. |
-| object lifecycle/KMS | **5** — S3 supports lifecycle transitions/expiry and SSE-KMS with customer-managed keys. | **5** — Object Storage supports lifecycle rules and SSE-KMS through Scaleway Key Manager. | **1** — no native managed object store with lifecycle/KMS; Presvo would need a second provider. |
+| object lifecycle/KMS | **5** — S3 supports lifecycle transitions/expiry and SSE-KMS with customer-managed keys. | **5** — Object Storage supports lifecycle rules and SSE-KMS through Scaleway Key Manager. | **1** — no native managed object store with lifecycle/KMS; Opevo would need a second provider. |
 | worker support | **5** — ECS services are designed to maintain long-running stateless processes. | **5** — managed Kapsule runs arbitrary container deployments and supports the private service network. | **5** — background workers are a first-class service and use the same compute plans as web/private services. |
 | static egress IP | **5** — private tasks can egress through NAT with an Elastic IP. | **5** — a Public Gateway performs outbound dynamic NAT through a detachable flexible public IP. | **5** — paid dedicated outbound IP sets provide reserved static addresses; shared regional CIDRs are also documented. |
 | operational effort | **2** — widest control surface: ECS, load balancing, IAM, VPC routes/endpoints, NAT, RDS, cache, S3, KMS, logs, and alarms. | **3** — managed control plane and data services help, but the team still owns Kubernetes workloads, nodes, networking, and upgrades. | **5** — application platform handles builds/deploys, service discovery, private networking, TLS, and managed data services. |
@@ -195,7 +195,7 @@ PITR or silently build a self-managed WAL archive into the beta architecture.
 Render is the lowest-effort application platform in this comparison. It has a
 Frankfurt region, regional private networking, long-running background workers,
 paid PostgreSQL PITR, managed Redis-compatible storage, managed environment
-secrets, and optional dedicated outbound IPs. Its two material gaps for Presvo
+secrets, and optional dedicated outbound IPs. Its two material gaps for Opevo
 are the lack of native object storage with lifecycle/customer KMS and the fact
 that the documented internal Key Value connection is not TLS by default.
 

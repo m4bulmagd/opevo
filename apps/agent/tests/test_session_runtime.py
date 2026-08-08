@@ -8,7 +8,7 @@ from agent.api_client import TranscriptAppendRetryableError
 from agent.composition import build_agent_process_runtime
 from agent.config import AgentSettings
 from agent.event_publisher import EventPublisher
-from presvo_contracts import (
+from opevo_contracts import (
     CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS,
     CallCompletionAcknowledgement,
     CallCompletionRequest,

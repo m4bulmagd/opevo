@@ -1354,7 +1354,7 @@ async def test_composed_internal_defect_redacts_exception_alert_telemetry_and_st
 
     assert result == {"claimed": 1, "delivered": 0, "retried": 0, "failed": 1}
     assert calls == 1
-    assert meter.instruments["presvo.provider.errors"].measurements == [
+    assert meter.instruments["opevo.provider.errors"].measurements == [
         (
             1,
             {
@@ -1365,10 +1365,10 @@ async def test_composed_internal_defect_redacts_exception_alert_telemetry_and_st
             },
         )
     ]
-    assert meter.instruments["presvo.outbox.terminal_failures"].measurements == [
+    assert meter.instruments["opevo.outbox.terminal_failures"].measurements == [
         (1, {"topic": "phone.disable", "error_class": "unknown"})
     ]
-    assert tracer.spans[0].attributes["presvo.failure.kind"] == "internal"
+    assert tracer.spans[0].attributes["opevo.failure.kind"] == "internal"
     alert = next(
         record
         for record in caplog.records
@@ -2062,7 +2062,7 @@ async def _seed_routing_state(
         session.add(
             AgentConfig(
                 user_id=user.id,
-                agent_name="Presvo Front Desk",
+                agent_name="Opevo Front Desk",
                 owner_context="Dental office reception",
                 system_prompt="Handle calls professionally.",
                 knowledge_base="Open weekdays.",

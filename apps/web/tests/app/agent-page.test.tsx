@@ -133,7 +133,7 @@ describe("agent page", () => {
     expect(intro).toBeInTheDocument();
     expect(runtime).toHaveAttribute("data-tone", "neutral");
     expect(runtime).toHaveTextContent("Call routing is enabled in the saved agent configuration");
-    expect(runtime).toHaveTextContent("Account readiness currently permits Presvo to serve calls");
+    expect(runtime).toHaveTextContent("Account readiness currently permits Opevo to serve calls");
     expect(runtime).not.toHaveTextContent(/answering|ready|live/i);
     expect(runtime.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -204,7 +204,7 @@ describe("agent page", () => {
     ["disabling_routing", "Stopping new calls"],
     ["canceling_subscription", "Canceling subscription"],
     ["draining_call", "Waiting for an active call to finish"],
-    ["releasing_number", "Releasing your Presvo number"],
+    ["releasing_number", "Releasing your Opevo number"],
     ["finalizing", "Finalizing your account"],
   ] as const)("maps the bounded %s deactivation progress to human copy", async (state, progressCopy) => {
     await renderAgentPage({
@@ -272,7 +272,7 @@ describe("agent page", () => {
   });
 
   it.each([
-    ["reactivation_not_ready", "releasing_number", "Reactivation unavailable", "Releasing your Presvo number"],
+    ["reactivation_not_ready", "releasing_number", "Reactivation unavailable", "Releasing your Opevo number"],
     ["deactivation_attention_required", "finalizing", "Attention required", "Finalizing your account"],
   ] as const)("retains mapped inactive cleanup progress for %s", async (blocker, deactivationState, label, progressCopy) => {
     await renderAgentPage({
@@ -294,7 +294,7 @@ describe("agent page", () => {
     expect(runtime).not.toHaveTextContent(deactivationState);
   });
 
-  it("uses URL-owned Presvo tabs and groups the general controls into named settings regions", async () => {
+  it("uses URL-owned Opevo tabs and groups the general controls into named settings regions", async () => {
     await renderAgentPage();
 
     const sections = document.querySelectorAll('[data-slot="settings-section"]');
@@ -533,7 +533,7 @@ describe("agent page", () => {
 
     expect(result).toMatchObject({
       status: "error",
-      message: "Reactivate Presvo before changing agent settings.",
+      message: "Reactivate Opevo before changing agent settings.",
     });
     expect(JSON.stringify(result)).not.toContain("pn_secret");
   });

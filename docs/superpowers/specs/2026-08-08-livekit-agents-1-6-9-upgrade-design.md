@@ -72,7 +72,7 @@ expensive production window.
   a documented constructor, lifecycle, or worker interface available in the
   selected family.
 - Adapt public SDK signatures and event contracts where required without
-  changing Presvo's domain or dispatch contracts.
+  changing Opevo's domain or dispatch contracts.
 - Re-run dependency auditing and update the security exception register only
   from the resolved final graph and fresh audit evidence.
 - Update architecture/status documentation that names the old pin or private
@@ -99,10 +99,10 @@ false-endpoint, interruption, and French-language evaluation.
 The agent remains a separately deployed LiveKit worker started through
 `python -m agent.main start`. Its validated settings, process runtime,
 dispatch parsing, session construction, lifecycle callbacks, transcript
-delivery, and ordered shutdown remain Presvo-owned boundaries.
+delivery, and ordered shutdown remain Opevo-owned boundaries.
 
 The dependency migration may change adapters at the LiveKit edge, but it must
-not change Presvo's domain objects or internal API payloads. Compatibility
+not change Opevo's domain objects or internal API payloads. Compatibility
 changes stay in the composition, pipeline, entrypoint, debug-stream, and image
 build seams already responsible for the SDK.
 
@@ -118,7 +118,7 @@ a different turn detector during this migration.
 ## Error and Compatibility Policy
 
 - Configuration failures continue to fail closed before accepting jobs.
-- Provider setup failures retain their current sanitized Presvo error and
+- Provider setup failures retain their current sanitized Opevo error and
   logging boundaries.
 - Cancellation and ordered shutdown must not be converted into ordinary
   provider failures.
@@ -132,7 +132,7 @@ a different turn detector during this migration.
 
 Before changing dependencies, run the focused compatibility, composition,
 pipeline, entrypoint, debug-stream, and shutdown tests on `1.4.4`. Add a
-characterization test only where a relevant Presvo boundary is not already
+characterization test only where a relevant Opevo boundary is not already
 observable.
 
 For production Python behavior changes, use red-green-refactor: write a test
@@ -171,7 +171,7 @@ not available; it must not imply provider certification.
    LiveKit `_executor`, or otherwise accesses an underscore-prefixed LiveKit
    API.
 3. The worker keeps its explicit existing turn-detector/provider behavior and
-   Presvo dispatch/session/shutdown contracts.
+   Opevo dispatch/session/shutdown contracts.
 4. Focused tests, the complete noncredentialed agent suite, Ruff, mypy,
    coverage, lock validation, dependency audit, and container validation have
    fresh recorded outcomes.

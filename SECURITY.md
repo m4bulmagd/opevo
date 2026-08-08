@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Presvo is in active development, production-oriented and locally verified, but
+Opevo is in active development, production-oriented and locally verified, but
 not production-certified. Security fixes are applied to the current `main`
 branch; there are no supported release branches yet.
 
@@ -20,7 +20,7 @@ Include the affected component, impact, reproduction steps, and a suggested
 mitigation when available. Use synthetic data and redact credentials, customer
 content, recordings, transcripts, access tokens, and full phone numbers.
 
-Presvo does not currently publish a guaranteed response or remediation window.
+Opevo does not currently publish a guaranteed response or remediation window.
 Please allow the maintainers to investigate before public disclosure.
 
 ## Operational security documentation

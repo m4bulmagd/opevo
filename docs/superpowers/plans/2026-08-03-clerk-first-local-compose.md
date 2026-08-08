@@ -469,7 +469,7 @@ Near the existing port/reference exports in `run-local-e2e.sh`, add:
 
 ```sh
 export AUTH_MODE=local
-export LOCAL_AUTH_TOKEN=presvo-local-development-token
+export LOCAL_AUTH_TOKEN=opevo-local-development-token
 ```
 
 Replace the duplicate token literal later in the script with:
@@ -595,7 +595,7 @@ Keep web publishable/secret keys in `apps/web/.env`, API verifier/webhook values
 Run:
 
 ```bash
-rg -n "Compose supplies.*local|AUTH_MODE=local|LOCAL_AUTH_TOKEN=presvo-local-development-token" \
+rg -n "Compose supplies.*local|AUTH_MODE=local|LOCAL_AUTH_TOKEN=opevo-local-development-token" \
   README.md apps/web/.env.example apps/api/.env.example docs/architecture
 ```
 
@@ -663,7 +663,7 @@ From the repository root, preserve the already-running Postgres, Redis, MinIO, w
 ```bash
 docker compose \
   -f compose.dev.yaml \
-  -f /tmp/presvo-voice-e2e.override.yaml \
+  -f /tmp/opevo-voice-e2e.override.yaml \
   up -d --no-deps --force-recreate api web
 ```
 
@@ -690,7 +690,7 @@ The local token values must not be printed. A blank token in standard mode is ac
 Run:
 
 ```bash
-bash -c 'presvo_auth_status=$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/dashboard); if [ "$presvo_auth_status" = "200" ]; then echo "FAIL: unauthenticated dashboard returned 200"; exit 1; fi; echo "PASS: unauthenticated dashboard was denied ($presvo_auth_status)"'
+bash -c 'opevo_auth_status=$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/dashboard); if [ "$opevo_auth_status" = "200" ]; then echo "FAIL: unauthenticated dashboard returned 200"; exit 1; fi; echo "PASS: unauthenticated dashboard was denied ($opevo_auth_status)"'
 ```
 
 Expected: `PASS` with a redirect or other authentication-denial status, never `200`. Repeat against `/activate` and confirm the same boundary.
@@ -702,12 +702,12 @@ Ask the owner to open a new private browser, visit `/dashboard`, and confirm Cle
 - the dashboard or authoritative activation redirect loads;
 - API requests carry a real Clerk token and return no `401`/`503`;
 - a separate new private browser remains signed out;
-- a masked read-only database check confirms the request resolves the existing Clerk-linked user rather than `local_presvo_user`;
+- a masked read-only database check confirms the request resolves the existing Clerk-linked user rather than `local_opevo_user`;
 - no profile, activation, subscription, phone, or user row is deleted or fabricated.
 
 - [ ] **Step 7: Clean temporary diagnostics and record the next-stage boundary**
 
-Remove only temporary files created for this diagnostic/verification stage after verifying their exact paths, including `/tmp/presvo_readiness_probe.py` and `/tmp/inspect_livekit_webhooks.py`. Keep `/tmp/presvo-voice-e2e.override.yaml` until the voice test is complete because the running worker still depends on it.
+Remove only temporary files created for this diagnostic/verification stage after verifying their exact paths, including `/tmp/opevo_readiness_probe.py` and `/tmp/inspect_livekit_webhooks.py`. Keep `/tmp/opevo-voice-e2e.override.yaml` until the voice test is complete because the running worker still depends on it.
 
 Record that provider modes must be audited before clicking provider-mutating activation controls. Switching fake billing/telephony to real providers and deleting synthetic account `***65` require separate exact-scope decisions; neither is silently performed by this plan.
 

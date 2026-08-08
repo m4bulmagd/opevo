@@ -22,7 +22,7 @@
 - Do not add a generic “retry internal defects” extension point; no current operation has an approved internal-defect retry policy.
 - Do not inspect developer `.env` files or credential-gated live-provider tests. Use controlled test environment variables.
 - Use `UV_CACHE_DIR=/tmp/uv-cache` and the existing API environment through `UV_PROJECT_ENVIRONMENT=/home/mo/code/ai/bmad-opevo/apps/api/.venv` with `uv run --frozen --no-sync`.
-- Do not inspect or modify `Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
+- Do not inspect or modify `Opevo_frontend/` or `.worktrees/shadcn-activation-preview`.
 - Every production behavior change follows RED → GREEN → REFACTOR. Record the expected failing assertion before implementation.
 - Keep the solution explicit: shared bounded vocabulary and small mapping helpers are required; reflection, dynamic exception registries, and generic policy frameworks are not.
 

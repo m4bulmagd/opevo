@@ -20,7 +20,7 @@ contribution documents.
 
 - Rewrite `README.md` to approximately 100–130 lines.
 - Keep the current product name during this documentation-only change. The
-  broader Presvo-to-Opevo rename is separate work.
+  broader Opevo-to-Opevo rename is separate work.
 - Keep the existing landing-page screenshot and use concise surrounding copy.
 - Treat `docs/PROJECT_STATUS.md` as the canonical source for implementation and
   production-readiness claims.
@@ -92,4 +92,4 @@ will be linked to the staging documentation instead of explained inline.
 - The documented local commands and URLs match the current Compose setup.
 - Detailed evidence is linked rather than duplicated.
 - Markdown links resolve, Mermaid syntax is valid, and the working tree retains
-  the user's untracked `Presvo_frontend/` directory untouched.
+  the user's untracked `Opevo_frontend/` directory untouched.

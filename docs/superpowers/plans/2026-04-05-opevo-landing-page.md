@@ -1,10 +1,10 @@
-# Presvo Landing Page Implementation Plan
+# Opevo Landing Page Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a public landing page at `/` that matches the approved reference structure and swaps auth actions based on server session state.
 
-**Architecture:** Keep the landing page inside the existing `apps/web` Next.js app as the root server component. Read auth state through the current server-session helper, render auth-aware CTAs, and update shared branding metadata to `Presvo`.
+**Architecture:** Keep the landing page inside the existing `apps/web` Next.js app as the root server component. Read auth state through the current server-session helper, render auth-aware CTAs, and update shared branding metadata to `Opevo`.
 
 **Tech Stack:** Next.js App Router, React 19, Tailwind CSS v4, shadcn/ui, Clerk, Vitest, Testing Library
 
@@ -30,7 +30,7 @@
 - Modify: `apps/web/src/config/app-config.ts`
 - Modify: `apps/web/src/app/(app)/dashboard/_components/sidebar/app-sidebar.tsx`
 
-- [ ] Step 1: Change visible branding and metadata strings to `Presvo`
+- [ ] Step 1: Change visible branding and metadata strings to `Opevo`
 - [ ] Step 2: Verify the existing dashboard shell test still passes or remains unaffected
 
 ## Chunk 3: Final Verification

@@ -27,7 +27,7 @@ const INITIAL_SETTINGS: PreviewSettings = {
   personality: "professional",
   responseStyle: "balanced",
   speakingSpeed: 1,
-  provider: "presvo-balanced",
+  provider: "opevo-balanced",
   voiceId: "camille",
 };
 
@@ -144,9 +144,9 @@ export function AssistantPreview({ agentName }: { agentName: string }) {
                 onChange={(event) => update({ provider: event.target.value })}
                 value={settings.provider}
               >
-                <NativeSelectOption value="presvo-fast">Presvo Fast · lower latency</NativeSelectOption>
-                <NativeSelectOption value="presvo-balanced">Presvo Balanced</NativeSelectOption>
-                <NativeSelectOption value="presvo-reasoning">Presvo Reasoning · complex calls</NativeSelectOption>
+                <NativeSelectOption value="opevo-fast">Opevo Fast · lower latency</NativeSelectOption>
+                <NativeSelectOption value="opevo-balanced">Opevo Balanced</NativeSelectOption>
+                <NativeSelectOption value="opevo-reasoning">Opevo Reasoning · complex calls</NativeSelectOption>
               </NativeSelect>
             </label>
           </div>

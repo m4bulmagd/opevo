@@ -159,8 +159,8 @@ async def test_readiness_dependency_spans_are_explicit_clients() -> None:
     assert await checks.check_database() is True
     assert await checks.check_redis() is True
     assert observed == [
-        ("presvo.dependency.check", SpanKind.CLIENT),
-        ("presvo.dependency.check", SpanKind.CLIENT),
+        ("opevo.dependency.check", SpanKind.CLIENT),
+        ("opevo.dependency.check", SpanKind.CLIENT),
     ]
 
 

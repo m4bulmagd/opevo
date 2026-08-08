@@ -290,7 +290,7 @@ test("discards, persists, and restores the live account Profile name", async ({ 
   const fullName = page.getByRole("textbox", { name: "Full name" });
   const initialFullName = await fullName.inputValue();
   const temporaryFullName =
-    initialFullName === "Presvo Profile E2E" ? "Presvo Profile E2E alternate" : "Presvo Profile E2E";
+    initialFullName === "Opevo Profile E2E" ? "Opevo Profile E2E alternate" : "Opevo Profile E2E";
   let restorationConfirmed = false;
 
   try {
@@ -439,7 +439,7 @@ test("resets account Preview and retains exact deactivation confirmation", async
   await expect(privacy.getByRole("combobox", { name: "Preview recording retention" })).toHaveValue("30");
   await expect(security.getByRole("switch", { name: "Two-factor authentication" })).not.toBeChecked();
 
-  await danger.getByRole("button", { name: "Deactivate Presvo" }).click();
+  await danger.getByRole("button", { name: "Deactivate Opevo" }).click();
   const dialog = page.getByRole("alertdialog");
   const confirmation = dialog.getByLabel("Type DEACTIVATE to confirm");
   const deactivate = dialog.getByRole("button", { name: "Deactivate account" });
@@ -447,14 +447,14 @@ test("resets account Preview and retains exact deactivation confirmation", async
   await expect(deactivate).toBeDisabled();
   await confirmation.fill("DEACTIVATE");
   await expect(deactivate).toBeEnabled();
-  await dialog.getByRole("button", { name: "Keep Presvo active" }).click();
+  await dialog.getByRole("button", { name: "Keep Opevo active" }).click();
   await expect(dialog).toHaveCount(0);
 
-  await danger.getByRole("button", { name: "Deactivate Presvo" }).click();
+  await danger.getByRole("button", { name: "Deactivate Opevo" }).click();
   const reopenedDialog = page.getByRole("alertdialog");
   await expect(reopenedDialog.getByLabel("Type DEACTIVATE to confirm")).toHaveValue("");
   await expect(reopenedDialog.getByRole("button", { name: "Deactivate account" })).toBeDisabled();
-  await reopenedDialog.getByRole("button", { name: "Keep Presvo active" }).click();
+  await reopenedDialog.getByRole("button", { name: "Keep Opevo active" }).click();
   expect(backendRequests).toEqual([]);
 });
 

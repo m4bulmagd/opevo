@@ -1,4 +1,4 @@
-title = "Presvo secret scanning policy"
+title = "Opevo secret scanning policy"
 
 [extend]
 useDefault = true

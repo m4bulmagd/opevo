@@ -2,14 +2,14 @@ from uuid import UUID
 
 import pytest
 
-from presvo_contracts import (
+from opevo_contracts import (
     CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS,
     ContractError,
     create_contract,
     dump_contract,
     parse_contract,
 )
-from presvo_contracts.completion import (
+from opevo_contracts.completion import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
     VerificationCompletionAcknowledgement,

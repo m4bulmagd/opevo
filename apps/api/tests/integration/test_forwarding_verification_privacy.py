@@ -38,7 +38,7 @@ from app.workers.outbox.verification_dispatch import (
 # ARCEP-reserved fictional ranges: 019900 for source lines and 099900 for
 # technical/internal lines. They cannot identify a real French subscriber.
 SOURCE_NUMBER = "+33199000000"
-PRESVO_NUMBER = "+33999000000"
+OPEVO_NUMBER = "+33999000000"
 OWNER_SENTINEL = "Privacy Owner Sentinel"
 BUSINESS_SENTINEL = "Privacy Business Sentinel"
 DESCRIPTION_SENTINEL = "Privacy Description Sentinel"
@@ -116,7 +116,7 @@ def _sip_join(*, event_id: str, room_name: str) -> dict:
             "kind": "SIP",
             "attributes": {
                 "sip.phoneNumber": SOURCE_NUMBER,
-                "sip.trunkPhoneNumber": PRESVO_NUMBER,
+                "sip.trunkPhoneNumber": OPEVO_NUMBER,
                 "sip.diversion": SOURCE_NUMBER,
             },
         },
@@ -152,7 +152,7 @@ async def _seed_provisioned_customer(
     )
     phone = PhoneNumber(
         user_id=user.id,
-        e164=PRESVO_NUMBER,
+        e164=OPEVO_NUMBER,
         country_code="FR",
         provider="fake",
         provider_number_id="fake-privacy-verification-number",
@@ -407,7 +407,7 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
     assert completion_token not in json.dumps(outbox_payload)
     for sentinel in (
         SOURCE_NUMBER,
-        PRESVO_NUMBER,
+        OPEVO_NUMBER,
         OWNER_SENTINEL,
         BUSINESS_SENTINEL,
         DESCRIPTION_SENTINEL,
@@ -422,7 +422,7 @@ async def test_verification_lifecycle_is_private_and_runtime_isolated(
         completion_token,
         normal_call_token,
         SOURCE_NUMBER,
-        PRESVO_NUMBER,
+        OPEVO_NUMBER,
         OWNER_SENTINEL,
         BUSINESS_SENTINEL,
         DESCRIPTION_SENTINEL,

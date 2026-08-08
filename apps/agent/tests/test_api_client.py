@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from pydantic import ValidationError
-from presvo_contracts import (
+from opevo_contracts import (
     CallCompletionAcknowledgement,
     CallCompletionRequest,
     ContractError,

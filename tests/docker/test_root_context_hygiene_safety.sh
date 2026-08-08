@@ -60,9 +60,9 @@ if [ -e "$sentinel_path" ] || [ -L "$sentinel_path" ]; then
   exit 1
 fi
 
-target_directory=$(mktemp -d /tmp/presvo-dangling-sentinel.XXXXXX)
+target_directory=$(mktemp -d /tmp/opevo-dangling-sentinel.XXXXXX)
 target_path="$target_directory/dangling-target"
-probe_output_path=$(mktemp /tmp/presvo-sentinel-probe.XXXXXX)
+probe_output_path=$(mktemp /tmp/opevo-sentinel-probe.XXXXXX)
 
 ln -s "$target_path" "$sentinel_path"
 sentinel_created=true
@@ -90,7 +90,7 @@ test -L "$sentinel_path"
 test "$(readlink -- "$sentinel_path")" = "$target_path"
 test ! -e "$target_path"
 
-replacement_target=${PRESVO_TEST_REPLACEMENT_SENTINEL_TARGET:-}
+replacement_target=${OPEVO_TEST_REPLACEMENT_SENTINEL_TARGET:-}
 if [ -n "$replacement_target" ]; then
   if [ -e "$replacement_target" ] || [ -L "$replacement_target" ]; then
     printf '%s already exists; refusing the controlled replacement.\n' \

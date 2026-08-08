@@ -31,7 +31,7 @@ function UnavailableProfile() {
 function UnavailableAssignedNumber() {
   return (
     <ProductSurface
-      description="Your Presvo number is unavailable right now. Try refreshing this page shortly."
+      description="Your Opevo number is unavailable right now. Try refreshing this page shortly."
       title="Assigned number"
     >
       <p className="text-sm text-text-secondary">Assigned number unavailable.</p>
@@ -58,7 +58,7 @@ export default async function AccountPage() {
   return (
     <div className="@container/main flex flex-col gap-4 md:gap-6">
       <PageIntro
-        description="Your profile, Presvo number, and account preferences."
+        description="Your profile, Opevo number, and account preferences."
         eyebrow="Account settings"
         title="Settings"
       />
@@ -90,7 +90,7 @@ export default async function AccountPage() {
 
       {account.status === "active" ? (
         <ProductSurface
-          description="Deactivation immediately stops new calls, ends the current subscription, and permanently releases the current Presvo number."
+          description="Deactivation immediately stops new calls, ends the current subscription, and permanently releases the current Opevo number."
           title="Danger zone"
           tone="danger"
         >

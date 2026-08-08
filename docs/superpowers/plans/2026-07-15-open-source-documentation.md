@@ -1,8 +1,8 @@
-# Presvo Open-Source Documentation Implementation Plan
+# Opevo Open-Source Documentation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Publish a portfolio-first, contributor-friendly documentation set that accurately presents Presvo's implemented capabilities, current limitations, production ambition, and phased roadmap.
+**Goal:** Publish a portfolio-first, contributor-friendly documentation set that accurately presents Opevo's implemented capabilities, current limitations, production ambition, and phased roadmap.
 
 **Architecture:** `README.md` becomes the concise public landing page, while `docs/PROJECT_STATUS.md` becomes the canonical feature-status and roadmap source. Root policy files establish the MIT license, contribution workflow, and private security-reporting path; current architecture documents are corrected without rewriting historical plans or specifications.
 
@@ -10,8 +10,8 @@
 
 ## Global Constraints
 
-- Use **Presvo** as the only public product name; “AI voice assistant platform” is descriptive copy, not a competing name.
-- State exactly that Presvo is a working pre-production MVP with a production-oriented architecture progressing toward controlled beta.
+- Use **Opevo** as the only public product name; “AI voice assistant platform” is descriptive copy, not a competing name.
+- State exactly that Opevo is a working pre-production MVP with a production-oriented architecture progressing toward controlled beta.
 - Label capabilities only as **Implemented**, **Partial**, **Planned**, or **Exploratory**.
 - Treat `docs/PROJECT_STATUS.md` as the only canonical feature-status and roadmap document.
 - Guided onboarding is the next product milestone; the Retell-inspired conversation-flow builder is later work.
@@ -26,7 +26,7 @@
 
 ### Files to create
 
-- `LICENSE` — standard MIT grant with `2026 Presvo contributors` as the copyright line.
+- `LICENSE` — standard MIT grant with `2026 Opevo contributors` as the copyright line.
 - `CONTRIBUTING.md` — contributor setup, repository workflow, verification commands, provider boundaries, and secret-handling rules.
 - `SECURITY.md` — private vulnerability-reporting instructions through GitHub Security Advisories.
 - `docs/PROJECT_STATUS.md` — canonical product boundary, feature matrix, limitations, production gates, and roadmap.
@@ -82,7 +82,7 @@ Create `LICENSE` with the standard MIT text and this exact identity line:
 ```text
 MIT License
 
-Copyright (c) 2026 Presvo contributors
+Copyright (c) 2026 Opevo contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -108,9 +108,9 @@ SOFTWARE.
 Create `CONTRIBUTING.md` with these sections and concrete requirements:
 
 ````markdown
-# Contributing to Presvo
+# Contributing to Opevo
 
-Thanks for helping improve Presvo. The project is in active pre-production
+Thanks for helping improve Opevo. The project is in active pre-production
 development, so focused fixes, tests, documentation corrections, and small
 product improvements are easier to review than broad rewrites.
 
@@ -222,7 +222,7 @@ Create `SECURITY.md` with this reporting contract:
 
 ## Supported versions
 
-Presvo is in active pre-production development. Security fixes are applied to
+Opevo is in active pre-production development. Security fixes are applied to
 the current `main` branch; there are no supported release branches yet.
 
 ## Reporting a vulnerability
@@ -239,7 +239,7 @@ Include the affected component, impact, reproduction steps, and a suggested
 mitigation when available. Use synthetic data and redact credentials, customer
 content, recordings, transcripts, access tokens, and full phone numbers.
 
-Presvo does not currently publish a guaranteed response or remediation window.
+Opevo does not currently publish a guaranteed response or remediation window.
 Please allow the maintainers to investigate before public disclosure.
 
 ## Operational security documentation
@@ -257,8 +257,8 @@ Run:
 test -s LICENSE
 test -s CONTRIBUTING.md
 test -s SECURITY.md
-rg -n '^# (Contributing to Presvo|Security Policy)$' CONTRIBUTING.md SECURITY.md
-rg -n 'Copyright \(c\) 2026 Presvo contributors' LICENSE
+rg -n '^# (Contributing to Opevo|Security Policy)$' CONTRIBUTING.md SECURITY.md
+rg -n 'Copyright \(c\) 2026 Opevo contributors' LICENSE
 git diff --check -- LICENSE CONTRIBUTING.md SECURITY.md
 ```
 
@@ -298,16 +298,16 @@ Expected: exit `0`.
 Create `docs/PROJECT_STATUS.md` with this opening:
 
 ```markdown
-# Presvo Project Status
+# Opevo Project Status
 
-This document is the canonical source for Presvo's implemented capabilities,
+This document is the canonical source for Opevo's implemented capabilities,
 known limitations, production-readiness gates, and roadmap. Historical specs,
 plans, and audits describe the repository at earlier points in time and may no
 longer match the current implementation.
 
 ## Current status
 
-**Active development:** Presvo is a working pre-production MVP with a
+**Active development:** Opevo is a working pre-production MVP with a
 production-oriented architecture. Work is progressing toward a controlled
 beta, with onboarding, compliance, recovery testing, and real-provider
 certification still in progress.
@@ -386,7 +386,7 @@ Add:
 
 ## Production-readiness gates
 
-Presvo is intended for production, but it should not be described as
+Opevo is intended for production, but it should not be described as
 production-ready until all of these gates have evidence:
 
 - Guided onboarding and complete customer account workflows
@@ -438,7 +438,7 @@ Add the five approved phases without dates:
 
 ### Phase 4 — Conversation-flow builder
 
-Presvo will begin with the conversation runtime rather than a canvas:
+Opevo will begin with the conversation runtime rather than a canvas:
 
 1. Typed flow model and business templates
 2. Conversation steps, conditional transitions, fallbacks, and end states
@@ -471,7 +471,7 @@ This direction is inspired by [Retell AI's structured conversation flows](https:
 Run:
 
 ```bash
-rg -n '^# Presvo Project Status$|^## (Current status|Feature matrix|Known limitations|Production-readiness gates|Roadmap|Related documentation)$' docs/PROJECT_STATUS.md
+rg -n '^# Opevo Project Status$|^## (Current status|Feature matrix|Known limitations|Production-readiness gates|Roadmap|Related documentation)$' docs/PROJECT_STATUS.md
 rg -n '\*\*(Implemented|Partial|Planned|Exploratory)\*\*' docs/PROJECT_STATUS.md
 ! rg -n 'T[B]D|T[O]DO|coming soon|production-ready today' docs/PROJECT_STATUS.md
 git diff --check -- docs/PROJECT_STATUS.md
@@ -484,7 +484,7 @@ negative search returns no matches, and `git diff --check` exits `0`.
 
 ```bash
 git add docs/PROJECT_STATUS.md
-git commit -m "docs: publish Presvo project status and roadmap"
+git commit -m "docs: publish Opevo project status and roadmap"
 ```
 
 ---
@@ -504,7 +504,7 @@ Run:
 
 ```bash
 rg -n '^# AI Call Assistant$|^## Required GitHub branch protection$|^## Staging Checklist$' README.md
-! rg -n '^# Presvo$|docs/dashboard.png|docs/PROJECT_STATUS.md' README.md
+! rg -n '^# Opevo$|docs/dashboard.png|docs/PROJECT_STATUS.md' README.md
 ```
 
 Expected: the old operations-first headings are found and the new portfolio
@@ -515,21 +515,21 @@ markers are absent.
 Replace the existing README with this opening structure and exact status copy:
 
 ```markdown
-# Presvo
+# Opevo
 
 > An open-source, France-first AI voice assistant platform for handling inbound
 > business calls.
 
-**Status:** Active development. Presvo is a working pre-production MVP with a
+**Status:** Active development. Opevo is a working pre-production MVP with a
 production-oriented architecture. Work is progressing toward a controlled
 beta, with onboarding, compliance, recovery testing, and real-provider
 certification still in progress.
 
-![Presvo Dashboard](docs/dashboard.png)
+![Opevo Dashboard](docs/dashboard.png)
 
-## What Presvo does
+## What Opevo does
 
-Presvo gives a professional or small business a dedicated French phone number
+Opevo gives a professional or small business a dedicated French phone number
 and a configurable AI assistant. Inbound calls are routed through Telnyx and
 LiveKit, handled by a separate voice-agent worker, and made reviewable in a
 Next.js dashboard with transcripts, summaries, recordings, and minute usage.
@@ -732,7 +732,7 @@ starting a change. Please report vulnerabilities privately according to
 
 ## License
 
-Presvo is available under the [MIT License](LICENSE).
+Opevo is available under the [MIT License](LICENSE).
 ````
 
 - [ ] **Step 7: Verify the README contract and links**
@@ -740,7 +740,7 @@ Presvo is available under the [MIT License](LICENSE).
 Run:
 
 ```bash
-rg -n '^# Presvo$|^## (What Presvo does|Current scope and limitations|Architecture|Engineering highlights|Technology stack|Local development|Repository structure|Documentation|Contributing and security|License)$' README.md
+rg -n '^# Opevo$|^## (What Opevo does|Current scope and limitations|Architecture|Engineering highlights|Technology stack|Local development|Repository structure|Documentation|Contributing and security|License)$' README.md
 rg -n 'docs/dashboard.png|docs/PROJECT_STATUS.md|CONTRIBUTING.md|SECURITY.md|\[MIT License\]\(LICENSE\)' README.md
 ! rg -n '^# AI Call Assistant$|^## Required GitHub branch protection$|^## Staging Checklist$' README.md
 git diff --check -- README.md
@@ -753,7 +753,7 @@ operations-first headings are absent, and the diff check exits `0`.
 
 ```bash
 git add README.md
-git commit -m "docs: present Presvo as an open source portfolio project"
+git commit -m "docs: present Opevo as an open source portfolio project"
 ```
 
 ---
@@ -883,7 +883,7 @@ current Compose behavior are found; the diff check exits `0`.
 
 ```bash
 git add docs/Verdict.md docs/architecture/agent-config-api.md docs/architecture/backend-context.md docs/architecture/billing-usage-api.md docs/architecture/staging-smoke-runbook.md
-git commit -m "docs: align current documentation with Presvo reality"
+git commit -m "docs: align current documentation with Opevo reality"
 ```
 
 ---
@@ -907,7 +907,7 @@ test -s docs/PROJECT_STATUS.md
 test -s CONTRIBUTING.md
 test -s SECURITY.md
 test -s LICENSE
-rg -n '^# Presvo$' README.md
+rg -n '^# Opevo$' README.md
 rg -n 'working pre-production MVP with a production-oriented architecture' README.md docs/PROJECT_STATUS.md
 ! rg -n 'T[B]D|T[O]DO|f[i]ll in|production-ready today' README.md docs/PROJECT_STATUS.md CONTRIBUTING.md SECURITY.md
 ! rg -n '^# (AI Call Assistant|Opevo)$' README.md docs/PROJECT_STATUS.md CONTRIBUTING.md SECURITY.md

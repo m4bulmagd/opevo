@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import pytest
 from livekit.agents import JobExecutorType
-from presvo_contracts import ContractError, CustomerCallDispatch, create_contract
+from opevo_contracts import ContractError, CustomerCallDispatch, create_contract
 
 import agent.main as agent_main
 from agent.composition import (
@@ -221,7 +221,7 @@ def test_agent_env_example_documents_debug_stream_flag() -> None:
     assert "AGENT_MAX_ENDPOINTING_DELAY=1.5" in env_example
     assert "LIVEKIT_SILERO_VAD_ENABLED=true" in env_example
     assert "LIVEKIT_TURN_DETECTOR_ENABLED=true" in env_example
-    assert "OTEL_SERVICE_NAME=presvo-agent" in env_example
+    assert "OTEL_SERVICE_NAME=opevo-agent" in env_example
     assert "OTEL_EXPORTER_OTLP_ENDPOINT=" in env_example
     assert "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf" in env_example
 

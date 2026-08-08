@@ -108,7 +108,7 @@ describe("StatusSurface", () => {
         description="Forwarded calls can be answered."
         icon={<svg aria-label={`${tone} status`} />}
         label="Answering state"
-        title="Presvo is answering"
+        title="Opevo is answering"
         tone={tone}
       />,
     );
@@ -118,14 +118,14 @@ describe("StatusSurface", () => {
     expect(surface).toHaveAttribute("data-tone", tone);
     expect(screen.getByLabelText(`${tone} status`)).toBeInTheDocument();
     expect(screen.getByText("Answering state")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 2, name: "Presvo is answering" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Opevo is answering" })).toBeInTheDocument();
     expect(screen.getByText("Forwarded calls can be answered.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Review activation" })).toHaveAttribute("href", "/activate");
   });
 
   it("provides a static marker when a custom status icon is not supplied", () => {
     const { container } = render(
-      <StatusSurface label="Paused" title="Presvo is paused" tone="paused">
+      <StatusSurface label="Paused" title="Opevo is paused" tone="paused">
         Review the readiness blockers.
       </StatusSurface>,
     );
@@ -144,7 +144,7 @@ describe("StatusSurface", () => {
     ["an empty fragment", <></>],
     ["a zero-valued conditional", 0],
   ])("provides a static marker when the icon is %s", (_case, icon) => {
-    const { container } = render(<StatusSurface icon={icon} label="Paused" title="Presvo is paused" tone="paused" />);
+    const { container } = render(<StatusSurface icon={icon} label="Paused" title="Opevo is paused" tone="paused" />);
 
     expect(screen.getByText("Paused")).toBeInTheDocument();
     expect(container.querySelector("[data-status-marker]")).toBeInTheDocument();
@@ -160,7 +160,7 @@ describe("StatusSurface", () => {
           </>
         }
         label="Paused"
-        title="Presvo is paused"
+        title="Opevo is paused"
         tone="paused"
       />,
     );

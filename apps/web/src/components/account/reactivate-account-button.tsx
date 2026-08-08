@@ -37,7 +37,7 @@ export function ReactivateAccountButton({ reactivationAllowed }: { reactivationA
         aria-describedby={!reactivationAllowed ? "reactivation-unavailable" : undefined}
       >
         {isPending ? <Spinner data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" />}
-        Reactivate Presvo
+        Reactivate Opevo
       </Button>
       {!reactivationAllowed ? (
         <p id="reactivation-unavailable" className="text-muted-foreground text-sm">

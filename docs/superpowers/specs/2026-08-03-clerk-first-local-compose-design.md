@@ -142,7 +142,7 @@ them.
 4. The web backend client sends that token to FastAPI as a bearer token.
 5. The application-scoped API Clerk verifier validates the signature, issuer,
    temporal claims, and exact local authorized party.
-6. The verified Clerk subject resolves to the existing Presvo user. For the
+6. The verified Clerk subject resolves to the existing Opevo user. For the
    account under test, that user owns the phone number ending in `99` and its
    persisted activation records.
 7. The activation UI reads and mutates only that authenticated user's canonical

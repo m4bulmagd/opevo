@@ -60,9 +60,9 @@ class ForwardingInstructionCatalog:
         self,
         carrier: CarrierCode,
         number_type: str | None,
-        presvo_number: str,
+        opevo_number: str,
     ) -> ForwardingGuide:
-        national_number = self._french_national_number(presvo_number)
+        national_number = self._french_national_number(opevo_number)
         steps = [
             self._step(
                 carrier=carrier,
@@ -76,15 +76,15 @@ class ForwardingInstructionCatalog:
             version=CATALOG_VERSION,
             carrier=carrier,
             number_type=number_type,
-            presvo_number=presvo_number,
+            opevo_number=opevo_number,
             warning=WARNING,
             steps=steps,
         )
 
     @staticmethod
-    def _french_national_number(presvo_number: str) -> str:
+    def _french_national_number(opevo_number: str) -> str:
         try:
-            parsed = phonenumbers.parse(presvo_number, None)
+            parsed = phonenumbers.parse(opevo_number, None)
         except NumberParseException as exc:
             raise ValueError(
                 "Assigned destination must be a valid French number"

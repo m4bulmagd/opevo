@@ -77,8 +77,8 @@ test("resumes deactivation after restart, preserves history, and provisions a ne
   await page.goto("/dashboard/account");
   const accountStatus = page.getByRole("region", { name: "Account status" });
   await expect(accountStatus.getByText("Inactive", { exact: true })).toBeVisible();
-  await expect(accountStatus.getByText("Presvo is inactive", { exact: true })).toBeVisible();
-  await expect(accountStatus.getByRole("button", { name: "Reactivate Presvo" })).toBeVisible();
+  await expect(accountStatus.getByText("Opevo is inactive", { exact: true })).toBeVisible();
+  await expect(accountStatus.getByRole("button", { name: "Reactivate Opevo" })).toBeVisible();
 
   await page.goto("/dashboard/calls");
   const historicalCall = page.locator(`a[href="/dashboard/calls/${state.historicalCallId}"]`);
@@ -86,10 +86,10 @@ test("resumes deactivation after restart, preserves history, and provisions a ne
   await expect(historicalCall).toHaveAccessibleName(/\bstatus Completed\b/);
 
   await page.goto("/dashboard/account");
-  await page.getByRole("button", { name: "Reactivate Presvo" }).click();
+  await page.getByRole("button", { name: "Reactivate Opevo" }).click();
   await expect(page).toHaveURL(/\/activate(?:\?|$)/, { timeout: 60_000 });
 
-  await expect(page.getByRole("heading", { name: "Choose your Presvo number" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose your Opevo number" })).toBeVisible();
   await expect(page.getByText("Your plan is ready")).toBeVisible();
   const reviewProvisioning = page.getByRole("button", { name: "Review number provisioning" });
   const confirmProvisioning = page.getByRole("button", { name: "Confirm and provision my number" });

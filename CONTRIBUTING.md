@@ -1,6 +1,6 @@
-# Contributing to Presvo
+# Contributing to Opevo
 
-Thanks for helping improve Presvo. The project is in active development,
+Thanks for helping improve Opevo. The project is in active development,
 production-oriented and locally verified, but not production-certified.
 Focused fixes, tests, documentation corrections, and small product improvements
 are easier to review than broad rewrites.
@@ -68,7 +68,7 @@ The staging runbook documents the complete provider-backed path:
 
 ### Shared wire contracts
 
-The API and agent share the small, versioned `presvo-contracts` package. Run
+The API and agent share the small, versioned `opevo-contracts` package. Run
 its focused package checks from the package directory:
 
 ```bash
@@ -109,8 +109,8 @@ build context so they can install `libs/shared`; run these commands from the
 repository root:
 
 ```bash
-docker build --file apps/api/Dockerfile --tag presvo-api:local .
-docker build --file apps/agent/Dockerfile --tag presvo-agent:local .
+docker build --file apps/api/Dockerfile --tag opevo-api:local .
+docker build --file apps/agent/Dockerfile --tag opevo-agent:local .
 ```
 
 ### API
@@ -120,7 +120,7 @@ API suite. These commands require ports `5432` and `6379` to be free; stop the
 local development stack first if it is running.
 
 ```bash
-docker run --detach --rm --name presvo-api-test-postgres \
+docker run --detach --rm --name opevo-api-test-postgres \
   --env POSTGRES_DB=ai_call_test \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD=postgres \
@@ -128,7 +128,7 @@ docker run --detach --rm --name presvo-api-test-postgres \
   --health-cmd='pg_isready -U postgres -d ai_call_test' \
   --health-interval=5s --health-timeout=5s --health-retries=10 \
   postgres:17.8-bookworm
-docker run --detach --rm --name presvo-api-test-redis \
+docker run --detach --rm --name opevo-api-test-redis \
   --publish 127.0.0.1:6379:6379 \
   --health-cmd='redis-cli ping' \
   --health-interval=5s --health-timeout=5s --health-retries=10 \
@@ -138,8 +138,8 @@ docker run --detach --rm --name presvo-api-test-redis \
 Wait until both containers report `healthy`:
 
 ```bash
-until docker inspect --format '{{.State.Health.Status}}' presvo-api-test-postgres | grep -qx healthy; do sleep 1; done
-until docker inspect --format '{{.State.Health.Status}}' presvo-api-test-redis | grep -qx healthy; do sleep 1; done
+until docker inspect --format '{{.State.Health.Status}}' opevo-api-test-postgres | grep -qx healthy; do sleep 1; done
+until docker inspect --format '{{.State.Health.Status}}' opevo-api-test-redis | grep -qx healthy; do sleep 1; done
 ```
 
 Then run the checks with the same non-secret service URLs as CI.
@@ -174,7 +174,7 @@ setup and teardown, a 60-second deadline.
 Remove the isolated services when verification is complete:
 
 ```bash
-docker rm --force presvo-api-test-postgres presvo-api-test-redis
+docker rm --force opevo-api-test-postgres opevo-api-test-redis
 ```
 
 ### Agent

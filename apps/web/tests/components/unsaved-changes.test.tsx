@@ -31,7 +31,7 @@ describe("unsaved changes foundations", () => {
     expect(screen.queryByRole("status", { name: "Unsaved changes" })).not.toBeInTheDocument();
   });
 
-  it("renders the Presvo save bar and locks both actions while pending", () => {
+  it("renders the Opevo save bar and locks both actions while pending", () => {
     const onDiscard = vi.fn();
     const onSave = vi.fn();
     const view = render(<UnsavedChangesBar dirty pending={false} onDiscard={onDiscard} onSave={onSave} />);

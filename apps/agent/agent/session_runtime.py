@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 from uuid import UUID
 
-from presvo_contracts import (
+from opevo_contracts import (
     CALL_COMPLETION_TRANSCRIPT_MAX_ITEMS,
     CallCompletionRequest,
     ContractError,

@@ -54,7 +54,7 @@ describe("root page", () => {
       "bg-card",
       "shadow-raised",
     );
-    expect(screen.getByRole("link", { name: /^Presvo$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^Opevo$/i })).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: /Log in/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: /Sign up/i }).length).toBeGreaterThan(0);
     expect(screen.queryByRole("link", { name: /Dashboard/i })).not.toBeInTheDocument();

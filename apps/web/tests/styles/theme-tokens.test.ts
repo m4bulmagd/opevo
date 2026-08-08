@@ -19,8 +19,8 @@ function declarationsForSelector(root: Root, selector: string) {
   return values;
 }
 
-describe("Presvo Tailwind theme tokens", () => {
-  it("preserves the approved light and dark Presvo visual contract", async () => {
+describe("Opevo Tailwind theme tokens", () => {
+  it("preserves the approved light and dark Opevo visual contract", async () => {
     const globalsPath = path.resolve(process.cwd(), "src/app/globals.css");
     const root = postcss.parse(await readFile(globalsPath, "utf8"), { from: globalsPath });
     const light = declarationsForSelector(root, ":root");

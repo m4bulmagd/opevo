@@ -16,7 +16,7 @@ from app.services.forwarding_instruction_catalog import (
 
 
 # ARCEP reserves the 09 99 range for technical/internal use rather than subscribers.
-PRESVO_NUMBER = "+33999000000"
+OPEVO_NUMBER = "+33999000000"
 CONDITIONS = ["unanswered", "busy", "unreachable"]
 BANNED_UNCONDITIONAL_ACTIONS = ("unconditional", "*21*", "#21#")
 
@@ -28,7 +28,7 @@ def build_guide(
     return ForwardingInstructionCatalog().for_profile(
         carrier=carrier,
         number_type=number_type,
-        presvo_number=PRESVO_NUMBER,
+        opevo_number=OPEVO_NUMBER,
     )
 
 
@@ -42,7 +42,7 @@ def test_every_carrier_has_versioned_conditional_sections(
     assert [step.condition for step in guide.steps] == CONDITIONS
     assert guide.carrier == carrier
     assert guide.number_type == "fixed"
-    assert guide.presvo_number == PRESVO_NUMBER
+    assert guide.opevo_number == OPEVO_NUMBER
     assert "may charge forwarded-call minutes" in guide.warning
     assert "availability depends on your plan" in guide.warning
 
@@ -111,7 +111,7 @@ def test_bouygues_uses_public_tariff_source_without_account_data() -> None:
     assert {str(step.source_url) for step in guide.steps if step.source_url} == {
         BOUYGUES_TARIFF_GUIDE_URL
     }
-    assert PRESVO_NUMBER not in BOUYGUES_TARIFF_GUIDE_URL
+    assert OPEVO_NUMBER not in BOUYGUES_TARIFF_GUIDE_URL
 
 
 def test_other_carrier_has_no_invented_provider_source() -> None:
@@ -136,5 +136,5 @@ def test_catalog_rejects_non_french_assigned_destination() -> None:
         ForwardingInstructionCatalog().for_profile(
             carrier="sfr",
             number_type="fixed",
-            presvo_number="+12025550123",
+            opevo_number="+12025550123",
         )

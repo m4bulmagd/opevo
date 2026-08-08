@@ -293,10 +293,10 @@ def test_service_identity_rejects_content_bearing_values(
     observability = _load_observability()
     monkeypatch.setenv(
         "OTEL_SERVICE_NAME",
-        "presvo-agent-transcript-secret-sentinel",
+        "opevo-agent-transcript-secret-sentinel",
     )
 
-    assert observability._service_name() == "presvo-agent"
+    assert observability._service_name() == "opevo-agent"
 
 
 class _FailingExporter:
@@ -447,30 +447,30 @@ def test_agent_spans_correlate_only_valid_call_ids_without_customer_content() ->
         pass
 
     assert [item[0] for item in tracer.started] == [
-        "presvo.agent.lifecycle",
-        "presvo.agent.provider.request",
-        "presvo.agent.lifecycle",
+        "opevo.agent.lifecycle",
+        "opevo.agent.provider.request",
+        "opevo.agent.lifecycle",
     ]
     first_attributes = tracer.started[0][1]["attributes"]
     assert first_attributes == {
-        "presvo.call.id": call_id,
-        "presvo.agent.pipeline_mode": "sts",
+        "opevo.call.id": call_id,
+        "opevo.agent.pipeline_mode": "sts",
     }
     provider_attributes = tracer.started[1][1]["attributes"]
     assert provider_attributes == {
-        "presvo.call.id": call_id,
-        "presvo.provider.name": "livekit",
-        "presvo.provider.operation": "session_start",
+        "opevo.call.id": call_id,
+        "opevo.provider.name": "livekit",
+        "opevo.provider.operation": "session_start",
     }
     assert tracer.started[0][1]["kind"] is SpanKind.INTERNAL
     assert tracer.started[1][1]["kind"] is SpanKind.CLIENT
     unsafe_attributes = tracer.started[2][1]["attributes"]
-    assert unsafe_attributes == {"presvo.agent.pipeline_mode": "unknown"}
+    assert unsafe_attributes == {"opevo.agent.pipeline_mode": "unknown"}
     rendered = repr(tracer.started)
     assert "CALL_TRANSCRIPT_SENTINEL" not in rendered
     assert "PROMPT_SENTINEL" not in rendered
     assert all(item[2].ended for item in tracer.started)
-    assert all(item[2].attributes["presvo.outcome"] == "success" for item in tracer.started)
+    assert all(item[2].attributes["opevo.outcome"] == "success" for item in tracer.started)
 
 
 def test_provider_span_error_class_does_not_capture_cleared_exception() -> None:
@@ -488,8 +488,8 @@ def test_provider_span_error_class_does_not_capture_cleared_exception() -> None:
             raise sentinel
 
     assert captured.value is sentinel
-    assert tracer.started[0][2].attributes["presvo.outcome"] == "error"
-    assert tracer.started[0][2].attributes["presvo.error.class"] == "timeout"
+    assert tracer.started[0][2].attributes["opevo.outcome"] == "error"
+    assert tracer.started[0][2].attributes["opevo.error.class"] == "timeout"
 
 
 def test_span_recording_failure_does_not_change_application_result(

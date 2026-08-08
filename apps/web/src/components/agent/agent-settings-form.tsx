@@ -78,14 +78,14 @@ export function AgentSettingsForm({
         <p className="mb-6 max-w-2xl text-sm text-text-secondary leading-relaxed">
           {readOnly
             ? "These saved settings are read-only while the account is deactivating or inactive."
-            : "Live settings save through Presvo and apply to future calls after the backend confirms them."}
+            : "Live settings save through Opevo and apply to future calls after the backend confirms them."}
         </p>
 
         <div className="flex flex-col">
           {tab === "general" ? (
             <>
               <SettingsSection
-                description="Choose the name shown in Presvo and used as your receptionist's identity."
+                description="Choose the name shown in Opevo and used as your receptionist's identity."
                 title="Identity"
               >
                 <FieldGroup>

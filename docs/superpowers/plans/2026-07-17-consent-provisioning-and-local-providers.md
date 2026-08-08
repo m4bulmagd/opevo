@@ -18,7 +18,7 @@
 - Profile confirmation and eligible starter payment must precede provisioning consent.
 - Payment, subscription creation, and `invoice.paid` must never enqueue `phone.provision`.
 - Only `POST /api/activation/confirm-provisioning` may record initial number-order consent.
-- Repeated requests, jobs, and provider reconciliation must produce at most one Presvo number.
+- Repeated requests, jobs, and provider reconciliation must produce at most one Opevo number.
 - Number country is always `FR`; there is no fallback to `US` or Ireland.
 - Carrier lookup failure is non-blocking because the owner can select Orange, SFR, Bouygues Telecom, Free, or Other manually.
 - Local provider modes perform no external I/O and are absent from production routing.
@@ -215,7 +215,7 @@ Do not expose or persist the raw Telnyx object.
 
 - [ ] **Step 4: Implement the Telnyx and deterministic fake adapters**
 
-Presvo is locked to `telnyx==2.1.6`, which exposes resource classes rather than
+Opevo is locked to `telnyx==2.1.6`, which exposes resource classes rather than
 the newer `Telnyx(...).number_lookup` client surface. Its `APIResource.retrieve`
 signature is `retrieve(id, api_key=None, **params)`, so the adapter must call
 `telnyx.NumberLookup.retrieve(e164, api_key=api_key)` in `asyncio.to_thread`,
@@ -650,8 +650,8 @@ git commit -m "feat: add local billing and telephony adapters"
 
 ```python
 def test_local_auth_accepts_only_exact_configured_token() -> None:
-    provider = LocalAuthProvider(token="presvo-local-development-token")
-    assert provider.verify_token("presvo-local-development-token").clerk_user_id == "local_presvo_user"
+    provider = LocalAuthProvider(token="opevo-local-development-token")
+    assert provider.verify_token("opevo-local-development-token").clerk_user_id == "local_opevo_user"
     with pytest.raises(HTTPException) as error:
         provider.verify_token("wrong")
     assert error.value.status_code == 401
@@ -704,13 +704,13 @@ Add:
 
 ```python
 auth_mode: Literal["clerk", "local"] = "clerk"
-local_auth_token: str = "presvo-local-development-token"
+local_auth_token: str = "opevo-local-development-token"
 ```
 
 `LocalAuthProvider` accepts only `hmac.compare_digest(token,
-configured_token)`, always yields external ID `local_presvo_user`, and never
+configured_token)`, always yields external ID `local_opevo_user`, and never
 accepts a caller-selected user. In `require_user_identity`, local mode may call
-`UserBootstrapService.ensure_user` with `local@presvo.invalid`; Clerk mode keeps
+`UserBootstrapService.ensure_user` with `local@opevo.invalid`; Clerk mode keeps
 the existing synced-user requirement.
 
 - [ ] **Step 5: Fail closed outside development and document local defaults**
@@ -727,7 +727,7 @@ AUTH_MODE: local
 BILLING_MODE: fake
 CARRIER_LOOKUP_MODE: fake
 TELEPHONY_MODE: fake
-LOCAL_AUTH_TOKEN: presvo-local-development-token
+LOCAL_AUTH_TOKEN: opevo-local-development-token
 ```
 
 The worker receives only `TELEPHONY_MODE=fake`, which it needs for durable
@@ -775,7 +775,7 @@ git commit -m "feat: guard provider-free local activation"
 ```python
 @pytest.mark.anyio
 async def test_provider_free_journey_reaches_forwarding_required(local_client) -> None:
-    headers = {"Authorization": "Bearer presvo-local-development-token"}
+    headers = {"Authorization": "Bearer opevo-local-development-token"}
     assert (await local_client.put("/api/business-profile", headers=headers, json=complete_profile_payload())).status_code == 200
     assert (await local_client.post("/api/activation/lookup-carrier", headers=headers)).status_code == 200
     assert (await local_client.post("/api/activation/confirm-profile", headers=headers)).json()["stage"] == "payment_required"

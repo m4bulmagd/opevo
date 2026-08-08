@@ -6,7 +6,7 @@
 
 ## Context
 
-Presvo already runs its API, call-lifecycle worker, background worker, and
+Opevo already runs its API, call-lifecycle worker, background worker, and
 LiveKit agent as separate processes. The process topology is sound, but
 dependency construction is distributed across framework entrypoints, request
 providers, ARQ job dictionaries, business functions, and module-level caches.
@@ -85,7 +85,7 @@ construction paths, not to change customer-facing behavior.
 ## 1. Process and source boundaries
 
 Operational isolation and source-package isolation are separate decisions.
-Presvo retains the existing operational boundaries:
+Opevo retains the existing operational boundaries:
 
 ```text
 API process

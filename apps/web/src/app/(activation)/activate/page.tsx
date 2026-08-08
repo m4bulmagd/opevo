@@ -20,7 +20,7 @@ const MILESTONE_COPY: Record<ActivationMilestoneId, { eyebrow: string; title: st
   business: {
     eyebrow: "Your business",
     title: "Tell us about your business",
-    description: "Share the essentials Presvo needs to answer missed calls with the right context.",
+    description: "Share the essentials Opevo needs to answer missed calls with the right context.",
   },
   receptionist: {
     eyebrow: "Your receptionist",
@@ -28,13 +28,13 @@ const MILESTONE_COPY: Record<ActivationMilestoneId, { eyebrow: string; title: st
     description: "Set the voice, knowledge, and boundaries clients should hear when you cannot answer.",
   },
   number: {
-    eyebrow: "Your Presvo line",
-    title: "Choose your Presvo number",
+    eyebrow: "Your Opevo line",
+    title: "Choose your Opevo number",
     description: "Activate your plan, then review and approve your French number before anything is ordered.",
   },
   forwarding: {
     eyebrow: "Missed-call routing",
-    title: "Forward missed calls to Presvo",
+    title: "Forward missed calls to Opevo",
     description: "Follow the instructions for your carrier while keeping answered calls on your existing line.",
   },
   launch: {

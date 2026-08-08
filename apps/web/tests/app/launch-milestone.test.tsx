@@ -228,7 +228,7 @@ describe("launch milestone", () => {
       <LaunchMilestone localVerification={false} snapshot={activationSnapshot({ stage: "activating" })} />,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent(/Bringing Presvo live/i);
+    expect(screen.getByRole("status")).toHaveTextContent(/Bringing Opevo live/i);
     expect(screen.queryByText(/^Active$/i)).not.toBeInTheDocument();
     view.rerender(
       <LaunchMilestone
@@ -245,7 +245,7 @@ describe("launch milestone", () => {
         })}
       />,
     );
-    expect(screen.getByRole("alert")).toHaveTextContent(/couldn't bring Presvo live/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn't bring Opevo live/i);
     expect(screen.getByText(/Reference: routing_provider_terminal/i)).toBeInTheDocument();
   });
 
@@ -263,7 +263,7 @@ describe("launch milestone", () => {
       />,
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent(/Presvo is not active/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/Opevo is not active/i);
     expect(screen.queryByRole("button", { name: /^Go live$/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/^Active$/i)).not.toBeInTheDocument();
   });

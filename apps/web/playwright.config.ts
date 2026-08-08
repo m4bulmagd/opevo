@@ -10,7 +10,7 @@ export default defineConfig({
     timeout: 30_000,
   },
   reporter: "list",
-  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? "/tmp/presvo-playwright-results",
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? "/tmp/opevo-playwright-results",
   snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}{ext}",
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://127.0.0.1:3300",

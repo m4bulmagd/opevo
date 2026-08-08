@@ -26,7 +26,7 @@ path_identity() {
 new_marker() {
   local random_value
   IFS= read -r random_value </proc/sys/kernel/random/uuid
-  printf 'presvo-contract-context:%s\n' "$random_value"
+  printf 'opevo-contract-context:%s\n' "$random_value"
 }
 
 promote_cleanup_failure() {
@@ -65,7 +65,7 @@ create_quarantine_directory() {
         return 0
       fi
       if ! directory=$(mktemp -d \
-        /tmp/presvo-contract-context-cleanup.XXXXXX); then
+        /tmp/opevo-contract-context-cleanup.XXXXXX); then
         printf 'failed to create output cleanup quarantine.\n' >&2
         promote_cleanup_failure
         return 1
@@ -274,7 +274,7 @@ fixture_directory=$fixture_candidate
 fixture_identity=$fixture_candidate_identity
 fixture_name=$(basename "$fixture_directory")
 output_marker=$(new_marker)
-output_candidate=$(mktemp -d /tmp/presvo-contract-context.XXXXXX)
+output_candidate=$(mktemp -d /tmp/opevo-contract-context.XXXXXX)
 output_candidate_identity=$(path_identity "$output_candidate")
 if ! printf '%s\n' "$output_marker" \
   >"$output_candidate/.env.contract-context-owner"; then
@@ -303,7 +303,7 @@ test -f "$output_directory/context/libs/shared/pyproject.toml"
 test -d "$output_directory/context/libs/shared/src"
 test ! -e "$output_directory/context/.git"
 test ! -e "$output_directory/context/.env.contract-context-probe"
-test ! -e "$output_directory/context/Presvo_frontend"
+test ! -e "$output_directory/context/Opevo_frontend"
 test ! -e "$output_directory/context/tests/docker/$fixture_name/nested/.env"
 test ! -e "$output_directory/context/tests/docker/$fixture_name/nested/.env.contract-context-probe"
 test -f "$output_directory/context/tests/docker/$fixture_name/nested/.env.example"

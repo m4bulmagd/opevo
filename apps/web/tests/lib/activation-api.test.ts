@@ -111,7 +111,7 @@ describe("development capabilities", () => {
     if (nodeEnv === "production") {
       vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "pk_live_test");
       vi.stubEnv("CLERK_SECRET_KEY", "sk_live_test");
-      vi.stubEnv("API_BASE_URL", "https://api.presvo.test");
+      vi.stubEnv("API_BASE_URL", "https://api.opevo.test");
     }
 
     const { getDevelopmentCapabilities } = await import("@/lib/development/capabilities");

@@ -518,9 +518,9 @@ def test_authentication_instruments_and_attributes_are_bounded() -> None:
     meter = _SpecificationMeter()
     telemetry = _observability(meter=meter)
 
-    assert meter.specifications["presvo.auth.verifications"] == ("counter", None)
-    assert meter.specifications["presvo.auth.jwks.refreshes"] == ("counter", None)
-    assert meter.specifications["presvo.auth.jwks.refresh.duration"] == (
+    assert meter.specifications["opevo.auth.verifications"] == ("counter", None)
+    assert meter.specifications["opevo.auth.jwks.refreshes"] == ("counter", None)
+    assert meter.specifications["opevo.auth.jwks.refresh.duration"] == (
         "histogram",
         "s",
     )
@@ -531,7 +531,7 @@ def test_authentication_instruments_and_attributes_are_bounded() -> None:
     telemetry.record_jwks_stale_key_use()
     telemetry.record_jwks_refresh_cooldown("rejected")
 
-    assert meter.instruments["presvo.auth.verifications"].measurements == [
+    assert meter.instruments["opevo.auth.verifications"].measurements == [
         (1, {"outcome": "rejected", "reason": "authorized_party"}),
         (1, {"outcome": "other", "reason": "other"}),
     ]
@@ -586,12 +586,12 @@ class AuthenticationUnavailable(Exception):
 In `observability.py`, add fixed sets for outcomes/reasons, construct five counters plus one duration histogram, and implement the five methods through `_safe_label()` and `_safe_call()`. The exact metric names are:
 
 ```python
-"presvo.auth.verifications"
-"presvo.auth.jwks.refreshes"
-"presvo.auth.jwks.refresh.duration"
-"presvo.auth.jwks.coalesced_waits"
-"presvo.auth.jwks.stale_key_uses"
-"presvo.auth.jwks.refresh_cooldowns"
+"opevo.auth.verifications"
+"opevo.auth.jwks.refreshes"
+"opevo.auth.jwks.refresh.duration"
+"opevo.auth.jwks.coalesced_waits"
+"opevo.auth.jwks.stale_key_uses"
+"opevo.auth.jwks.refresh_cooldowns"
 ```
 
 The only accepted label values are:
@@ -1261,9 +1261,9 @@ docker compose -f compose.dev.yaml config --quiet
 env \
   ACTIVATION_FLOW_ENABLED=true \
   AGENT_DISPATCH_JWT_SECRET=test-only-test-only-test-only-test-only \
-  AGENT_IMAGE=presvo-agent:verification \
+  AGENT_IMAGE=opevo-agent:verification \
   API_BASE_URL=https://api.example.invalid \
-  API_IMAGE=presvo-api:verification \
+  API_IMAGE=opevo-api:verification \
   CLERK_AUTHORIZED_PARTIES=https://app.example.com \
   CLERK_ISSUER=https://clerk.example.com \
   CLERK_JWKS_URL=https://clerk.example.com/.well-known/jwks.json \
@@ -1298,7 +1298,7 @@ env \
   TELNYX_API_KEY=disposable-telnyx-key \
   TELNYX_DISABLED_CONNECTION_ID=disposable-disabled-connection \
   TELNYX_ORDERING_ENABLED=true \
-  WEB_IMAGE=presvo-web:verification \
+  WEB_IMAGE=opevo-web:verification \
   docker compose -f compose.yaml config --quiet
 ```
 
@@ -1329,10 +1329,10 @@ git commit -m "feat(api): map Clerk auth failures across dormant realtime path"
 Start disposable PostgreSQL and Redis containers with unique explicit names and ports, then run the same API contract as CI:
 
 ```bash
-docker run --detach --name presvo-clerk-auth-test-postgres --env POSTGRES_DB=ai_call_test --env POSTGRES_USER=postgres --env POSTGRES_PASSWORD=postgres --publish 127.0.0.1:55432:5432 --health-cmd 'pg_isready -U postgres -d ai_call_test' --health-interval 2s --health-timeout 2s --health-retries 30 postgres:17.8-bookworm
-docker run --detach --name presvo-clerk-auth-test-redis --publish 127.0.0.1:56379:6379 --health-cmd 'redis-cli ping' --health-interval 2s --health-timeout 2s --health-retries 30 redis:7.4.7-alpine
-docker inspect --format '{{.State.Health.Status}}' presvo-clerk-auth-test-postgres
-docker inspect --format '{{.State.Health.Status}}' presvo-clerk-auth-test-redis
+docker run --detach --name opevo-clerk-auth-test-postgres --env POSTGRES_DB=ai_call_test --env POSTGRES_USER=postgres --env POSTGRES_PASSWORD=postgres --publish 127.0.0.1:55432:5432 --health-cmd 'pg_isready -U postgres -d ai_call_test' --health-interval 2s --health-timeout 2s --health-retries 30 postgres:17.8-bookworm
+docker run --detach --name opevo-clerk-auth-test-redis --publish 127.0.0.1:56379:6379 --health-cmd 'redis-cli ping' --health-interval 2s --health-timeout 2s --health-retries 30 redis:7.4.7-alpine
+docker inspect --format '{{.State.Health.Status}}' opevo-clerk-auth-test-postgres
+docker inspect --format '{{.State.Health.Status}}' opevo-clerk-auth-test-redis
 cd apps/api
 UV_CACHE_DIR=/tmp/uv-cache uv lock --check
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync ruff check app tests
@@ -1406,12 +1406,12 @@ In `docs/engineering/2026-07-30-agent-api-review-decisions.md`:
 
 - [ ] **Step 6: Remove only disposable artifacts created by this work and inspect status**
 
-Stop/remove the explicitly named test containers and the disposable E2E Compose project. Remove generated `coverage.json` files only after confirming they are untracked build artifacts. Do not inspect or touch `/home/mo/code/ai/bmad-opevo/Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
+Stop/remove the explicitly named test containers and the disposable E2E Compose project. Remove generated `coverage.json` files only after confirming they are untracked build artifacts. Do not inspect or touch `/home/mo/code/ai/bmad-opevo/Opevo_frontend/` or `.worktrees/shadcn-activation-preview`.
 
 ```bash
-docker compose --project-name presvo-e2e -f compose.dev.yaml down --volumes --remove-orphans
-docker rm --force presvo-clerk-auth-test-postgres
-docker rm --force presvo-clerk-auth-test-redis
+docker compose --project-name opevo-e2e -f compose.dev.yaml down --volumes --remove-orphans
+docker rm --force opevo-clerk-auth-test-postgres
+docker rm --force opevo-clerk-auth-test-redis
 git status --short apps/api/coverage.json apps/agent/coverage.json
 rm --force apps/api/coverage.json apps/agent/coverage.json
 git status --short

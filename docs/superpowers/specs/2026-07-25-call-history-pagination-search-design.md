@@ -182,7 +182,7 @@ zero total matches remains on page 1 and renders the no-match state.
 
 ## Calls-page interaction
 
-The existing Presvo call cards remain intact.
+The existing Opevo call cards remain intact.
 
 Above the list, the page adds:
 

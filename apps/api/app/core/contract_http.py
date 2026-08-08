@@ -9,7 +9,7 @@ from copy import deepcopy
 from typing import TypeVar
 
 from fastapi import HTTPException, Request, status
-from presvo_contracts import ContractError, VersionedContract, parse_contract
+from opevo_contracts import ContractError, VersionedContract, parse_contract
 
 from app.core.observability import get_request_observability
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from contract_cases import CONTRACT_CASES, ContractCase
-from presvo_contracts import SUPPORTED_SCHEMA_VERSIONS, dump_contract
+from opevo_contracts import SUPPORTED_SCHEMA_VERSIONS, dump_contract
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures"

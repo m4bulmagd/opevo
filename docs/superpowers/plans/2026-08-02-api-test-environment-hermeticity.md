@@ -19,7 +19,7 @@
 - Keep realtime and activation flow disabled in the construction-safe pytest baseline. Do not enable or implement realtime.
 - Do not alter Clerk runtime validation, verifier behavior, production configuration, Compose service declarations, dependencies, lockfiles, or deployment state.
 - Never read, copy, rewrite, sanitize, or delete a developer's real `.env`. Controlled dotenv regressions use `tmp_path`; the full poisoned-dotenv proof may create only a pre-checked absent `apps/api/.env` inside this isolated worktree, then must delete that exact disposable file.
-- Do not touch `/home/mo/code/ai/bmad-opevo/Presvo_frontend/` or `.worktrees/shadcn-activation-preview`.
+- Do not touch `/home/mo/code/ai/bmad-opevo/Opevo_frontend/` or `.worktrees/shadcn-activation-preview`.
 - Use `UV_CACHE_DIR=/tmp/uv-cache` for every `uv` command. Do not push, deploy, open a PR, or modify remote branches.
 - The full API suite must pass with zero skips against disposable PostgreSQL and Redis, and both line and branch coverage must meet or increase `apps/api/coverage-baseline.json`; never lower either ratchet.
 
@@ -93,7 +93,7 @@ def test_explicit_test_environment_ignores_dotenv(
 
     assert settings.database_url == "sqlite+aiosqlite://"
     assert settings.redis_url == "redis://localhost:6379/0"
-    assert settings.otel_service_name == "presvo-api"
+    assert settings.otel_service_name == "opevo-api"
     assert settings.activation_flow_enabled is False
     assert settings.clerk_jwt_key == "constructor-static-key"
     assert settings.clerk_jwks_url is None
@@ -117,7 +117,7 @@ def test_process_test_environment_makes_cached_settings_ignore_dotenv(
     finally:
         get_settings.cache_clear()
 
-    assert settings.otel_service_name == "presvo-api"
+    assert settings.otel_service_name == "opevo-api"
     assert settings.activation_flow_enabled is False
     assert settings.clerk_jwt_key == "process-static-key"
     assert settings.clerk_jwks_url is None
@@ -536,7 +536,7 @@ def test_compose_render_can_skip_service_env_file_resolution(tmp_path: Path) -> 
         """\
 services:
   api:
-    image: example.invalid/presvo/api:test
+    image: example.invalid/opevo/api:test
     env_file:
       - ./service.env
     environment:
@@ -669,7 +669,7 @@ git commit -m "test(api): isolate local compose env rendering"
 **Files:**
 - Modify conditionally: `apps/api/coverage-baseline.json`
 - Modify: `docs/superpowers/specs/2026-08-02-api-test-environment-hermeticity-design.md`
-- Disposable and always removed: `apps/api/.env`, `apps/api/.coverage`, `apps/api/coverage.json`, `/tmp/presvo-api-hermeticity-coverage-clean.json`
+- Disposable and always removed: `apps/api/.env`, `apps/api/.coverage`, `apps/api/coverage.json`, `/tmp/opevo-api-hermeticity-coverage-clean.json`
 
 **Interfaces:**
 - Consumes: Tasks 1-3 and the repository's coverage-ratchet checker.
@@ -683,10 +683,10 @@ From the worktree root, run:
 git status --short --branch
 git diff --check
 test ! -e apps/api/.env
-test ! -e /home/mo/code/ai/bmad-opevo/.worktrees/api-test-env-hermeticity/Presvo_frontend
+test ! -e /home/mo/code/ai/bmad-opevo/.worktrees/api-test-env-hermeticity/Opevo_frontend
 ```
 
-Expected: only the committed implementation plan and three committed implementation tasks are ahead of the design commit, no uncommitted changes exist, the isolated worktree has no API `.env`, and it has no `Presvo_frontend` path. If `apps/api/.env` exists, stop without reading or deleting it.
+Expected: only the committed implementation plan and three committed implementation tasks are ahead of the design commit, no uncommitted changes exist, the isolated worktree has no API `.env`, and it has no `Opevo_frontend` path. If `apps/api/.env` exists, stop without reading or deleting it.
 
 - [x] **Step 2: Run lock and static-analysis gates**
 
@@ -705,27 +705,27 @@ Expected: lockfile unchanged and valid; Ruff and mypy report no errors.
 First prove neither exact name already exists:
 
 ```bash
-test -z "$(docker ps -a --filter name=^/presvo-api-hermeticity-postgres$ --format '{{.Names}}')"
-test -z "$(docker ps -a --filter name=^/presvo-api-hermeticity-redis$ --format '{{.Names}}')"
+test -z "$(docker ps -a --filter name=^/opevo-api-hermeticity-postgres$ --format '{{.Names}}')"
+test -z "$(docker ps -a --filter name=^/opevo-api-hermeticity-redis$ --format '{{.Names}}')"
 ```
 
 Then start:
 
 ```bash
 docker run -d \
-  --name presvo-api-hermeticity-postgres \
+  --name opevo-api-hermeticity-postgres \
   -e POSTGRES_DB=ai_call_test \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
   -p 127.0.0.1:55459:5432 \
   postgres:17.8-bookworm
 docker run -d \
-  --name presvo-api-hermeticity-redis \
+  --name opevo-api-hermeticity-redis \
   -p 127.0.0.1:56389:6379 \
   redis:7.4.7-alpine
 ```
 
-Poll `docker exec presvo-api-hermeticity-postgres pg_isready -U postgres -d ai_call_test` and `docker exec presvo-api-hermeticity-redis redis-cli ping` in bounded one-second loops for at most 60 attempts. Expected: PostgreSQL reports accepting connections and Redis reports `PONG`. If either fails, capture `docker logs` for that exact container and proceed directly to Step 9 cleanup.
+Poll `docker exec opevo-api-hermeticity-postgres pg_isready -U postgres -d ai_call_test` and `docker exec opevo-api-hermeticity-redis redis-cli ping` in bounded one-second loops for at most 60 attempts. Expected: PostgreSQL reports accepting connections and Redis reports `PONG`. If either fails, capture `docker logs` for that exact container and proceed directly to Step 9 cleanup.
 
 - [x] **Step 4: Run the clean full API suite with coverage**
 
@@ -750,7 +750,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python \
   ../../scripts/check_python_coverage.py check \
   --report coverage.json \
   --baseline coverage-baseline.json
-cp coverage.json /tmp/presvo-api-hermeticity-coverage-clean.json
+cp coverage.json /tmp/opevo-api-hermeticity-coverage-clean.json
 ```
 
 Expected: the complete API suite passes with zero skips; both line and branch checks pass. The general client fixture remains on its approved per-test SQLite path because `CLIENT_TEST_DATABASE_URL` is absent, while dedicated integration tests use PostgreSQL through `TEST_DATABASE_URL`.
@@ -785,7 +785,7 @@ Repeat the exact pytest and coverage-check commands from Step 4. Expected: the c
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --no-sync python -c \
-  'import json; from pathlib import Path; clean=json.loads(Path("/tmp/presvo-api-hermeticity-coverage-clean.json").read_text())["totals"]; poisoned=json.loads(Path("coverage.json").read_text())["totals"]; assert clean == poisoned, (clean, poisoned); print(clean)'
+  'import json; from pathlib import Path; clean=json.loads(Path("/tmp/opevo-api-hermeticity-coverage-clean.json").read_text())["totals"]; poisoned=json.loads(Path("coverage.json").read_text())["totals"]; assert clean == poisoned, (clean, poisoned); print(clean)'
 ```
 
 Expected: the assertion passes. This is the authoritative regression proving a conflicting local dotenv cannot alter collection, settings fixtures, deployment-readiness rendering, skips, or coverage.
@@ -841,9 +841,9 @@ Do not add a second `Issue 21` row to the older visual-execution ledger; this de
 Use `apply_patch` to delete only the disposable `apps/api/.env` created in Step 5. Then remove generated artifacts and named containers:
 
 ```bash
-rm -f apps/api/.coverage apps/api/coverage.json /tmp/presvo-api-hermeticity-coverage-clean.json
-docker stop presvo-api-hermeticity-postgres presvo-api-hermeticity-redis
-docker rm presvo-api-hermeticity-postgres presvo-api-hermeticity-redis
+rm -f apps/api/.coverage apps/api/coverage.json /tmp/opevo-api-hermeticity-coverage-clean.json
+docker stop opevo-api-hermeticity-postgres opevo-api-hermeticity-redis
+docker rm opevo-api-hermeticity-postgres opevo-api-hermeticity-redis
 ```
 
 Verify cleanup:
@@ -852,9 +852,9 @@ Verify cleanup:
 test ! -e apps/api/.env
 test ! -e apps/api/.coverage
 test ! -e apps/api/coverage.json
-test ! -e /tmp/presvo-api-hermeticity-coverage-clean.json
-test -z "$(docker ps -a --filter name=^/presvo-api-hermeticity-postgres$ --format '{{.Names}}')"
-test -z "$(docker ps -a --filter name=^/presvo-api-hermeticity-redis$ --format '{{.Names}}')"
+test ! -e /tmp/opevo-api-hermeticity-coverage-clean.json
+test -z "$(docker ps -a --filter name=^/opevo-api-hermeticity-postgres$ --format '{{.Names}}')"
+test -z "$(docker ps -a --filter name=^/opevo-api-hermeticity-redis$ --format '{{.Names}}')"
 ```
 
 Do not prune Docker and do not remove any differently named container, network, volume, image, cache, ignored file, or user resource.

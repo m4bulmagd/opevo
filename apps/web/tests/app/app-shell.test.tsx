@@ -568,7 +568,7 @@ describe("app shell", () => {
         reactivation_allowed: false,
         blocker: "account_deactivating",
       },
-      "Presvo is no longer accepting new calls",
+      "Opevo is no longer accepting new calls",
     ],
     [
       "inactive",
@@ -579,7 +579,7 @@ describe("app shell", () => {
         reactivation_allowed: true,
         blocker: "account_inactive",
       },
-      "Presvo is inactive",
+      "Opevo is inactive",
     ],
   ] as const)("shows the global lifecycle banner and every retained navigation destination while %s", async (_status, account, title) => {
     await renderDashboardLayout({ account });
@@ -606,8 +606,8 @@ describe("app shell", () => {
   it("omits the global lifecycle banner while active and retains navigation", async () => {
     await renderDashboardLayout();
 
-    expect(screen.queryByText("Presvo is no longer accepting new calls")).not.toBeInTheDocument();
-    expect(screen.queryByText("Presvo is inactive")).not.toBeInTheDocument();
+    expect(screen.queryByText("Opevo is no longer accepting new calls")).not.toBeInTheDocument();
+    expect(screen.queryByText("Opevo is inactive")).not.toBeInTheDocument();
     expect(within(desktopNavigation()).getByRole("link", { name: "Account" })).toHaveAttribute(
       "href",
       "/dashboard/account",

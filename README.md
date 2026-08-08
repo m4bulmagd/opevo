@@ -1,14 +1,14 @@
-# Presvo (WIP)
+# Opevo (WIP)
 
 > An open-source, France-first AI voice assistant for handling inbound business calls.
 
 **Status:** Working MVP in active development. Locally verified, but not yet production-certified.
 
-![Presvo landing page](docs/dashboard.png)
+![Opevo landing page](docs/dashboard.png)
 
-## What Presvo does
+## What Opevo does
 
-Presvo gives professionals and small businesses a configurable AI receptionist and a dedicated French phone number. It can:
+Opevo gives professionals and small businesses a configurable AI receptionist and a dedicated French phone number. It can:
 
 - answer conditionally forwarded calls with business-specific context;
 - manage subscriptions, number setup, forwarding verification, and live-call monitoring;
@@ -157,4 +157,4 @@ For real-provider configuration, follow the
 - [Contributing guide](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
-Presvo is available under the [MIT License](LICENSE).
+Opevo is available under the [MIT License](LICENSE).

@@ -6,7 +6,7 @@ from typing import Any
 
 from livekit import rtc
 from livekit.agents import Agent, AutoSubscribe, JobContext, room_io
-from presvo_contracts import ForwardingVerificationDispatch
+from opevo_contracts import ForwardingVerificationDispatch
 
 from agent.api_client import AgentApiClient
 from agent.config import AgentSettings

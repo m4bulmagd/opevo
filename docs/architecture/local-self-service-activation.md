@@ -1,6 +1,6 @@
 # Local self-service activation
 
-This document is the operator contract for Presvo's provider-free activation
+This document is the operator contract for Opevo's provider-free activation
 journey. It describes what is implemented locally, what the disposable browser
 test proves, and which production claims remain gated.
 
@@ -8,8 +8,8 @@ test proves, and which production claims remain gated.
 
 The implemented product path serves English-speaking professionals and small
 businesses in France. An owner keeps an existing French business number and
-receives one Presvo-provided French number. Only unanswered, busy, and
-unreachable calls are conditionally forwarded to Presvo; unconditional
+receives one Opevo-provided French number. Only unanswered, busy, and
+unreachable calls are conditionally forwarded to Opevo; unconditional
 forwarding is not part of the guided path.
 
 The local path is a deterministic product proof. It is not proof of cloud
@@ -65,7 +65,7 @@ account deactivation is immediate and has no automatic prorated refund.
 ## Why payment and provisioning consent are separate
 
 Billing eligibility proves that the account may use the selected plan. It does
-not authorize Presvo to order a phone number. Number provisioning can incur a
+not authorize Opevo to order a phone number. Number provisioning can incur a
 provider-side effect, so the owner must review the exact consequences and give
 separate, explicit consent. The local fake preserves that boundary even though
 it performs no external purchase.
@@ -152,7 +152,7 @@ bash scripts/run-local-e2e.sh
 
 The runner:
 
-- uses Compose project `presvo-e2e`;
+- uses Compose project `opevo-e2e`;
 - binds web/API/PostgreSQL/Redis/MinIO to alternate loopback ports;
 - builds migrate, API, `worker-lifecycle`, `worker-background`, and web images;
 - waits for datastore and application health plus both one-shot exits;
@@ -235,7 +235,7 @@ The following remain planned or require approval/evidence:
 - monitored controlled-beta evidence.
 
 The earlier recording start/delete race is resolved for normal customer calls.
-Presvo commits a private recording operation and reference-only reconciliation
+Opevo commits a private recording operation and reference-only reconciliation
 intent before recording-start provider I/O. Completion and owner removal record
 stop intent even without a provider egress ID, so a late or ambiguous start
 remains durably reconcilable after the call is hidden. This behavior is locally
