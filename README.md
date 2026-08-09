@@ -150,7 +150,7 @@ production certification.
 - Node.js 22 only when running browser tests from the host
 
 Configure Clerk credentials in `apps/web/.env` and the API verifier credentials
-in `apps/api/.env` (see the [staging smoke runbook](docs/architecture/staging-smoke-runbook.md)).
+in `apps/api/.env` (see the [staging smoke runbook](docs/runbooks/staging-smoke.md)).
 Then start the standard Clerk-authenticated development stack from the repository
 root:
 
@@ -182,7 +182,7 @@ bash scripts/run-local-e2e.sh
 ```
 
 For real-provider configuration, follow the
-[staging smoke runbook](docs/architecture/staging-smoke-runbook.md).
+[staging smoke runbook](docs/runbooks/staging-smoke.md).
 
 ## Technology
 

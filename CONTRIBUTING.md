@@ -62,7 +62,7 @@ docker compose -f compose.dev.yaml --profile voice up --build
 ```
 
 The staging runbook documents the complete provider-backed path:
-`docs/architecture/staging-smoke-runbook.md`.
+`docs/runbooks/staging-smoke.md`.
 
 ## Verification
 

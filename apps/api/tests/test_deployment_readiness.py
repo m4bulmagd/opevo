@@ -2090,9 +2090,7 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     runtime = (
         REPO_ROOT / "docs" / "architecture" / "runtime-contract.md"
     ).read_text()
-    staging = (
-        REPO_ROOT / "docs" / "architecture" / "staging-smoke-runbook.md"
-    ).read_text()
+    staging = (REPO_ROOT / "docs" / "runbooks" / "staging-smoke.md").read_text()
     deploy = (REPO_ROOT / "docs" / "runbooks" / "deploy.md").read_text()
     rollback = (REPO_ROOT / "docs" / "runbooks" / "rollback.md").read_text()
     incident = (REPO_ROOT / "docs" / "runbooks" / "incident-response.md").read_text()

@@ -47,4 +47,4 @@ This is bounded local/CI evidence, not a cloud-capacity claim. Issue 16A remains
 - Use [`deploy.md`](../runbooks/deploy.md) for rollout and queue-transition order.
 - Use [`rollback.md`](../runbooks/rollback.md) for reverse transitions and database forward-fix policy.
 - Use [`incident-response.md`](../runbooks/incident-response.md) for health, queue, and reconciliation signals.
-- Use [`staging-smoke-runbook.md`](staging-smoke-runbook.md) for real-provider staging verification.
+- Use [`staging-smoke.md`](../runbooks/staging-smoke.md) for real-provider staging verification.

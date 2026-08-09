@@ -192,7 +192,7 @@ This direction is inspired by [Retell AI's structured conversation flows](https:
 - [Backend runtime contract](architecture/runtime-contract.md)
 - [Integration endpoints](architecture/integration-endpoints.md)
 - [Production deployment decision](architecture/production-deployment.md)
-- [Staging smoke runbook](architecture/staging-smoke-runbook.md)
+- [Staging smoke runbook](runbooks/staging-smoke.md)
 - [Local self-service activation](architecture/local-self-service-activation.md)
 - [Controlled deployment and account-deactivation recovery](runbooks/deploy.md)
 - [Production-readiness hardening design](superpowers/specs/2026-07-12-production-readiness-hardening-design.md)
