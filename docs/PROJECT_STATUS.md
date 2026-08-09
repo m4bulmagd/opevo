@@ -171,9 +171,8 @@ Opevo will begin with the conversation runtime rather than a canvas:
 
 Before or alongside the runtime work, revisit the Python backend package
 responsibilities so the flow engine, LiveKit adapter, versioning, and durable
-traces do not accumulate in the existing central modules. The non-binding
-current considerations are recorded in
-[Backend package organization: future considerations](engineering/2026-08-03-backend-package-organization-considerations.md).
+traces do not accumulate in central modules. Any reorganization requires its
+own current design after the conversation-flow runtime boundary is understood.
 
 This direction is inspired by [Retell AI's structured conversation flows](https://docs.retellai.com/build/conversation-flow/overview). Recall.ai is a meeting-bot platform and is not the intended product reference.
 
@@ -195,6 +194,6 @@ This direction is inspired by [Retell AI's structured conversation flows](https:
 - [Staging smoke runbook](runbooks/staging-smoke.md)
 - [Local self-service activation](architecture/local-self-service-activation.md)
 - [Controlled deployment and account-deactivation recovery](runbooks/deploy.md)
-- [Production-readiness hardening design](superpowers/specs/2026-07-12-production-readiness-hardening-design.md)
-- [Opevo UI production handoff](engineering/2026-07-29-opevo-ui-production-handoff.md)
-- [Backend package organization: future considerations](engineering/2026-08-03-backend-package-organization-considerations.md)
+- [Incident response](runbooks/incident-response.md)
+- [CI and branch protection](engineering/ci-and-branch-protection.md)
+- [Dependency security exceptions](security/dependency-exceptions.md)

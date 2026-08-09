@@ -2221,3 +2221,52 @@ def test_repository_documentation_policy_keeps_working_artifacts_local() -> None
         assert ".work/" in document
         assert "docs/superpowers" in document
         assert "Git history" in document
+
+
+def test_historical_markdown_is_absent_from_the_canonical_tree() -> None:
+    retired = (
+        "docs/Verdict.md",
+        "docs/engineering/2026-07-18-production-readiness-handoff.md",
+        "docs/engineering/2026-07-29-opevo-ui-production-handoff.md",
+        "docs/engineering/2026-07-30-agent-api-review-decisions.md",
+        "docs/engineering/2026-08-03-backend-package-organization-considerations.md",
+    )
+    for relative_path in retired:
+        assert not (REPO_ROOT / relative_path).exists(), relative_path
+
+
+def test_canonical_markdown_local_links_resolve() -> None:
+    documents = (
+        REPO_ROOT / "AGENTS.md",
+        REPO_ROOT / "CONTEXT.md",
+        REPO_ROOT / "CONTRIBUTING.md",
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "SECURITY.md",
+        REPO_ROOT / "docs/PROJECT_STATUS.md",
+        REPO_ROOT / "docs/architecture/agent-config-api.md",
+        REPO_ROOT / "docs/architecture/billing-usage-api.md",
+        REPO_ROOT / "docs/architecture/call-history-api.md",
+        REPO_ROOT / "docs/architecture/integration-endpoints.md",
+        REPO_ROOT / "docs/architecture/local-self-service-activation.md",
+        REPO_ROOT / "docs/architecture/production-deployment.md",
+        REPO_ROOT / "docs/architecture/runtime-contract.md",
+        REPO_ROOT / "docs/engineering/ci-and-branch-protection.md",
+        REPO_ROOT / "docs/runbooks/credential-rotation.md",
+        REPO_ROOT / "docs/runbooks/deploy.md",
+        REPO_ROOT / "docs/runbooks/incident-response.md",
+        REPO_ROOT / "docs/runbooks/rollback.md",
+        REPO_ROOT / "docs/runbooks/staging-smoke.md",
+        REPO_ROOT / "docs/security/dependency-exceptions.md",
+        REPO_ROOT / "libs/shared/tests/fixtures/README.md",
+    )
+    link_pattern = re.compile(r"(?<!!)\[[^\]]+\]\((?P<target>[^)]+)\)")
+
+    for document in documents:
+        assert document.is_file(), document
+        for match in link_pattern.finditer(document.read_text()):
+            raw_target = match.group("target")
+            target = raw_target.split("#", 1)[0]
+            if not target or target.startswith(("http://", "https://", "mailto:")):
+                continue
+            resolved = (document.parent / target).resolve()
+            assert resolved.exists(), f"{document}: broken local link {raw_target}"
