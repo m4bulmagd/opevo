@@ -2221,3 +2221,16 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
         assert "ten lifecycle probes" in document
         assert "simultaneously" in document
     assert "realtime remains deferred" in ledger
+
+
+def test_repository_documentation_policy_keeps_working_artifacts_local() -> None:
+    gitignore = (REPO_ROOT / ".gitignore").read_text()
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text()
+    agents = (REPO_ROOT / "AGENTS.md").read_text()
+
+    assert "/.work/" in gitignore
+    assert "/docs/superpowers/" in gitignore
+    for document in (contributing, agents):
+        assert ".work/" in document
+        assert "docs/superpowers" in document
+        assert "Git history" in document

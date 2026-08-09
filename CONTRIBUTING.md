@@ -25,7 +25,7 @@ are easier to review than broad rewrites.
 - `apps/agent` — LiveKit voice-agent runtime
 - `apps/web` — Next.js landing page and customer dashboard
 - `libs/shared` — small cross-application Python contracts
-- `docs` — architecture decisions, runbooks, status, plans, and specifications
+- `docs` — current architecture contracts, runbooks, project status, CI guidance, and security records
 
 ## Local development
 
@@ -242,6 +242,14 @@ GitHub ruleset checks are documented in
 - Run the focused checks while iterating and the complete affected-app checks
   before requesting review.
 - Keep commits focused and use descriptive messages.
+
+## Documentation lifecycle
+
+Tracked documentation must describe the product as it works now, explain a current operating procedure, or preserve a consequential decision that still constrains future work. Keep temporary feature designs, plans, checklists, handoff notes, review reports, and verification transcripts under the ignored `.work/` directory while work is active. Never commit files under `docs/superpowers/`.
+
+When work finishes, delete its working documents. Update `docs/PROJECT_STATUS.md`, a current architecture document, a runbook, or a short decision record only when its durable truth changed. Git history, commits, issues, and pull requests preserve completed-work history.
+
+Every tracked decision record must declare its status. Mark replaced decisions `superseded` and link them to the current replacement.
 
 ## Security
 
