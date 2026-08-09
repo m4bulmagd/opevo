@@ -189,7 +189,7 @@ This direction is inspired by [Retell AI's structured conversation flows](https:
 
 ## Related documentation
 
-- [Backend context](architecture/backend-context.md)
+- [Backend runtime contract](architecture/runtime-contract.md)
 - [Integration endpoints](architecture/integration-endpoints.md)
 - [Production deployment decision](architecture/production-deployment.md)
 - [Staging smoke runbook](architecture/staging-smoke-runbook.md)

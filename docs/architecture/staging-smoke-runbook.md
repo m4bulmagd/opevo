@@ -464,10 +464,4 @@ The staging smoke is successful when all of these are true:
 
 ## Record Results
 
-After the run, update `docs/architecture/backend-context.md` with:
-
-- date of the smoke run
-- which steps passed
-- which steps failed
-- exact blocker for any failed step
-- whether the staging path is ready for the next release decision
+Record the run in the controlled release or operations evidence. Update docs/PROJECT_STATUS.md only when the supported capability or production-readiness status changes.

@@ -198,7 +198,7 @@ For real-provider configuration, follow the
 ## Documentation
 
 - [Detailed project status and roadmap](docs/PROJECT_STATUS.md)
-- [Architecture and engineering context](docs/architecture/backend-context.md)
+- [Architecture and runtime contract](docs/architecture/runtime-contract.md)
 - [Integration endpoints](docs/architecture/integration-endpoints.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)

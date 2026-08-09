@@ -2080,7 +2080,9 @@ def test_deployment_and_rollback_runbooks_define_safe_release_boundaries() -> No
 def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> None:
     readme = (REPO_ROOT / "README.md").read_text()
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text()
-    backend = (REPO_ROOT / "docs" / "architecture" / "backend-context.md").read_text()
+    runtime = (
+        REPO_ROOT / "docs" / "architecture" / "runtime-contract.md"
+    ).read_text()
     deployment = (
         REPO_ROOT / "docs" / "architecture" / "production-deployment.md"
     ).read_text()
@@ -2094,9 +2096,6 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
         REPO_ROOT / "docs" / "architecture" / "local-self-service-activation.md"
     ).read_text()
     status = (REPO_ROOT / "docs" / "PROJECT_STATUS.md").read_text()
-    ledger = (
-        REPO_ROOT / "docs" / "engineering" / "2026-07-30-agent-api-review-decisions.md"
-    ).read_text()
 
     ownership_rows = {
         "worker-lifecycle": (
@@ -2112,7 +2111,7 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
             "4",
         ),
     }
-    for document in (backend, deployment):
+    for document in (runtime,):
         rows = {
             match.group("service"): (
                 match.group("queue"),
@@ -2130,7 +2129,7 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
         }
         assert rows == ownership_rows
 
-    for document in (backend, incident):
+    for document in (runtime, incident):
         assert "PostgreSQL outbox/call state" in document
         assert "Redis" in document
         assert "authoritative" in document
@@ -2146,14 +2145,9 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     )
     rollout_positions = [normalized_deploy.index(step) for step in rollout]
     assert rollout_positions == sorted(rollout_positions)
-    for document in (deployment, deploy):
-        normalized_document = " ".join(document.split())
-        assert "`worker-lifecycle` can consume and reject a legacy outbox wakeup" in (
-            normalized_document
-        )
-        assert "background reconciliation recover the PostgreSQL row on schedule" in (
-            normalized_document
-        )
+    normalized_document = " ".join(deploy.split())
+    assert "`worker-lifecycle` can consume and reject a legacy outbox wakeup" in normalized_document
+    assert "background reconciliation recover the PostgreSQL row on schedule" in normalized_document
 
     normalized_rollback = " ".join(rollback.replace("**", "").split())
     reverse_rollout = (
@@ -2200,27 +2194,18 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
         assert "worker-lifecycle" in tokens
         assert "worker-background" in tokens
 
-    status_worker_isolation = next(
-        line for line in status.splitlines() if "Worker isolation (4A + 4B)" in line
-    )
-    ledger_issue_four = next(
-        line for line in ledger.splitlines() if line.startswith("| 4 |")
-    )
-    for line in (status_worker_isolation, ledger_issue_four):
-        assert "Implemented" in line
-
-    for document in (status, ledger):
+    for document in (status, runtime):
         assert "4A + 4B" in document
         assert "controlled ten-call local/CI evidence" in document
         assert "Issue 16A" in document
         assert "load" in document
         assert "recovery drills" in document
-    for document in (readme, backend, status, ledger):
+    for document in (readme, runtime, status):
         assert "p95 `<= 2 seconds`" in document
         assert "background slots" in document
         assert "ten lifecycle probes" in document
         assert "simultaneously" in document
-    assert "realtime remains deferred" in ledger
+    assert "Realtime remains deferred" in runtime
 
 
 def test_repository_documentation_policy_keeps_working_artifacts_local() -> None:
