@@ -5,20 +5,15 @@ Canonical release order: **backup verification → migration job → worker and 
 Do not reorder or parallelize these gates. A release is complete only after the
 last gate passes and its value-free evidence has been recorded.
 
-## Worker-isolation coexistence order
+## Current worker topology
 
-This ordered transition applies when moving from the legacy generic worker to
-the two explicit services. It is a compatibility sequence within the worker and
-agent gate, not authorization to run a production deployment.
+Deploy `worker-background`, then `worker-lifecycle`, from the same immutable API
+image. During a rolling update, retain the previous healthy revision of each
+worker until its replacement reports healthy and the matching queue signals are
+stable. Do not merge the two services or route their jobs through one process.
 
-1. Start `worker-background` from the new API image.
-2. Start `worker-lifecycle` while the generic worker still consumes the default
-   queue.
-3. Roll out the new API so new wakeups route explicitly.
-4. Verify both health keys, depth/oldest-due metrics, and both reconciliation
-   jobs.
-5. Wait for old API replicas to disappear and the legacy/default backlog to drain.
-6. Drain and remove the generic worker.
+Verify both health keys, depth/oldest-due metrics, and reconciliation jobs
+before proceeding to the API gate.
 
 The services and their checks are fixed: `worker-lifecycle` consumes
 `arq:queue`, reports `opevo:worker:call-lifecycle:health`, and defaults to 10
@@ -28,14 +23,9 @@ slots; `worker-background` consumes `arq:queue:background`, reports
 `opevo.worker.queue.oldest_due.age{queue_class}` for each class. PostgreSQL
 outbox/call state is authoritative; Redis is execution and wakeup only.
 
-During this bounded overlap, `worker-lifecycle` can consume and reject a legacy
-outbox wakeup from the shared default queue; the old generic worker knows that
-legacy function. This unknown-function result is a migration signal: stop the
-transition, preserve the normalized function and attempt evidence, restore
-compatible routing, and let background reconciliation recover the PostgreSQL
-row on schedule. An orphaned lifecycle attempt recovers on call reconciliation
-after service restoration. Both are reconciliation-schedule delays, not a
-zero-delay guarantee.
+A missed wakeup or interrupted attempt is recovered from committed state after
+the owning service is restored; recovery follows the reconciliation schedule
+rather than a zero-delay guarantee.
 
 ## Scope and owners
 
@@ -263,11 +253,10 @@ redacted log reference.
 Owners: `<application owner>` and `<voice owner>`
 
 Deploy `worker-background`, then `worker-lifecycle`, from `$API_IMAGE` first.
-Keep the legacy generic worker consuming the default queue until the explicit
-API routing and drain checks in [Worker-isolation coexistence order](#worker-isolation-coexistence-order)
-are complete. For the voice agent, add
-the new `$AGENT_IMAGE` revision alongside the old revision and prove it is
-registered before draining the old workers. Use one changed service at a time.
+Retain the previous healthy revision of each worker until the replacement is
+healthy and its queue metrics are stable. For the voice agent, add the new
+`$AGENT_IMAGE` revision alongside the old revision and prove it is registered
+before draining the old agent revision. Use one changed service at a time.
 Keep the existing API version serving traffic during this gate only because the
 preconditions proved that version compatible with the migrated schema.
 Before registering the new agent, re-check the recorded new-agent/previous-API

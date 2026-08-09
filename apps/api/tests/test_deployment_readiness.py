@@ -3,7 +3,6 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import sys
 import tomllib
@@ -2149,34 +2148,24 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
         assert "authoritative" in document
 
     normalized_deploy = " ".join(deploy.replace("**", "").split())
-    rollout = (
-        "worker-background",
-        "worker-lifecycle",
-        "new API so new wakeups route explicitly",
-        "Verify both health keys",
-        "legacy/default backlog to drain",
-        "remove the generic worker",
-    )
-    rollout_positions = [normalized_deploy.index(step) for step in rollout]
-    assert rollout_positions == sorted(rollout_positions)
-    normalized_document = " ".join(deploy.split())
-    assert "`worker-lifecycle` can consume and reject a legacy outbox wakeup" in normalized_document
-    assert "background reconciliation recover the PostgreSQL row on schedule" in normalized_document
+    assert "Deploy `worker-background`, then `worker-lifecycle`" in normalized_deploy
+    assert "retain the previous healthy revision of each worker" in normalized_deploy
+    assert "Verify both health keys" in normalized_deploy
 
     normalized_rollback = " ".join(rollback.replace("**", "").split())
-    reverse_rollout = (
-        "previous API routing",
-        "explicit queues drain",
-        "generic worker restoration",
-        "new workers removed last",
-    )
-    rollback_positions = [normalized_rollback.index(step) for step in reverse_rollout]
-    assert rollback_positions == sorted(rollback_positions)
-    assert "not a zero-delay guarantee" in rollback
-    assert "<legacy-worker-service>" in rollback
-    assert "legacy-generic-worker" not in rollback
-    assert "actual previous worker service identity" in rollback
-    assert "not a service to create" in rollback
+    assert "restore previous API routing first" in normalized_rollback
+    assert "roll back `worker-background` and `worker-lifecycle`" in normalized_rollback
+    assert "previous API image" in normalized_rollback
+
+    for historical_worker_term in (
+        "coexistence",
+        "generic worker",
+        "legacy/default",
+        "legacy outbox",
+        "<legacy-worker-service>",
+    ):
+        assert historical_worker_term not in deploy.casefold()
+        assert historical_worker_term not in rollback.casefold()
 
     for metric in (
         "opevo.worker.queue.depth{queue_class}",
@@ -2194,19 +2183,9 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     staging_shell_blocks = re.findall(
         r"```(?:bash|sh)\n(?P<body>.*?)\n```", staging, re.DOTALL
     )
-    staging_log_commands = [
-        command.strip()
-        for block in staging_shell_blocks
-        for command in re.sub(r"\\\n[ \t]*", " ", block).splitlines()
-        if re.search(r"^\s*docker compose\b.*\blogs\b", command)
-    ]
-    assert staging_log_commands
-    for command in staging_log_commands:
-        tokens = shlex.split(command)
-        assert "opevo-worker" not in command
-        assert re.search(r"(?<![-\w])worker(?![-\w])", command) is None
-        assert "worker-lifecycle" in tokens
-        assert "worker-background" in tokens
+    assert staging_shell_blocks
+    for block in staging_shell_blocks:
+        assert re.search(r"^\s*docker compose\b", block, re.MULTILINE) is None
 
     for document in (status, runtime):
         assert "4A + 4B" in document
@@ -2238,6 +2217,9 @@ def test_repository_documentation_policy_keeps_working_artifacts_local() -> None
 def test_historical_markdown_is_absent_from_the_canonical_tree() -> None:
     retired = (
         "docs/Verdict.md",
+        "docs/architecture/agent-config-api.md",
+        "docs/architecture/billing-usage-api.md",
+        "docs/architecture/call-history-api.md",
         "docs/engineering/2026-07-18-production-readiness-handoff.md",
         "docs/engineering/2026-07-29-opevo-ui-production-handoff.md",
         "docs/engineering/2026-07-30-agent-api-review-decisions.md",
@@ -2245,6 +2227,53 @@ def test_historical_markdown_is_absent_from_the_canonical_tree() -> None:
     )
     for relative_path in retired:
         assert not (REPO_ROOT / relative_path).exists(), relative_path
+
+
+def test_consolidated_customer_api_document_preserves_runtime_semantics() -> None:
+    document = (
+        REPO_ROOT / "docs/architecture/integration-endpoints.md"
+    ).read_text()
+    authority = document.split("## Customer APIs", 1)[0]
+    normalized = " ".join(document.split())
+
+    assert "status codes" not in authority
+    for required_semantic in (
+        "profile content revision",
+        "confirmed content revision",
+        "returns `null` when no subscription exists",
+        "zeroed usage",
+        "newest first",
+        "structured caller intent",
+        "query punctuation",
+        "domestic trunk `0`",
+        "`started_at DESC NULLS LAST`, `created_at DESC`, and `id DESC`",
+        "`401`",
+        "`400`",
+        "`404`",
+        "`409`",
+        "`422`",
+        "`429`",
+        "`502`",
+    ):
+        assert required_semantic in normalized
+
+
+def test_real_provider_staging_runbook_bounds_global_ordering_and_cleanup() -> None:
+    document = (REPO_ROOT / "docs/runbooks/staging-smoke.md").read_text()
+    normalized = " ".join(document.split())
+
+    for required_safeguard in (
+        "TELNYX_ORDERING_ENABLED=false",
+        "process-wide startup setting",
+        "exclusive staging window",
+        "no other owner",
+        "redeploy `worker-background`",
+        "do not release the number directly in the Telnyx console",
+        "separately approved account-deactivation and reconciliation",
+        "local owner state",
+        "provider release",
+    ):
+        assert required_safeguard in normalized
 
 
 def test_canonical_markdown_local_links_resolve() -> None:
@@ -2255,9 +2284,6 @@ def test_canonical_markdown_local_links_resolve() -> None:
         REPO_ROOT / "README.md",
         REPO_ROOT / "SECURITY.md",
         REPO_ROOT / "docs/PROJECT_STATUS.md",
-        REPO_ROOT / "docs/architecture/agent-config-api.md",
-        REPO_ROOT / "docs/architecture/billing-usage-api.md",
-        REPO_ROOT / "docs/architecture/call-history-api.md",
         REPO_ROOT / "docs/architecture/integration-endpoints.md",
         REPO_ROOT / "docs/architecture/local-self-service-activation.md",
         REPO_ROOT / "docs/architecture/production-deployment.md",

@@ -1,76 +1,86 @@
-# Credential rotation and revocation runbook
+# Credential Rotation and Revocation Runbook
 
-Gate 0 is **closed by user attestation** received at `2026-07-13T04:32:42Z`. The user attested that all 14 replacement credentials were installed, tested with the applications, and that the old values were revoked.
+Use this procedure for planned rotation, suspected exposure, provider
+offboarding, or ownership transfer. Store completion evidence in the approved
+operations/change record, not in this repository. This runbook must remain
+value-free: never paste a secret, token, signature, private key, webhook body,
+credential fragment, or provider payload into Git.
 
-The timestamp in this runbook is the time the attestation was received. It is not a provider rotation, verification, or revocation timestamp. Provider action times and provider audit-event identifiers were not supplied and are not inferred.
+## Current credential classes
 
-This document must remain value-free. Record credential identifiers, timestamps, operators, provider audit-event references, and smoke-test outcomes only. Never paste a secret, token, signature, private key, webhook signing value, or partially masked credential here.
+The tracked `.env.example` files and deployment configuration are authoritative
+for exact consumers. Before rotating, compare this inventory with those sources
+and include any newly introduced credential.
 
-## Credential inventory
+| Credential class | Environment variable(s) | Minimum value-free verification |
+| --- | --- | --- |
+| Clerk browser/API | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | Sign in with a disposable account and complete one authenticated server request. |
+| Clerk token verification | `CLERK_JWT_KEY` or the credentials controlling `CLERK_JWKS_URL` | Accept a current Clerk session and reject an invalid token without logging either value. |
+| Clerk webhook | `CLERK_WEBHOOK_SECRET` | Deliver one signed disposable Clerk event and confirm one accepted result. |
+| Stripe API | `STRIPE_SECRET_KEY` | Create or retrieve one test-mode hosted session through the application. |
+| Stripe webhook | `STRIPE_WEBHOOK_SECRET` | Deliver one signed Stripe test event and confirm idempotent acceptance. |
+| LiveKit API | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Register the disposable agent revision and complete one staging dispatch. |
+| Telnyx API | `TELNYX_API_KEY` | Perform one approved read-only staging request before any mutation. |
+| Gemini | `GEMINI_API_KEY` | Complete one bounded summary request and each enabled Gemini voice mode. |
+| Speechmatics | `SPEECHMATICS_API_KEY` | Complete one short non-sensitive STT or TTS staging probe. |
+| ElevenLabs | `ELEVENLABS_API_KEY` | Complete one short non-sensitive enabled STT or TTS probe. |
+| Deepgram | `DEEPGRAM_API_KEY` | Complete one short non-sensitive STT probe when Deepgram is enabled. |
+| Object storage | `S3_ACCESS_KEY`, `S3_SECRET_KEY` | Put, sign/read, and delete one disposable object in a probe prefix. |
+| Agent dispatch signing | `AGENT_DISPATCH_JWT_SECRET` | Accept a newly signed disposable token and reject a token signed with the retired value. |
+| Local development auth | `LOCAL_AUTH_TOKEN` | Run only the explicit provider-free development journey; never deploy this token or mode. |
 
-`Complete — user attested (received 2026-07-13T04:32:42Z)` records the user's completion statement and its receipt time only. It does not claim that the provider action occurred at that time.
-
-| Credential name | Local environment variable(s) | Rotated | Verified | Revoked | Operator | Revocation evidence | Smoke test | Smoke-test result | Status |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Stripe API | `STRIPE_SECRET_KEY` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Complete one test-mode authenticated Stripe API operation. | Passed — user attested | Complete |
-| Stripe webhook | `STRIPE_WEBHOOK_SECRET` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Deliver a signed Stripe test event and confirm successful handling. | Passed — user attested | Complete |
-| Clerk publishable | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Load the web authentication flow and confirm Clerk initializes. | Passed — user attested | Complete |
-| Clerk secret | `CLERK_SECRET_KEY` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Complete an authenticated server-side Clerk request. | Passed — user attested | Complete |
-| Clerk webhook | `CLERK_WEBHOOK_SECRET` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Deliver a signed Clerk test event and confirm successful handling. | Passed — user attested | Complete |
-| LiveKit key/secret | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Connect the API and agent to a disposable LiveKit room and complete a test dispatch. | Passed — user attested | Complete |
-| Telnyx API | `TELNYX_API_KEY` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Complete a read-only authenticated Telnyx API request. | Passed — user attested | Complete |
-| Gemini | `GEMINI_API_KEY` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Complete one minimal Gemini request through each configured consumer. | Passed — user attested | Complete |
-| Speechmatics | `SPEECHMATICS_API_KEY` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Transcribe a short non-sensitive audio sample. | Passed — user attested | Complete |
-| ElevenLabs | `ELEVENLABS_API_KEY` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Synthesize a short non-sensitive audio sample. | Passed — user attested | Complete |
-| Mistral | `MISTRAL_API_KEY` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Complete one minimal Mistral request through the configured consumer. | Passed — user attested | Complete |
-| S3 access/secret | `S3_ACCESS_KEY`, `S3_SECRET_KEY` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Put, read, and delete a disposable object in a non-production probe prefix. | Passed — user attested | Complete |
-| dispatch JWT secret | `AGENT_DISPATCH_JWT_SECRET` | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | Complete — user attested (received 2026-07-13T04:32:42Z) | User (conversation attestation) | User attestation only; no provider audit ID supplied. | Confirm a JWT signed by the new secret is accepted and one signed by the old secret is rejected. | Passed — user attested | Complete |
+Do not create, retain, or rotate a credential merely because an unused legacy
+setting exists. First prove a current runtime consumer or remove the unused
+setting through a separately reviewed change.
 
 ## Rotation procedure
 
-Repeat these steps for every inventory row. For a paired credential, rotate and deploy the pair atomically.
+For paired credentials, rotate and deploy the pair atomically unless the
+provider documents a safe overlap mechanism.
 
-1. Identify every production, staging, CI, and local consumer before changing the credential.
-2. Issue the replacement in the provider dashboard or generate a new high-entropy internal secret.
-3. Store the replacement only in the approved secret store or the relevant ignored local `.env` file. Never put it in source control, shell history, logs, screenshots, tickets, chat, or this runbook.
-4. Restart or redeploy every affected process.
-5. Run the row-specific smoke test and record the `rotated` and `verified` timestamps, operator, and a value-free result.
-6. Revoke the exposed credential. Record the `revoked` timestamp and a non-secret provider audit-event, credential ID, or screenshot reference that proves revocation.
-7. Re-run the smoke test with the replacement. Where supported, explicitly prove the old credential is rejected.
-8. Mark the row complete only when rotation, verification, and revocation evidence are all present.
+1. Open a value-free change or incident record with the environment, owner,
+   credential class, affected consumers, start time, and rollback authority.
+2. Identify every production, staging, CI, and local consumer from deployment
+   configuration, `.env.example` files, and provider access policy.
+3. Issue the replacement in the provider dashboard or generate a new
+   high-entropy internal secret. Record only an opaque credential/audit ID.
+4. Store the replacement in the approved secret store or relevant ignored
+   local `.env` file. Never place it in source control, shell history, logs,
+   screenshots, tickets, chat, or this runbook.
+5. Restart or deploy one bounded consumer set using the replacement. Preserve a
+   rollback path until verification completes.
+6. Run the credential-class smoke check above and record only pass/fail,
+   timestamps, operator, environment, and opaque evidence references.
+7. Move the remaining consumers, repeat verification, then revoke the old
+   credential. Where supported, prove the retired value is rejected.
+8. Monitor authentication and provider-error signals for one approved window.
+   Close the record only after replacement verification and revocation evidence
+   are both present.
+
+If the replacement fails, stop rollout, restore the last independently verified
+secret reference where safe, and keep the potentially exposed credential
+revoked when security requires it. Escalate instead of weakening verification
+or re-enabling a known-compromised value.
 
 ## Local secret-file controls
 
-Restrict the local files without reading or printing their contents:
+Restrict ignored local secret files without reading or printing their contents:
 
 ```bash
 chmod 600 apps/api/.env apps/agent/.env apps/web/.env
 stat -c '%a %n' apps/api/.env apps/agent/.env apps/web/.env
-```
-
-Required result:
-
-```text
-600 apps/api/.env
-600 apps/agent/.env
-600 apps/web/.env
-```
-
-Confirm the files are ignored and have never been committed:
-
-```bash
 git check-ignore apps/api/.env apps/agent/.env apps/web/.env
 git log --all -- apps/api/.env apps/agent/.env apps/web/.env
 ```
 
-Required result: `git check-ignore` prints all three paths and the history command prints no commits.
+The expected permissions are `600`; all three paths must be ignored; the Git
+history command must print no commits. If a secret file or value was committed,
+treat the credential as exposed, rotate it immediately, and follow the private
+security-reporting process in [`SECURITY.md`](../../SECURITY.md).
 
-## Gate 0 sign-off
+## Evidence boundary
 
-Gate 0 was closed from the user's conversation attestation received at `2026-07-13T04:32:42Z`. The user attested that every row has:
-
-- a replacement credential installed in the applications;
-- a successful application smoke test; and
-- revocation of the old credential.
-
-This is an attestation-based close, not independent provider-dashboard verification. The receipt timestamp is not a provider action timestamp, and no provider audit IDs were supplied. If provider timestamps or audit references are collected later, append them without replacing or reinterpreting the attestation receipt time.
+The repository records this reusable procedure only. Provider action times,
+audit-event identifiers, smoke results, approvals, and incident timelines
+belong in access-controlled operational evidence with the organization's
+retention policy. Do not append completed rotation tables or attestations here.

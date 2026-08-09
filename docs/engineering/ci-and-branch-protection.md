@@ -41,6 +41,10 @@ contents permission, and checkout steps do not persist credentials.
 - `CI / Web` installs with `npm ci`, runs Biome, TypeScript, Vitest, and the
   Next.js production build. Its build uses explicit non-secret Clerk and local
   API/application placeholders; it does not use provider secrets.
+- `CI / E2E` runs after API, agent, and web verification. It installs the
+  locked web dependencies and Chromium, then runs the disposable provider-free
+  activation, deactivation, restart, and reactivation journey through
+  `scripts/run-local-e2e.sh`. It does not deploy or contact product providers.
 - `CI / Migrations` starts a dedicated PostgreSQL 17.8 service with an empty
   `ai_call_migrations` database and runs `alembic -c alembic.ini upgrade head`.
   This blank-database upgrade is required migration verification and must stay
@@ -91,6 +95,7 @@ not replace the individual migration, dependency, secret, or container checks:
 - `CI / Agent`
 - `CI / Shared contracts`
 - `CI / Web`
+- `CI / E2E`
 - `CI / Migrations`
 - `CI / Dependency audit / api`
 - `CI / Dependency audit / agent`

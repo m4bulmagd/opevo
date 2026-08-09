@@ -53,7 +53,7 @@ require a configured real-provider run.
 | Starter billing | **Implemented** | Stripe Checkout, a pinned Billing Portal configuration, paid-invoice minute grants, subscription lifecycle handling, and PostgreSQL-backed usage accounting are present. Portal subscription-only cancellation remains active until the paid-period end; owner account deactivation cancels immediately without automatic proration or refund. The Portal configuration still requires deployment-time review and real Stripe certification. |
 | French number provisioning | **Implemented** | Queue-backed provisioning, persisted status, retry handling, assignment, and routing gates are present. Payment eligibility and explicit provisioning consent are separate. The fake local path is browser-proven; Telnyx still needs fresh staging certification. |
 | Agent configuration | **Implemented** | Customer-owned agent identity, owner context, system prompt, knowledge base, fixed launch pipeline, guarded routing toggle, persisted profile-owned content overrides, and unsaved-change protection are present. |
-| Inbound voice runtime | **Implemented** | LiveKit dispatch and a separate agent worker support Speechmatics or Deepgram STT, Gemini LLM, and Speechmatics or ElevenLabs TTS. The coherent LiveKit Agents 1.6.9 family uses public turn-handling and asset-download APIs; 742 local tests, the coverage gate, dependency audit, final image build, non-root runtime smoke, and health probe pass, while credentialed behavioral evaluation remains a production-readiness gate. |
+| Inbound voice runtime | **Implemented** | LiveKit dispatch and a separate agent worker support Speechmatics or Deepgram STT, Gemini LLM, and Speechmatics or ElevenLabs TTS. The coherent LiveKit Agents 1.6.9 family uses public turn-handling and asset-download APIs; its test suite, coverage gate, dependency audit, final image build, non-root runtime smoke, and health probe pass, while credentialed behavioral evaluation remains a production-readiness gate. |
 | Native-audio STS runtime | **Partial** | Gemini native-audio support exists in the worker and tests but is intentionally hidden from the customer-facing France launch. |
 | Durable call lifecycle | **Implemented** | Incremental transcript persistence, call-scoped agent JWTs, a state machine, reconciliation, duration limits, and idempotent finalization are present. |
 | Call review | **Implemented** | Call list/detail, transcript, summary, recording availability, signed recording URLs, and usage charge are present. |
@@ -161,20 +161,10 @@ production-ready until all of these gates have evidence:
 
 ### Phase 4 — Conversation-flow builder
 
-Opevo will begin with the conversation runtime rather than a canvas:
-
-1. Typed flow model and business templates
-2. Conversation steps, conditional transitions, fallbacks, and end states
-3. Validation, versioning, simulation, and call-path traces
-4. Visual node editor after the runtime is proven
-5. Reusable subflows and tool/function nodes after the authoring model is stable
-
-Before or alongside the runtime work, revisit the Python backend package
-responsibilities so the flow engine, LiveKit adapter, versioning, and durable
-traces do not accumulate in central modules. Any reorganization requires its
-own current design after the conversation-flow runtime boundary is understood.
-
-This direction is inspired by [Retell AI's structured conversation flows](https://docs.retellai.com/build/conversation-flow/overview). Recall.ai is a meeting-bot platform and is not the intended product reference.
+- A typed, versioned conversation runtime with validation and simulation
+- Business templates, conditional transitions, fallbacks, and end states
+- Visual authoring only after the runtime and trace model are proven
+- A current implementation design before backend reorganization or delivery
 
 ### Phase 5 — Advanced capabilities
 
