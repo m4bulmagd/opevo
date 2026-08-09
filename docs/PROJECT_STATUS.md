@@ -67,7 +67,7 @@ require a configured real-provider run.
 | Live dashboard and intervention | **Partial** | A complete, visibly labelled local-only live-call Preview exists. The optional backend WebSocket observer remains disabled by default, has a documented identity-key mismatch, and is not connected to the Preview; live monitoring and intervention remain unimplemented. |
 | Push notifications | **Partial** | A visibly labelled local notification Preview exists, and notification records/provider boundaries exist, but private device-token delivery is not part of the launch path. |
 | Production observability and CI | **Partial** | Readiness checks, safe logging, bounded recording and account-deactivation metrics, OpenTelemetry, pinned CI actions, dependency audits, secret scanning, and container scanning are configured and locally verified. Cloud monitoring, required alert routing, and operating evidence are absent. |
-| Production deployment | **Partial** | Hardened images, release migrations, deployment and rollback runbooks, and a provider comparison exist; a production platform and operating evidence are not yet approved. |
+| Production deployment | **Partial** | Hardened images, release migrations, deployment and rollback runbooks, provider-neutral selection criteria, and an explicit approval gate exist; no provider or region is approved, and operating evidence remains absent. |
 | French localization and legal surfaces | **Planned** | The launch UI is still English and approved privacy, terms, legal notice, support, retention, and subprocessor surfaces are absent. |
 | Account export and permanent deletion | **Planned** | Reversible account deactivation and per-terminal-call **Remove call** are implemented, but account-wide export, permanent deletion orchestration, and recording-access audit records are absent. No retention, backup-erasure, or historical-copy-erasure claim is made. |
 | Automatic 30-day retention | **Planned** | Bucket lifecycle primitives exist, but an approved customer-facing automatic 30-day retention policy and operating proof are not implemented. |
@@ -171,9 +171,8 @@ Opevo will begin with the conversation runtime rather than a canvas:
 
 Before or alongside the runtime work, revisit the Python backend package
 responsibilities so the flow engine, LiveKit adapter, versioning, and durable
-traces do not accumulate in the existing central modules. The non-binding
-current considerations are recorded in
-[Backend package organization: future considerations](engineering/2026-08-03-backend-package-organization-considerations.md).
+traces do not accumulate in central modules. Any reorganization requires its
+own current design after the conversation-flow runtime boundary is understood.
 
 This direction is inspired by [Retell AI's structured conversation flows](https://docs.retellai.com/build/conversation-flow/overview). Recall.ai is a meeting-bot platform and is not the intended product reference.
 
@@ -189,12 +188,12 @@ This direction is inspired by [Retell AI's structured conversation flows](https:
 
 ## Related documentation
 
-- [Backend context](architecture/backend-context.md)
+- [Backend runtime contract](architecture/runtime-contract.md)
 - [Integration endpoints](architecture/integration-endpoints.md)
 - [Production deployment decision](architecture/production-deployment.md)
-- [Staging smoke runbook](architecture/staging-smoke-runbook.md)
+- [Staging smoke runbook](runbooks/staging-smoke.md)
 - [Local self-service activation](architecture/local-self-service-activation.md)
 - [Controlled deployment and account-deactivation recovery](runbooks/deploy.md)
-- [Production-readiness hardening design](superpowers/specs/2026-07-12-production-readiness-hardening-design.md)
-- [Opevo UI production handoff](engineering/2026-07-29-opevo-ui-production-handoff.md)
-- [Backend package organization: future considerations](engineering/2026-08-03-backend-package-organization-considerations.md)
+- [Incident response](runbooks/incident-response.md)
+- [CI and branch protection](engineering/ci-and-branch-protection.md)
+- [Dependency security exceptions](security/dependency-exceptions.md)

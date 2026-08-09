@@ -195,7 +195,7 @@ A real call additionally requires a deployed
 API/web/`worker-lifecycle`/`worker-background`/agent topology, LiveKit SIP and
 agent dispatch, private object storage, model and speech
 providers, webhook delivery, DNS/TLS, and operational monitoring. Use the
-[staging smoke runbook](staging-smoke-runbook.md); do not reinterpret the local
+[staging smoke runbook](../runbooks/staging-smoke.md); do not reinterpret the local
 browser pass as provider certification.
 
 ## Data lifecycle and deferred gates
