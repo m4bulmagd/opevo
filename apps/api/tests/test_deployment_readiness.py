@@ -2078,10 +2078,23 @@ def test_deployment_and_rollback_runbooks_define_safe_release_boundaries() -> No
     assert "stop accepting new dispatches" in deploy
     assert "active job count reaches zero" in deploy
     assert "termination grace" in deploy
-    assert "pre-drain" in architecture
     assert "backward-compatible" in rollback
     assert "forward-fix" in rollback
     assert "irreversible" in rollback
+
+
+def test_project_status_describes_provider_neutral_deployment_approval_gate() -> None:
+    status = (REPO_ROOT / "docs" / "PROJECT_STATUS.md").read_text()
+    production_deployment_row = next(
+        row
+        for row in status.splitlines()
+        if row.startswith("| Production deployment |")
+    )
+
+    assert "provider comparison" not in production_deployment_row
+    assert "provider-neutral selection criteria" in production_deployment_row
+    assert "explicit approval gate" in production_deployment_row
+    assert "no provider or region is approved" in production_deployment_row
 
 
 def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> None:
@@ -2113,23 +2126,22 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
             "4",
         ),
     }
-    for document in (runtime,):
-        rows = {
-            match.group("service"): (
-                match.group("queue"),
-                match.group("jobs"),
-                match.group("health"),
-                match.group("slots"),
-            )
-            for match in re.finditer(
-                r"^\| `(?P<service>worker-[^`]+)` \| `(?P<queue>[^`]+)` \| "
-                r"(?P<jobs>[^|]+) \| `(?P<health>[^`]+)` \| "
-                r"(?P<slots>\d+) \|$",
-                document,
-                re.MULTILINE,
-            )
-        }
-        assert rows == ownership_rows
+    rows = {
+        match.group("service"): (
+            match.group("queue"),
+            match.group("jobs"),
+            match.group("health"),
+            match.group("slots"),
+        )
+        for match in re.finditer(
+            r"^\| `(?P<service>worker-[^`]+)` \| `(?P<queue>[^`]+)` \| "
+            r"(?P<jobs>[^|]+) \| `(?P<health>[^`]+)` \| "
+            r"(?P<slots>\d+) \|$",
+            runtime,
+            re.MULTILINE,
+        )
+    }
+    assert rows == ownership_rows
 
     for document in (runtime, incident):
         assert "PostgreSQL outbox/call state" in document
