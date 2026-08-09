@@ -2035,8 +2035,8 @@ def test_deployment_and_rollback_runbooks_define_safe_release_boundaries() -> No
     normalized_deploy = " ".join(deploy.replace("**", "").split())
     rollback = (REPO_ROOT / "docs" / "runbooks" / "rollback.md").read_text()
 
-    for provider in ("AWS Paris", "Scaleway Paris", "EU managed application platform"):
-        assert provider in architecture
+    assert "Status: **not selected**" in architecture
+    assert "No hosting provider or region is approved" in architecture
     for criterion in (
         "data residency",
         "PostgreSQL PITR",
@@ -2047,7 +2047,14 @@ def test_deployment_and_rollback_runbooks_define_safe_release_boundaries() -> No
         "monthly beta cost",
     ):
         assert criterion in architecture
-    assert "pending explicit user approval" in architecture
+    assert "explicit owner approval" in architecture
+    assert "pre-drain" in architecture
+    for stale_provider in (
+        "AWS Paris",
+        "Scaleway Paris",
+        "Render Frankfurt",
+    ):
+        assert stale_provider not in architecture
     assert "Terraform" not in architecture
 
     release_order = (
