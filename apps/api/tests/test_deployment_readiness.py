@@ -2083,9 +2083,6 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
     runtime = (
         REPO_ROOT / "docs" / "architecture" / "runtime-contract.md"
     ).read_text()
-    deployment = (
-        REPO_ROOT / "docs" / "architecture" / "production-deployment.md"
-    ).read_text()
     staging = (
         REPO_ROOT / "docs" / "architecture" / "staging-smoke-runbook.md"
     ).read_text()
@@ -2196,7 +2193,7 @@ def test_worker_isolation_documents_ownership_rollout_and_bounded_evidence() -> 
 
     for document in (status, runtime):
         assert "4A + 4B" in document
-        assert "controlled ten-call local/CI evidence" in document
+        assert "controlled ten-call local/ci evidence" in document.lower()
         assert "Issue 16A" in document
         assert "load" in document
         assert "recovery drills" in document

@@ -38,7 +38,7 @@ Realtime remains deferred. The optional observer is disabled by default and must
 
 ## Evidence boundary
 
-Worker isolation is implemented as decision 4A + 4B. controlled ten-call local/CI evidence held four background slots while ten lifecycle probes started simultaneously, with lifecycle queue-delay p95 `<= 2 seconds`.
+Worker isolation is implemented as decision 4A + 4B. Controlled ten-call local/CI evidence held four background slots while ten lifecycle probes started simultaneously, with lifecycle queue-delay p95 `<= 2 seconds`.
 
 This is bounded local/CI evidence, not a cloud-capacity claim. Issue 16A remains open for representative load, saturation, monitoring, alert routing, and recovery drills.
 
