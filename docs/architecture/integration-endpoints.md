@@ -4,6 +4,103 @@ This document describes account-lifecycle APIs plus the non-product-facing
 backend endpoints used by local fixtures, internal workers, provider webhooks,
 health checks, and realtime clients.
 
+## Contract authority
+
+FastAPI's generated `/openapi.json` is authoritative for the request and
+response field shapes and validation constraints it declares. It does not list
+every runtime authorization, conflict, rate-limit, or provider-failure status.
+This document records those status behaviors plus the rules that are not
+obvious from the schema: transaction boundaries, asynchronous effects,
+ownership, idempotency, and lifecycle constraints.
+
+## Customer APIs
+
+In a standard deployed environment, all customer APIs require a Clerk bearer
+token that resolves to a synced local user. The explicitly provider-free local
+development mode uses its documented local token instead. Account-state policy
+may additionally reject mutations while an account is `deactivating` or
+`inactive`.
+
+### Agent configuration
+
+- `GET /api/agent/config` returns the owner's configuration and supplies the
+  default projection when one has not been persisted.
+- `PATCH /api/agent/config` accepts the editable fields declared in OpenAPI.
+  With the activation flow enabled, receptionist content remains owned by the
+  business profile and is projected to the runtime configuration in the same
+  database transaction.
+- An explicit profile-owned content edit increments the profile content
+  revision and keeps the runtime projection revision aligned. If the profile
+  was already confirmed, the save also advances its confirmed content revision
+  so reactivation does not treat the saved edit as an unreviewed draft.
+- Direct `false -> true` routing changes are rejected when the activation flow
+  is enabled; verified go-live owns that transition. Owners may still disable
+  routing directly.
+- A routing change commits the configuration plus a reference-only
+  `phone.enable` or `phone.disable` outbox intent. The request performs no
+  Telnyx I/O. Redis wakeup is best effort after commit, and reconciliation can
+  recover a missed wakeup from PostgreSQL. A successful PATCH therefore means
+  the durable intent was accepted, not that the provider already changed.
+
+### Billing and usage
+
+- `GET /api/billing/subscription`, `GET /api/billing/usage`, and
+  `GET /api/billing/usage-ledger` return the owner-scoped local billing view.
+  Subscription returns `null` when no subscription exists; usage still returns
+  `200` with zeroed usage fields when neither a subscription nor ledger exists;
+  and ledger entries are newest first. Subscription responses include checkout
+  eligibility and scheduled cancellation state as declared in OpenAPI.
+- `POST /api/billing/checkout-session` accepts only the `starter` plan, records
+  an idempotent checkout attempt, and rejects an account that is not eligible
+  to start another checkout.
+- `POST /api/billing/portal-session` requires an existing Stripe customer. An
+  optional caller return URL must have the same scheme, host, and port as the
+  configured server-owned return URL; Stripe always receives the server-owned
+  URL and the configured `STRIPE_BILLING_PORTAL_CONFIGURATION_ID`.
+- Stripe remains authoritative for payment state. Signed Stripe webhooks update
+  the local subscription, cancellation, and usage projections.
+
+### Call history
+
+- `GET /api/calls` returns non-removed owner calls with `q`, `status`, `range`,
+  `limit`, and `offset` filters. Current status filters are `completed`,
+  `in_progress`, and `failed`; current date ranges are `7d` and `30d`.
+- Search matches summary text and structured caller intent case-insensitively.
+  A phone-shaped query with at least three digits also matches caller numbers
+  after query punctuation is removed; a domestic trunk `0` is additionally
+  tried without that leading zero. Transcripts and arbitrary summary metadata
+  are not searched. Results use `started_at DESC NULLS LAST`, `created_at DESC`,
+  and `id DESC` for deterministic newest-first pagination.
+- List and detail responses carry structured summary status, caller intent,
+  action items, sentiment, and follow-up state as declared in OpenAPI.
+- `GET /api/calls/{call_id}` hides missing, removed, and cross-tenant calls with
+  `404` and mints a fresh short-lived recording URL only when private original
+  audio is still available.
+- `DELETE /api/calls/{call_id}` accepts only terminal owner calls. One local
+  transaction purges customer-visible content, records any required
+  reference-only recording cleanup, and returns `204`; provider stop and exact
+  object deletion continue asynchronously. Repeated removal is idempotent.
+
+### Runtime error and status behavior
+
+Generated OpenAPI does not enumerate every branch below:
+
+- Missing, invalid, or unsynced deployed customer authentication returns `401`;
+  request/path validation returns `422`; and configured rate limits on hosted
+  billing and call-history endpoints return `429`.
+- Agent configuration returns `404` when its owner-scoped resource cannot be
+  resolved. PATCH returns `409` for blocked account state, activation-owned
+  enablement, missing phone assignment, or readiness blockers, and `502` when
+  the update transaction cannot be completed.
+- Checkout returns `409` for eligibility, hosted-session state, or attempt
+  identity conflicts and `502` when Stripe session creation fails. Portal
+  creation returns `400` for a malformed or off-origin caller return URL, `409`
+  for missing customer or required hosted-session state, and `502` for a Stripe
+  failure.
+- Call detail and removal return `404` for unknown, removed, or cross-tenant
+  calls. Removal returns `409` for an active call or blocked account mutation;
+  the first and repeated successful terminal-call removals return `204`.
+
 ## Account lifecycle
 
 ### `GET /api/account`
@@ -115,6 +212,13 @@ Response:
 ```json
 {"status":"ok"}
 ```
+
+### `GET /readyz`
+
+Checks PostgreSQL and Redis concurrently under one bounded deadline. A success
+response reports both dependencies as ready. A failure returns a bounded
+dependency outcome without hosts, ports, credentials, or raw exception text.
+Readiness is a traffic-eligibility signal, not a liveness or restart command.
 
 ## Realtime WebSocket
 
@@ -360,7 +464,4 @@ Behavior:
   Provider and original-audio cleanup continues asynchronously without retry
   exhaustion; repeated owner removal is idempotent and active calls reject it.
 - Firebase push delivery is intentionally absent from the launch post-call path. The authenticated dashboard reads the opaque local notification; private device-token delivery belongs to a later workstream.
-- User-facing API docs live separately in:
-  - [agent-config-api.md](agent-config-api.md)
-  - [billing-usage-api.md](billing-usage-api.md)
-  - [call-history-api.md](call-history-api.md)
+- Field-level API contracts are generated from FastAPI at `/openapi.json`.

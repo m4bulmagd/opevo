@@ -130,35 +130,26 @@ downgrade`, restore a snapshot, or manually delete newly added schema objects.
 Additive columns/tables can remain unused until a later cleanup migration after
 all old application versions are retired.
 
-### Worker-isolation reverse order
+### Current worker rollback order
 
-When the affected release includes the two worker services, reverse the
-coexistence sequence exactly: restore previous API routing first; let the
-explicit queues drain second; restore the old generic worker third; remove the
-new workers last. In operational shorthand, this is **previous API routing →
-explicit queues drain → generic worker restoration → new workers removed last**.
+When API queue routing changed, restore previous API routing first, then roll
+back `worker-background` and `worker-lifecycle` to the previous API image one
+service at a time. Keep both explicit services available throughout the
+transition; never move one queue's jobs into the other service.
 
-Before cutover, record the actual previous worker service identity as
-`<legacy-worker-service>` in the change record. This is a captured identity,
-not a service to create or a replacement service name.
-
-Keep `worker-lifecycle` and `worker-background` running while their respective
-`arq:queue` and `arq:queue:background` work drains. Check
-`opevo:worker:call-lifecycle:health`,
+Check `opevo:worker:call-lifecycle:health`,
 `opevo:worker:background:health`,
 `opevo.worker.queue.depth{queue_class}`, and
-`opevo.worker.queue.oldest_due.age{queue_class}` before restoring the old
-generic worker. PostgreSQL outbox/call state remains authoritative while Redis
-is execution/wakeup only: outbox and call reconciliation recover orphaned work
-after restoration, with a schedule-bound delay rather than a zero-delay
-guarantee; this is not a zero-delay guarantee.
+`opevo.worker.queue.oldest_due.age{queue_class}` before and after each worker
+replacement. PostgreSQL outbox/call state remains authoritative while Redis is
+execution/wakeup only: outbox and call reconciliation recover orphaned work
+after service restoration with a schedule-bound delay.
 
 ### Roll back the affected services
 
 Roll back the narrowest component first. For a full application rollback,
-remove newly exposed frontend behavior, then restore API routing, drain the
-explicit queues, restore the legacy generic worker, remove the new worker
-services, and restore the agent one service at a time:
+remove newly exposed frontend behavior, then restore API routing, replace both
+explicit worker services, and restore the agent one service at a time:
 
 ```bash
 <deployctl> service deploy opevo-web \
@@ -169,25 +160,20 @@ services, and restore the agent one service at a time:
   --image <previous-api-image@sha256:digest> \
   --reason <incident-id> --wait
 
-<deployctl> service wait-queue-drain worker-lifecycle --queue arq:queue \
-  --reason <incident-id> --wait
-
-<deployctl> service wait-queue-drain worker-background --queue arq:queue:background \
-  --reason <incident-id> --wait
-
-<deployctl> service deploy <legacy-worker-service> \
+<deployctl> service deploy worker-background \
   --image <previous-api-image@sha256:digest> \
   --reason <incident-id> --wait
 
-<deployctl> service remove worker-lifecycle --reason <incident-id> --wait
-<deployctl> service remove worker-background --reason <incident-id> --wait
+<deployctl> service deploy worker-lifecycle \
+  --image <previous-api-image@sha256:digest> \
+  --reason <incident-id> --wait
 
 <deployctl> service deploy opevo-agent \
   --image <previous-agent-image@sha256:digest> \
   --reason <incident-id> --wait
 ```
 
-`<legacy-worker-service>` must use the same previous API artifact as the API
+Both worker services must use the same previous API artifact as the API
 service. If only one component changed or failed, do not roll unrelated healthy
 components.
 
