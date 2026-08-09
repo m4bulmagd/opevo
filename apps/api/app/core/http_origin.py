@@ -116,7 +116,7 @@ def parse_canonical_http_origins(value: str | None) -> tuple[str, ...]:
 
 
 def validate_absolute_https_url(value: str) -> None:
-    error = ValueError("invalid Clerk JWKS URL")
+    error = ValueError("invalid HTTPS URL")
     if (
         not value
         or value != value.strip()

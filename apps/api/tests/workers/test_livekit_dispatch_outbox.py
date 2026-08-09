@@ -402,7 +402,7 @@ async def _seed_dispatch(
     now = datetime.now(UTC)
     user = User(
         id=user_id,
-        clerk_user_id="outbox-user",
+        external_user_id="outbox-user",
         email="outbox@example.com",
         full_name=owner_name,
     )
@@ -1281,7 +1281,7 @@ async def test_terminal_invalid_payload_releases_authoritative_aggregate_call(
     from app.models.user import User
 
     call, event, _subscription = await _seed_dispatch(db_session)
-    other_user = User(clerk_user_id="payload-target", email="target@example.com")
+    other_user = User(external_user_id="payload-target", email="target@example.com")
     db_session.add(other_user)
     await db_session.flush()
     payload_target = Call(user_id=other_user.id, status="pending")

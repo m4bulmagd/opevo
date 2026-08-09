@@ -101,7 +101,7 @@ CROSS JOIN (
   summary_data,
   summary_transcript_max_sequence
 )
-WHERE owner.clerk_user_id = 'local_opevo_user'
+WHERE owner.external_user_id = 'local_opevo_user'
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO call_messages (

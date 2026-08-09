@@ -1,6 +1,6 @@
 import "server-only";
 
-import { authMode } from "@/lib/auth/clerk-config";
+import { authProvider } from "@/lib/auth/auth-config";
 
 export type DevelopmentCapabilities = {
   localBilling: boolean;
@@ -8,7 +8,7 @@ export type DevelopmentCapabilities = {
 };
 
 export function getDevelopmentCapabilities(): DevelopmentCapabilities {
-  const localDevelopment = process.env.NODE_ENV === "development" && authMode === "local";
+  const localDevelopment = process.env.NODE_ENV === "development" && authProvider === "local";
 
   return {
     localBilling: localDevelopment && process.env.BILLING_MODE === "fake",

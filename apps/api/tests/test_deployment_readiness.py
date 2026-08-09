@@ -77,7 +77,7 @@ CLERK_SESSION_VERIFIER_SETTINGS = (
     "CLERK_JWKS_TOTAL_TIMEOUT_SECONDS",
 )
 LOCAL_COMPOSE_AUTH_DEFAULTS = {
-    "AUTH_MODE": "",
+    "AUTH_PROVIDER": "",
     "LOCAL_AUTH_TOKEN": "",
     "CLERK_AUTHORIZED_PARTIES": "",
     "COMPOSE_PROFILES": "voice",
@@ -96,6 +96,8 @@ API_ONLY_WORKER_SENSITIVE_SETTINGS = frozenset(
         "CLERK_JWT_KEY",
         "CLERK_JWKS_URL",
         "CLERK_WEBHOOK_SECRET",
+        "SUPABASE_URL",
+        "SUPABASE_JWT_AUDIENCE",
         "STRIPE_WEBHOOK_SECRET",
         "STRIPE_PRICE_STARTER",
         "STRIPE_CHECKOUT_SUCCESS_URL",
@@ -391,7 +393,7 @@ def base_settings() -> Settings:
         telnyx_active_connection_id="telnyx-active-connection",
         telnyx_disabled_connection_id="telnyx-disabled-connection",
         telnyx_ordering_enabled=True,
-        auth_mode="clerk",
+        auth_provider="clerk",
         billing_mode="stripe",
         carrier_lookup_mode="telnyx",
         telephony_mode="telnyx",
@@ -720,7 +722,7 @@ def test_local_runtime_rejects_an_omitted_local_auth_token(
     settings = Settings(
         _env_file=None,
         app_env="development",
-        auth_mode="local",
+        auth_provider="local",
         database_url="sqlite+aiosqlite://",
         redis_url="redis://localhost:6379/0",
     )
@@ -736,7 +738,7 @@ def test_local_runtime_rejects_an_omitted_local_auth_token(
 @pytest.mark.parametrize(
     ("field_name", "unsafe_value", "setting_name"),
     [
-        ("auth_mode", "local", "AUTH_MODE"),
+        ("auth_provider", "local", "AUTH_PROVIDER"),
         ("billing_mode", "fake", "BILLING_MODE"),
         ("carrier_lookup_mode", "fake", "CARRIER_LOOKUP_MODE"),
         ("telephony_mode", "fake", "TELEPHONY_MODE"),
@@ -763,7 +765,7 @@ def test_production_requires_exact_provider_modes_without_echoing_values(
 
 @pytest.mark.parametrize(
     "field_name",
-    ("auth_mode", "billing_mode", "carrier_lookup_mode", "telephony_mode"),
+    ("auth_provider", "billing_mode", "carrier_lookup_mode", "telephony_mode"),
 )
 def test_settings_validation_hides_arbitrary_invalid_mode_values(
     field_name: str,
@@ -789,11 +791,11 @@ def test_every_non_development_environment_rejects_local_auth(
         database_url="sqlite+aiosqlite://",
         redis_url="redis://localhost:6379/0",
         agent_dispatch_jwt_secret="runtime-dispatch-secret-with-at-least-32-bytes",
-        auth_mode="local",
+        auth_provider="local",
         local_auth_token="local-token-sentinel-that-must-not-be-reported",
     )
 
-    with pytest.raises(RuntimeError, match="AUTH_MODE") as error:
+    with pytest.raises(RuntimeError, match="AUTH_PROVIDER") as error:
         validate_api_runtime(settings)
 
     assert "local-token-sentinel-that-must-not-be-reported" not in str(error.value)
@@ -859,7 +861,7 @@ def test_api_lifespan_rejects_invalid_production_settings_before_serving() -> No
         **os.environ,
         "APP_ENV": "production",
         "AGENT_DISPATCH_JWT_SECRET": "",
-        "AUTH_MODE": "clerk",
+        "AUTH_PROVIDER": "clerk",
         "BILLING_MODE": "stripe",
         "CARRIER_LOOKUP_MODE": "telnyx",
         "TELEPHONY_MODE": "telnyx",
@@ -899,12 +901,12 @@ def test_api_startup_is_migration_free_but_release_image_keeps_alembic() -> None
     assert 'command: ["/app/.venv/bin/alembic", "-c", "/app/alembic.ini", "upgrade", "head"]' in migration_compose
 
 
-def test_assistant_overrides_migration_is_the_only_alembic_head() -> None:
+def test_external_identity_migration_is_the_only_alembic_head() -> None:
     config = Config(str(REPO_ROOT / "apps" / "api" / "alembic.ini"))
     config.set_main_option("path_separator", "os")
 
     assert ScriptDirectory.from_config(config).get_heads() == [
-        "0017_assistant_overrides"
+        "0018_external_user_identity"
     ]
 
 
@@ -987,6 +989,14 @@ def test_runtime_images_are_pinned_minimal_non_root_and_health_checked() -> None
     assert "COPY --from=builder /app/.next/static ./.next/static" in dockerfiles["web"]
     assert 'CMD ["node", "server.js"]' in dockerfiles["web"]
     assert "node_modules ./node_modules" not in dockerfiles["web"]
+    for setting in (
+        "AUTH_PROVIDER",
+        "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+        "NEXT_PUBLIC_SUPABASE_URL",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    ):
+        assert f"ARG {setting}" in dockerfiles["web"]
+        assert f"{setting}=${setting}" in dockerfiles["web"]
 
     next_config = (REPO_ROOT / "apps" / "web" / "next.config.mjs").read_text()
     assert 'output: "standalone"' in next_config
@@ -1006,7 +1016,6 @@ def test_compose_separates_required_production_inputs_from_local_services() -> N
     for required_input in (
         "DATABASE_URL",
         "REDIS_URL",
-        "CLERK_WEBHOOK_SECRET",
         "LIVEKIT_API_SECRET",
         "STORAGE_BUCKET_NAME",
         "S3_ENDPOINT_URL",
@@ -1014,9 +1023,18 @@ def test_compose_separates_required_production_inputs_from_local_services() -> N
         "S3_SECRET_KEY",
         "S3_REGION",
         "AGENT_DISPATCH_JWT_SECRET",
-        "CLERK_SECRET_KEY",
     ):
         assert f"${{{required_input}:?" in compose
+
+    for selected_provider_input in (
+        "AUTH_PROVIDER",
+        "CLERK_WEBHOOK_SECRET",
+        "CLERK_SECRET_KEY",
+        "SUPABASE_URL",
+        "NEXT_PUBLIC_SUPABASE_URL",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    ):
+        assert f"${{{selected_provider_input}:-" in compose
 
     assert "  migrate:" not in compose
     assert "read_only: true" in compose
@@ -1139,13 +1157,61 @@ def test_production_compose_renders_exactly_one_nonempty_clerk_key_source() -> N
     ) == 1
 
 
+def test_production_compose_can_select_supabase_without_clerk_credentials(
+    base_settings: Settings,
+) -> None:
+    supabase_url = "https://project.supabase.co"
+    document = render_compose(
+        "compose.yaml",
+        PRODUCTION_COMPOSE_ENVIRONMENT
+        | {
+            "AUTH_PROVIDER": "supabase",
+            "CLERK_AUTHORIZED_PARTIES": "",
+            "CLERK_ISSUER": "",
+            "CLERK_JWKS_URL": "",
+            "CLERK_SECRET_KEY": "",
+            "CLERK_WEBHOOK_SECRET": "",
+            "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "",
+            "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+            "NEXT_PUBLIC_SUPABASE_URL": supabase_url,
+            "SUPABASE_URL": supabase_url,
+        },
+    )
+    api_environment = resolved_service_environment(document, "api")
+    web_environment = resolved_service_environment(document, "web")
+
+    assert api_environment["AUTH_PROVIDER"] == "supabase"
+    assert api_environment["SUPABASE_URL"] == supabase_url
+    assert api_environment["SUPABASE_JWT_AUDIENCE"] == "authenticated"
+    assert api_environment["CLERK_ISSUER"] == ""
+    assert web_environment["AUTH_PROVIDER"] == "supabase"
+    assert web_environment["NEXT_PUBLIC_SUPABASE_URL"] == supabase_url
+    assert web_environment["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"] == (
+        "sb_publishable_test"
+    )
+    assert web_environment["CLERK_SECRET_KEY"] == ""
+
+    validate_api_runtime(
+        base_settings.model_copy(
+            update={
+                "auth_provider": "supabase",
+                "supabase_url": supabase_url,
+                "clerk_issuer": "",
+                "clerk_authorized_parties": "",
+                "clerk_jwks_url": "",
+                "clerk_webhook_secret": "",
+            }
+        )
+    )
+
+
 def test_local_compose_defaults_interactive_services_to_clerk() -> None:
     document = load_local_compose_yaml()
     api_environment = resolved_service_environment(document, "api")
     web_environment = resolved_service_environment(document, "web")
 
-    assert api_environment["AUTH_MODE"] == "clerk"
-    assert web_environment["AUTH_MODE"] == "clerk"
+    assert api_environment["AUTH_PROVIDER"] == "clerk"
+    assert web_environment["AUTH_PROVIDER"] == "clerk"
     assert api_environment["LOCAL_AUTH_TOKEN"] == ""
     assert web_environment["LOCAL_AUTH_TOKEN"] == ""
     assert api_environment["CLERK_AUTHORIZED_PARTIES"] == (
@@ -1156,9 +1222,9 @@ def test_local_compose_defaults_interactive_services_to_clerk() -> None:
         worker_environment = resolved_service_environment(document, worker)
         assert {
             setting: worker_environment[setting]
-            for setting in ("AUTH_MODE", "LOCAL_AUTH_TOKEN", "CLERK_AUTHORIZED_PARTIES")
+            for setting in ("AUTH_PROVIDER", "LOCAL_AUTH_TOKEN", "CLERK_AUTHORIZED_PARTIES")
         } == {
-            "AUTH_MODE": "clerk",
+            "AUTH_PROVIDER": "clerk",
             "LOCAL_AUTH_TOKEN": "",
             "CLERK_AUTHORIZED_PARTIES": "",
         }
@@ -1193,14 +1259,14 @@ def test_local_compose_explicit_clerk_authorized_parties_override_wins() -> None
 def test_local_compose_accepts_explicit_synthetic_auth_for_disposable_tests() -> None:
     document = load_local_compose_yaml(
         {
-            "AUTH_MODE": "local",
+            "AUTH_PROVIDER": "local",
             "LOCAL_AUTH_TOKEN": "disposable-local-token",
         }
     )
 
     for service in ("api", "web"):
         environment = resolved_service_environment(document, service)
-        assert environment["AUTH_MODE"] == "local"
+        assert environment["AUTH_PROVIDER"] == "local"
         assert environment["LOCAL_AUTH_TOKEN"] == "disposable-local-token"
 
 
@@ -1214,7 +1280,7 @@ def test_local_compose_runtime_rejects_invalid_synthetic_auth_token(
 ) -> None:
     document = load_local_compose_yaml(
         {
-            "AUTH_MODE": "local",
+            "AUTH_PROVIDER": "local",
             "LOCAL_AUTH_TOKEN": local_auth_token,
         }
     )
@@ -1223,7 +1289,7 @@ def test_local_compose_runtime_rejects_invalid_synthetic_auth_token(
         app_env=api_environment["APP_ENV"],
         database_url=api_environment["DATABASE_URL"],
         redis_url=api_environment["REDIS_URL"],
-        auth_mode=api_environment["AUTH_MODE"],
+        auth_provider=api_environment["AUTH_PROVIDER"],
         local_auth_token=api_environment["LOCAL_AUTH_TOKEN"],
     )
 
@@ -1298,7 +1364,7 @@ def test_production_compose_scopes_modes_and_passes_runtime_validation(
     )
     assert lifecycle_environment == background_environment
     api_only_modes = {
-        "AUTH_MODE": ("auth_mode", "clerk"),
+        "AUTH_PROVIDER": ("auth_provider", "clerk"),
         "BILLING_MODE": ("billing_mode", "stripe"),
         "CARRIER_LOOKUP_MODE": ("carrier_lookup_mode", "telnyx"),
     }
@@ -1574,7 +1640,7 @@ def test_development_workers_filter_resolved_api_env_by_process_ownership(
         | background_provider_values
         | synthetic_storage_values
         | {
-            "AUTH_MODE": "local",
+            "AUTH_PROVIDER": "local",
             "BILLING_MODE": "stripe",
             "CARRIER_LOOKUP_MODE": "telnyx",
             "TELEPHONY_MODE": "telnyx",
@@ -1629,7 +1695,7 @@ def test_development_workers_filter_resolved_api_env_by_process_ownership(
             | FAKE_WORKER_PROVIDER_SENSITIVE_SETTINGS
         ):
             assert worker_environment.get(setting) in (None, "")
-        assert worker_environment["AUTH_MODE"] == "clerk"
+        assert worker_environment["AUTH_PROVIDER"] == "clerk"
         assert worker_environment["BILLING_MODE"] == "fake"
         assert worker_environment["CARRIER_LOOKUP_MODE"] == "fake"
         assert worker_environment["TELEPHONY_MODE"] == "fake"
@@ -1734,7 +1800,7 @@ def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
     api_environment = resolved_service_environment(document, "api")
     web_environment = resolved_service_environment(document, "web")
 
-    assert api_environment["AUTH_MODE"] == "clerk"
+    assert api_environment["AUTH_PROVIDER"] == "clerk"
     assert api_environment["BILLING_MODE"] == "fake"
     assert api_environment["CARRIER_LOOKUP_MODE"] == "fake"
     assert api_environment["TELEPHONY_MODE"] == "fake"
@@ -1744,20 +1810,20 @@ def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
         worker_environment = resolved_service_environment(document, worker)
         assert worker_environment["TELEPHONY_MODE"] == "fake"
         assert worker_environment["ACTIVATION_FLOW_ENABLED"] == "true"
-        assert worker_environment["AUTH_MODE"] == "clerk"
+        assert worker_environment["AUTH_PROVIDER"] == "clerk"
         assert worker_environment["CARRIER_LOOKUP_MODE"] == "fake"
         assert worker_environment["LOCAL_AUTH_TOKEN"] == ""
         for setting in CLERK_SESSION_VERIFIER_SETTINGS:
             assert worker_environment.get(setting) in (None, "")
         assert worker_environment["BILLING_MODE"] == "fake"
-    assert web_environment["AUTH_MODE"] == "clerk"
+    assert web_environment["AUTH_PROVIDER"] == "clerk"
     assert web_environment["BILLING_MODE"] == "fake"
     assert web_environment["TELEPHONY_MODE"] == "fake"
     assert "CARRIER_LOOKUP_MODE" not in web_environment
     assert "NEXT_PUBLIC_LOCAL_AUTH_TOKEN" not in web_environment
 
     local_examples = (
-        "AUTH_MODE=local",
+        "AUTH_PROVIDER=local",
         "LOCAL_AUTH_TOKEN=replace-with-a-development-only-token",
         "BILLING_MODE=fake",
         "CARRIER_LOOKUP_MODE=fake",
@@ -1940,17 +2006,17 @@ def test_local_e2e_runner_preserves_signal_exit_and_failure_logs(
     fake_docker = tmp_path / "docker"
     fake_docker.write_text(
         """#!/bin/sh
-if [ "${AUTH_MODE:-}" = "local" ]; then
-  auth_mode_state=local
+if [ "${AUTH_PROVIDER:-}" = "local" ]; then
+  auth_provider_state=local
 else
-  auth_mode_state=unexpected
+  auth_provider_state=unexpected
 fi
 if [ -n "${LOCAL_AUTH_TOKEN:-}" ]; then
   local_token_state=configured
 else
   local_token_state=missing
 fi
-printf '%s|%s|%s\\n' "$auth_mode_state" "$local_token_state" "$*" >> "$PROBE_LOG"
+printf '%s|%s|%s\\n' "$auth_provider_state" "$local_token_state" "$*" >> "$PROBE_LOG"
 if [ ! -e "$PROBE_SIGNAL_MARKER" ]; then
   : > "$PROBE_SIGNAL_MARKER"
   kill -"$PROBE_SIGNAL" "$PPID"

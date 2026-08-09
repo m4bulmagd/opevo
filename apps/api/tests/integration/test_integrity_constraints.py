@@ -87,7 +87,7 @@ async def _create_user(
 ) -> User:
     async with session_factory() as session:
         user = User(
-            clerk_user_id=f"user_{suffix}_{uuid4().hex}",
+            external_user_id=f"user_{suffix}_{uuid4().hex}",
             email=f"{suffix}_{uuid4().hex}@example.com",
         )
         session.add(user)

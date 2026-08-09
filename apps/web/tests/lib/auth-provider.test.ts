@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { requireWebAuthConfiguration, resolveWebAuthMode } from "@/lib/auth/auth-mode";
+import { requireWebAuthConfiguration, resolveWebAuthProvider } from "@/lib/auth/auth-provider";
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const developmentClerkConfig = {
   nodeEnv: "development",
-  authMode: "clerk",
+  authProvider: "clerk",
   publishableKey: "pk_test_configured",
   secretKey: "clerk-test-fixture",
   backendBaseUrl: "http://api:8000",
@@ -22,20 +22,28 @@ function readSourceTree(directory: string): string {
     .join("\n");
 }
 
-describe("resolveWebAuthMode", () => {
-  it("defaults blank auth modes to Clerk", () => {
-    expect(resolveWebAuthMode({ nodeEnv: "development" })).toBe("clerk");
-    expect(resolveWebAuthMode({ nodeEnv: "development", authMode: "  " })).toBe("clerk");
+describe("resolveWebAuthProvider", () => {
+  it("defaults a blank provider to Clerk", () => {
+    expect(resolveWebAuthProvider({ nodeEnv: "development" })).toBe("clerk");
+    expect(resolveWebAuthProvider({ nodeEnv: "development", authProvider: "  " })).toBe("clerk");
   });
 
   it("rejects unknown auth modes", () => {
-    expect(() => resolveWebAuthMode({ nodeEnv: "development", authMode: "mock" })).toThrow("Unsupported AUTH_MODE");
+    expect(() => resolveWebAuthProvider({ nodeEnv: "development", authProvider: "mock" })).toThrow(
+      "Unsupported AUTH_PROVIDER",
+    );
   });
 
   it("accepts local auth only in development", () => {
-    expect(resolveWebAuthMode({ nodeEnv: "development", authMode: "local" })).toBe("local");
-    expect(() => resolveWebAuthMode({ nodeEnv: "production", authMode: "local" })).toThrow(/AUTH_MODE=local/);
-    expect(() => resolveWebAuthMode({ nodeEnv: "test", authMode: "local" })).toThrow(/development-only/);
+    expect(resolveWebAuthProvider({ nodeEnv: "development", authProvider: "local" })).toBe("local");
+    expect(() => resolveWebAuthProvider({ nodeEnv: "production", authProvider: "local" })).toThrow(
+      /AUTH_PROVIDER=local/,
+    );
+    expect(() => resolveWebAuthProvider({ nodeEnv: "test", authProvider: "local" })).toThrow(/development-only/);
+  });
+
+  it("accepts Supabase as a hosted provider", () => {
+    expect(resolveWebAuthProvider({ nodeEnv: "production", authProvider: "supabase" })).toBe("supabase");
   });
 });
 
@@ -51,7 +59,7 @@ describe("requireWebAuthConfiguration", () => {
     expect(
       requireWebAuthConfiguration({
         nodeEnv: "development",
-        authMode: "local",
+        authProvider: "local",
         publishableKey: "",
         secretKey: "",
         backendBaseUrl: "http://api:8000",
@@ -75,8 +83,24 @@ describe("requireWebAuthConfiguration", () => {
 
   it("rejects local auth in production even when Clerk settings exist", () => {
     expect(() =>
-      requireWebAuthConfiguration({ ...developmentClerkConfig, nodeEnv: "production", authMode: "local" }),
-    ).toThrow(/AUTH_MODE=local/);
+      requireWebAuthConfiguration({ ...developmentClerkConfig, nodeEnv: "production", authProvider: "local" }),
+    ).toThrow(/AUTH_PROVIDER=local/);
+  });
+
+  it.each([
+    ["URL", { supabaseUrl: " " }, "NEXT_PUBLIC_SUPABASE_URL"],
+    ["publishable key", { supabasePublishableKey: "" }, "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"],
+  ])("rejects a missing Supabase %s", (_label, override, missingName) => {
+    expect(() =>
+      requireWebAuthConfiguration({
+        nodeEnv: "production",
+        authProvider: "supabase",
+        supabaseUrl: "https://project.supabase.co",
+        supabasePublishableKey: "sb_publishable_test",
+        backendBaseUrl: "https://api.example.com",
+        ...override,
+      }),
+    ).toThrow(missingName);
   });
 
   it("does not expose the local server credential as a public environment variable", () => {

@@ -22,9 +22,9 @@ const testState = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("@/components/auth/clerk-sign-out", () => {
+vi.mock("@/components/auth/sign-out-control", () => {
   return {
-    ClerkSignOut: ({ variant }: { variant: "activation" | "mobile" | "workspace" }) => {
+    SignOutControl: ({ variant }: { variant: "activation" | "mobile" | "workspace" }) => {
       testState.clerkSignOutVariants.push(variant);
       return <button aria-label={`${variant} Clerk sign-out sentinel`} type="button" />;
     },
@@ -118,17 +118,17 @@ async function renderDashboardLayout({
   account = activeAccount,
   agentEnabled = true,
   agentName = "Ava",
-  authMode = "local",
+  authProvider = "local",
 }: {
   account?: AccountStatus;
   agentEnabled?: boolean;
   agentName?: string;
-  authMode?: "clerk" | "local";
+  authProvider?: "clerk" | "local";
 } = {}) {
   vi.stubEnv("NODE_ENV", "development");
-  vi.stubEnv("AUTH_MODE", authMode);
-  vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", authMode === "clerk" ? "pk_test_configured" : "");
-  vi.stubEnv("CLERK_SECRET_KEY", authMode === "clerk" ? "clerk-test-fixture" : "");
+  vi.stubEnv("AUTH_PROVIDER", authProvider);
+  vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", authProvider === "clerk" ? "pk_test_configured" : "");
+  vi.stubEnv("CLERK_SECRET_KEY", authProvider === "clerk" ? "clerk-test-fixture" : "");
   testState.getAccountMock.mockResolvedValue(account);
   testState.getAgentConfigForRequestMock.mockResolvedValue(agentConfig(agentName, agentEnabled));
 
@@ -422,7 +422,7 @@ describe("app shell", () => {
   });
 
   it("delegates desktop and mobile account controls to explicit shared-leaf variants", async () => {
-    await renderDashboardLayout({ authMode: "clerk" });
+    await renderDashboardLayout({ authProvider: "clerk" });
 
     const header = screen.getByRole("banner");
     const trigger = within(header).getByRole("button", { name: "Open navigation" });
@@ -536,7 +536,7 @@ describe("app shell", () => {
 
   it("renders protected dashboard content in guarded local mode", async () => {
     vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "local");
+    vi.stubEnv("AUTH_PROVIDER", "local");
     vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "");
     vi.stubEnv("CLERK_SECRET_KEY", "");
     testState.listCallsMock.mockResolvedValueOnce({
@@ -627,7 +627,7 @@ describe("app shell", () => {
     ["sign-up", "@/app/(auth)/sign-up/[[...sign-up]]/page"],
   ])("redirects local %s routes to activation", async (_route, modulePath) => {
     vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "local");
+    vi.stubEnv("AUTH_PROVIDER", "local");
     vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "");
     vi.stubEnv("CLERK_SECRET_KEY", "");
 

@@ -364,9 +364,19 @@ UTC timestamp.
 
 Owner: `<web owner>`
 
+Before deployment, confirm the immutable web image was built with the selected
+`AUTH_PROVIDER`, matching `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_APP_URL`, and
+that provider's public browser values. These values are Next.js build inputs;
+runtime environment variables do not rewrite the browser bundle. For Supabase,
+the image build must include `NEXT_PUBLIC_SUPABASE_URL` and
+`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. For Clerk, it must include
+`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Do not pass provider secrets as Docker
+build arguments.
+
 Deploy `$WEB_IMAGE` by digest after backend eligibility is stable. Confirm the
-public runtime configuration points to the approved origins and Clerk
-publishable identifier; never record or expose the Clerk secret.
+public runtime configuration points to the approved origins, selected
+`AUTH_PROVIDER`, and that provider's public browser identifier. Never record or
+expose a provider secret.
 
 ```bash
 <deployctl> service deploy opevo-web --image "$WEB_IMAGE" --release "$RELEASE_ID" --wait
@@ -392,8 +402,11 @@ use a real customer's data, transcript, or recording. Execute in this order:
 1. Load the web root, sign in, and confirm the authenticated dashboard can read
    the account's current state.
 2. Make one non-mutating authenticated API request and confirm tenant isolation.
-3. Deliver one provider-signed test webhook using the provider's test mode and
-   confirm it is accepted exactly once.
+3. Prove the selected authentication provisioning path: for Clerk, deliver one
+   signed disposable `user.created` event and confirm idempotent acceptance; for
+   Supabase, complete the disposable account's first authenticated API request
+   and confirm verified lazy provisioning. Supabase has no authentication
+   webhook in this architecture.
 4. Place one short consented test call through the configured beta number.
    Confirm dispatch, agent connection, configured STS or STT→LLM→TTS speech
    path, clean call completion, durable finalization, usage accounting, and the

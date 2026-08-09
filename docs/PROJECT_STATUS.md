@@ -47,7 +47,7 @@ require a configured real-provider run.
 
 | Area | Status | Current evidence and limitation |
 |---|---|---|
-| Public landing page and authentication shell | **Implemented** | Next.js landing page, Clerk sign-in/sign-up routes, and protected dashboard routing are present. |
+| Public landing page and authentication shell | **Implemented** | Next.js exposes provider-neutral session, route-protection, auth-entry, account-security, and sign-out seams with Clerk and Supabase adapters plus an explicit development-only local provider. FastAPI verifies provider credentials at adapter boundaries and resolves them to one internal user UUID before domain work. |
 | Customer dashboard | **Implemented** | The complete Opevo visual system is applied across the responsive dashboard, calls, live assistant settings, billing, account, onboarding status, empty states, and server actions. Exact colors, typography, spacing, borders, shadows, card hierarchy, and light/dark layouts are regression-protected. |
 | Guided onboarding | **Implemented** | A resumable five-milestone web journey covers business/receptionist content, local or Stripe billing, explicit number consent, provisioning, carrier-aware conditional forwarding, a timed test call, and explicit go-live. The disposable Playwright path proves local operation; real-provider certification remains a release gate. |
 | Starter billing | **Implemented** | Stripe Checkout, a pinned Billing Portal configuration, paid-invoice minute grants, subscription lifecycle handling, and PostgreSQL-backed usage accounting are present. Portal subscription-only cancellation remains active until the paid-period end; owner account deactivation cancels immediately without automatic proration or refund. The Portal configuration still requires deployment-time review and real Stripe certification. |
@@ -64,7 +64,7 @@ require a configured real-provider run.
 | Transactional outbox | **Implemented** | Handlers cover `phone.provision`, `phone.enable`, `phone.disable`, `livekit.dispatch`, `summary.generate`, `recording.reconcile`, and `account.deactivate`. Recording and account-deactivation events use private operation aggregates and carry only `operation_id`. |
 | Worker isolation (4A + 4B) | **Implemented** | `worker-lifecycle` owns `arq:queue` call finalization/reconciliation at 10 default slots; `worker-background` owns `arq:queue:background` outbox delivery/reconciliation and verification expiry at 4. Health and class-specific queue metrics are present. The evidence is controlled ten-call local/CI evidence only: four blocked background slots while ten lifecycle probes start simultaneously, with local/CI queue-delay p95 `<= 2 seconds`. |
 | Call finalization effects | **Implemented** | Usage debit and the pending notification row are direct writes in the same call-finalization transaction. |
-| Live dashboard and intervention | **Partial** | A complete, visibly labelled local-only live-call Preview exists. The optional backend WebSocket observer remains disabled by default, has a documented identity-key mismatch, and is not connected to the Preview; live monitoring and intervention remain unimplemented. |
+| Live dashboard and intervention | **Partial** | A complete, visibly labelled local-only live-call Preview exists. The optional backend WebSocket observer uses the same internal user UUID as publishers but remains disabled by default and is not connected to the Preview; production monitoring and intervention remain unimplemented. |
 | Push notifications | **Partial** | A visibly labelled local notification Preview exists, and notification records/provider boundaries exist, but private device-token delivery is not part of the launch path. |
 | Production observability and CI | **Partial** | Readiness checks, safe logging, bounded recording and account-deactivation metrics, OpenTelemetry, pinned CI actions, dependency audits, secret scanning, and container scanning are configured and locally verified. Cloud monitoring, required alert routing, and operating evidence are absent. |
 | Production deployment | **Partial** | Hardened images, release migrations, deployment and rollback runbooks, provider-neutral selection criteria, and an explicit approval gate exist; no provider or region is approved, and operating evidence remains absent. |
@@ -77,7 +77,7 @@ require a configured real-provider run.
 
 ## Known limitations
 
-- Real phone calls require external Clerk, Stripe, Telnyx, LiveKit, storage,
+- Real phone calls require external Clerk or Supabase authentication, Stripe, Telnyx, LiveKit, storage,
   and model-provider configuration.
 - The provider-free browser proof deliberately does not start the LiveKit agent;
   the deterministic simulator invokes the same forwarding-verification
@@ -134,7 +134,7 @@ production-ready until all of these gates have evidence:
 
 ### Phase 1 — Real-provider activation certification
 
-- Three clean Clerk/Stripe/Telnyx/LiveKit staging journeys
+- Three clean selected-auth-provider/Stripe/Telnyx/LiveKit staging journeys
 - Delayed and failed provisioning recovery evidence
 - Carrier and number-type coverage for conditional forwarding
 - Recording disclosure, legal, and support approval
@@ -179,6 +179,7 @@ production-ready until all of these gates have evidence:
 ## Related documentation
 
 - [Backend runtime contract](architecture/runtime-contract.md)
+- [Authentication architecture](architecture/authentication.md)
 - [Integration endpoints](architecture/integration-endpoints.md)
 - [Production deployment decision](architecture/production-deployment.md)
 - [Staging smoke runbook](runbooks/staging-smoke.md)

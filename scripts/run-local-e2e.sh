@@ -12,7 +12,7 @@ export REDIS_PORT=56379
 export MINIO_PORT=59000
 export MINIO_CONSOLE_PORT=59001
 export DASHBOARD_METRICS_REFERENCE_TIME=2026-07-29T12:00:00Z
-export AUTH_MODE=local
+export AUTH_PROVIDER=local
 export LOCAL_AUTH_TOKEN=opevo-local-development-token
 
 compose() {

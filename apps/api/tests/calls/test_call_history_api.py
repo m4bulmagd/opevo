@@ -37,7 +37,7 @@ class FakeRecordingService:
 async def seed_call_history(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     email: str,
     user_status: str = "active",
     newest_caller_number: str = "+33111111111",
@@ -46,7 +46,7 @@ async def seed_call_history(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id=clerk_user_id,
+            external_user_id=external_user_id,
             email=email,
             status=user_status,
         )
@@ -96,11 +96,11 @@ async def seed_call_history(
     return result
 
 
-async def seed_user(database_url: str, *, clerk_user_id: str, email: str) -> None:
+async def seed_user(database_url: str, *, external_user_id: str, email: str) -> None:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id=clerk_user_id, email=email))
+        session.add(User(external_user_id=external_user_id, email=email))
         await session.commit()
     await engine.dispose()
 
@@ -108,7 +108,7 @@ async def seed_user(database_url: str, *, clerk_user_id: str, email: str) -> Non
 async def seed_call_with_transcript(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     email: str,
     deleted: bool = False,
     status: str = "completed",
@@ -118,7 +118,7 @@ async def seed_call_with_transcript(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id=clerk_user_id,
+            external_user_id=external_user_id,
             email=email,
             status=user_status,
         )
@@ -169,7 +169,7 @@ async def seed_call_with_transcript(
 async def seed_call_with_recording(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     email: str,
     recording_url: str,
     recording_object_key: str | None = None,
@@ -180,7 +180,7 @@ async def seed_call_with_recording(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id=clerk_user_id,
+            external_user_id=external_user_id,
             email=email,
             status=user_status,
         )
@@ -220,7 +220,7 @@ async def fetch_call(database_url: str, *, call_id: UUID) -> Call:
 async def seed_call_into_session(
     session,
     *,
-    clerk_user_id: str = "user_calls",
+    external_user_id: str = "user_calls",
     email: str = "calls@example.com",
     recording_url: str | None = None,
     recording_object_key: str | None = None,
@@ -229,7 +229,7 @@ async def seed_call_into_session(
     summary_text: str | None = "Caller request: Opening hours.",
     summary_data: object = None,
 ) -> Call:
-    user = User(clerk_user_id=clerk_user_id, email=email)
+    user = User(external_user_id=external_user_id, email=email)
     session.add(user)
     await session.flush()
 
@@ -280,7 +280,7 @@ async def test_list_calls_returns_visible_calls_newest_first(
 ) -> None:
     ids = await seed_call_history(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
     )
 
@@ -312,7 +312,7 @@ async def test_list_calls_applies_search_and_pagination_metadata(
 ) -> None:
     ids = await seed_call_history(
         client_database_url,
-        clerk_user_id="user_calls_search",
+        external_user_id="user_calls_search",
         email="calls-search@example.invalid",
     )
 
@@ -345,7 +345,7 @@ async def test_list_calls_applies_status_and_date_range_query_contract(
 ) -> None:
     ids = await seed_call_history(
         client_database_url,
-        clerk_user_id="user_calls_filters",
+        external_user_id="user_calls_filters",
         email="calls-filters@example.invalid",
     )
     original_list_calls = CallHistoryService.list_calls
@@ -397,7 +397,7 @@ async def test_list_calls_phone_search_matches_domestic_trunk_prefix_to_e164_num
 ) -> None:
     ids = await seed_call_history(
         client_database_url,
-        clerk_user_id="user_calls_domestic_phone_search",
+        external_user_id="user_calls_domestic_phone_search",
         email="calls-domestic-phone-search@example.invalid",
         newest_caller_number="+33187001234",
     )
@@ -444,7 +444,7 @@ async def test_list_calls_rejects_invalid_query_bounds(
 ) -> None:
     await seed_user(
         client_database_url,
-        clerk_user_id="user_calls_bounds",
+        external_user_id="user_calls_bounds",
         email="calls-bounds@example.invalid",
     )
     response = await async_client.get(
@@ -466,10 +466,10 @@ async def test_inactive_owner_can_list_get_and_play_back_historical_call(
     rs256_clerk_token_for,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    clerk_user_id = "inactive_call_history_owner"
+    external_user_id = "inactive_call_history_owner"
     call_id = await seed_call_with_recording(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="inactive-call-history@example.invalid",
         recording_url="https://stored.example.invalid/old",
         recording_object_key="calls/inactive-owner/call.mp3",
@@ -477,7 +477,7 @@ async def test_inactive_owner_can_list_get_and_play_back_historical_call(
     )
     await seed_user(
         client_database_url,
-        clerk_user_id="inactive_call_history_other",
+        external_user_id="inactive_call_history_other",
         email="inactive-call-history-other@example.invalid",
     )
 
@@ -497,7 +497,7 @@ async def test_inactive_owner_can_list_get_and_play_back_historical_call(
         fake_get_access_url,
     )
     headers = {
-        "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+        "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
     }
 
     listed = await async_client.get("/api/calls", headers=headers)
@@ -935,7 +935,7 @@ async def test_get_call_detail_returns_transcript(
 ) -> None:
     call_id = await seed_call_with_transcript(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
     )
 
@@ -954,7 +954,7 @@ async def test_get_call_detail_returns_404_for_soft_deleted_call(
 ) -> None:
     call_id = await seed_call_with_transcript(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
         deleted=True,
     )
@@ -977,7 +977,7 @@ async def test_get_call_detail_mints_fresh_recording_url(
 
     call_id = await seed_call_with_recording(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
         recording_url="https://stored.example.com/old",
         recording_object_key="calls/user_calls/call.mp3",
@@ -1006,7 +1006,7 @@ async def test_get_call_detail_mints_fresh_recording_url_from_object_key(
 
     call = await seed_call_into_session(
         db_session,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
         recording_url="https://stored.example.com/old",
         recording_object_key="calls/user_calls/object-key.mp3",
@@ -1043,7 +1043,7 @@ async def test_get_call_detail_returns_null_recording_url_when_object_missing(
 
     call = await seed_call_into_session(
         db_session,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
         recording_url="https://stored.example.com/old",
         recording_object_key="calls/user_calls/object-key.mp3",
@@ -1066,7 +1066,7 @@ async def test_get_call_detail_returns_null_recording_url_without_recording(
 ) -> None:
     call_id = await seed_call_with_transcript(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
     )
 
@@ -1085,7 +1085,7 @@ async def test_delete_call_soft_deletes_and_hides_it(
 ) -> None:
     call_id = await seed_call_with_transcript(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
     )
 
@@ -1113,7 +1113,7 @@ async def test_delete_call_rejects_active_call_without_mutating_customer_content
 ) -> None:
     call_id = await seed_call_with_transcript(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
         status="connected",
     )
@@ -1149,7 +1149,7 @@ async def test_delete_call_rejects_non_active_owner_without_destructive_side_eff
 ) -> None:
     call_id = await seed_call_with_recording(
         client_database_url,
-        clerk_user_id=f"{user_status}-delete-owner",
+        external_user_id=f"{user_status}-delete-owner",
         email=f"{user_status}-delete-owner@example.com",
         recording_url="https://stored.example.com/private",
         recording_object_key=f"calls/{user_status}/retained.ogg",
@@ -1181,12 +1181,12 @@ async def test_delete_call_returns_404_for_other_users_call(
 ) -> None:
     await seed_user(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
     )
     foreign_call_id = await seed_call_with_transcript(
         client_database_url,
-        clerk_user_id="user_other",
+        external_user_id="user_other",
         email="other@example.com",
     )
 
@@ -1204,7 +1204,7 @@ async def test_delete_call_returns_404_for_unknown_call(
 ) -> None:
     await seed_user(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
     )
 
@@ -1224,7 +1224,7 @@ async def test_delete_call_repeat_owner_returns_provider_free_204(
 ) -> None:
     call_id = await seed_call_with_recording(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
         recording_url="https://stored.example.com/legacy",
         recording_object_key="calls/user_calls/delete-once.mp3",
@@ -1260,7 +1260,7 @@ async def test_delete_call_outbox_wake_failure_does_not_change_provider_free_204
     test_app.state.runtime.arq_pool = pool
     call_id = await seed_call_with_recording(
         client_database_url,
-        clerk_user_id="user_calls",
+        external_user_id="user_calls",
         email="calls@example.com",
         recording_url="https://stored.example.com/legacy",
         recording_object_key="calls/user_calls/provider-free-delete.ogg",

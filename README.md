@@ -20,7 +20,7 @@ Opevo gives professionals and small businesses a configurable AI receptionist an
 ### Done
 
 - Public landing page, authentication shell, and tenant-isolated dashboard
-- Clerk-authenticated local activation journey with fake billing and telephony providers
+- Provider-neutral authentication with Clerk and Supabase adapters, plus an explicit local test provider
 - Stripe billing and queued Telnyx number-provisioning integrations
 - LiveKit voice-agent runtime with configurable speech and language providers
 - Durable call lifecycle, transcripts, summaries, private recordings, and usage accounting
@@ -28,7 +28,7 @@ Opevo gives professionals and small businesses a configurable AI receptionist an
 
 ### In progress
 
-- Fresh real-provider certification across Clerk, Stripe, Telnyx, and LiveKit
+- Fresh real-provider certification across the selected auth provider, Stripe, Telnyx, and LiveKit
 - Cloud deployment, monitoring, backup restoration, and recovery evidence
 - Call tags and notes, accessibility conformance, and frontend performance gates
 
@@ -50,7 +50,7 @@ boundaries:
 
 | Path | Responsibility |
 |---|---|
-| `apps/web` | Next.js dashboard. Server Components and Server Actions obtain a Clerk token and call FastAPI server-side. |
+| `apps/web` | Next.js dashboard. Provider adapters expose a neutral server session to Server Components and Server Actions that call FastAPI. |
 | `apps/api` | FastAPI control plane, provider webhooks, domain services, repositories, provider adapters, SQLAlchemy models, and Alembic migrations. |
 | `apps/api/app/workers` | Two ARQ entry points built from the API image: the call-lifecycle worker and the background/outbox worker. |
 | `apps/agent` | LiveKit voice worker. It consumes dispatch metadata, builds the configured speech pipeline, streams transcript segments to FastAPI, and reports call completion. |
@@ -61,7 +61,7 @@ flowchart TB
       subgraph Experience["Owner experience"]
           direction LR
           Owner[Business owner] --> Web[Next.js dashboard]
-          Web <--> Clerk[Clerk authentication]
+          Web <--> Auth[Selected auth provider]
       end
 
       subgraph Call["Inbound call"]
@@ -88,7 +88,7 @@ flowchart TB
       Call ~~~ Platform
 
       Web -->|server-side requests| API
-      Clerk -->|signed user webhooks| API
+      Auth -.->|optional provider webhooks| API
       LiveKit -->|signed call and egress webhooks| API
       Agent -->|transcript and completion| API
 
@@ -104,9 +104,12 @@ flowchart TB
       Background -->|number provisioning and routing| Telnyx
       Background -->|post-call summaries| AI
 ```
-The owner journey is server-rendered by Next.js: the web app obtains the Clerk
-session token, calls FastAPI, and renders PostgreSQL-backed state. Clerk and
-Stripe also synchronize identity and billing state through signed webhooks.
+The owner journey is server-rendered by Next.js: the web app obtains a verified
+provider session, calls FastAPI with its bearer token, and renders
+PostgreSQL-backed state. FastAPI maps the provider subject to one internal user
+UUID before domain work begins. Clerk can also synchronize profile data through
+signed webhooks; Supabase provisions the same local identity from verified JWT
+claims on first use. Stripe synchronization remains independent of identity.
 
 For an inbound call, Telnyx forwards SIP media to LiveKit. A signed LiveKit
 participant webhook makes FastAPI validate eligibility and atomically commit a
@@ -149,25 +152,29 @@ production certification.
 - Docker with Docker Compose
 - Node.js 22 only when running browser tests from the host
 
-Configure Clerk credentials in `apps/web/.env` and the API verifier credentials
-in `apps/api/.env` (see the [staging smoke runbook](docs/runbooks/staging-smoke.md)).
-Then start the standard Clerk-authenticated development stack from the repository
-root:
+Choose `AUTH_PROVIDER=clerk` or `AUTH_PROVIDER=supabase` as a deployment-level
+Compose variable, then configure only that provider's web and API values in the
+corresponding ignored `.env` files. See the
+[authentication architecture](docs/architecture/authentication.md) and
+[staging smoke runbook](docs/runbooks/staging-smoke.md). Start the development
+stack from the repository root:
 
 ```bash
-docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
+AUTH_PROVIDER=supabase docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
 
+This example selects Supabase. Omit the prefix to use the default Clerk adapter.
+
 Open [http://127.0.0.1:3000/activate](http://127.0.0.1:3000/activate).
-This uses Clerk for identity. The fake billing, carrier, telephony, and
-verification providers are separate from authentication; they do not create a
-synthetic user. It does not start the LiveKit voice agent.
+The fake billing, carrier, telephony, and verification providers are separate
+from authentication; they do not create a synthetic user. This command does not
+start the LiveKit voice agent.
 
 For a manual, provider-free local-auth test only, explicitly opt in to the
 development token:
 
 ```bash
-AUTH_MODE=local \
+AUTH_PROVIDER=local \
 LOCAL_AUTH_TOKEN=replace-with-a-development-only-token \
 docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
@@ -191,7 +198,7 @@ For real-provider configuration, follow the
 | Web | Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui |
 | API | Python 3.13, FastAPI, SQLAlchemy, Alembic, Pydantic |
 | Voice | LiveKit Agents, Speechmatics/Deepgram, Gemini, Speechmatics/ElevenLabs |
-| Providers | Clerk, Stripe, Telnyx |
+| Providers | Clerk or Supabase authentication, Stripe, Telnyx |
 | Data and jobs | PostgreSQL, Redis, ARQ, S3-compatible object storage |
 | Delivery | Docker Compose, GitHub Actions, OpenTelemetry, gitleaks, Trivy |
 
@@ -199,6 +206,7 @@ For real-provider configuration, follow the
 
 - [Detailed project status and roadmap](docs/PROJECT_STATUS.md)
 - [Architecture and runtime contract](docs/architecture/runtime-contract.md)
+- [Authentication architecture](docs/architecture/authentication.md)
 - [Integration endpoints](docs/architecture/integration-endpoints.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)

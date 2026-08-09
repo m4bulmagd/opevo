@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ClerkSecurityButton } from "@/components/account/clerk-security-button";
+import { ClerkSecurityButton } from "@/lib/auth/providers/clerk/security-button";
 
 const { openUserProfileMock } = vi.hoisted(() => ({ openUserProfileMock: vi.fn() }));
 

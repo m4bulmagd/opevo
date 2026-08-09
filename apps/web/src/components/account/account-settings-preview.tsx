@@ -4,7 +4,6 @@ import { type ReactNode, useState } from "react";
 
 import { RotateCcw } from "lucide-react";
 
-import { ClerkSecurityButton } from "@/components/account/clerk-security-button";
 import { CapabilityBadge } from "@/components/product/capability-badge";
 import { ProductSurface } from "@/components/product/product-surface";
 import { Button } from "@/components/ui/button";
@@ -12,7 +11,8 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Switch } from "@/components/ui/switch";
 
 type AccountSettingsPreviewProps = Readonly<{
-  securityMode: "clerk" | "unavailable";
+  securityControl: ReactNode;
+  securityMode: "managed" | "unavailable";
 }>;
 
 type PreviewPreferences = {
@@ -75,7 +75,7 @@ function PreferenceRow({
 
 const PREVIEW_DESCRIPTION = "Preview only. Changes stay local and reset on reload.";
 
-export function AccountSettingsPreview({ securityMode }: AccountSettingsPreviewProps) {
+export function AccountSettingsPreview({ securityControl, securityMode }: AccountSettingsPreviewProps) {
   const [preferences, setPreferences] = useState(INITIAL_PREFERENCES);
   const [status, setStatus] = useState("");
 
@@ -156,18 +156,18 @@ export function AccountSettingsPreview({ securityMode }: AccountSettingsPreviewP
         </label>
       </ProductSurface>
 
-      <ProductSurface description="Manage password and sign-in through Clerk." title="Security">
+      <ProductSurface description="Manage your password and sign-in methods." title="Security">
         <div className="divide-y divide-border">
           <div className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="font-medium text-sm">Password and sign-in</p>
               <p className="mt-0.5 text-text-secondary text-xs leading-relaxed">
-                {securityMode === "clerk"
-                  ? "Manage your hosted account credentials through Clerk."
-                  : "Password and sign-in methods are managed through Clerk in hosted accounts."}
+                {securityMode === "managed"
+                  ? "Manage the credentials for your hosted account."
+                  : "Password and sign-in controls are unavailable in local development."}
               </p>
             </div>
-            {securityMode === "clerk" ? <ClerkSecurityButton /> : null}
+            {securityMode === "managed" ? securityControl : null}
           </div>
           <PreferenceRow
             badge={<CapabilityBadge status="preview" />}

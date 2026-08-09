@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncEngine
 
-    from app.core.auth import AuthProvider
+    from app.auth.providers.base import AuthProvider
     from app.core.database import AsyncSessionFactory
     from app.core.observability import Observability
     from app.providers.storage.base import StorageProvider

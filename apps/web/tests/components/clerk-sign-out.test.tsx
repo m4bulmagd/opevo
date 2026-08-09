@@ -3,7 +3,7 @@ import type { ReactElement, ReactNode } from "react";
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ClerkSignOut } from "@/components/auth/clerk-sign-out";
+import { ClerkSignOut } from "@/lib/auth/providers/clerk/sign-out";
 
 vi.mock("@clerk/nextjs", async () => {
   const { Children, cloneElement } = await import("react");

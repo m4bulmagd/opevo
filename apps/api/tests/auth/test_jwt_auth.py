@@ -29,7 +29,7 @@ EXPLICIT_DISPATCH_SECRET = (
 
 
 @pytest.mark.anyio
-async def test_rejected_clerk_token_logs_only_safe_fixed_fields(
+async def test_rejected_auth_token_logs_only_safe_fixed_fields(
     async_client,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -65,7 +65,7 @@ async def test_rejected_clerk_token_logs_only_safe_fixed_fields(
         token,
     ):
         assert sentinel not in caplog.text
-    assert "event=clerk_token_rejected" in caplog.text
+    assert "event=auth_token_rejected" in caplog.text
     assert "operation=verify_token" in caplog.text
     assert "reason=authorized_party" in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
@@ -436,4 +436,4 @@ async def test_protected_route_rejects_token_without_local_user(
     )
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "User not synced"}
+    assert response.json() == {"detail": "Invalid token"}

@@ -375,7 +375,7 @@ async def _seed_verification_dispatch(
 ):
     user = User(
         id=user_id,
-        clerk_user_id="verification-dispatch-owner",
+        external_user_id="verification-dispatch-owner",
         email="verification-dispatch-owner@example.invalid",
     )
     db_session.add(user)

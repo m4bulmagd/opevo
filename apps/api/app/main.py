@@ -91,7 +91,8 @@ def create_app(
     application.include_router(readiness_router)
     if configured_settings.realtime_enabled:
         application.include_router(websocket_router)
-    application.include_router(clerk_webhook_router)
+    if configured_settings.auth_provider == "clerk":
+        application.include_router(clerk_webhook_router)
     application.include_router(livekit_webhook_router)
     application.include_router(stripe_webhook_router)
     return application

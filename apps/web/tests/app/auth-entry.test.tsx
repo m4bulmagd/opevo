@@ -6,7 +6,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const authState = vi.hoisted(() => ({
-  authMode: "clerk" as "clerk" | "local",
+  authProvider: "clerk" as "clerk" | "local",
   redirectMock: vi.fn(() => {
     throw new Error("NEXT_REDIRECT");
   }),
@@ -31,9 +31,9 @@ vi.mock("next/navigation", () => ({
   redirect: authState.redirectMock,
 }));
 
-vi.mock("@/lib/auth/clerk-config", () => ({
-  get authMode() {
-    return authState.authMode;
+vi.mock("@/lib/auth/auth-config", () => ({
+  get authProvider() {
+    return authState.authProvider;
   },
 }));
 
@@ -43,7 +43,7 @@ vi.mock("@clerk/nextjs", () => ({
 }));
 
 beforeEach(() => {
-  authState.authMode = "clerk";
+  authState.authProvider = "clerk";
   authState.redirectMock.mockClear();
   authState.signInMock.mockClear();
   authState.signUpMock.mockClear();
@@ -88,7 +88,7 @@ describe("hosted auth entry", () => {
     ["sign-in", () => import("@/app/(auth)/sign-in/[[...sign-in]]/page")],
     ["sign-up", () => import("@/app/(auth)/sign-up/[[...sign-up]]/page")],
   ])("keeps local %s on the authoritative activation route", async (_label, loadPage) => {
-    authState.authMode = "local";
+    authState.authProvider = "local";
     const { default: AuthPage } = await loadPage();
 
     await expect(AuthPage()).rejects.toThrow("NEXT_REDIRECT");

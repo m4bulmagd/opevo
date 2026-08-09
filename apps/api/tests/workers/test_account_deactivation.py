@@ -185,7 +185,7 @@ async def _seed_operation(
 ) -> SeededOperation:
     async with session_factory() as session:
         user = User(
-            clerk_user_id=f"deactivation-{completed_steps}-{trigger}-{active_call}",
+            external_user_id=f"deactivation-{completed_steps}-{trigger}-{active_call}",
             email=f"deactivation-{completed_steps}-{trigger}-{active_call}@example.com",
             status="deactivating",
             lifecycle_generation=2,
@@ -584,7 +584,7 @@ async def test_real_subscription_ended_request_disables_before_drain_and_release
 ) -> None:
     async with deactivation_session_factory() as session:
         user = User(
-            clerk_user_id="real-subscription-ended",
+            external_user_id="real-subscription-ended",
             email="real-subscription-ended@example.com",
             status="active",
         )
@@ -1122,12 +1122,12 @@ async def test_observability_snapshot_aggregates_only_safe_operation_dimensions(
 ) -> None:
     async with deactivation_session_factory() as session:
         owner = User(
-            clerk_user_id="snapshot-owner",
+            external_user_id="snapshot-owner",
             email="snapshot-owner@example.com",
             status="deactivating",
         )
         ended = User(
-            clerk_user_id="snapshot-ended",
+            external_user_id="snapshot-ended",
             email="snapshot-ended@example.com",
             status="deactivating",
         )

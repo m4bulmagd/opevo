@@ -96,7 +96,7 @@ def test_verification_source_presence_check_preserves_static_key_bytes() -> None
     ],
 )
 def test_jwks_endpoint_requires_safe_absolute_https_url(url: str) -> None:
-    with pytest.raises(ValueError, match="invalid Clerk JWKS URL") as exc_info:
+    with pytest.raises(ValueError, match="invalid HTTPS URL") as exc_info:
         validate_absolute_https_url(url)
     assert url not in str(exc_info.value)
 
@@ -104,7 +104,7 @@ def test_jwks_endpoint_requires_safe_absolute_https_url(url: str) -> None:
 def _settings(**updates: object) -> Settings:
     values: dict[str, object] = {
         "app_env": "test",
-        "auth_mode": "clerk",
+        "auth_provider": "clerk",
         "database_url": "sqlite+aiosqlite://",
         "redis_url": "redis://localhost:6379/0",
         "clerk_issuer": "https://clerk.example.com",
@@ -144,7 +144,7 @@ def test_local_development_does_not_require_clerk_configuration() -> None:
     validate_api_runtime(
         _settings(
             app_env="development",
-            auth_mode="local",
+            auth_provider="local",
             clerk_issuer="",
             clerk_authorized_parties=None,
             clerk_jwt_key=None,

@@ -7,7 +7,7 @@ def _settings(*, app_env: str) -> Settings:
         app_env=app_env,
         database_url="sqlite+aiosqlite://",
         redis_url="redis://localhost:6379/0",
-        auth_mode="clerk",
+        auth_provider="clerk",
         agent_dispatch_jwt_secret="test-dispatch-secret-with-at-least-32-bytes",
     )
 

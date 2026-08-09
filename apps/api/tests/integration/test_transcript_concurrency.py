@@ -75,7 +75,7 @@ async def _create_call(factory: async_sessionmaker[AsyncSession]) -> Call:
     suffix = uuid4().hex
     async with factory() as session:
         user = User(
-            clerk_user_id=f"transcript_concurrency_{suffix}",
+            external_user_id=f"transcript_concurrency_{suffix}",
             email=f"transcript-concurrency-{suffix}@example.com",
         )
         session.add(user)

@@ -281,14 +281,14 @@ def sqlite_session() -> Session:
 
 
 def _sync_user(sqlite_session: Session, *, suffix: str) -> User:
-    user = User(clerk_user_id=f"user_{suffix}", email=f"{suffix}@example.com")
+    user = User(external_user_id=f"user_{suffix}", email=f"{suffix}@example.com")
     sqlite_session.add(user)
     sqlite_session.flush()
     return user
 
 
 async def _async_user(db_session: AsyncSession, *, suffix: str) -> User:
-    user = User(clerk_user_id=f"user_{suffix}", email=f"{suffix}@example.com")
+    user = User(external_user_id=f"user_{suffix}", email=f"{suffix}@example.com")
     db_session.add(user)
     await db_session.flush()
     return user
@@ -616,7 +616,7 @@ async def test_webhook_duplicate_keeps_outer_transaction_usable(
     ) is True
     await db_session.commit()
 
-    outer_user = User(clerk_user_id="outer_user", email="outer@example.com")
+    outer_user = User(external_user_id="outer_user", email="outer@example.com")
     db_session.add(outer_user)
     assert await repository.record_if_new(
         provider="stripe",

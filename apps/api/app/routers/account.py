@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.auth.domain import AuthenticatedUser
+from app.core.auth import require_user_identity
 from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.core.rate_limit import limiter
@@ -27,7 +28,7 @@ def get_account_lifecycle_service(
 
 @router.get("", response_model=AccountStatusResponse)
 async def get_account(
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: AccountLifecycleService = Depends(get_account_lifecycle_service),
 ) -> AccountStatusResponse:
     return await service.get_account(identity.internal_user_id)
@@ -42,7 +43,7 @@ async def get_account(
 async def deactivate_account(
     request: Request,
     payload: AccountDeactivateRequest,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: AccountLifecycleService = Depends(get_account_lifecycle_service),
 ) -> AccountStatusResponse:
     return await service.request_owner_deactivation(

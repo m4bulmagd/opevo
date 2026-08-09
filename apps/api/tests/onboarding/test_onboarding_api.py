@@ -6,7 +6,7 @@ import pytest
 from conftest import install_test_api_runtime
 from fastapi import HTTPException
 
-from app.core.auth import UserIdentity
+from app.auth.domain import AuthenticatedUser
 from app.services.customer_readiness_policy import (
     CustomerReadinessStage,
     ReadinessBlocker,
@@ -63,8 +63,7 @@ async def test_get_onboarding_status_returns_expected_fields() -> None:
     from app.routers.onboarding import get_onboarding_status
 
     response = await get_onboarding_status(
-        identity=UserIdentity(
-            clerk_user_id="user_123",
+        identity=AuthenticatedUser(
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
         service=FakeOnboardingService(),
@@ -93,8 +92,7 @@ async def test_retry_provisioning_enqueues_job() -> None:
     pool = FakeArqPool()
     response = await retry_provisioning(
         request=_fake_request_with_pool(pool),
-        identity=UserIdentity(
-            clerk_user_id="user_123",
+        identity=AuthenticatedUser(
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
         service=FakeOnboardingService(),
@@ -111,8 +109,7 @@ async def test_retry_provisioning_rejects_non_retryable_state() -> None:
     with pytest.raises(HTTPException) as exc_info:
         await retry_provisioning(
             request=_fake_request_with_pool(FakeArqPool()),
-            identity=UserIdentity(
-                clerk_user_id="user_123",
+            identity=AuthenticatedUser(
                 internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
             ),
             service=FakeRejectingOnboardingService(),

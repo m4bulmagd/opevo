@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.auth.domain import AuthenticatedUser
+from app.core.auth import require_user_identity
 from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.schemas.activation import ActivationSnapshotResponse
@@ -29,7 +30,7 @@ def get_onboarding_service(
 
 @router.get("", response_model=OnboardingStatusResponse)
 async def get_onboarding_status(
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: OnboardingService = Depends(get_onboarding_service),
 ) -> OnboardingStatusResponse:
     return await service.get_status(identity.internal_user_id)
@@ -42,7 +43,7 @@ async def get_onboarding_status(
 )
 async def retry_provisioning(
     request: Request,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: OnboardingService = Depends(get_onboarding_service),
 ) -> ActivationSnapshotResponse:
     try:

@@ -30,21 +30,21 @@ async def _seed_blocked_user(
     *,
     status: str,
 ) -> tuple[str, str]:
-    clerk_user_id = f"blocked_{status}"
+    external_user_id = f"blocked_{status}"
     email = f"blocked-{status}@example.invalid"
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         session.add(
             User(
-                clerk_user_id=clerk_user_id,
+                external_user_id=external_user_id,
                 email=email,
                 status=status,
             )
         )
         await session.commit()
     await engine.dispose()
-    return clerk_user_id, email
+    return external_user_id, email
 
 
 async def _mutation_counts(database_url: str) -> Mapping[str, int]:
@@ -86,7 +86,7 @@ async def test_blocked_owner_mutation_returns_stable_conflict_without_writes(
     path: str,
     payload: dict[str, object] | None,
 ) -> None:
-    clerk_user_id, _email = await _seed_blocked_user(
+    external_user_id, _email = await _seed_blocked_user(
         client_database_url,
         status=status,
     )
@@ -96,7 +96,7 @@ async def test_blocked_owner_mutation_returns_stable_conflict_without_writes(
         method,
         path,
         headers={
-            "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+            "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
         },
         json=payload,
     )
@@ -112,12 +112,12 @@ async def test_inactive_owner_can_read_billing_and_account_state(
     client_database_url: str,
     rs256_clerk_token_for,
 ) -> None:
-    clerk_user_id, _email = await _seed_blocked_user(
+    external_user_id, _email = await _seed_blocked_user(
         client_database_url,
         status="inactive",
     )
     headers = {
-        "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+        "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
     }
 
     account = await async_client.get("/api/account", headers=headers)

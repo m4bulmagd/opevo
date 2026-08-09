@@ -23,7 +23,7 @@ class SecretBearingObject:
 
 
 def test_safe_log_label_allows_only_fixed_auth_token_labels() -> None:
-    assert safe_log_label("clerk_token_rejected") == "clerk_token_rejected"
+    assert safe_log_label("auth_token_rejected") == "auth_token_rejected"
     assert safe_log_label("verify_token") == "verify_token"
     assert safe_log_label("JWT_TOKEN_SENTINEL") is None
     assert safe_log_label("customer_token_value") is None

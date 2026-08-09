@@ -5,10 +5,11 @@ from collections.abc import Callable, Sequence
 import httpx
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
 from opentelemetry import metrics, trace
 
 from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
-from app.core.clerk_jwks import JwksSigningKeyResolver, StaticSigningKeyResolver
+from app.auth.jwks import JwksSigningKeyResolver, StaticSigningKeyResolver
 from app.core.observability import Observability
 
 
@@ -210,6 +211,7 @@ def resolver_for(
     monotonic: Callable[[], float] | None = None,
     total_timeout_seconds: float = 2.0,
     observability: Observability | None = None,
+    allowed_algorithms: frozenset[str] = frozenset({"RS256"}),
 ) -> JwksSigningKeyResolver:
     return JwksSigningKeyResolver(
         jwks_url=JWKS_URL,
@@ -219,6 +221,7 @@ def resolver_for(
         read_timeout_seconds=0.5,
         pool_timeout_seconds=0.1,
         total_timeout_seconds=total_timeout_seconds,
+        allowed_algorithms=allowed_algorithms,
         observability=observability
         or Observability(
             meter=metrics.get_meter(__name__), tracer=trace.get_tracer(__name__)
@@ -226,6 +229,27 @@ def resolver_for(
         transport=transport,
         **({} if monotonic is None else {"monotonic": monotonic}),
     )
+
+
+@pytest.mark.anyio
+async def test_resolver_accepts_configured_supabase_es256_key() -> None:
+    public_key = ec.generate_private_key(ec.SECP256R1()).public_key()
+    jwk = jwt.algorithms.ECAlgorithm.to_jwk(public_key, as_dict=True)
+    jwk.update(kid="supabase-key", alg="ES256", use="sig")
+    transport = CountingTransport(
+        httpx.Response(200, json={"keys": [jwk]})
+    )
+    resolver = resolver_for(
+        transport=transport,
+        allowed_algorithms=frozenset({"ES256", "RS256"}),
+    )
+
+    key = await resolver.resolve_key(
+        unsigned_token(headers={"alg": "ES256", "kid": "supabase-key"})
+    )
+
+    assert key.algorithm_name == "ES256"
+    await resolver.aclose()
 
 
 @pytest.mark.anyio

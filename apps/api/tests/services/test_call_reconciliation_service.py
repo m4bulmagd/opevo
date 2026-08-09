@@ -28,7 +28,7 @@ def test_reconciliation_module_exists() -> None:
 
 async def _user(db_session, suffix: str) -> User:
     user = User(
-        clerk_user_id=f"reconcile_{suffix}",
+        external_user_id=f"reconcile_{suffix}",
         email=f"reconcile_{suffix}@example.com",
     )
     db_session.add(user)

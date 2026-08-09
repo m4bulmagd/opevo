@@ -1,9 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const clerkAuthMock = vi.fn();
+const supabaseGetClaimsMock = vi.fn();
+const supabaseGetSessionMock = vi.fn();
 
 vi.mock("@clerk/nextjs/server", () => ({
   auth: clerkAuthMock,
+}));
+
+vi.mock("@/lib/auth/providers/supabase/server-client", () => ({
+  createSupabaseServerClient: vi.fn(async () => ({
+    auth: {
+      getClaims: supabaseGetClaimsMock,
+      getSession: supabaseGetSessionMock,
+    },
+  })),
 }));
 
 async function importServerSession() {
@@ -15,26 +26,27 @@ describe("server session selection", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     clerkAuthMock.mockReset();
+    supabaseGetClaimsMock.mockReset();
+    supabaseGetSessionMock.mockReset();
     vi.resetModules();
   });
 
   it("returns the fixed local session only on the server", async () => {
     vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "local");
+    vi.stubEnv("AUTH_PROVIDER", "local");
     vi.stubEnv("LOCAL_AUTH_TOKEN", "opevo-local-development-token");
 
     const { getServerSessionState } = await importServerSession();
     const session = await getServerSessionState();
 
     expect(session.isAuthenticated).toBe(true);
-    expect(session.userId).toBe("local_opevo_user");
     expect(await session.getToken()).toBe("opevo-local-development-token");
     expect(clerkAuthMock).not.toHaveBeenCalled();
   });
 
   it("fails closed when local mode has no server token", async () => {
     vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "local");
+    vi.stubEnv("AUTH_PROVIDER", "local");
     vi.stubEnv("LOCAL_AUTH_TOKEN", "  ");
 
     const { getServerSessionState } = await importServerSession();
@@ -44,7 +56,7 @@ describe("server session selection", () => {
 
   it("fails closed when the local server token is padded", async () => {
     vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "local");
+    vi.stubEnv("AUTH_PROVIDER", "local");
     vi.stubEnv("LOCAL_AUTH_TOKEN", " padded-local-token ");
 
     const { getServerSessionState } = await importServerSession();
@@ -54,7 +66,7 @@ describe("server session selection", () => {
 
   it("cannot construct a server session module with incomplete Clerk configuration", async () => {
     vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "clerk");
+    vi.stubEnv("AUTH_PROVIDER", "clerk");
     vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "");
     vi.stubEnv("CLERK_SECRET_KEY", "");
     vi.stubEnv("API_BASE_URL", "http://api:8000");
@@ -64,7 +76,7 @@ describe("server session selection", () => {
 
   it("uses Clerk when Clerk mode is configured", async () => {
     vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "clerk");
+    vi.stubEnv("AUTH_PROVIDER", "clerk");
     vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "pk_test_session");
     vi.stubEnv("CLERK_SECRET_KEY", "sk_test_session");
     const getToken = vi.fn().mockResolvedValue("clerk-session-token");
@@ -74,13 +86,32 @@ describe("server session selection", () => {
     const session = await getServerSessionState();
 
     expect(session.isAuthenticated).toBe(true);
-    expect(session.userId).toBe("user_123");
     expect(await session.getToken()).toBe("clerk-session-token");
+  });
+
+  it("uses a verified Supabase cookie session and returns only its access token", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("AUTH_PROVIDER", "supabase");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://project.supabase.co");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "sb_publishable_test");
+    supabaseGetClaimsMock.mockResolvedValue({ data: { claims: { sub: "supabase-user" } }, error: null });
+    supabaseGetSessionMock.mockResolvedValue({
+      data: { session: { access_token: "supabase-session-token" } },
+      error: null,
+    });
+
+    const { getServerSessionState } = await importServerSession();
+    const session = await getServerSessionState();
+
+    expect(session.isAuthenticated).toBe(true);
+    expect(await session.getToken()).toBe("supabase-session-token");
+    expect(session).not.toHaveProperty("userId");
+    expect(clerkAuthMock).not.toHaveBeenCalled();
   });
 
   it("requires both an authenticated identity and token for server requests", async () => {
     vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "clerk");
+    vi.stubEnv("AUTH_PROVIDER", "clerk");
     vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "pk_test_session");
     vi.stubEnv("CLERK_SECRET_KEY", "sk_test_session");
     clerkAuthMock.mockResolvedValue({ userId: "user_123", getToken: vi.fn().mockResolvedValue(null) });

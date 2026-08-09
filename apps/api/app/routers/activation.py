@@ -3,7 +3,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.auth.domain import AuthenticatedUser
+from app.core.auth import require_user_identity
 from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.core.dispatch_token import (
@@ -106,7 +107,7 @@ def get_forwarding_verification_service(
 
 @router.get("/api/activation", response_model=ActivationSnapshotResponse)
 async def get_activation(
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: ActivationSnapshotService = Depends(get_activation_snapshot_service),
 ) -> ActivationSnapshotResponse:
     return await _get_activation_snapshot(identity.internal_user_id, service)
@@ -115,7 +116,7 @@ async def get_activation(
 @router.put("/api/business-profile", response_model=BusinessProfileResponse)
 async def put_business_profile(
     payload: BusinessProfileDraft,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: BusinessProfileService = Depends(get_business_profile_service),
 ) -> BusinessProfileResponse:
     try:
@@ -137,7 +138,7 @@ async def put_business_profile(
     response_model=CarrierLookupResponse,
 )
 async def lookup_carrier(
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: CarrierLookupService = Depends(get_carrier_lookup_service),
 ) -> CarrierLookupResponse:
     try:
@@ -160,7 +161,7 @@ async def lookup_carrier(
     response_model=ActivationSnapshotResponse,
 )
 async def confirm_profile(
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     command_service: BusinessProfileService = Depends(get_business_profile_service),
     snapshot_service: ActivationSnapshotService = Depends(
         get_activation_snapshot_service
@@ -187,7 +188,7 @@ async def confirm_profile(
 )
 async def confirm_provisioning(
     request: Request,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: ActivationProvisioningService = Depends(
         get_activation_provisioning_service
     ),
@@ -210,7 +211,7 @@ async def confirm_provisioning(
 )
 async def retry_provisioning(
     request: Request,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: ActivationProvisioningService = Depends(
         get_activation_provisioning_service
     ),
@@ -231,7 +232,7 @@ async def retry_provisioning(
     response_model=ActivationSnapshotResponse,
 )
 async def open_verification_window(
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: ForwardingVerificationService = Depends(
         get_forwarding_verification_service
     ),
@@ -258,7 +259,7 @@ async def open_verification_window(
 )
 async def go_live(
     request: Request,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: ActivationGoLiveService = Depends(get_activation_go_live_service),
 ) -> ActivationSnapshotResponse:
     try:

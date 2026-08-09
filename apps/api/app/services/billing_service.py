@@ -160,22 +160,16 @@ class BillingService:
             )
         )
         metadata = event_object.get("metadata", {})
-        clerk_user_id = metadata.get("clerk_user_id")
-        discovered_user = (
-            await self.user_repository.get_by_clerk_user_id(clerk_user_id)
-            if clerk_user_id
-            else None
-        )
-        user_id = (
-            discovered_user.id if discovered_user is not None else existing_user_id
-        )
+        owner_metadata_present, metadata_user_id = self._metadata_user_id(metadata)
+        if owner_metadata_present and metadata_user_id is None:
+            return
+        user_id = metadata_user_id or existing_user_id
         if user_id is None:
+            return
+        if existing_user_id is not None and existing_user_id != user_id:
             return
         user = await self.user_repository.get_by_id_for_update(user_id)
         if user is None:
-            return
-        owner_metadata_present, metadata_user_id = self._metadata_user_id(metadata)
-        if owner_metadata_present and metadata_user_id != user.id:
             return
         current_subscription = (
             await self.subscription_repository.get_by_user_id_for_update(user_id)
@@ -513,6 +507,7 @@ class BillingService:
             subscription = await self._bootstrap_subscription_from_invoice(
                 subscription_id,
                 event_object,
+                user_id=user_id,
                 event_created_at=event_created_at,
                 lifecycle_generation=lifecycle_generation,
             )
@@ -573,6 +568,7 @@ class BillingService:
             subscription = await self._bootstrap_subscription_from_invoice(
                 subscription_id,
                 event_object,
+                user_id=user_id,
                 status="past_due",
                 event_created_at=event_created_at,
                 lifecycle_generation=lifecycle_generation,
@@ -597,15 +593,12 @@ class BillingService:
         subscription_id: str,
         event_object: dict,
         *,
+        user_id: UUID,
         status: str = "active",
         event_created_at: datetime,
         lifecycle_generation: int,
     ):
-        clerk_user_id = self._extract_invoice_clerk_user_id(event_object)
-        if not clerk_user_id:
-            return None
-
-        user = await self.user_repository.get_by_clerk_user_id(clerk_user_id)
+        user = await self.user_repository.get_by_id(user_id)
         if user is None:
             return None
 
@@ -628,32 +621,33 @@ class BillingService:
             lifecycle_generation=lifecycle_generation,
         )
 
-    async def _invoice_user_id(self, event_object: dict):
-        clerk_user_id = self._extract_invoice_clerk_user_id(event_object)
-        if not clerk_user_id:
-            return None
-        user = await self.user_repository.get_by_clerk_user_id(clerk_user_id)
-        return user.id if user is not None else None
-
     async def _resolve_current_invoice_context(
         self,
         event_object: dict,
         *,
         subscription_id: str,
     ) -> tuple[UUID, int] | None:
-        user_id = await self._invoice_user_id(event_object)
-        if user_id is None:
-            user_id = await self.subscription_repository.get_user_id_by_stripe_subscription_id(
+        owner_metadata_present, metadata_user_id = self._invoice_metadata_user_id(
+            event_object
+        )
+        existing_user_id = (
+            await self.subscription_repository.get_user_id_by_stripe_subscription_id(
                 subscription_id
             )
+        )
+        if (
+            owner_metadata_present
+            and metadata_user_id is not None
+            and existing_user_id is not None
+            and metadata_user_id != existing_user_id
+        ):
+            return None
+        user_id = metadata_user_id or existing_user_id
         if user_id is None:
             return None
         user = await self.user_repository.get_by_id_for_update(user_id)
         if user is None:
             return None
-        owner_metadata_present, metadata_user_id = self._invoice_metadata_user_id(
-            event_object
-        )
         if owner_metadata_present and metadata_user_id != user.id:
             return None
         metadata_generation = self._invoice_lifecycle_generation(event_object)
@@ -786,17 +780,6 @@ class BillingService:
             if lookup_key:
                 return lookup_key
         return None
-
-    @staticmethod
-    def _extract_invoice_clerk_user_id(event_object: dict) -> str | None:
-        subscription_details = event_object.get("parent", {}).get(
-            "subscription_details", {}
-        )
-        metadata = subscription_details.get("metadata", {})
-        clerk_user_id = metadata.get("clerk_user_id")
-        if clerk_user_id:
-            return clerk_user_id
-        return event_object.get("metadata", {}).get("clerk_user_id")
 
     @staticmethod
     def _extract_invoice_plan_tier_from_metadata(event_object: dict) -> str | None:

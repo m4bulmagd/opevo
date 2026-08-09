@@ -75,7 +75,7 @@ _SAFE_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _SAFE_FIXED_AUTH_LABELS = frozenset(
     {
-        "clerk_token_rejected",
+        "auth_token_rejected",
         "verify_token",
     }
 )

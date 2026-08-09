@@ -53,7 +53,6 @@ class BillingSessionService:
         *,
         user_id: str,
         customer_email: str,
-        clerk_user_id: str,
         plan_tier: str,
         lifecycle_generation: int,
         customer_id: str | None = None,
@@ -62,7 +61,6 @@ class BillingSessionService:
     ) -> HostedSession:
         price_id = self._resolve_price_id(plan_tier)
         metadata = {
-            "clerk_user_id": clerk_user_id,
             "user_id": user_id,
             "plan_tier": plan_tier,
             "lifecycle_generation": str(lifecycle_generation),

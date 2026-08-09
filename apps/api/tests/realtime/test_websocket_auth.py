@@ -1,6 +1,7 @@
 import pytest
+from uuid import UUID
 
-from app.core.auth import AuthProvider, UserIdentity
+from app.auth.domain import AuthenticatedUser
 from app.core.redis import RedisEventBus
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import WebSocketManager
@@ -26,9 +27,11 @@ class FakeObservability:
         pass
 
 
-class FakeAuthProvider(AuthProvider):
-    async def verify_token(self, token: str) -> UserIdentity:
-        return UserIdentity(clerk_user_id="user_ws_test")
+class FakeAuthenticator:
+    async def authenticate(self, token: str) -> AuthenticatedUser:
+        return AuthenticatedUser(
+            internal_user_id=UUID("00000000-0000-0000-0000-000000000123")
+        )
 
 
 class FakeRedis:
@@ -40,7 +43,7 @@ async def test_websocket_requires_auth_message_before_events() -> None:
     websocket = FakeWebSocket()
 
     service = RealtimeService(
-        auth_provider=FakeAuthProvider(),
+        authenticator=FakeAuthenticator(),
         event_bus=RedisEventBus(FakeRedis()),
         websocket_manager=WebSocketManager(),
         observability=FakeObservability(),

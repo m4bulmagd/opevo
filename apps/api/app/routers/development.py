@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.auth.domain import AuthenticatedUser
+from app.core.auth import require_user_identity
 from app.core.config import Settings
 from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
@@ -70,7 +71,7 @@ def _require_fake_telephony(request: Request) -> None:
 
 def _require_local_call_fixture(request: Request) -> None:
     settings = _request_settings(request)
-    if settings.auth_mode != "local" or settings.telephony_mode != "fake":
+    if settings.auth_provider != "local" or settings.telephony_mode != "fake":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "local_telephony_disabled"},
@@ -83,7 +84,7 @@ def _require_local_call_fixture(request: Request) -> None:
 )
 async def activate_starter(
     request: Request,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: LocalBillingService = Depends(get_local_billing_service),
     snapshot_service: ActivationSnapshotService = Depends(
         get_development_activation_snapshot_service
@@ -114,7 +115,7 @@ async def activate_starter(
 )
 async def simulate_forwarded_call(
     request: Request,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: ForwardingVerificationService = Depends(
         get_development_forwarding_verification_service
     ),
@@ -141,7 +142,7 @@ async def simulate_forwarded_call(
 )
 async def start_call_drain_fixture(
     request: Request,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     session: AsyncSession = Depends(get_session),
 ) -> CallDrainFixtureResponse:
     _require_local_call_fixture(request)
@@ -177,7 +178,7 @@ async def start_call_drain_fixture(
 async def finish_call_drain_fixture(
     payload: CallDrainFixturePayload,
     request: Request,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     session: AsyncSession = Depends(get_session),
 ) -> CallDrainFixtureResponse:
     _require_local_call_fixture(request)

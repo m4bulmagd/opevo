@@ -1,7 +1,10 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.auth.failures import UserNotProvisioned
 from app.composition.runtime import get_api_runtime
 from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
+
+
 router = APIRouter(tags=["websocket"])
 
 
@@ -22,7 +25,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             message = await websocket.receive_json()
             if message.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
-    except TokenRejected:
+    except (TokenRejected, UserNotProvisioned):
         await websocket.send_json({"type": "error", "detail": "invalid_token"})
         await websocket.close(code=1008)
     except AuthenticationUnavailable:

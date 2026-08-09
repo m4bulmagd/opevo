@@ -267,7 +267,7 @@ async def test_locked_activation_repositories_get_or_create_one_row(
     )
 
     user = User(
-        clerk_user_id=f"activation_repo_{uuid4().hex}",
+        external_user_id=f"activation_repo_{uuid4().hex}",
         email=f"activation_repo_{uuid4().hex}@example.com",
     )
     db_session.add(user)
@@ -295,7 +295,7 @@ async def test_activation_event_append_returns_existing_idempotent_event(
     )
 
     user = User(
-        clerk_user_id=f"activation_event_{uuid4().hex}",
+        external_user_id=f"activation_event_{uuid4().hex}",
         email=f"activation_event_{uuid4().hex}@example.com",
     )
     db_session.add(user)

@@ -1,8 +1,9 @@
 import "server-only";
 
-import { authMode } from "@/lib/auth/clerk-config";
-
-const LOCAL_USER_ID = "local_opevo_user";
+import { authProvider } from "@/lib/auth/auth-config";
+import { getClerkServerSession } from "@/lib/auth/providers/clerk/server-session";
+import { getLocalServerSession } from "@/lib/auth/providers/local/server-session";
+import { getSupabaseServerSession } from "@/lib/auth/providers/supabase/server-session";
 
 export class ServerSessionRequiredError extends Error {
   constructor() {
@@ -12,34 +13,19 @@ export class ServerSessionRequiredError extends Error {
 }
 
 export async function getServerSessionState() {
-  if (authMode === "local") {
-    const token = process.env.LOCAL_AUTH_TOKEN;
-
-    if (!token || token !== token.trim()) {
-      throw new Error("LOCAL_AUTH_TOKEN is required when AUTH_MODE=local");
-    }
-
-    return {
-      isAuthenticated: true,
-      userId: LOCAL_USER_ID,
-      getToken: async () => token,
-    };
+  if (authProvider === "local") {
+    return getLocalServerSession();
   }
-
-  const { auth } = await import("@clerk/nextjs/server");
-  const session = await auth();
-
-  return {
-    isAuthenticated: Boolean(session.userId),
-    userId: session.userId,
-    getToken: session.getToken,
-  };
+  if (authProvider === "supabase") {
+    return getSupabaseServerSession();
+  }
+  return getClerkServerSession();
 }
 
 export async function requireServerSession() {
   const session = await getServerSessionState();
 
-  if (!session.isAuthenticated || !session.userId) {
+  if (!session.isAuthenticated) {
     throw new ServerSessionRequiredError();
   }
 
@@ -49,5 +35,5 @@ export async function requireServerSession() {
     throw new ServerSessionRequiredError();
   }
 
-  return { userId: session.userId, token };
+  return { token };
 }

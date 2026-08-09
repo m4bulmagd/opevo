@@ -72,7 +72,7 @@ describe("account page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getActivationSnapshotMock.mockResolvedValue(activationSnapshot());
-    resolveAccountIdentityMock.mockResolvedValue({ email: "maya@opevo.test", securityMode: "clerk" });
+    resolveAccountIdentityMock.mockResolvedValue({ email: "maya@opevo.test", securityMode: "managed" });
     deactivateAccountMock.mockResolvedValue(undefined);
     reactivateAccountMock.mockResolvedValue({
       status: "success",
@@ -134,7 +134,7 @@ describe("account page", () => {
       unexpected: "Email is temporarily unavailable.",
     },
     {
-      securityMode: "clerk" as const,
+      securityMode: "managed" as const,
       expected: "Email is temporarily unavailable.",
       unexpected: "Email unavailable in local development",
     },
@@ -153,7 +153,7 @@ describe("account page", () => {
 
   it("keeps unsupported notification, privacy, and MFA preferences visibly local-only and resets without fetching", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    render(<AccountSettingsPreview securityMode="unavailable" />);
+    render(<AccountSettingsPreview securityControl={null} securityMode="unavailable" />);
 
     const notifications = screen.getByRole("region", { name: "Notifications Preview" });
     const privacy = screen.getByRole("region", { name: "Privacy & recordings Preview" });
@@ -164,7 +164,7 @@ describe("account page", () => {
     }
     expect(security.querySelector('[data-capability-status="preview"]')).toBeVisible();
     expect(
-      within(security).getByText("Password and sign-in methods are managed through Clerk in hosted accounts."),
+      within(security).getByText("Password and sign-in controls are unavailable in local development."),
     ).toBeVisible();
     expect(within(security).queryByRole("button", { name: "Manage password and sign-in" })).not.toBeInTheDocument();
     expect(security).not.toHaveTextContent(/saved|enabled|updated successfully/i);
@@ -186,11 +186,16 @@ describe("account page", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("limits Preview copy to MFA while Clerk password management remains live", () => {
-    render(<AccountSettingsPreview securityMode="clerk" />);
+  it("limits Preview copy to MFA while hosted password management remains live", () => {
+    render(
+      <AccountSettingsPreview
+        securityControl={<button type="button">Manage password and sign-in</button>}
+        securityMode="managed"
+      />,
+    );
 
     const security = screen.getByRole("region", { name: "Security" });
-    expect(security).toHaveAccessibleDescription("Manage password and sign-in through Clerk.");
+    expect(security).toHaveAccessibleDescription("Manage your password and sign-in methods.");
     expect(within(security).getByRole("button", { name: "Manage password and sign-in" })).toBeVisible();
 
     const mfaRow = within(security).getByText("Two-factor authentication").closest(".grid");

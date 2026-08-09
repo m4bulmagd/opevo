@@ -15,7 +15,7 @@ from app.repositories.phone_number_provisioning_repository import (
 async def _user(db_session: AsyncSession, label: str) -> User:
     marker = f"{label}-{uuid4().hex}"
     user = User(
-        clerk_user_id=f"provisioning-repository-{marker}",
+        external_user_id=f"provisioning-repository-{marker}",
         email=f"{marker}@example.com",
     )
     db_session.add(user)

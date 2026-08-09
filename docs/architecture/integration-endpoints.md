@@ -15,10 +15,12 @@ ownership, idempotency, and lifecycle constraints.
 
 ## Customer APIs
 
-In a standard deployed environment, all customer APIs require a Clerk bearer
-token that resolves to a synced local user. The explicitly provider-free local
-development mode uses its documented local token instead. Account-state policy
-may additionally reject mutations while an account is `deactivating` or
+In a standard deployed environment, all customer APIs require a bearer token
+from the deployment's selected authentication provider. The adapter verifies
+the token and the shared authentication service resolves it to one internal
+user UUID before the request reaches domain work. The explicitly provider-free
+local development mode uses its documented local token instead. Account-state
+policy may additionally reject mutations while an account is `deactivating` or
 `inactive`.
 
 ### Agent configuration
@@ -174,9 +176,9 @@ of this lifecycle.
 ## Development-only call-drain fixtures
 
 These routes are registered only when `APP_ENV=development`. They also require
-`AUTH_MODE=local`, `TELEPHONY_MODE=fake`, and the authenticated local owner.
+`AUTH_PROVIDER=local`, `TELEPHONY_MODE=fake`, and the authenticated local owner.
 They return the same bounded `local_telephony_disabled` conflict for a
-Clerk-authenticated development configuration or non-fake telephony. They are
+Hosted-provider development configurations or non-fake telephony. They are
 absent outside development.
 
 ### `POST /api/development/call-drain-fixture/start`
@@ -228,14 +230,18 @@ Optional WebSocket endpoint for authenticated per-user observer events. It is no
 
 The dashboard does not consume this endpoint. Its authoritative state comes from authenticated PostgreSQL-backed API reads, with affected routes revalidated after successful mutations. Missing, delayed, duplicated, or failed realtime delivery must not change call acceptance, finalization, billing, provisioning, recording, onboarding, or dashboard correctness.
 
-Do not enable this capability for customer use yet. Current API and agent publishers use the local internal user UUID as the Redis channel key, while WebSocket authentication registers connections by Clerk subject ID. The publisher and subscriber identity key must be unified before realtime is re-enabled.
+Do not enable this capability for customer use yet. API and agent publishers use
+the internal user UUID as the Redis channel key, and WebSocket authentication
+resolves provider credentials through the shared authentication service before
+registering the same UUID. Production delivery, reconnect, and monitoring
+evidence is still required before realtime can be enabled.
 
 Expected first client message:
 
 ```json
 {
   "type": "auth",
-  "token": "<clerk-session-token>"
+  "token": "<selected-provider-session-token>"
 }
 ```
 
@@ -386,7 +392,9 @@ The worker runs call reconciliation every minute. It recovers stale pending, con
 
 ### `POST /webhooks/clerk`
 
-Consumes Clerk user-sync events.
+Consumes Clerk user-sync events. This route is registered only when
+`AUTH_PROVIDER=clerk`; Supabase identities use verified lazy provisioning and
+do not require this route.
 
 Requirements:
 
@@ -396,7 +404,7 @@ Requirements:
 Behavior:
 
 - verifies the Svix signature
-- syncs the local user row
+- syncs the local user row through the shared idempotent provisioning service
 - returns `202 Accepted`
 
 ### `POST /webhooks/stripe`

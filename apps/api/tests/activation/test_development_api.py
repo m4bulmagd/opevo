@@ -42,7 +42,7 @@ async def _api_client(
     verification_ready: bool = False,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, async_sessionmaker, dict[str, User]]]:
     from app import main as main_module
-    from app.core.auth import build_auth_provider
+    from app.auth.factory import build_auth_provider
     from tests.fakes import build_test_observability
 
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'development-api.db'}"
@@ -54,11 +54,11 @@ async def _api_client(
     users: dict[str, User] = {}
     async with session_factory() as session:
         owner = User(
-            clerk_user_id="development_owner",
+            external_user_id="development_owner",
             email="development-owner@example.com",
         )
         other = User(
-            clerk_user_id="development_other",
+            external_user_id="development_other",
             email="development-other@example.com",
         )
         session.add_all([owner, other])

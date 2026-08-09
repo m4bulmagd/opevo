@@ -39,7 +39,7 @@ async def _seed_claimed_verification(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id="verification-completion-owner",
+            external_user_id="verification-completion-owner",
             email="verification-completion-owner@example.invalid",
         )
         session.add(user)

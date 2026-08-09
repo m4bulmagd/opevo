@@ -85,7 +85,7 @@ def _construction_settings_environment() -> dict[str, str]:
         "WORKER_BACKGROUND_MAX_JOBS": "4",
         "REALTIME_ENABLED": "false",
         "ACTIVATION_FLOW_ENABLED": "false",
-        "AUTH_MODE": "clerk",
+        "AUTH_PROVIDER": "clerk",
         "CLERK_ISSUER": TEST_CLERK_ISSUER,
         "CLERK_AUDIENCE": "",
         "CLERK_AUTHORIZED_PARTIES": TEST_CLERK_AUTHORIZED_PARTY,
@@ -205,7 +205,7 @@ async def active_user(db_session: AsyncSession):
     from app.repositories.user_repository import UserRepository
 
     user = await UserRepository(db_session).create(
-        clerk_user_id="user_active",
+        external_user_id="user_active",
         email="active@example.com",
     )
     await db_session.commit()
@@ -325,13 +325,13 @@ def rs256_clerk_token_for(clerk_key_material: dict[str, str | bytes]):
     private_key_pem = str(clerk_key_material["private_key_pem"])
 
     def _build(
-        clerk_user_id: str,
+        external_user_id: str,
         *,
         claims: dict[str, object] | None = None,
         headers: dict[str, object] | None = None,
     ) -> str:
         payload: dict[str, object] = {
-            "sub": clerk_user_id,
+            "sub": external_user_id,
             "iss": "https://clerk.example.com",
             "exp": 4102444800,
             "nbf": 0,
@@ -368,7 +368,9 @@ def stripe_subscription_created_payload() -> dict:
                 "created": 1709990000,
                 "customer": "cus_123",
                 "status": "active",
-                "metadata": {"clerk_user_id": "user_123"},
+                "metadata": {
+                    "user_id": "00000000-0000-0000-0000-000000000123"
+                },
                 "items": {
                     "data": [
                         {
@@ -398,7 +400,9 @@ def stripe_current_subscription_created_payload() -> dict:
                 "created": 1709990000,
                 "customer": "cus_123",
                 "status": "active",
-                "metadata": {"clerk_user_id": "user_123"},
+                "metadata": {
+                    "user_id": "00000000-0000-0000-0000-000000000123"
+                },
                 "items": {
                     "data": [
                         {
@@ -432,6 +436,9 @@ def stripe_invoice_paid_payload() -> dict:
                 "parent": {
                     "subscription_details": {
                         "subscription": "sub_123",
+                        "metadata": {
+                            "user_id": "00000000-0000-0000-0000-000000000123"
+                        },
                     }
                 },
                 "lines": {

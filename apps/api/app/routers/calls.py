@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import limiter
 
-from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.auth.domain import AuthenticatedUser
+from app.core.auth import require_user_identity
 from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.schemas.calls import CallDetailResponse, CallHistoryListResponse
@@ -59,7 +60,7 @@ def get_call_deletion_service(
 @limiter.limit("60/minute")
 async def list_calls(
     request: Request,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_history_service),
     q: Annotated[str | None, Query(max_length=100)] = None,
     status_filter: Annotated[
@@ -95,7 +96,7 @@ async def list_calls(
 async def get_call(
     request: Request,
     call_id: UUID,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_history_service),
 ) -> CallDetailResponse:
     try:
@@ -109,7 +110,7 @@ async def get_call(
 async def delete_call(
     request: Request,
     call_id: UUID,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: CallHistoryService = Depends(get_call_deletion_service),
 ) -> Response:
     try:

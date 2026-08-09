@@ -5,7 +5,7 @@ import Link from "next/link";
 import { History, PhoneCall, Search } from "lucide-react";
 
 import { ThemeSwitcher } from "@/app/(app)/dashboard/_components/sidebar/theme-switcher";
-import { ClerkSignOut } from "@/components/auth/clerk-sign-out";
+import { SignOutControl } from "@/components/auth/sign-out-control";
 import { CapabilityBadge } from "@/components/product/capability-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { MobileWorkspaceNavigation } from "@/components/workspace/mobile-workspace-navigation";
 import { type WorkspaceCallerIdentity, WorkspaceCallerStatus } from "@/components/workspace/workspace-caller-status";
 import { WorkspaceNotificationsPreview } from "@/components/workspace/workspace-notifications-preview";
-import { authMode, shouldWrapClerk } from "@/lib/auth/clerk-config";
+import { authProvider } from "@/lib/auth/auth-config";
 
 export type WorkspaceAccountControls = Readonly<{
   desktop: ReactNode;
@@ -21,20 +21,16 @@ export type WorkspaceAccountControls = Readonly<{
 }>;
 
 export function resolveWorkspaceAccountControls(): WorkspaceAccountControls {
-  if (authMode === "local") {
+  if (authProvider === "local") {
     return {
       desktop: <Badge variant="secondary">Local development</Badge>,
       mobile: <Badge variant="secondary">Local development</Badge>,
     };
   }
 
-  if (!shouldWrapClerk) {
-    return { desktop: null, mobile: null };
-  }
-
   return {
-    desktop: <ClerkSignOut variant="workspace" />,
-    mobile: <ClerkSignOut variant="mobile" />,
+    desktop: <SignOutControl variant="workspace" />,
+    mobile: <SignOutControl variant="mobile" />,
   };
 }
 

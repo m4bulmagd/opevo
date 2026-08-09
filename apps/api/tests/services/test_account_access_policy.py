@@ -18,7 +18,7 @@ from app.services.account_access_policy import (
 )
 def test_account_state_blocks_owner_mutations(status: str, code: str) -> None:
     user = User(
-        clerk_user_id=f"user_{status}",
+        external_user_id=f"user_{status}",
         email=f"{status}@example.invalid",
         status=status,
     )
@@ -31,7 +31,7 @@ def test_account_state_blocks_owner_mutations(status: str, code: str) -> None:
 
 def test_active_account_allows_owner_mutations() -> None:
     user = User(
-        clerk_user_id="user_active_policy",
+        external_user_id="user_active_policy",
         email="active-policy@example.invalid",
         status="active",
     )
@@ -41,7 +41,7 @@ def test_active_account_allows_owner_mutations() -> None:
 
 def test_unknown_account_state_fails_closed_as_inactive() -> None:
     user = User(
-        clerk_user_id="user_unknown_policy",
+        external_user_id="user_unknown_policy",
         email="unknown-policy@example.invalid",
         status="unknown",
     )
@@ -54,7 +54,7 @@ def test_unknown_account_state_fails_closed_as_inactive() -> None:
 
 def test_current_active_lifecycle_allows_queued_work() -> None:
     user = User(
-        clerk_user_id="current-lifecycle",
+        external_user_id="current-lifecycle",
         email="current-lifecycle@example.invalid",
         status="active",
         lifecycle_generation=3,
@@ -65,7 +65,7 @@ def test_current_active_lifecycle_allows_queued_work() -> None:
 
 def test_stale_active_lifecycle_blocks_queued_work() -> None:
     user = User(
-        clerk_user_id="stale-lifecycle",
+        external_user_id="stale-lifecycle",
         email="stale-lifecycle@example.invalid",
         status="active",
         lifecycle_generation=3,

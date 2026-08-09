@@ -195,7 +195,7 @@ async def _seed_prepared_operation(
 ) -> _RecordingSeed:
     async with session_factory() as session:
         user = User(
-            clerk_user_id=f"task7-{suffix}-user",
+            external_user_id=f"task7-{suffix}-user",
             email=f"task7-{suffix}@example.invalid",
         )
         session.add(user)
