@@ -58,41 +58,52 @@ boundaries:
 
 ```mermaid
 flowchart TB
-    subgraph Experience["Owner experience"]
-        direction LR
-        Owner[Business owner] --> Web[Next.js dashboard]
-        Web <--> Clerk[Clerk authentication]
-    end
+      subgraph Experience["Owner experience"]
+          direction LR
+          Owner[Business owner] --> Web[Next.js dashboard]
+          Web <--> Clerk[Clerk authentication]
+      end
 
-    subgraph Call["Inbound call"]
-        direction LR
-        Caller -->|forwarded call| Telnyx
-        Telnyx -->|SIP| LiveKit
-        LiveKit --> Agent[LiveKit voice worker]
-        Agent <--> AI[Speech and language providers]
-    end
+      subgraph Call["Inbound call"]
+          direction LR
+          Caller -->|forwarded call| Telnyx
+          Telnyx -->|SIP| LiveKit
+          LiveKit <-->|voice-agent session| Agent[LiveKit voice worker]
+          Agent <--> AI[Speech and language providers]
+      end
 
-    subgraph Platform["Durable platform"]
-        direction TB
-        API <--> DB[(PostgreSQL)]
-        API --> Redis[(Redis / ARQ)]
-        Redis -->|arq:queue| Lifecycle[worker-lifecycle]
-        Redis -->|arq:queue:background| Background[worker-background]
-        Lifecycle --> DB
-        Background --> DB
-        Storage[(Private object storage)]
-    end
+      subgraph Platform["Durable platform"]
+          direction TB
+          API[FastAPI control plane] <--> DB[(PostgreSQL)]
+          API --> Redis[(Redis / ARQ)]
+          Redis -->|arq:queue| Lifecycle[worker-lifecycle]
+          Redis -->|arq:queue:background| Background[worker-background]
+          Lifecycle <--> DB
+          Background <--> DB
+          API -->|recording access| Storage[(Private object storage)]
+          Background -->|recording reconciliation| Storage
+      end
 
-    Experience ~~~ Call
-    Call ~~~ Platform
+      Experience ~~~ Call
+      Call ~~~ Platform
 
-    Web -->|server-side requests| API
-    Clerk -->|signed webhooks| API
-    LiveKit -->|signed webhooks| API
-    Agent -->|transcript and completion| API
-    LiveKit -->|room-composite recordings| Storage
+      Web -->|server-side requests| API
+      Clerk -->|signed user webhooks| API
+      LiveKit -->|signed call and egress webhooks| API
+      Agent -->|transcript and completion| API
+
+      Background -->|dispatch and configuration metadata| LiveKit
+      API -->|recording start| LiveKit
+      LiveKit -->|room-composite recordings| Storage
+
+      API -->|checkout and billing portal| Stripe[Stripe]
+      Stripe -->|signed billing webhooks| API
+      Background -->|subscription cleanup| Stripe
+
+      API -->|carrier lookup| Telnyx
+      Background -->|number provisioning and routing| Telnyx
+      Background -->|post-call summaries| AI
 ```
-
 The owner journey is server-rendered by Next.js: the web app obtains the Clerk
 session token, calls FastAPI, and renders PostgreSQL-backed state. Clerk and
 Stripe also synchronize identity and billing state through signed webhooks.
