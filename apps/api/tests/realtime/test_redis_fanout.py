@@ -3,7 +3,7 @@ from uuid import UUID
 
 import pytest
 
-from app.core.auth import AuthProvider, UserIdentity
+from app.auth.domain import AuthenticatedUser
 from app.core.redis import RedisEventBus
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import WebSocketManager
@@ -51,9 +51,9 @@ class FakeWebSocket:
         self.messages.append(payload)
 
 
-class FakeAuthProvider(AuthProvider):
-    async def verify_token(self, token: str) -> UserIdentity:
-        return UserIdentity(clerk_user_id="user_realtime_test")
+class FakeAuthenticator:
+    async def authenticate(self, token: str) -> AuthenticatedUser:
+        return AuthenticatedUser(internal_user_id=USER_ID)
 
 
 class _PubSub:
@@ -125,7 +125,7 @@ def _service(
     observability = FakeObservability()
     return (
         RealtimeService(
-            auth_provider=FakeAuthProvider(),
+            authenticator=FakeAuthenticator(),
             event_bus=event_bus,
             websocket_manager=manager or WebSocketManager(),
             observability=observability,

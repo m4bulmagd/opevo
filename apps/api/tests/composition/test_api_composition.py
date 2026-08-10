@@ -707,7 +707,7 @@ async def test_build_api_runtime_validates_before_opening_resources(settings) ->
     from app.composition.api import build_api_runtime
 
     invalid_settings = settings.model_copy(
-        update={"auth_mode": "local", "local_auth_token": ""}
+        update={"auth_provider": "local", "local_auth_token": ""}
     )
     constructed: list[str] = []
 
@@ -740,7 +740,7 @@ async def test_create_app_publishes_only_complete_runtime_during_lifespan(
     from app.main import create_app
 
     configured_settings = settings.model_copy(
-        update={"auth_mode": "local", "local_auth_token": ""}
+        update={"auth_provider": "local", "local_auth_token": ""}
     )
     build_calls: list[object] = []
 

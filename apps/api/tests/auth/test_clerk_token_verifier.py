@@ -9,9 +9,11 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 
-from app.core.auth import ClerkAuthProvider, UserIdentity, build_auth_provider
+from app.auth.domain import ExternalIdentity
+from app.auth.factory import build_auth_provider
+from app.auth.providers.clerk import ClerkAuthProvider
 from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
-from app.core.clerk_jwks import JwksSigningKeyResolver, StaticSigningKeyResolver
+from app.auth.jwks import JwksSigningKeyResolver, StaticSigningKeyResolver
 from app.core.runtime_validation import validate_api_runtime
 
 
@@ -113,7 +115,7 @@ async def test_static_verifier_accepts_complete_rs256_token(
 ) -> None:
     identity = await clerk_provider.verify_token(rs256_clerk_token_for("user_active"))
 
-    assert identity == UserIdentity(clerk_user_id="user_active")
+    assert identity == ExternalIdentity(external_user_id="user_active")
 
 
 @pytest.mark.anyio
@@ -147,7 +149,7 @@ async def test_whitespace_static_key_selects_and_uses_configured_jwks(
     finally:
         await provider.aclose()
 
-    assert identity == UserIdentity(clerk_user_id="user_active")
+    assert identity == ExternalIdentity(external_user_id="user_active")
     assert transport.request_count == 1
 
 
@@ -308,7 +310,7 @@ async def test_verifier_disables_audience_check_when_not_configured(
 
     identity = await clerk_provider.verify_token(token)
 
-    assert identity == UserIdentity(clerk_user_id="user_active")
+    assert identity == ExternalIdentity(external_user_id="user_active")
 
 
 def _unsigned_token(payload: dict[str, object], *, algorithm: str = "none") -> str:
@@ -414,7 +416,7 @@ async def test_verifier_accepts_either_exact_approved_origin(
         identity = await provider.verify_token(
             rs256_clerk_token_for("user_active", claims={"azp": origin})
         )
-        assert identity == UserIdentity(clerk_user_id="user_active")
+        assert identity == ExternalIdentity(external_user_id="user_active")
 
 
 @pytest.mark.anyio
@@ -533,4 +535,4 @@ async def test_jwks_verifier_uses_the_same_strict_claim_policy(
     finally:
         await provider.aclose()
 
-    assert identity == UserIdentity(clerk_user_id="user_active")
+    assert identity == ExternalIdentity(external_user_id="user_active")

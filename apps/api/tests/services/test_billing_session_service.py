@@ -192,7 +192,6 @@ async def test_create_checkout_session_uses_price_mapping() -> None:
     result = await service.create_checkout_session(
         user_id="user_123",
         customer_email="billing@example.com",
-        clerk_user_id="clerk_123",
         plan_tier="starter",
         lifecycle_generation=7,
     )
@@ -203,7 +202,6 @@ async def test_create_checkout_session_uses_price_mapping() -> None:
         == "price_starter_123"
     )
     expected_metadata = {
-        "clerk_user_id": "clerk_123",
         "user_id": "user_123",
         "plan_tier": "starter",
         "lifecycle_generation": "7",
@@ -238,7 +236,6 @@ async def test_injected_hosted_client_logs_are_filtered_without_hiding_unrelated
             await service.create_checkout_session(
                 user_id="user_123",
                 customer_email="billing@example.com",
-                clerk_user_id="clerk_123",
                 plan_tier="starter",
                 lifecycle_generation=7,
             )
@@ -278,7 +275,6 @@ async def test_non_injected_hosted_client_missing_sdk_is_safe_provider_failure(
             await service.create_checkout_session(
                 user_id="user_123",
                 customer_email="billing@example.com",
-                clerk_user_id="clerk_123",
                 plan_tier="starter",
                 lifecycle_generation=7,
             )
@@ -318,7 +314,6 @@ async def test_injected_hosted_client_works_and_redacts_logs_without_sdk(
             result = await service.create_checkout_session(
                 user_id="user_123",
                 customer_email="billing@example.com",
-                clerk_user_id="clerk_123",
                 plan_tier="starter",
                 lifecycle_generation=7,
             )
@@ -354,7 +349,6 @@ async def test_injected_hosted_defect_propagates_unchanged_without_sdk(
             await service.create_checkout_session(
                 user_id="user_123",
                 customer_email="billing@example.com",
-                clerk_user_id="clerk_123",
                 plan_tier="starter",
                 lifecycle_generation=7,
             )
@@ -379,7 +373,6 @@ async def test_reactivation_checkout_reuses_customer_and_durable_idempotency() -
         user_id="user_123",
         customer_email="billing@example.com",
         customer_id="cus_retained",
-        clerk_user_id="clerk_123",
         plan_tier="starter",
         lifecycle_generation=7,
         idempotency_key="checkout:user_123:g7",
@@ -409,7 +402,6 @@ async def test_create_checkout_session_rejects_standard_plan() -> None:
         await service.create_checkout_session(
             user_id="user_123",
             customer_email="billing@example.com",
-            clerk_user_id="clerk_123",
             plan_tier="standard",
             lifecycle_generation=7,
         )
@@ -526,7 +518,6 @@ async def test_stripe_call_does_not_block_the_event_loop() -> None:
     await service.create_checkout_session(
         user_id="user_123",
         customer_email="billing@example.com",
-        clerk_user_id="clerk_123",
         plan_tier="starter",
         lifecycle_generation=7,
     )
@@ -649,7 +640,6 @@ async def test_hosted_session_errors_match_shared_stripe_contract(
             await service.create_checkout_session(
                 user_id="user_123",
                 customer_email="billing@example.com",
-                clerk_user_id="clerk_123",
                 plan_tier="starter",
                 lifecycle_generation=7,
             )
@@ -687,7 +677,6 @@ async def test_hosted_session_arbitrary_defects_propagate_unchanged(
             await service.create_checkout_session(
                 user_id="user_123",
                 customer_email="billing@example.com",
-                clerk_user_id="clerk_123",
                 plan_tier="starter",
                 lifecycle_generation=7,
             )
@@ -711,7 +700,6 @@ async def test_hosted_session_cancellation_propagates_unchanged() -> None:
         await service.create_checkout_session(
             user_id="user_123",
             customer_email="billing@example.com",
-            clerk_user_id="clerk_123",
             plan_tier="starter",
             lifecycle_generation=7,
         )
@@ -741,7 +729,6 @@ async def test_malformed_hosted_session_response_is_terminal_validation(caller: 
             await service.create_checkout_session(
                 user_id="user_123",
                 customer_email="billing@example.com",
-                clerk_user_id="clerk_123",
                 plan_tier="starter",
                 lifecycle_generation=7,
             )

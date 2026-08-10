@@ -17,6 +17,8 @@ and include any newly introduced credential.
 | Clerk browser/API | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | Sign in with a disposable account and complete one authenticated server request. |
 | Clerk token verification | `CLERK_JWT_KEY` or the credentials controlling `CLERK_JWKS_URL` | Accept a current Clerk session and reject an invalid token without logging either value. |
 | Clerk webhook | `CLERK_WEBHOOK_SECRET` | Deliver one signed disposable Clerk event and confirm one accepted result. |
+| Supabase browser/API | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Sign in with a disposable account and complete one authenticated server request. |
+| Supabase token verification | Project signing keys exposed through the `SUPABASE_URL` JWKS endpoint | Accept a current Supabase session and reject an invalid token without logging either value. |
 | Stripe API | `STRIPE_SECRET_KEY` | Create or retrieve one test-mode hosted session through the application. |
 | Stripe webhook | `STRIPE_WEBHOOK_SECRET` | Deliver one signed Stripe test event and confirm idempotent acceptance. |
 | LiveKit API | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Register the disposable agent revision and complete one staging dispatch. |

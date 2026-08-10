@@ -39,8 +39,8 @@ contents permission, and checkout steps do not persist credentials.
   mypy, and the complete shared-contract pytest suite independently of either
   application.
 - `CI / Web` installs with `npm ci`, runs Biome, TypeScript, Vitest, and the
-  Next.js production build. Its build uses explicit non-secret Clerk and local
-  API/application placeholders; it does not use provider secrets.
+  Next.js production build. Its build exercises the Clerk adapter with explicit
+  non-secret API/application placeholders; it does not use provider secrets.
 - `CI / E2E` runs after API, agent, and web verification. It installs the
   locked web dependencies and Chromium, then runs the disposable provider-free
   activation, deactivation, restart, and reactivation journey through

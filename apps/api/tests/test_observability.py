@@ -1398,10 +1398,14 @@ async def test_actual_webhook_handlers_emit_semantic_outcome_once(
         def verify_webhook(self, _payload, _headers) -> str:
             return "evt-clerk"
 
-    async def sync_user(self, **_kwargs) -> None:
-        return None
+    async def provision_user(self, **_kwargs) -> bool:
+        return True
 
-    monkeypatch.setattr(clerk_module.AuthService, "sync_clerk_user", sync_user)
+    monkeypatch.setattr(
+        clerk_module.AuthService,
+        "provision_user_from_event",
+        provision_user,
+    )
     clerk_payload = {
         "type": "user.created",
         "data": {
@@ -1416,10 +1420,14 @@ async def test_actual_webhook_handlers_emit_semantic_outcome_once(
     )
     assert response.status_code == 202
 
-    async def fail_sync_user(self, **_kwargs) -> None:
+    async def fail_provision_user(self, **_kwargs) -> bool:
         raise RuntimeError("PRIVATE_WEBHOOK_FAILURE")
 
-    monkeypatch.setattr(clerk_module.AuthService, "sync_clerk_user", fail_sync_user)
+    monkeypatch.setattr(
+        clerk_module.AuthService,
+        "provision_user_from_event",
+        fail_provision_user,
+    )
     with pytest.raises(RuntimeError, match="PRIVATE_WEBHOOK_FAILURE"):
         await clerk_module.handle_clerk_webhook(
             _WebhookRequest(clerk_payload, telemetry),
@@ -1488,7 +1496,7 @@ async def test_repository_snapshots_aggregate_outbox_and_call_state(
 
     now = datetime.now(UTC)
     users = [
-        User(clerk_user_id=f"metrics-{index}", email=f"metrics-{index}@example.com")
+        User(external_user_id=f"metrics-{index}", email=f"metrics-{index}@example.com")
         for index in range(4)
     ]
     db_session.add_all(users)

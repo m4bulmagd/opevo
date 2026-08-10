@@ -26,6 +26,9 @@ from app.workers.outbox.delivery import deliver_outbox_batch
 from tests.fakes import MockArqPool
 
 
+STRIPE_USER_ID = UUID("00000000-0000-0000-0000-000000000123")
+
+
 class _OutboxObservability:
     def record_outbox_terminal_failure(self, _topic: str, _error_class: str) -> None:
         pass
@@ -60,7 +63,8 @@ async def _seed_completed_generation_one_deactivation(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id="user_123",
+            id=STRIPE_USER_ID,
+            external_user_id="user_123",
             email=email,
             status="inactive",
             lifecycle_generation=2,
@@ -158,7 +162,7 @@ async def test_subscription_activation_provisions_usage_ledger(
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            session.add(User(clerk_user_id="user_123", email="billing@example.com"))
+            session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="billing@example.com"))
             await session.commit()
         await engine.dispose()
 
@@ -212,7 +216,7 @@ async def test_subscription_activation_accepts_stripe_style_signature(
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            session.add(User(clerk_user_id="user_123", email="billing@example.com"))
+            session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="billing@example.com"))
             await session.commit()
         await engine.dispose()
 
@@ -239,7 +243,7 @@ async def test_subscription_activation_accepts_current_stripe_subscription_shape
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            session.add(User(clerk_user_id="user_123", email="billing@example.com"))
+            session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="billing@example.com"))
             await session.commit()
         await engine.dispose()
 
@@ -268,7 +272,7 @@ async def test_period_end_cancellation_is_only_a_serving_schedule_projection(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id="user_123", email="scheduled@example.com")
+        user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="scheduled@example.com")
         session.add(user)
         await session.flush()
         session.add(
@@ -354,7 +358,7 @@ async def test_period_end_cancellation_reversal_clears_only_schedule_projection(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id="user_123", email="reversal@example.com")
+        user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="reversal@example.com")
         session.add(user)
         await session.flush()
         session.add(
@@ -437,7 +441,8 @@ async def test_generation_one_null_watermark_preserves_newest_schedule_projectio
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id="user_123",
+            id=STRIPE_USER_ID,
+            external_user_id="user_123",
             email=f"legacy-schedule-{delivery_order}@example.com",
         )
         session.add(user)
@@ -521,7 +526,7 @@ async def test_current_generation_final_cancellation_starts_one_deactivation_ope
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id="user_123", email="final-cancel@example.com")
+        user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="final-cancel@example.com")
         session.add(user)
         await session.flush()
         session.add(
@@ -654,7 +659,7 @@ async def test_terminal_subscription_update_converges_without_phone_disable(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id="user_123", email="terminal-update@example.com")
+        user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="terminal-update@example.com")
         session.add(user)
         await session.flush()
         session.add(
@@ -931,7 +936,8 @@ async def test_matching_generation_reactivates_inactive_account_without_old_subs
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id="user_123",
+            id=STRIPE_USER_ID,
+            external_user_id="user_123",
             email="reactivation-without-old-subscription@example.com",
             status="inactive",
             lifecycle_generation=2,
@@ -1002,7 +1008,8 @@ async def test_invalid_generation_metadata_is_not_treated_as_legacy_generation_o
     async with session_factory() as session:
         session.add(
             User(
-                clerk_user_id="user_123",
+                id=STRIPE_USER_ID,
+                external_user_id="user_123",
                 email=f"invalid-generation-{invalid_generation}@example.com",
             )
         )
@@ -1033,7 +1040,6 @@ async def test_invalid_generation_metadata_is_not_treated_as_legacy_generation_o
 @pytest.mark.parametrize(
     "invalid_owner",
     [
-        "mismatch",
         "malformed",
         "missing-explicit-generation-one",
         "missing-current",
@@ -1051,12 +1057,13 @@ async def test_subscription_rejects_invalid_internal_owner_metadata(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         owner = User(
-            clerk_user_id="user_123",
+            id=STRIPE_USER_ID,
+            external_user_id="user_123",
             email=f"subscription-owner-{invalid_owner}@example.com",
             lifecycle_generation=lifecycle_generation,
         )
         other = User(
-            clerk_user_id=f"other_{invalid_owner}",
+            external_user_id=f"other_{invalid_owner}",
             email=f"subscription-other-{invalid_owner}@example.com",
         )
         session.add_all([owner, other])
@@ -1115,12 +1122,13 @@ async def test_invoice_rejects_invalid_internal_owner_metadata(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         owner = User(
-            clerk_user_id="user_123",
+            id=STRIPE_USER_ID,
+            external_user_id="user_123",
             email=f"invoice-owner-{invalid_owner}@example.com",
             lifecycle_generation=lifecycle_generation,
         )
         other = User(
-            clerk_user_id=f"invoice_other_{invalid_owner}",
+            external_user_id=f"invoice_other_{invalid_owner}",
             email=f"invoice-other-{invalid_owner}@example.com",
         )
         session.add_all([owner, other])
@@ -1149,7 +1157,7 @@ async def test_invoice_rejects_invalid_internal_owner_metadata(
         {},
     )
     metadata.update(
-        clerk_user_id="user_123",
+        user_id=str(STRIPE_USER_ID),
         plan_tier="starter",
         lifecycle_generation=str(lifecycle_generation),
     )
@@ -1305,7 +1313,8 @@ async def test_owner_cancellation_terminal_event_converges_on_exact_incomplete_o
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id="user_123",
+            id=STRIPE_USER_ID,
+            external_user_id="user_123",
             email="owner-convergence@example.com",
             status="deactivating",
             lifecycle_generation=2,
@@ -1401,7 +1410,8 @@ async def test_missing_or_old_generation_invoice_cannot_grant_or_enable(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id="user_123",
+            id=STRIPE_USER_ID,
+            external_user_id="user_123",
             email=f"stale-invoice-{metadata_generation}@example.com",
             lifecycle_generation=2,
         )
@@ -1443,7 +1453,7 @@ async def test_missing_or_old_generation_invoice_cannot_grant_or_enable(
         "metadata",
         {},
     )
-    metadata.update(clerk_user_id="user_123", plan_tier="starter")
+    metadata.update(user_id=str(STRIPE_USER_ID), plan_tier="starter")
     if metadata_generation is not None:
         metadata["lifecycle_generation"] = metadata_generation
 
@@ -1485,7 +1495,6 @@ async def test_current_generation_paid_invoice_retries_until_subscription_reacti
     invoice["data"]["object"]["parent"]["subscription_details"].update(
         subscription="sub_generation_2_invoice_first",
         metadata={
-            "clerk_user_id": "user_123",
             "user_id": str(user_id),
             "plan_tier": "starter",
             "lifecycle_generation": "2",
@@ -1587,7 +1596,6 @@ async def test_current_generation_failed_invoice_retries_until_subscription_reac
     invoice["data"]["object"]["parent"]["subscription_details"].update(
         subscription="sub_generation_2_invoice_failed_first",
         metadata={
-            "clerk_user_id": "user_123",
             "user_id": str(user_id),
             "plan_tier": "starter",
             "lifecycle_generation": "2",
@@ -1681,7 +1689,7 @@ async def test_stripe_webhook_has_no_telnyx_provider_dependency(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_123", email="stripe-only@example.com"))
+        session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="stripe-only@example.com"))
         await session.commit()
     await engine.dispose()
 
@@ -1708,7 +1716,7 @@ async def test_first_paid_invoice_grants_minutes_without_ordering_number(
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            session.add(User(clerk_user_id="user_123", email="billing@example.com"))
+            session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="billing@example.com"))
             await session.commit()
         await engine.dispose()
 
@@ -1741,7 +1749,7 @@ async def test_first_paid_invoice_grants_minutes_without_ordering_number(
         "lookup_key": "starter"
     }
     invoice_payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
-        "clerk_user_id": "user_123",
+        "user_id": str(STRIPE_USER_ID),
         "plan_tier": "starter",
     }
 
@@ -1789,7 +1797,7 @@ async def test_invoice_paid_resets_minutes(
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            user = User(clerk_user_id="user_123", email="billing@example.com")
+            user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="billing@example.com")
             session.add(user)
             await session.flush()
             session.add(
@@ -1879,7 +1887,7 @@ async def test_invoice_paid_bootstraps_subscription_without_ordering_number(
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            session.add(User(clerk_user_id="user_123", email="billing@example.com"))
+            session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="billing@example.com"))
             await session.commit()
         await engine.dispose()
 
@@ -1907,7 +1915,7 @@ async def test_invoice_paid_bootstraps_subscription_without_ordering_number(
         "lookup_key": "starter"
     }
     invoice_payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
-        "clerk_user_id": "user_123",
+        "user_id": str(STRIPE_USER_ID),
         "plan_tier": "starter",
     }
 
@@ -1946,7 +1954,7 @@ async def test_distinct_webhook_events_grant_one_invoice_without_ordering_number
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_123", email="invoice-once@example.com"))
+        session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="invoice-once@example.com"))
         await session.commit()
     await engine.dispose()
 
@@ -1955,7 +1963,7 @@ async def test_distinct_webhook_events_grant_one_invoice_without_ordering_number
         "lookup_key": "starter"
     }
     first_payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
-        "clerk_user_id": "user_123",
+        "user_id": str(STRIPE_USER_ID),
         "plan_tier": "starter",
     }
     second_payload = deepcopy(first_payload)
@@ -2024,7 +2032,7 @@ async def test_every_supported_stripe_lifecycle_event_is_replay_safe_without_pro
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id="user_123", email="lifecycle@example.com")
+        user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="lifecycle@example.com")
         session.add(user)
         await session.flush()
         if event_type != "customer.subscription.created":
@@ -2158,7 +2166,7 @@ async def test_invoice_payment_does_not_enable_phone_or_require_redis_wakeup(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id="user_123", email="redis-down@example.com")
+        user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="redis-down@example.com")
         session.add(user)
         await session.flush()
         session.add(
@@ -2178,7 +2186,7 @@ async def test_invoice_payment_does_not_enable_phone_or_require_redis_wakeup(
     payload = deepcopy(stripe_invoice_paid_payload)
     payload["data"]["object"]["lines"]["data"][0]["price"] = {"lookup_key": "starter"}
     payload["data"]["object"]["parent"]["subscription_details"]["metadata"] = {
-        "clerk_user_id": "user_123",
+        "user_id": str(STRIPE_USER_ID),
         "plan_tier": "starter",
     }
     from app.main import app
@@ -2224,7 +2232,7 @@ async def test_invoice_paid_does_not_grant_when_invoice_policy_rejects(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id="user_123", email="invoice-policy@example.com")
+        user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="invoice-policy@example.com")
         session.add(user)
         await session.flush()
         session.add(
@@ -2270,7 +2278,7 @@ async def test_subscription_event_rejects_unsupported_lookup_key(
         UnsupportedStripeLifecycleError,
     )
 
-    user = User(clerk_user_id="user_123", email="unsupported-plan@example.com")
+    user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="unsupported-plan@example.com")
     db_session.add(user)
     await db_session.flush()
     payload = deepcopy(stripe_subscription_created_payload)
@@ -2298,7 +2306,7 @@ async def test_unsupported_subscription_data_is_a_safe_bad_request(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_123", email="bad-stripe-data@example.com"))
+        session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="bad-stripe-data@example.com"))
         await session.commit()
     await engine.dispose()
 
@@ -2349,7 +2357,7 @@ async def test_reverse_order_same_subscription_update_does_not_regress_status(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_123", email="reverse-order@example.com"))
+        session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="reverse-order@example.com"))
         await session.commit()
     await engine.dispose()
 
@@ -2396,7 +2404,7 @@ async def test_deleted_subscription_ignores_older_paid_invoice(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_123", email="deleted-invoice@example.com"))
+        session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="deleted-invoice@example.com"))
         await session.commit()
     await engine.dispose()
 
@@ -2446,7 +2454,7 @@ async def test_deactivating_account_rejects_new_and_old_subscription_events(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         session.add(
-            User(clerk_user_id="user_123", email="resubscribe-order@example.com")
+            User(id=STRIPE_USER_ID, external_user_id="user_123", email="resubscribe-order@example.com")
         )
         await session.commit()
     await engine.dispose()
@@ -2518,7 +2526,8 @@ async def test_conflicting_active_subscription_is_adopted_for_cleanup(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id="user_123",
+            id=STRIPE_USER_ID,
+            external_user_id="user_123",
             email="conflicting-subscription@example.com",
         )
         session.add(user)
@@ -2590,7 +2599,7 @@ async def test_equal_second_routing_update_cannot_override_nonrouting_status(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_123", email="equal-second@example.com"))
+        session.add(User(id=STRIPE_USER_ID, external_user_id="user_123", email="equal-second@example.com"))
         await session.commit()
     await engine.dispose()
 
@@ -2636,7 +2645,7 @@ async def test_newer_mismatched_invoice_is_retryable_and_rolls_back(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         session.add(
-            User(clerk_user_id="user_123", email="invoice-conflict@example.com")
+            User(id=STRIPE_USER_ID, external_user_id="user_123", email="invoice-conflict@example.com")
         )
         await session.commit()
     await engine.dispose()
@@ -2652,7 +2661,7 @@ async def test_newer_mismatched_invoice_is_retryable_and_rolls_back(
     conflicting_invoice.update(id="evt_newer_mismatched_invoice", created=400)
     conflicting_invoice["data"]["object"]["parent"]["subscription_details"].update(
         subscription="sub_unknown",
-        metadata={"clerk_user_id": "user_123", "plan_tier": "starter"},
+        metadata={"user_id": str(STRIPE_USER_ID), "plan_tier": "starter"},
     )
     conflicting_invoice["data"]["object"]["lines"]["data"][0]["parent"][
         "subscription_item_details"
@@ -2694,7 +2703,7 @@ async def test_deactivating_account_ignores_ambiguous_replacement(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         session.add(
-            User(clerk_user_id="user_123", email="equal-generation@example.com")
+            User(id=STRIPE_USER_ID, external_user_id="user_123", email="equal-generation@example.com")
         )
         await session.commit()
     await engine.dispose()
@@ -2759,7 +2768,7 @@ async def test_sparse_new_subscription_does_not_inherit_terminal_subscription_da
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id="user_123", email="sparse-replacement@example.com")
+        user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="sparse-replacement@example.com")
         session.add(user)
         await session.flush()
         session.add(
@@ -2828,7 +2837,7 @@ async def test_delayed_cancellation_revokes_legacy_active_subscription(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id="user_123", email="legacy-cancel@example.com")
+        user = User(id=STRIPE_USER_ID, external_user_id="user_123", email="legacy-cancel@example.com")
         session.add(user)
         await session.flush()
         session.add(
@@ -2890,7 +2899,8 @@ async def test_delayed_invoice_failure_revokes_legacy_active_subscription(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id="user_123", email="legacy-invoice-failure@example.com"
+            id=STRIPE_USER_ID,
+            external_user_id="user_123", email="legacy-invoice-failure@example.com"
         )
         session.add(user)
         await session.flush()

@@ -13,7 +13,7 @@ from opevo_contracts import (
     parse_realtime_event,
 )
 
-from app.core.auth import AuthProvider
+from app.auth.authenticator import Authenticator
 from app.core.observability import Observability
 from app.core.redis import RedisEventBus
 from app.websockets.manager import WebSocketManager
@@ -25,13 +25,13 @@ logger = logging.getLogger(__name__)
 class RealtimeService:
     def __init__(
         self,
-        auth_provider: AuthProvider,
+        authenticator: Authenticator,
         *,
         event_bus: RedisEventBus,
         websocket_manager: WebSocketManager,
         observability: Observability,
     ) -> None:
-        self.auth_provider = auth_provider
+        self.authenticator = authenticator
         self.event_bus = event_bus
         self.websocket_manager = websocket_manager
         self.observability = observability
@@ -43,9 +43,10 @@ class RealtimeService:
             await websocket.close(code=1008)
             return None
 
-        identity = await self.auth_provider.verify_token(message["token"])
-        await self.websocket_manager.connect(identity.clerk_user_id, websocket)
-        return identity.clerk_user_id
+        user = await self.authenticator.authenticate(message["token"])
+        internal_user_id = str(user.internal_user_id)
+        await self.websocket_manager.connect(internal_user_id, websocket)
+        return internal_user_id
 
     async def publish_call_started(
         self, user_id: UUID, *, room_name: str, call_id: UUID

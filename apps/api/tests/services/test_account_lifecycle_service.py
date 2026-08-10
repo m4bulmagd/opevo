@@ -20,7 +20,7 @@ from tests.fakes import FakeCustomerReadinessService
 async def _seed_owner(
     database_url: str,
     *,
-    clerk_user_id: str = "account-owner",
+    external_user_id: str = "account-owner",
     status: str = "active",
     subscription_id: str | None = "sub-current",
     phone_provider_id: str | None = "pn-private",
@@ -30,8 +30,8 @@ async def _seed_owner(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id=clerk_user_id,
-            email=f"{clerk_user_id}@example.com",
+            external_user_id=external_user_id,
+            email=f"{external_user_id}@example.com",
             status=status,
         )
         session.add(user)
@@ -42,7 +42,7 @@ async def _seed_owner(
             session.add(
                 Subscription(
                     user_id=user.id,
-                    stripe_customer_id=f"cus-{clerk_user_id}",
+                    stripe_customer_id=f"cus-{external_user_id}",
                     stripe_subscription_id=subscription_id,
                     plan_tier="starter",
                     status="active",

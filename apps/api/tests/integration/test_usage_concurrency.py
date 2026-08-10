@@ -69,7 +69,7 @@ async def _seed_user(
 ) -> User:
     async with session_factory() as session:
         user = User(
-            clerk_user_id=f"task6_{suffix}_{uuid4().hex}",
+            external_user_id=f"task6_{suffix}_{uuid4().hex}",
             email=f"task6_{suffix}_{uuid4().hex}@example.com",
         )
         session.add(user)

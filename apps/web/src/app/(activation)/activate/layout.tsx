@@ -4,12 +4,12 @@ import Link from "next/link";
 
 import { PhoneCall } from "lucide-react";
 
-import { ClerkSignOut } from "@/components/auth/clerk-sign-out";
+import { SignOutControl } from "@/components/auth/sign-out-control";
 import { Badge } from "@/components/ui/badge";
-import { authMode, shouldWrapClerk } from "@/lib/auth/clerk-config";
+import { authProvider } from "@/lib/auth/auth-config";
 
 function AccountControl() {
-  if (authMode === "local") {
+  if (authProvider === "local") {
     return (
       <Badge variant="secondary">
         <span className="sm:hidden">Local</span>
@@ -18,11 +18,7 @@ function AccountControl() {
     );
   }
 
-  if (!shouldWrapClerk) {
-    return null;
-  }
-
-  return <ClerkSignOut variant="activation" />;
+  return <SignOutControl variant="activation" />;
 }
 
 export default function ActivationLayout({ children }: Readonly<{ children: ReactNode }>) {

@@ -12,7 +12,7 @@ access-controlled release/operations record rather than this repository.
 
 This procedure verifies one complete synthetic-owner journey across:
 
-- Clerk identity and webhook synchronization;
+- the selected Clerk or Supabase identity flow and local-user provisioning;
 - Stripe test-mode eligibility and hosted billing;
 - explicit Telnyx number-provisioning consent and assignment;
 - conditional forwarding verification and explicit go-live;
@@ -32,7 +32,7 @@ Before the window, record value-free references for:
 - the staging environment and deployed 40-character Git commit;
 - immutable API, web, agent, and worker image digests;
 - release commander, provider owner, test owner, and on-call owner;
-- one disposable Clerk identity and Stripe test customer;
+- one disposable identity in the selected auth provider and one Stripe test customer;
 - one approved disposable existing French line and authority to order/release
   one Opevo staging number;
 - the LiveKit project, SIP trunk, Telnyx active/disabled connections, private
@@ -46,7 +46,7 @@ record. Use opaque test references and redacted provider-console links.
 The deployed target must use the production-equivalent modes below:
 
 ```text
-AUTH_MODE=clerk
+AUTH_PROVIDER=<clerk-or-supabase>
 BILLING_MODE=stripe
 CARRIER_LOOKUP_MODE=telnyx
 TELEPHONY_MODE=telnyx
@@ -62,13 +62,13 @@ disabled until the release commander opens the bounded provisioning gate below.
 
 ## Operator convention
 
-Use non-secret origins and an ephemeral Clerk session token in a protected
-shell. Do not paste the token into evidence or command output.
+Use non-secret origins and an ephemeral session token from the selected provider
+in a protected shell. Do not paste the token into evidence or command output.
 
 ```bash
 export STAGING_API_URL=https://<staging-api-origin>
 export STAGING_WEB_URL=https://<staging-web-origin>
-export CLERK_SESSION_TOKEN=<ephemeral-disposable-owner-token>
+export AUTH_SESSION_TOKEN=<ephemeral-disposable-owner-token>
 ```
 
 Replace the placeholders locally. The commands below use `--fail` so an HTTP
@@ -91,9 +91,11 @@ recording/storage degradation.
 
 ## Gate 2 — identity and profile
 
-Create the disposable owner through Clerk so a real signed `user.created`
-webhook reaches staging. Sign in through the web application and complete the
-Business and Receptionist milestones using synthetic, non-sensitive content.
+Create the disposable owner through the selected provider. For Clerk, require a
+real signed `user.created` webhook to reach staging. For Supabase, require the
+first verified session to exercise lazy local provisioning. Sign in through the
+web application and complete the Business and Receptionist milestones using
+synthetic, non-sensitive content.
 
 Verify through the authenticated product/API that:
 

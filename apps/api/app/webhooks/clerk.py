@@ -3,7 +3,8 @@ import time
 from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import ClerkAuthProvider, get_auth_provider
+from app.auth.providers.clerk import ClerkAuthProvider, extract_clerk_user_profile
+from app.core.auth import get_auth_provider
 from app.core.database import get_session
 from app.core.observability import get_request_observability
 from app.schemas.auth import ClerkWebhookEnvelope
@@ -27,7 +28,10 @@ async def handle_clerk_webhook(
         event_id = auth_provider.verify_webhook(payload_bytes, dict(request.headers))
         envelope = ClerkWebhookEnvelope.model_validate_json(payload_bytes)
         outcome = "error"
-        is_new = await AuthService(session).sync_clerk_user(
+        payload = envelope.model_dump()
+        is_new = await AuthService(session).provision_user_from_event(
+            profile=extract_clerk_user_profile(payload["data"]),
+            provider="clerk",
             payload=envelope.model_dump(),
             event_id=event_id,
             event_type=envelope.type,

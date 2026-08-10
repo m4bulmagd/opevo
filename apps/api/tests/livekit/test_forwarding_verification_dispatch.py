@@ -478,7 +478,7 @@ async def test_duplicate_webhook_id_claims_and_dispatches_exactly_once(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = User(
-            clerk_user_id="verification-webhook-owner",
+            external_user_id="verification-webhook-owner",
             email="verification-webhook-owner@example.invalid",
         )
         session.add(user)

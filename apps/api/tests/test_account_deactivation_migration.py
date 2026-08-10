@@ -218,7 +218,7 @@ async def test_account_deactivation_repository_reads_and_locks_operations(
     db_session: AsyncSession,
 ) -> None:
     user = User(
-        clerk_user_id=f"deactivation_{uuid4().hex}",
+        external_user_id=f"deactivation_{uuid4().hex}",
         email=f"deactivation_{uuid4().hex}@example.com",
     )
     db_session.add(user)

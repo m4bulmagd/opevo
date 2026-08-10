@@ -17,7 +17,7 @@ from app.repositories.subscription_repository import (
 
 async def _user(db_session: AsyncSession, suffix: str) -> User:
     user = User(
-        clerk_user_id=f"user_{suffix}",
+        external_user_id=f"user_{suffix}",
         email=f"{suffix}@example.com",
     )
     db_session.add(user)

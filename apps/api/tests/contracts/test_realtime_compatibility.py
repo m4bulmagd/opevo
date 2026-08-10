@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from app.core.auth import AuthProvider, UserIdentity
+from app.auth.domain import AuthenticatedUser
 from app.core.redis import RedisEventBus
 from app.services.realtime_service import RealtimeService
 from app.websockets.manager import WebSocketManager
@@ -34,9 +34,9 @@ class _Observability:
         pass
 
 
-class _AuthProvider(AuthProvider):
-    async def verify_token(self, token: str) -> UserIdentity:
-        return UserIdentity(clerk_user_id="user_contract_test")
+class _Authenticator:
+    async def authenticate(self, token: str) -> AuthenticatedUser:
+        return AuthenticatedUser(internal_user_id=USER_ID)
 
 
 @pytest.mark.anyio
@@ -64,7 +64,7 @@ async def test_api_realtime_producers_match_golden_contracts(
 ) -> None:
     redis = _Redis()
     service = RealtimeService(
-        auth_provider=_AuthProvider(),
+        authenticator=_Authenticator(),
         event_bus=RedisEventBus(redis_client=redis),
         websocket_manager=WebSocketManager(),
         observability=_Observability(),

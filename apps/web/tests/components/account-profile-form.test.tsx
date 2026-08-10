@@ -25,7 +25,7 @@ function renderProfile(overrides: Partial<React.ComponentProps<typeof AccountPro
       initialProfile={initialProfile}
       nameMaxLength={60}
       readOnly={false}
-      securityMode="clerk"
+      securityMode="managed"
       {...overrides}
     />,
   );
@@ -82,7 +82,7 @@ describe("account profile form", () => {
   });
 
   it("describes a missing hosted Clerk email as temporarily unavailable", () => {
-    renderProfile({ email: null, securityMode: "clerk" });
+    renderProfile({ email: null, securityMode: "managed" });
 
     expect(screen.getByLabelText("Email")).toHaveAccessibleDescription("Email is temporarily unavailable.");
     expect(screen.getByText("Email is temporarily unavailable.")).toBeInTheDocument();

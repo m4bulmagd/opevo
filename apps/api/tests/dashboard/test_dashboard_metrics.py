@@ -47,7 +47,7 @@ async def _seed_dashboard(
     profile_revision: int = 1,
     confirmation_revision: int | None = None,
     confirmed_at: datetime | None = None,
-    owner_clerk_user_id: str | None = None,
+    owner_external_user_id: str | None = None,
     owner_status: str = "active",
 ) -> DashboardOwners:
     engine = create_async_engine(database_url, future=True)
@@ -56,12 +56,12 @@ async def _seed_dashboard(
     try:
         async with session_factory() as session:
             owner = User(
-                clerk_user_id=owner_clerk_user_id or f"dashboard-owner-{unique}",
+                external_user_id=owner_external_user_id or f"dashboard-owner-{unique}",
                 email=f"dashboard-owner-{unique}@example.com",
                 status=owner_status,
             )
             other_owner = User(
-                clerk_user_id=f"dashboard-other-{unique}",
+                external_user_id=f"dashboard-other-{unique}",
                 email=f"dashboard-other-{unique}@example.com",
             )
             session.add_all([owner, other_owner])
@@ -142,7 +142,7 @@ async def test_dashboard_metrics_resolve_owner_and_return_exact_contract(
     test_app,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    clerk_user_id = "dashboard-api-owner"
+    external_user_id = "dashboard-api-owner"
     current = datetime(2026, 7, 15, 12, tzinfo=UTC)
     previous = current - timedelta(days=8)
     original_get_metrics = DashboardMetricsService.get_metrics
@@ -172,7 +172,7 @@ async def test_dashboard_metrics_resolve_owner_and_return_exact_contract(
     try:
         await _seed_dashboard(
             client_database_url,
-            owner_clerk_user_id=clerk_user_id,
+            owner_external_user_id=external_user_id,
             calls=[
                 _call(
                     started_at=current,
@@ -191,7 +191,7 @@ async def test_dashboard_metrics_resolve_owner_and_return_exact_contract(
         response = await async_client.get(
             "/api/dashboard/metrics",
             headers={
-                "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+                "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
             },
         )
     finally:
@@ -225,10 +225,10 @@ async def test_dashboard_metrics_exclude_calls_owned_by_another_user(
     client_database_url: str,
     rs256_clerk_token_for,
 ) -> None:
-    clerk_user_id = "dashboard-api-isolated-owner"
+    external_user_id = "dashboard-api-isolated-owner"
     await _seed_dashboard(
         client_database_url,
-        owner_clerk_user_id=clerk_user_id,
+        owner_external_user_id=external_user_id,
         calls=[
             _call(
                 owner="other",
@@ -241,7 +241,7 @@ async def test_dashboard_metrics_exclude_calls_owned_by_another_user(
     response = await async_client.get(
         "/api/dashboard/metrics",
         headers={
-            "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+            "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
         },
     )
 
@@ -267,10 +267,10 @@ async def test_dashboard_metrics_serialize_an_empty_average_as_json_null(
     client_database_url: str,
     rs256_clerk_token_for,
 ) -> None:
-    clerk_user_id = "dashboard-api-empty-average-owner"
+    external_user_id = "dashboard-api-empty-average-owner"
     await _seed_dashboard(
         client_database_url,
-        owner_clerk_user_id=clerk_user_id,
+        owner_external_user_id=external_user_id,
         calls=[
             _call(
                 started_at=datetime.now(UTC),
@@ -283,7 +283,7 @@ async def test_dashboard_metrics_serialize_an_empty_average_as_json_null(
     response = await async_client.get(
         "/api/dashboard/metrics",
         headers={
-            "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+            "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
         },
     )
 
@@ -297,17 +297,17 @@ async def test_inactive_owner_can_read_dashboard_metrics_but_cannot_mutate_route
     client_database_url: str,
     rs256_clerk_token_for,
 ) -> None:
-    clerk_user_id = "dashboard-api-inactive-owner"
+    external_user_id = "dashboard-api-inactive-owner"
     await _seed_dashboard(
         client_database_url,
-        owner_clerk_user_id=clerk_user_id,
+        owner_external_user_id=external_user_id,
         owner_status="inactive",
         calls=[
             _call(started_at=datetime.now(UTC)),
         ],
     )
     headers = {
-        "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+        "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
     }
 
     response = await async_client.get("/api/dashboard/metrics", headers=headers)

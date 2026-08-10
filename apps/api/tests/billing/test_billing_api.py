@@ -6,7 +6,7 @@ from uuid import UUID
 import pytest
 from fastapi import HTTPException
 
-from app.core.auth import UserIdentity
+from app.auth.domain import AuthenticatedUser
 from app.core.provider_failures import ProviderFailure
 from app.schemas.billing_api import (
     UsageLedgerEntryResponse,
@@ -147,8 +147,7 @@ async def test_get_subscription_returns_null_for_new_user() -> None:
 
     response = await get_subscription(
         identity=_as_any(
-            UserIdentity(
-                clerk_user_id="user_123",
+            AuthenticatedUser(
                 internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
             )
         ),
@@ -164,8 +163,7 @@ async def test_get_usage_returns_zeroed_snapshot_without_subscription() -> None:
 
     response = await get_usage(
         identity=_as_any(
-            UserIdentity(
-                clerk_user_id="user_123",
+            AuthenticatedUser(
                 internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
             )
         ),
@@ -184,8 +182,7 @@ async def test_get_usage_ledger_returns_recent_entries() -> None:
     service = FakeBillingQueryService()
     response = await get_usage_ledger(
         identity=_as_any(
-            UserIdentity(
-                clerk_user_id="user_123",
+            AuthenticatedUser(
                 internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
             )
         ),
@@ -220,7 +217,6 @@ class FakeBillingSessionService:
         *,
         user_id,
         customer_email,
-        clerk_user_id,
         plan_tier,
         lifecycle_generation,
         customer_id=None,
@@ -321,8 +317,7 @@ async def test_create_checkout_session_returns_url() -> None:
     response = await create_checkout_session(
         request=_fake_request(),
         payload=CheckoutSessionRequest(plan_tier="starter"),
-        identity=UserIdentity(
-            clerk_user_id="user_123",
+        identity=AuthenticatedUser(
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
         service=FakeBillingSessionService(),
@@ -342,8 +337,7 @@ async def test_checkout_provider_failure_keeps_the_http_response_safe() -> None:
         await create_checkout_session(
             request=_fake_request(),
             payload=CheckoutSessionRequest(plan_tier="starter"),
-            identity=UserIdentity(
-                clerk_user_id="user_123",
+            identity=AuthenticatedUser(
                 internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
             ),
             service=FakeProviderFailingBillingSessionService(),
@@ -368,8 +362,7 @@ async def test_checkout_ends_business_transaction_before_stripe() -> None:
     response = await create_checkout_session(
         request=_fake_request(),
         payload=CheckoutSessionRequest(plan_tier="starter"),
-        identity=UserIdentity(
-            clerk_user_id="user_123",
+        identity=AuthenticatedUser(
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
         service=service,
@@ -395,8 +388,7 @@ async def test_checkout_uses_generation_captured_by_locked_eligibility() -> None
     await create_checkout_session(
         request=_fake_request(),
         payload=CheckoutSessionRequest(plan_tier="starter"),
-        identity=UserIdentity(
-            clerk_user_id="user_123",
+        identity=AuthenticatedUser(
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
         service=service,
@@ -417,8 +409,7 @@ async def test_reactivation_checkout_reuses_customer_and_same_durable_session() 
     query_service.account_status = "inactive"
     query_service.lifecycle_generation = 4
     service = FakeBillingSessionService(query_service=query_service)
-    identity = UserIdentity(
-        clerk_user_id="user_123",
+    identity = AuthenticatedUser(
         internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
     )
     payload = CheckoutSessionRequest(plan_tier="starter")
@@ -479,8 +470,7 @@ async def test_create_checkout_session_rejects_active_subscription() -> None:
         await create_checkout_session(
             request=_fake_request(),
             payload=CheckoutSessionRequest(plan_tier="starter"),
-            identity=UserIdentity(
-                clerk_user_id="user_123",
+            identity=AuthenticatedUser(
                 internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
             ),
             service=FakeBillingSessionService(),
@@ -515,8 +505,7 @@ async def test_checkout_uses_central_subscription_eligibility(
     call = create_checkout_session(
         request=_fake_request(),
         payload=CheckoutSessionRequest(plan_tier="starter"),
-        identity=UserIdentity(
-            clerk_user_id="user_123",
+        identity=AuthenticatedUser(
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
         service=FakeBillingSessionService(),
@@ -564,8 +553,7 @@ async def test_checkout_enforces_account_reactivation_preconditions(
     call = create_checkout_session(
         request=_fake_request(),
         payload=CheckoutSessionRequest(plan_tier="starter"),
-        identity=UserIdentity(
-            clerk_user_id="user_123",
+        identity=AuthenticatedUser(
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
         service=FakeBillingSessionService(),
@@ -589,8 +577,7 @@ async def test_create_portal_session_returns_url() -> None:
     response = await create_portal_session(
         request=_fake_request(),
         payload=PortalSessionRequest(return_url="https://app.example.com/settings"),
-        identity=UserIdentity(
-            clerk_user_id="user_123",
+        identity=AuthenticatedUser(
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
         service=FakeBillingSessionService(),
@@ -609,8 +596,7 @@ async def test_portal_provider_failure_keeps_the_http_response_safe() -> None:
         await create_portal_session(
             request=_fake_request(),
             payload=PortalSessionRequest(),
-            identity=UserIdentity(
-                clerk_user_id="user_123",
+            identity=AuthenticatedUser(
                 internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
             ),
             service=FakeProviderFailingBillingSessionService(),
@@ -633,8 +619,7 @@ async def test_portal_ends_business_transaction_before_stripe() -> None:
     response = await create_portal_session(
         request=_fake_request(),
         payload=PortalSessionRequest(return_url="https://app.example.com/settings"),
-        identity=UserIdentity(
-            clerk_user_id="user_123",
+        identity=AuthenticatedUser(
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
         service=FakeBillingSessionService(query_service=query_service),
@@ -700,8 +685,7 @@ async def test_create_portal_session_accepts_omitted_return_url() -> None:
     response = await create_portal_session(
         request=_fake_request(),
         payload=PortalSessionRequest(),
-        identity=UserIdentity(
-            clerk_user_id="user_123",
+        identity=AuthenticatedUser(
             internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
         ),
         service=FakeBillingSessionService(),
@@ -722,8 +706,7 @@ async def test_create_portal_session_maps_unsafe_return_url_to_bad_request() -> 
             payload=PortalSessionRequest(
                 return_url="https://evil.example.com/settings"
             ),
-            identity=UserIdentity(
-                clerk_user_id="user_123",
+            identity=AuthenticatedUser(
                 internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
             ),
             service=FakeUnsafePortalSessionService(),
@@ -743,8 +726,7 @@ async def test_create_portal_session_rejects_missing_customer() -> None:
         await create_portal_session(
             request=_fake_request(),
             payload=PortalSessionRequest(return_url="https://app.example.com/settings"),
-            identity=UserIdentity(
-                clerk_user_id="user_123",
+            identity=AuthenticatedUser(
                 internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
             ),
             service=FakeBillingSessionService(),

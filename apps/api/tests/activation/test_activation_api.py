@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.models.user import User
 from app.models.subscription import Subscription
 from app.models.usage_ledger import UsageLedger
-from app.core.auth import UserIdentity
+from app.auth.domain import AuthenticatedUser
 from app.providers.carrier_lookup.base import CarrierLookupResult
 from app.schemas.business_profile import WEEKDAYS
 from app.services.activation_snapshot_service import ActivationSnapshotUnavailableError
@@ -63,23 +63,23 @@ def complete_profile_payload() -> dict[str, object]:
 async def _seed_user(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     email: str,
 ) -> None:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id=clerk_user_id, email=email))
+        session.add(User(external_user_id=external_user_id, email=email))
         await session.commit()
     await engine.dispose()
 
 
-async def _load_internal_user_id(database_url: str, clerk_user_id: str):
+async def _load_internal_user_id(database_url: str, external_user_id: str):
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user_id = await session.scalar(
-            select(User.id).where(User.clerk_user_id == clerk_user_id)
+            select(User.id).where(User.external_user_id == external_user_id)
         )
     await engine.dispose()
     return user_id
@@ -168,7 +168,7 @@ async def test_activation_routes_reject_unsynced_clerk_identity(
     )
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "User not synced"}
+    assert response.json() == {"detail": "Invalid token"}
 
 
 @pytest.mark.anyio
@@ -180,18 +180,18 @@ async def test_go_live_endpoint_returns_202_and_uses_authenticated_owner(
 ) -> None:
     from app.routers.activation import get_activation_go_live_service
 
-    clerk_user_id = "user_go_live_endpoint"
+    external_user_id = "user_go_live_endpoint"
     await _seed_user(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="go-live-endpoint@example.com",
     )
     expected_user_id = await _load_internal_user_id(
         client_database_url,
-        clerk_user_id,
+        external_user_id,
     )
     headers = {
-        "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+        "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
     }
     current = await async_client.get("/api/activation", headers=headers)
     assert current.status_code == 200
@@ -228,10 +228,10 @@ async def test_go_live_endpoint_maps_blockers_to_stable_409(
     from app.routers.activation import get_activation_go_live_service
     from app.services.activation_go_live_service import ActivationGoLiveBlockedError
 
-    clerk_user_id = "user_go_live_blocked"
+    external_user_id = "user_go_live_blocked"
     await _seed_user(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="go-live-blocked@example.com",
     )
 
@@ -248,7 +248,7 @@ async def test_go_live_endpoint_maps_blockers_to_stable_409(
         response = await async_client.post(
             "/api/activation/go-live",
             headers={
-                "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+                "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
             },
         )
     finally:
@@ -310,7 +310,7 @@ async def test_carrier_lookup_returns_normalized_detection_without_confirming_it
 ) -> None:
     await _seed_user(
         client_database_url,
-        clerk_user_id="user_carrier_lookup_success",
+        external_user_id="user_carrier_lookup_success",
         email="carrier-lookup-success@example.com",
     )
     headers = {
@@ -360,7 +360,7 @@ async def test_lookup_failure_returns_safe_manual_fallback_and_profile_put_still
 
     await _seed_user(
         client_database_url,
-        clerk_user_id="user_carrier_lookup_failure",
+        external_user_id="user_carrier_lookup_failure",
         email="carrier-lookup-failure@example.com",
     )
     headers = {
@@ -445,7 +445,7 @@ async def test_telnyx_api_error_persists_failure_and_returns_secret_free_fallbac
 
     await _seed_user(
         client_database_url,
-        clerk_user_id="user_carrier_api_error",
+        external_user_id="user_carrier_api_error",
         email="carrier-api-error@example.com",
     )
     headers = {
@@ -515,12 +515,12 @@ async def test_carrier_lookup_uses_only_authenticated_internal_user_ownership(
 
     await _seed_user(
         client_database_url,
-        clerk_user_id="carrier_owner_a",
+        external_user_id="carrier_owner_a",
         email="carrier-owner-a@example.com",
     )
     await _seed_user(
         client_database_url,
-        clerk_user_id="carrier_owner_b",
+        external_user_id="carrier_owner_b",
         email="carrier-owner-b@example.com",
     )
     expected_user_id = await _load_internal_user_id(
@@ -553,7 +553,7 @@ async def test_business_profile_rejects_invalid_payload(
 ) -> None:
     await _seed_user(
         client_database_url,
-        clerk_user_id="user_invalid_profile",
+        external_user_id="user_invalid_profile",
         email="invalid-profile@example.com",
     )
 
@@ -578,7 +578,7 @@ async def test_confirm_profile_returns_stable_incomplete_profile_error(
 ) -> None:
     await _seed_user(
         client_database_url,
-        clerk_user_id="user_incomplete_profile",
+        external_user_id="user_incomplete_profile",
         email="incomplete-profile@example.com",
     )
     headers = {
@@ -623,7 +623,7 @@ async def test_confirm_profile_revalidates_current_profile_after_stale_edit(
 ) -> None:
     await _seed_user(
         client_database_url,
-        clerk_user_id="user_stale_confirmation",
+        external_user_id="user_stale_confirmation",
         email="stale-confirmation@example.com",
     )
     headers = {
@@ -683,7 +683,7 @@ async def test_profile_projection_size_failure_uses_stable_error_code(
 
     await _seed_user(
         client_database_url,
-        clerk_user_id="user_oversized_projection",
+        external_user_id="user_oversized_projection",
         email="oversized-projection@example.com",
     )
     test_app.dependency_overrides[get_business_profile_service] = (
@@ -734,7 +734,7 @@ async def test_profile_commands_translate_missing_internal_user_to_stable_confli
 
     await _seed_user(
         client_database_url,
-        clerk_user_id="user_deleted_during_command",
+        external_user_id="user_deleted_during_command",
         email="deleted-during-command@example.com",
     )
     test_app.dependency_overrides[get_business_profile_service] = (
@@ -769,7 +769,7 @@ async def test_get_activation_translates_missing_user_snapshot_race(
 
     await _seed_user(
         client_database_url,
-        clerk_user_id="user_deleted_before_snapshot",
+        external_user_id="user_deleted_before_snapshot",
         email="deleted-before-snapshot@example.com",
     )
     test_app.dependency_overrides[get_activation_snapshot_service] = (
@@ -806,7 +806,7 @@ async def test_confirm_profile_translates_missing_user_during_snapshot_refresh(
 
     await _seed_user(
         client_database_url,
-        clerk_user_id="user_deleted_after_confirmation",
+        external_user_id="user_deleted_after_confirmation",
         email="deleted-after-confirmation@example.com",
     )
     command_service = SuccessfulProfileCommandService()
@@ -842,12 +842,12 @@ async def test_activation_api_is_scoped_to_authenticated_user(
 ) -> None:
     await _seed_user(
         client_database_url,
-        clerk_user_id="activation_user_a",
+        external_user_id="activation_user_a",
         email="activation-a@example.com",
     )
     await _seed_user(
         client_database_url,
-        clerk_user_id="activation_user_b",
+        external_user_id="activation_user_b",
         email="activation-b@example.com",
     )
     headers_a = {
@@ -877,13 +877,13 @@ async def test_confirm_provisioning_returns_202_canonical_activation_snapshot(
     rs256_clerk_token_for,
     complete_profile_payload: dict[str, object],
 ) -> None:
-    clerk_user_id = "activation_confirm_provisioning"
+    external_user_id = "activation_confirm_provisioning"
     await _seed_user(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="confirm-provisioning@example.com",
     )
-    headers = {"Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"}
+    headers = {"Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"}
     saved = await async_client.put(
         "/api/business-profile",
         json=complete_profile_payload,
@@ -893,7 +893,7 @@ async def test_confirm_provisioning_returns_202_canonical_activation_snapshot(
         "/api/activation/confirm-profile",
         headers=headers,
     )
-    user_id = await _load_internal_user_id(client_database_url, clerk_user_id)
+    user_id = await _load_internal_user_id(client_database_url, external_user_id)
     subscription_now = datetime.now(UTC)
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -951,10 +951,10 @@ async def test_confirm_provisioning_translates_blocker_to_stable_409_code(
         async def confirm(self, user_id, *, arq_pool):
             raise ActivationProvisioningBlockedError("minutes_exhausted")
 
-    clerk_user_id = "activation_provisioning_blocked"
+    external_user_id = "activation_provisioning_blocked"
     await _seed_user(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="provisioning-blocked@example.com",
     )
     test_app.dependency_overrides[get_activation_provisioning_service] = BlockedService
@@ -962,7 +962,7 @@ async def test_confirm_provisioning_translates_blocker_to_stable_409_code(
         response = await async_client.post(
             "/api/activation/confirm-provisioning",
             headers={
-                "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+                "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
             },
         )
     finally:
@@ -996,8 +996,7 @@ async def test_confirm_provisioning_route_uses_authenticated_owner_and_arq_wake(
     install_test_api_runtime(app, arq_pool=pool)
     result = await confirm_provisioning(
         request=SimpleNamespace(app=app),
-        identity=UserIdentity(
-            clerk_user_id="authenticated_owner",
+        identity=AuthenticatedUser(
             internal_user_id=user_id,
         ),
         service=commands,
@@ -1033,8 +1032,7 @@ async def test_open_verification_window_uses_authenticated_owner_and_snapshot() 
     snapshots = Snapshots()
 
     result = await open_verification_window(
-        identity=UserIdentity(
-            clerk_user_id="authenticated_owner",
+        identity=AuthenticatedUser(
             internal_user_id=user_id,
         ),
         service=commands,
@@ -1064,10 +1062,10 @@ async def test_open_verification_window_translates_conflict_to_safe_409(
                 "verification_window_already_open"
             )
 
-    clerk_user_id = "verification_window_blocked"
+    external_user_id = "verification_window_blocked"
     await _seed_user(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="verification-window-blocked@example.com",
     )
     test_app.dependency_overrides[get_forwarding_verification_service] = BlockedService
@@ -1075,7 +1073,7 @@ async def test_open_verification_window_translates_conflict_to_safe_409(
         response = await async_client.post(
             "/api/activation/open-verification-window",
             headers={
-                "Authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"
+                "Authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"
             },
         )
     finally:

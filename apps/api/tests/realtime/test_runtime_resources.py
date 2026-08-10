@@ -69,8 +69,8 @@ async def test_app_runtime_dependencies_use_captured_settings(
     observability = Observability()
 
     class WaitingRealtimeService:
-        def __init__(self, auth_provider, *, event_bus, websocket_manager, observability) -> None:
-            observed["auth_provider"] = auth_provider
+        def __init__(self, authenticator, *, event_bus, websocket_manager, observability) -> None:
+            observed["authenticator"] = authenticator
             observed["event_bus"] = event_bus
             observed["observability"] = observability
 
@@ -99,7 +99,7 @@ async def test_app_runtime_dependencies_use_captured_settings(
         recording_service_factory=lambda **_kwargs: object(),
     )
     assert runtime.settings is configured
-    assert observed["auth_provider"] is provider
+    assert observed["authenticator"].auth_provider is provider
     assert observed["auth_observability"] is observability
     assert observed["event_bus"].redis_client is redis_client
 
@@ -272,7 +272,8 @@ async def test_lifespan_safely_reports_relay_and_cleanup_failures(
             raise RuntimeError("REDIS_PROVIDER_SECRET customer text")
 
     class FailingRealtimeService:
-        def __init__(self, auth_provider, *, event_bus, websocket_manager, observability) -> None:
+        def __init__(self, authenticator, *, event_bus, websocket_manager, observability) -> None:
+            del authenticator, websocket_manager, observability
             self.event_bus = event_bus
 
         async def fanout_forever(self) -> None:

@@ -36,10 +36,12 @@ docker compose -f compose.dev.yaml up --build
 ```
 
 This starts PostgreSQL, Redis, MinIO, migrations, the API, `worker-lifecycle`,
-`worker-background`, and the web application. The standard stack uses Clerk and
-fails closed when its required server configuration is missing; it never
-substitutes an authenticated local identity. Synthetic local authentication must
-be enabled explicitly and is limited to disposable development and E2E workflows.
+`worker-background`, and the web application. The standard stack defaults to
+Clerk but can select Supabase with `AUTH_PROVIDER`; each application fails
+closed when the selected provider's server configuration is missing. It never
+substitutes an authenticated local identity. Synthetic local authentication
+must be enabled explicitly and is limited to disposable development and E2E
+workflows.
 
 The core `worker-background` service also needs the API-side dispatch secret,
 LiveKit credentials and agent name, and the selected summary provider's model and
@@ -224,8 +226,9 @@ NEXT_PUBLIC_REALTIME_ENABLED=false \
   npm run build
 ```
 
-These build-only values match CI and are not provider credentials. Real Clerk
-or other provider secrets are not required for repository verification.
+These build-only values exercise the Clerk adapter like CI and are not provider
+credentials. Real Clerk, Supabase, or other provider secrets are not required
+for repository verification.
 
 The complete workflow, blank-database migration check, and exact required
 GitHub ruleset checks are documented in

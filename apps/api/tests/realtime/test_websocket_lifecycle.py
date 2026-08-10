@@ -19,11 +19,7 @@ Design constraints
   state. TestClient is used *without* the ``with TestClient(app):`` context
   manager so lifespan does not replace those focused test resources.
 
-Bug fixed during writing these tests
---------------------------------------
-``RealtimeService.authenticate()`` previously called ``identity.user_id`` which
-does not exist on ``UserIdentity``; it has been corrected to
-``identity.clerk_user_id``.
+WebSocket connections are keyed by the provider-neutral internal user UUID.
 """
 
 import asyncio
@@ -31,13 +27,15 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack
 from pathlib import Path
 import threading
+from uuid import UUID
 
 import pytest
 from conftest import install_test_api_runtime
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect as StarletteWebSocketDisconnect
 
-from app.core.auth import AuthProvider, UserIdentity
+from app.auth.domain import AuthenticatedUser
+from app.auth.failures import UserNotProvisioned
 from app.composition.lifecycle import RuntimeCleanup
 from app.composition.runtime import ApiRuntime
 from app.core.auth_failures import AuthenticationUnavailable, TokenRejected
@@ -51,16 +49,19 @@ from app.websockets.manager import WebSocketManager
 # ---------------------------------------------------------------------------
 
 
-class FakeAuthProvider(AuthProvider):
+WS_USER_ID = UUID("00000000-0000-0000-0000-000000000123")
+
+
+class FakeAuthenticator:
     def __init__(self, failure: Exception | None = None) -> None:
         self.failure = failure
 
-    async def verify_token(self, token: str) -> UserIdentity:
+    async def authenticate(self, token: str) -> AuthenticatedUser:
         if self.failure is not None:
             raise self.failure
         if token != "valid-token":
             raise TokenRejected("signature")
-        return UserIdentity(clerk_user_id="user_ws_test")
+        return AuthenticatedUser(internal_user_id=WS_USER_ID)
 
 
 class FakeEventBus:
@@ -87,7 +88,7 @@ def _runtime_with_realtime(settings, realtime_service) -> ApiRuntime:
         session_factory=object(),
         redis_client=object(),
         observability=object(),
-        auth_provider=realtime_service.auth_provider,
+        auth_provider=object(),
         readiness_checks=object(),
         storage_provider=object(),
         arq_pool=None,
@@ -135,7 +136,7 @@ def ws_app_factory(
 
     def _factory(
         *,
-        auth_provider: AuthProvider | None = None,
+        auth_provider: FakeAuthenticator | None = None,
         websocket_manager: WebSocketManager | None = None,
     ) -> tuple[object, WebSocketManager]:
         configured_settings = Settings().model_copy(
@@ -155,7 +156,7 @@ def ws_app_factory(
         app.dependency_overrides[get_session] = _override_get_session
         manager = websocket_manager or WebSocketManager()
         realtime_service = RealtimeService(
-            auth_provider=auth_provider or FakeAuthProvider(),
+            authenticator=auth_provider or FakeAuthenticator(),
             event_bus=FakeEventBus(),
             websocket_manager=manager,
             observability=FakeObservability(),
@@ -325,13 +326,14 @@ def test_wrong_message_type_receives_error_and_close(ws_app) -> None:
     ("failure", "detail", "close_code"),
     [
         (TokenRejected("authorized_party"), "invalid_token", 1008),
+        (UserNotProvisioned(), "invalid_token", 1008),
         (AuthenticationUnavailable("jwks_timeout"), "auth_unavailable", 1013),
     ],
 )
 def test_websocket_maps_typed_auth_failure_to_safe_frame_and_close(
     ws_app_factory, failure: Exception, detail: str, close_code: int
 ) -> None:
-    app, _ = ws_app_factory(auth_provider=FakeAuthProvider(failure))
+    app, _ = ws_app_factory(auth_provider=FakeAuthenticator(failure))
     with TestClient(app).websocket_connect("/ws") as websocket:
         websocket.send_json({"type": "auth", "token": "TOKEN_SENTINEL"})
         assert websocket.receive_json() == {"type": "error", "detail": detail}
@@ -352,7 +354,7 @@ def test_authenticated_client_disconnects_from_service_manager_exactly_once(
         assert websocket.receive_json() == {"type": "pong"}
 
     assert len(manager.disconnect_calls) == 1
-    assert manager.disconnect_calls[0][0] == "user_ws_test"
+    assert manager.disconnect_calls[0][0] == str(WS_USER_ID)
 
 
 def test_auth_failure_does_not_disconnect_before_identity_is_established(
@@ -360,7 +362,7 @@ def test_auth_failure_does_not_disconnect_before_identity_is_established(
 ) -> None:
     manager = ManagerSpy()
     app, _ = ws_app_factory(
-        auth_provider=FakeAuthProvider(TokenRejected("signature")),
+        auth_provider=FakeAuthenticator(TokenRejected("signature")),
         websocket_manager=manager,
     )
 
@@ -441,7 +443,7 @@ def test_broadcast_delivered_to_authenticated_client(ws_app) -> None:
 
         asgi_loop = asgi_loop_holder[0]
         future = asyncio.run_coroutine_threadsafe(
-            ws_manager.broadcast("user_ws_test", broadcast_payload),
+            ws_manager.broadcast(str(WS_USER_ID), broadcast_payload),
             asgi_loop,
         )
         future.result(timeout=5)

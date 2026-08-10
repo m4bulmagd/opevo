@@ -179,7 +179,7 @@ def test_recording_operation_model_has_private_coordination_shape() -> None:
 
 async def _create_call(db_session: AsyncSession, *, suffix: str) -> Call:
     user = User(
-        clerk_user_id=f"recording_operation_{suffix}_{uuid4().hex}",
+        external_user_id=f"recording_operation_{suffix}_{uuid4().hex}",
         email=f"recording_operation_{suffix}_{uuid4().hex}@example.com",
     )
     db_session.add(user)

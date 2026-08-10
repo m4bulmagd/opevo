@@ -75,7 +75,7 @@ def build_records():
     phone_number_id = uuid4()
     user = User(
         id=user_id,
-        clerk_user_id="snapshot-user",
+        external_user_id="snapshot-user",
         email="snapshot@example.com",
         status="active",
     )
@@ -443,7 +443,7 @@ async def test_runtime_failures_do_not_change_paid_subscription_eligibility(
 async def test_get_returns_safe_profile_required_snapshot_for_missing_domain_rows() -> None:
     user = User(
         id=uuid4(),
-        clerk_user_id="new-user",
+        external_user_id="new-user",
         email="new@example.com",
         status="active",
     )

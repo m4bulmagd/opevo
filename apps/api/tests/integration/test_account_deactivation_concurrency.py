@@ -315,7 +315,7 @@ async def _seed_active_account(
 ) -> _ActiveAccount:
     async with session_factory() as session:
         user = User(
-            clerk_user_id=f"task8-{suffix}-{uuid4().hex}",
+            external_user_id=f"task8-{suffix}-{uuid4().hex}",
             email=f"task8-{suffix}-{uuid4().hex}@example.invalid",
             country_code="FR",
         )
@@ -376,7 +376,7 @@ def _terminal_subscription_event(
                 "customer": subscription.stripe_customer_id,
                 "status": "canceled",
                 "metadata": {
-                    "clerk_user_id": user.clerk_user_id,
+                    "external_user_id": user.external_user_id,
                     "user_id": str(user.id),
                     "lifecycle_generation": "1",
                 },
@@ -457,7 +457,7 @@ async def test_late_provider_acquisition_after_deactivation_is_durably_released_
 ) -> None:
     async with account_session_factory() as session:
         user = User(
-            clerk_user_id=f"late-provision-{uuid4().hex}",
+            external_user_id=f"late-provision-{uuid4().hex}",
             email=f"late-provision-{uuid4().hex}@example.invalid",
             country_code="FR",
         )
@@ -725,7 +725,7 @@ async def test_reclaimed_provider_cleanup_is_single_flight_without_transactions(
 ) -> None:
     async with account_session_factory() as session:
         user = User(
-            clerk_user_id=f"cleanup-single-flight-{uuid4().hex}",
+            external_user_id=f"cleanup-single-flight-{uuid4().hex}",
             email=f"cleanup-single-flight-{uuid4().hex}@example.invalid",
         )
         session.add(user)
@@ -1032,7 +1032,7 @@ async def _seed_drained_operation_with_call(
 ) -> tuple[UUID, UUID]:
     async with session_factory() as session:
         user = User(
-            clerk_user_id=f"drain-{call_status}-{uuid4().hex}",
+            external_user_id=f"drain-{call_status}-{uuid4().hex}",
             email=f"drain-{call_status}-{uuid4().hex}@example.invalid",
             status="deactivating",
             lifecycle_generation=2,
@@ -1319,7 +1319,7 @@ async def test_stale_enable_provision_invoice_and_go_live_work_is_provider_free(
                         "subscription_details": {
                             "subscription": subscription.stripe_subscription_id,
                             "metadata": {
-                                "clerk_user_id": user.clerk_user_id,
+                                "external_user_id": user.external_user_id,
                                 "user_id": str(user.id),
                                 "lifecycle_generation": "1",
                                 "plan_tier": "starter",
@@ -1431,7 +1431,7 @@ async def test_next_generation_checkout_and_provisioning_wait_for_cleanup(
 ) -> None:
     async with account_session_factory() as session:
         user = User(
-            clerk_user_id=f"generation-block-{uuid4().hex}",
+            external_user_id=f"generation-block-{uuid4().hex}",
             email=f"generation-block-{uuid4().hex}@example.invalid",
             status="inactive",
             lifecycle_generation=2,
@@ -1817,16 +1817,16 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         provisioning_id = provisioning.id
         owner = await session.get(User, seeded.user_id)
         assert owner is not None
-        owner_clerk_user_id = owner.clerk_user_id
+        owner_external_user_id = owner.external_user_id
         other = User(
-            clerk_user_id=f"task8-preservation-other-{uuid4().hex}",
+            external_user_id=f"task8-preservation-other-{uuid4().hex}",
             email=f"task8-preservation-other-{uuid4().hex}@example.invalid",
             status="inactive",
         )
         session.add(other)
         await session.commit()
         other_user_id = other.id
-        other_clerk_user_id = other.clerk_user_id
+        other_external_user_id = other.external_user_id
 
     async with account_session_factory() as session:
         operation = await AccountLifecycleService(
@@ -2154,7 +2154,7 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
                 recording_service=_RetainedRecordingPlayback(),
             )
 
-    from app.core.auth import build_auth_provider
+    from app.auth.factory import build_auth_provider
     from tests.fakes import build_test_observability
 
     auth_provider = build_auth_provider(
@@ -2178,12 +2178,12 @@ async def test_completion_removes_only_number_projections_and_preserves_history(
         ) as client:
             owner_headers = {
                 "Authorization": (
-                    f"Bearer {rs256_clerk_token_for(owner_clerk_user_id)}"
+                    f"Bearer {rs256_clerk_token_for(owner_external_user_id)}"
                 )
             }
             other_headers = {
                 "Authorization": (
-                    f"Bearer {rs256_clerk_token_for(other_clerk_user_id)}"
+                    f"Bearer {rs256_clerk_token_for(other_external_user_id)}"
                 )
             }
             owner_list = await client.get("/api/calls", headers=owner_headers)

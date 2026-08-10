@@ -29,16 +29,15 @@ async def test_invoice_paid_locks_user_before_subscription() -> None:
             return SimpleNamespace(already_granted=True, first_activation=False)
 
     class _Users:
-        async def get_by_clerk_user_id(self, _clerk_user_id: str):
-            events.append("user_lookup")
-            return user
-
         async def get_by_id_for_update(self, requested_user_id):
             assert requested_user_id == user_id
             events.append("user_lock")
             return user
 
     class _Subscriptions:
+        async def get_user_id_by_stripe_subscription_id(self, _subscription_id):
+            return user_id
+
         async def get_by_user_id_for_update(self, requested_user_id):
             assert requested_user_id == user_id
             events.append("subscription_lock")
@@ -67,7 +66,7 @@ async def test_invoice_paid_locks_user_before_subscription() -> None:
             "parent": {
                 "subscription_details": {
                     "subscription": "sub_lock_order",
-                    "metadata": {"clerk_user_id": "user_lock_order"},
+                    "metadata": {"user_id": str(user_id)},
                 }
             },
             "lines": {
@@ -81,7 +80,6 @@ async def test_invoice_paid_locks_user_before_subscription() -> None:
 
     assert events == [
         "invoice_lock",
-        "user_lookup",
         "user_lock",
         "subscription_lock",
         "invoice_target",

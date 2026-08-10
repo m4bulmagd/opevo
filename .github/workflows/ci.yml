@@ -402,6 +402,16 @@ jobs:
           --file "${{ matrix.dockerfile }}"
           --tag "opevo-${{ matrix.application }}:${{ github.sha }}"
           "${{ matrix.context }}"
+      - name: Build Supabase web image
+        if: matrix.application == 'web'
+        run: >-
+          docker build
+          --file "${{ matrix.dockerfile }}"
+          --build-arg AUTH_PROVIDER=supabase
+          --build-arg NEXT_PUBLIC_SUPABASE_URL=https://project.supabase.co
+          --build-arg NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_placeholder
+          --tag "opevo-web-supabase:${{ github.sha }}"
+          "${{ matrix.context }}"
       - name: Verify shared package in Python runtime images
         if: matrix.application != 'web'
         run: >-

@@ -26,6 +26,7 @@ MAX_KID_LENGTH = 128
 MAX_JWKS_BODY_BYTES = 256 * 1024
 MAX_JWKS_KEYS = 16
 REFRESH_COOLDOWN_SECONDS = 5.0
+JWK_KEY_TYPES = {"RS256": "RSA", "ES256": "EC"}
 
 type VerificationKey = AllowedPublicKeys | jwt.PyJWK | str | bytes
 
@@ -133,6 +134,7 @@ class JwksSigningKeyResolver:
         pool_timeout_seconds: float,
         total_timeout_seconds: float,
         observability: Observability,
+        allowed_algorithms: frozenset[str] = frozenset({"RS256"}),
         transport: httpx.AsyncBaseTransport | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -141,6 +143,7 @@ class JwksSigningKeyResolver:
         self._stale_grace_seconds = stale_grace_seconds
         self._total_timeout_seconds = total_timeout_seconds
         self._observability = observability
+        self._allowed_algorithms = allowed_algorithms
         self._monotonic = monotonic
         self._transport = (
             transport
@@ -246,7 +249,7 @@ class JwksSigningKeyResolver:
         algorithm = header.get("alg")
         if algorithm is None:
             raise TokenRejected("malformed")
-        if algorithm != "RS256":
+        if algorithm not in self._allowed_algorithms:
             raise TokenRejected("algorithm")
         kid = header.get("kid")
         if not isinstance(kid, str) or not kid or len(kid) > MAX_KID_LENGTH:
@@ -398,9 +401,10 @@ class JwksSigningKeyResolver:
                     or "verify" not in key_ops
                 ):
                     raise _InvalidJwksDocument
+            algorithm = raw_key.get("alg")
             if (
-                raw_key.get("kty") != "RSA"
-                or raw_key.get("alg") != "RS256"
+                algorithm not in self._allowed_algorithms
+                or raw_key.get("kty") != JWK_KEY_TYPES.get(algorithm)
                 or raw_key.get("use") not in (None, "sig")
             ):
                 continue

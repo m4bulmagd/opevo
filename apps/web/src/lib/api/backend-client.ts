@@ -1,6 +1,6 @@
 import "server-only";
 
-import { selectFirstNonblank } from "@/lib/auth/clerk-config";
+import { selectFirstNonblank } from "@/lib/auth/auth-config";
 import { requireServerSession } from "@/lib/auth/server-session";
 
 const API_BASE_URL =

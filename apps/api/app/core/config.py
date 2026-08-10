@@ -42,8 +42,10 @@ class Settings(BaseSettings):
     realtime_enabled: bool = False
     activation_flow_enabled: bool = False
     cors_allowed_origins: str | None = None
-    auth_mode: Literal["clerk", "local"] = "clerk"
+    auth_provider: Literal["clerk", "local", "supabase"] = "clerk"
     local_auth_token: str = ""
+    supabase_url: str = ""
+    supabase_jwt_audience: str = "authenticated"
     clerk_issuer: str = ""
     clerk_audience: str | None = None
     clerk_authorized_parties: str | None = None

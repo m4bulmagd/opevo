@@ -4,7 +4,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AuthenticatedUserIdentity, require_user_identity
+from app.auth.domain import AuthenticatedUser
+from app.core.auth import require_user_identity
 from app.composition.runtime import get_api_runtime
 from app.core.database import get_session
 from app.core.dispatch_token import (
@@ -144,7 +145,7 @@ def get_agent_config_service(
 
 @router.get("/config", response_model=AgentConfigResponse)
 async def get_agent_config(
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: AgentConfigService = Depends(get_agent_config_service),
 ) -> AgentConfigResponse:
     try:
@@ -160,7 +161,7 @@ async def get_agent_config(
 @router.patch("/config", response_model=AgentConfigResponse)
 async def patch_agent_config(
     payload: AgentConfigPatchRequest,
-    identity: AuthenticatedUserIdentity = Depends(require_user_identity),
+    identity: AuthenticatedUser = Depends(require_user_identity),
     service: AgentConfigService = Depends(get_agent_config_service),
 ) -> AgentConfigResponse:
     try:

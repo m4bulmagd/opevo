@@ -7,5 +7,5 @@ export type AccountProfileValues = Readonly<{
 
 export type AccountIdentity = Readonly<{
   email: string | null;
-  securityMode: "clerk" | "unavailable";
+  securityMode: "managed" | "unavailable";
 }>;

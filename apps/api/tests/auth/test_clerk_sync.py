@@ -2,8 +2,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.auth.domain import ExternalUserProfile
 from app.services.auth_service import AuthService
-from app.services.user_bootstrap_service import UserBootstrapService
+from app.services.user_provisioning import UserProvisioning
 
 
 @pytest.mark.anyio
@@ -30,7 +31,7 @@ async def test_clerk_user_created_webhook_upserts_local_user(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        result = await session.execute(select(User).where(User.clerk_user_id == clerk_user_created_payload["data"]["id"]))
+        result = await session.execute(select(User).where(User.external_user_id == clerk_user_created_payload["data"]["id"]))
         user = result.scalar_one_or_none()
         config = (
             await session.execute(select(AgentConfig).where(AgentConfig.user_id == user.id))
@@ -80,7 +81,7 @@ async def test_clerk_user_created_bootstraps_activation_aggregate_idempotently(
     async with session_factory() as session:
         user = await session.scalar(
             select(User).where(
-                User.clerk_user_id == clerk_user_created_payload["data"]["id"]
+                User.external_user_id == clerk_user_created_payload["data"]["id"]
             )
         )
         assert user is not None
@@ -112,7 +113,7 @@ async def test_clerk_user_created_bootstraps_activation_aggregate_idempotently(
 
 @pytest.mark.anyio
 async def test_shared_user_bootstrap_flushes_without_committing(db_session) -> None:
-    service = UserBootstrapService(db_session)
+    service = UserProvisioning(db_session)
 
     commit = AsyncMock(wraps=db_session.commit)
     flush = AsyncMock(wraps=db_session.flush)
@@ -120,12 +121,12 @@ async def test_shared_user_bootstrap_flushes_without_committing(db_session) -> N
         patch.object(db_session, "commit", commit),
         patch.object(db_session, "flush", flush),
     ):
-        user = await service.ensure_user(
+        user = await service.ensure_user(ExternalUserProfile(
             external_user_id="shared_bootstrap_user",
             email="shared@example.com",
-        )
+        ))
 
-    assert user.clerk_user_id == "shared_bootstrap_user"
+    assert user.external_user_id == "shared_bootstrap_user"
     flush.assert_awaited()
     commit.assert_not_awaited()
 
@@ -136,17 +137,19 @@ async def test_clerk_resynchronization_preserves_existing_account_status(
     db_session,
     status: str,
 ) -> None:
-    service = UserBootstrapService(db_session)
-    user = await service.ensure_user(
+    service = UserProvisioning(db_session)
+    user = await service.ensure_user(ExternalUserProfile(
         external_user_id=f"resync_{status}",
         email=f"resync-{status}@example.invalid",
-    )
+    ))
     user.status = status
     await db_session.commit()
 
     resynchronized = await service.ensure_user(
-        external_user_id=user.clerk_user_id,
-        email=user.email,
+        ExternalUserProfile(
+            external_user_id=user.external_user_id,
+            email=user.email,
+        )
     )
     await db_session.commit()
 
@@ -160,29 +163,34 @@ async def test_clerk_sync_delegates_once_and_keeps_one_final_commit_per_event(
     clerk_user_created_payload,
 ) -> None:
     service = AuthService(db_session)
-    bootstrap = getattr(service, "user_bootstrap_service", None)
-    assert bootstrap is not None, "AuthService must delegate to UserBootstrapService"
-    bootstrap.ensure_user = AsyncMock()
+    provisioning = getattr(service, "user_provisioning", None)
+    assert provisioning is not None, "AuthService must delegate to UserProvisioning"
+    provisioning.ensure_user = AsyncMock()
     commit = AsyncMock(wraps=db_session.commit)
 
     with patch.object(db_session, "commit", commit):
-        first = await service.sync_clerk_user(
-            clerk_user_created_payload,
+        profile = ExternalUserProfile(
+            external_user_id=clerk_user_created_payload["data"]["id"],
+            email=clerk_user_created_payload["data"]["email_addresses"][0][
+                "email_address"
+            ],
+        )
+        first = await service.provision_user_from_event(
+            profile=profile,
+            provider="clerk",
+            payload=clerk_user_created_payload,
             event_id="evt_shared_bootstrap",
             event_type="user.created",
         )
-        duplicate = await service.sync_clerk_user(
-            clerk_user_created_payload,
+        duplicate = await service.provision_user_from_event(
+            profile=profile,
+            provider="clerk",
+            payload=clerk_user_created_payload,
             event_id="evt_shared_bootstrap",
             event_type="user.created",
         )
 
     assert first is True
     assert duplicate is False
-    bootstrap.ensure_user.assert_awaited_once_with(
-        external_user_id=clerk_user_created_payload["data"]["id"],
-        email=clerk_user_created_payload["data"]["email_addresses"][0][
-            "email_address"
-        ],
-    )
+    provisioning.ensure_user.assert_awaited_once_with(profile)
     assert commit.await_count == 2

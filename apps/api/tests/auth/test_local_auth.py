@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.core.auth import LocalAuthProvider
+from app.auth.providers.local import LocalAuthProvider
 from app.core.auth_failures import TokenRejected
 from app.core.config import Settings
 from app.core.database import get_session
@@ -77,7 +77,7 @@ def local_settings() -> Settings:
         app_env="development",
         database_url="sqlite+aiosqlite://",
         redis_url="redis://localhost:6379/0",
-        auth_mode="local",
+        auth_provider="local",
         local_auth_token=LOCAL_TOKEN,
     )
 
@@ -139,7 +139,7 @@ async def test_local_auth_accepts_only_exact_configured_token() -> None:
 
     identity = await provider.verify_token(LOCAL_TOKEN)
 
-    assert identity.clerk_user_id == LOCAL_EXTERNAL_USER_ID
+    assert identity.external_user_id == LOCAL_EXTERNAL_USER_ID
     for rejected_token in ("", "wrong-local-token", "é"):
         with pytest.raises(TokenRejected) as error:
             await provider.verify_token(rejected_token)
@@ -176,7 +176,7 @@ async def _load_local_aggregate(database_url: str) -> tuple[User | None, dict[st
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = await session.scalar(
-            select(User).where(User.clerk_user_id == LOCAL_EXTERNAL_USER_ID)
+            select(User).where(User.external_user_id == LOCAL_EXTERNAL_USER_ID)
         )
         if user is None:
             counts = {
@@ -190,7 +190,7 @@ async def _load_local_aggregate(database_url: str) -> tuple[User | None, dict[st
                 "user": int(
                     await session.scalar(
                         select(func.count(User.id)).where(
-                            User.clerk_user_id == LOCAL_EXTERNAL_USER_ID
+                            User.external_user_id == LOCAL_EXTERNAL_USER_ID
                         )
                     )
                     or 0
@@ -242,7 +242,7 @@ async def test_first_local_request_durably_bootstraps_once_and_repeat_is_idempot
     assert first.status_code == 200
     first_user, first_counts = await _load_local_aggregate(database_url)
     assert first_user is not None
-    assert first_user.clerk_user_id == LOCAL_EXTERNAL_USER_ID
+    assert first_user.external_user_id == LOCAL_EXTERNAL_USER_ID
     assert first_user.email == LOCAL_EMAIL
     assert first_counts == {
         "user": 1,
@@ -285,7 +285,8 @@ async def test_clerk_mode_rejects_local_token_and_does_not_bootstrap_local_user(
 async def test_concurrent_first_bootstrap_creates_one_complete_aggregate(
     bootstrap_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    from app.services.user_bootstrap_service import UserBootstrapService
+    from app.auth.domain import ExternalUserProfile
+    from app.services.user_provisioning import UserProvisioning
 
     suffix = uuid4().hex
     external_user_id = f"concurrent_bootstrap_{suffix}"
@@ -295,9 +296,11 @@ async def test_concurrent_first_bootstrap_creates_one_complete_aggregate(
     async def bootstrap() -> User:
         async with bootstrap_session_factory() as session:
             await start.wait()
-            user = await UserBootstrapService(session).ensure_user(
-                external_user_id=external_user_id,
-                email=email,
+            user = await UserProvisioning(session).ensure_user(
+                ExternalUserProfile(
+                    external_user_id=external_user_id,
+                    email=email,
+                )
             )
             await session.commit()
             return user
@@ -313,13 +316,13 @@ async def test_concurrent_first_bootstrap_creates_one_complete_aggregate(
     assert first.id == second.id
     async with bootstrap_session_factory() as session:
         user = await session.scalar(
-            select(User).where(User.clerk_user_id == external_user_id)
+            select(User).where(User.external_user_id == external_user_id)
         )
         assert user is not None
         counts = {
             "user": await session.scalar(
                 select(func.count(User.id)).where(
-                    User.clerk_user_id == external_user_id
+                    User.external_user_id == external_user_id
                 )
             ),
             "agent_config": await session.scalar(

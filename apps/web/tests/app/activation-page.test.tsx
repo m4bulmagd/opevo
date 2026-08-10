@@ -10,8 +10,7 @@ import type { ActivationSnapshot } from "@/lib/types/activation";
 import { forwardingGuide } from "./activation-snapshot-fixture";
 
 const clerkConfigState = vi.hoisted(() => ({
-  authMode: "local" as "local" | "clerk",
-  shouldWrapClerk: false,
+  authProvider: "local" as "local" | "clerk",
 }));
 const clerkSignOutState = vi.hoisted(() => ({
   variants: [] as Array<"activation" | "mobile" | "workspace">,
@@ -27,18 +26,15 @@ const { getAccountMock, getActivationSnapshotMock, getDevelopmentCapabilitiesMoc
     refreshMock: vi.fn(),
   }));
 
-vi.mock("@/lib/auth/clerk-config", () => ({
-  get authMode() {
-    return clerkConfigState.authMode;
-  },
-  get shouldWrapClerk() {
-    return clerkConfigState.shouldWrapClerk;
+vi.mock("@/lib/auth/auth-config", () => ({
+  get authProvider() {
+    return clerkConfigState.authProvider;
   },
 }));
 
-vi.mock("@/components/auth/clerk-sign-out", () => {
+vi.mock("@/components/auth/sign-out-control", () => {
   return {
-    ClerkSignOut: ({ variant }: { variant: "activation" | "mobile" | "workspace" }) => {
+    SignOutControl: ({ variant }: { variant: "activation" | "mobile" | "workspace" }) => {
       clerkSignOutState.variants.push(variant);
       return <button aria-label={`${variant} Clerk sign-out sentinel`} type="button" />;
     },
@@ -406,8 +402,7 @@ describe("authoritative stage refresh", () => {
 
 describe("activation route feedback", () => {
   beforeEach(() => {
-    clerkConfigState.authMode = "local";
-    clerkConfigState.shouldWrapClerk = false;
+    clerkConfigState.authProvider = "local";
     clerkSignOutState.variants.length = 0;
   });
 
@@ -424,8 +419,7 @@ describe("activation route feedback", () => {
   });
 
   it("delegates Clerk sign-out to the shared activation leaf", async () => {
-    clerkConfigState.authMode = "clerk";
-    clerkConfigState.shouldWrapClerk = true;
+    clerkConfigState.authProvider = "clerk";
     const { default: ActivationLayout } = await import("@/app/(activation)/activate/layout");
 
     render(await ActivationLayout({ children: <div id="activation-content">Activation form</div> }));

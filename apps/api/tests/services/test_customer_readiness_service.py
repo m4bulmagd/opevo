@@ -58,7 +58,7 @@ def build_records():
     user_id = uuid4()
     user = User(
         id=user_id,
-        clerk_user_id="user-ready",
+        external_user_id="user-ready",
         email="ready@example.com",
         status="active",
     )

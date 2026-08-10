@@ -144,7 +144,7 @@ async def test_concurrent_distinct_joins_create_one_call_and_one_intent(
 ) -> None:
     now = datetime.now(UTC)
     async with livekit_session_factory() as session:
-        user = User(clerk_user_id="concurrent-user", email="concurrent@example.com")
+        user = User(external_user_id="concurrent-user", email="concurrent@example.com")
         session.add(user)
         await session.flush()
         session.add_all(
@@ -228,7 +228,7 @@ async def test_account_lock_orders_admission_against_deactivation_commit(
     now = datetime.now(UTC)
     async with livekit_session_factory() as session:
         user = User(
-            clerk_user_id=f"account-admission-{first_commit}",
+            external_user_id=f"account-admission-{first_commit}",
             email=f"account-admission-{first_commit}@example.com",
         )
         session.add(user)
@@ -387,7 +387,7 @@ async def test_agent_join_cannot_resurrect_call_failed_after_stale_pending_read(
     livekit_session_factory,
 ) -> None:
     async with livekit_session_factory() as session:
-        user = User(clerk_user_id="agent-race-user", email="agent-race@example.com")
+        user = User(external_user_id="agent-race-user", email="agent-race@example.com")
         session.add(user)
         await session.flush()
         call = Call(
@@ -460,7 +460,7 @@ async def test_end_before_begin_claim_makes_start_ineligible_without_provider_io
 ) -> None:
     async with livekit_session_factory() as session:
         user = User(
-            clerk_user_id="end-before-claim-user",
+            external_user_id="end-before-claim-user",
             email="end-before-claim@example.com",
         )
         session.add(user)
@@ -536,7 +536,7 @@ async def test_end_after_claim_then_delete_purges_call_and_late_success_only_upd
     now = datetime.now(UTC)
     async with livekit_session_factory() as session:
         user = User(
-            clerk_user_id="delete-start-race-user",
+            external_user_id="delete-start-race-user",
             email="delete-start-race@example.com",
         )
         session.add(user)

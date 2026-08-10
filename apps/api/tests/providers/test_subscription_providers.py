@@ -409,7 +409,6 @@ async def test_subscription_and_hosted_sessions_reuse_the_stripe_classifier(
         await service.create_checkout_session(
             user_id="user_123",
             customer_email="billing@example.com",
-            clerk_user_id="clerk_123",
             plan_tier="starter",
             lifecycle_generation=7,
         )

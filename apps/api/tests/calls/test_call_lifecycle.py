@@ -13,7 +13,7 @@ async def test_create_user_and_default_agent_config(
     agent_config_repository = AgentConfigRepository(db_session)
 
     user = await user_repository.create(
-        clerk_user_id="user_123",
+        external_user_id="user_123",
         email="test@example.com",
     )
     config = await agent_config_repository.create_default(user.id)

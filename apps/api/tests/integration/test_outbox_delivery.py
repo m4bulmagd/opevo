@@ -383,7 +383,7 @@ async def _seed_customer_dispatch_event(
     now = datetime.now(UTC)
     async with session_factory() as session:
         user = User(
-            clerk_user_id=f"dispatch_fault_{uuid4().hex}",
+            external_user_id=f"dispatch_fault_{uuid4().hex}",
             email=f"dispatch_fault_{uuid4().hex}@example.com",
         )
         session.add(user)
@@ -461,7 +461,7 @@ async def _seed_verification_dispatch_event(
 ) -> OutboxEvent:
     async with session_factory() as session:
         user = User(
-            clerk_user_id=f"verification_fault_{uuid4().hex}",
+            external_user_id=f"verification_fault_{uuid4().hex}",
             email=f"verification_fault_{uuid4().hex}@example.com",
         )
         session.add(user)
@@ -563,7 +563,7 @@ async def test_concurrent_onboarding_retry_creates_one_new_attempt(
 ) -> None:
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"retry_{uuid4().hex}",
+            external_user_id=f"retry_{uuid4().hex}",
             email=f"retry_{uuid4().hex}@example.com",
         )
         session.add(user)
@@ -608,7 +608,7 @@ async def test_concurrent_go_live_commands_create_one_durable_attempt(
     now = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"go_live_{uuid4().hex}",
+            external_user_id=f"go_live_{uuid4().hex}",
             email=f"go_live_{uuid4().hex}@example.com",
             country_code="FR",
         )
@@ -725,7 +725,7 @@ async def test_concurrent_provisioning_confirmation_creates_one_durable_intent(
     activation_id = uuid4()
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"confirm_{uuid4().hex}",
+            external_user_id=f"confirm_{uuid4().hex}",
             email=f"confirm_{uuid4().hex}@example.com",
             country_code="FR",
         )
@@ -2034,7 +2034,7 @@ async def _seed_routing_state(
 ) -> UUID:
     async with session_factory() as session:
         user = User(
-            clerk_user_id=f"routing_{uuid4().hex}",
+            external_user_id=f"routing_{uuid4().hex}",
             email=f"routing_{uuid4().hex}@example.com",
         )
         session.add(user)
@@ -2265,7 +2265,7 @@ async def test_provisioning_provider_runs_without_provisioning_row_lock(
 
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"provision_lock_{uuid4().hex}",
+            external_user_id=f"provision_lock_{uuid4().hex}",
             email=f"provision_lock_{uuid4().hex}@example.com",
             country_code="FR",
         )
@@ -2350,7 +2350,7 @@ async def test_same_provisioning_key_serializes_provider_execution_past_lease_ov
 
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"provision_serial_{uuid4().hex}",
+            external_user_id=f"provision_serial_{uuid4().hex}",
             email=f"provision_serial_{uuid4().hex}@example.com",
             country_code="FR",
         )
@@ -2427,7 +2427,7 @@ async def test_default_provision_handler_threads_key_but_requires_durable_number
 
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"provision_{uuid4().hex}",
+            external_user_id=f"provision_{uuid4().hex}",
             email=f"provision_{uuid4().hex}@example.com",
         )
         session.add(user)
@@ -2502,7 +2502,7 @@ async def test_provisioning_crash_replays_same_key_and_stays_disabled_until_rout
     operation_key = "outbox:phone-provision:crash-safe-disabled"
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"provision_crash_{uuid4().hex}",
+            external_user_id=f"provision_crash_{uuid4().hex}",
             email=f"provision_crash_{uuid4().hex}@example.com",
             country_code="FR",
         )
@@ -2616,7 +2616,7 @@ async def test_reclaimed_crashed_provision_recovers_reference_only_cleanup(
     operation_key = "outbox:phone-provision:stale-recovery"
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"provision_stale_recovery_{uuid4().hex}",
+            external_user_id=f"provision_stale_recovery_{uuid4().hex}",
             email=f"provision_stale_recovery_{uuid4().hex}@example.com",
             country_code="FR",
         )
@@ -2810,7 +2810,7 @@ async def test_pending_order_retries_outbox_without_customer_retry(
     operation_key = "outbox:phone-provision:pending-order"
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"provision_pending_{uuid4().hex}",
+            external_user_id=f"provision_pending_{uuid4().hex}",
             email=f"provision_pending_{uuid4().hex}@example.com",
             country_code="FR",
         )
@@ -2901,7 +2901,7 @@ async def test_existing_order_conflict_is_terminal_and_disables_customer_retry(
     operation_key = "outbox:phone-provision:order-conflict"
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"provision_conflict_{uuid4().hex}",
+            external_user_id=f"provision_conflict_{uuid4().hex}",
             email=f"provision_conflict_{uuid4().hex}@example.com",
             country_code="FR",
         )
@@ -2976,7 +2976,7 @@ async def test_customer_retry_new_event_reuses_original_provider_operation_key(
 
     async with outbox_session_factory() as session:
         user = User(
-            clerk_user_id=f"provision_customer_retry_{uuid4().hex}",
+            external_user_id=f"provision_customer_retry_{uuid4().hex}",
             email=f"provision_customer_retry_{uuid4().hex}@example.com",
             country_code="FR",
         )

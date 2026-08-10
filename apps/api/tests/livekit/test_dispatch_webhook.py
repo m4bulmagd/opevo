@@ -182,7 +182,7 @@ async def test_participant_joined_dispatches_agent_and_creates_pending_call(
         engine = create_async_engine(client_database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            user = User(clerk_user_id="user_livekit", email="livekit@example.com")
+            user = User(external_user_id="user_livekit", email="livekit@example.com")
             session.add(user)
             await session.flush()
             session.add(

@@ -39,7 +39,7 @@ async def _seed_window(
 ) -> CustomerActivation:
     identity = uuid4().hex
     user = User(
-        clerk_user_id=f"verification_expiry_{identity}",
+        external_user_id=f"verification_expiry_{identity}",
         email=f"verification-expiry-{identity}@example.com",
     )
     db_session.add(user)

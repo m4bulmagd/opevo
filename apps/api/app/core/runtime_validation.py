@@ -4,6 +4,7 @@ from app.core.clerk_verification_source import select_clerk_verification_source
 from app.core.config import Settings
 from app.core.dispatch_token import is_dispatch_secret_safe
 from app.core.http_origin import (
+    parse_canonical_http_origin,
     parse_canonical_http_origins,
     parse_http_origin,
     validate_absolute_https_url,
@@ -19,8 +20,6 @@ LIVEKIT_REQUIRED_SETTINGS = (
 PRODUCTION_REQUIRED_SETTINGS = (
     "database_url",
     "redis_url",
-    "clerk_issuer",
-    "clerk_webhook_secret",
     "stripe_secret_key",
     "stripe_webhook_secret",
     "stripe_price_starter",
@@ -80,14 +79,14 @@ def _validate_livekit_configuration(settings: Settings, environment: str) -> Non
 
 def validate_api_runtime(settings: Settings) -> None:
     environment = settings.app_env.strip().lower()
-    if settings.auth_mode == "local" and (
+    if settings.auth_provider == "local" and (
         _is_missing(settings.local_auth_token)
         or settings.local_auth_token != settings.local_auth_token.strip()
     ):
         raise RuntimeError(
             "Missing or invalid required runtime settings: LOCAL_AUTH_TOKEN"
         )
-    if settings.auth_mode == "clerk":
+    if settings.auth_provider == "clerk":
         invalid_clerk: list[str] = []
         if _is_missing(settings.clerk_issuer):
             invalid_clerk.append("CLERK_ISSUER")
@@ -111,13 +110,31 @@ def validate_api_runtime(settings: Settings) -> None:
                 "Missing or invalid required runtime settings: "
                 + ", ".join(invalid_clerk)
             )
+    if settings.auth_provider == "supabase":
+        invalid_supabase: list[str] = []
+        try:
+            supabase_origin = parse_canonical_http_origin(settings.supabase_url)
+        except ValueError:
+            invalid_supabase.append("SUPABASE_URL")
+        else:
+            if environment in {"staging", "production"} and not supabase_origin.startswith(
+                "https://"
+            ):
+                invalid_supabase.append("SUPABASE_URL")
+        if _is_missing(settings.supabase_jwt_audience):
+            invalid_supabase.append("SUPABASE_JWT_AUDIENCE")
+        if invalid_supabase:
+            raise RuntimeError(
+                "Missing or invalid required runtime settings: "
+                + ", ".join(invalid_supabase)
+            )
     if environment == "development":
         _validate_livekit_configuration(settings, environment)
         return
 
     invalid_modes: list[str] = []
-    if settings.auth_mode != "clerk":
-        invalid_modes.append("AUTH_MODE")
+    if settings.auth_provider not in {"clerk", "supabase"}:
+        invalid_modes.append("AUTH_PROVIDER")
     if environment == "production":
         required_modes = {
             "BILLING_MODE": (settings.billing_mode, "stripe"),
@@ -142,8 +159,10 @@ def validate_api_runtime(settings: Settings) -> None:
 
     missing = _require(settings, PRODUCTION_REQUIRED_SETTINGS)
 
-    if _is_missing(settings.clerk_jwt_key) and _is_missing(settings.clerk_jwks_url):
-        missing.append("CLERK_JWT_KEY or CLERK_JWKS_URL")
+    if settings.auth_provider == "clerk":
+        missing.extend(_require(settings, ("clerk_issuer", "clerk_webhook_secret")))
+        if _is_missing(settings.clerk_jwt_key) and _is_missing(settings.clerk_jwks_url):
+            missing.append("CLERK_JWT_KEY or CLERK_JWKS_URL")
 
     if not settings.telnyx_ordering_enabled:
         missing.append("TELNYX_ORDERING_ENABLED")

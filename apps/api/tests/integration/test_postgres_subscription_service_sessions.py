@@ -77,7 +77,7 @@ async def test_billing_and_onboarding_share_a_real_postgres_async_session(
 ) -> None:
     async with task5_service_session_factory() as session:
         user = User(
-            clerk_user_id=f"user_services_{uuid4().hex}",
+            external_user_id=f"user_services_{uuid4().hex}",
             email=f"services_{uuid4().hex}@example.com",
         )
         session.add(user)
@@ -128,7 +128,7 @@ async def test_stale_identity_map_cannot_regress_locked_subscription(
 
     async with task5_service_session_factory() as seed_session:
         user = User(
-            clerk_user_id=f"user_stale_{uuid4().hex}",
+            external_user_id=f"user_stale_{uuid4().hex}",
             email=f"stale_{uuid4().hex}@example.com",
         )
         seed_session.add(user)
@@ -199,7 +199,7 @@ async def test_concurrent_reactivation_checkout_requests_share_provider_identity
 ) -> None:
     async with task5_service_session_factory() as seed_session:
         user = User(
-            clerk_user_id=f"user_checkout_{uuid4().hex}",
+            external_user_id=f"user_checkout_{uuid4().hex}",
             email=f"checkout_{uuid4().hex}@example.com",
             status="inactive",
             lifecycle_generation=2,

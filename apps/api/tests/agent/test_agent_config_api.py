@@ -51,7 +51,7 @@ def test_api_agent_name_limit_matches_profile_receptionist_name_bound() -> None:
 async def seed_agent_config(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     email: str,
     agent_name: str = "Assistant",
     owner_context: str | None = None,
@@ -63,7 +63,7 @@ async def seed_agent_config(
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = User(clerk_user_id=clerk_user_id, email=email)
+        user = User(external_user_id=external_user_id, email=email)
         session.add(user)
         await session.flush()
         session.add(
@@ -84,7 +84,7 @@ async def seed_agent_config(
 async def seed_phone_number(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     is_active: bool,
     provider_number_id: str | None = "pn_123",
 ) -> None:
@@ -93,7 +93,7 @@ async def seed_phone_number(
     async with session_factory() as session:
         user = (
             await session.execute(
-                select(User).where(User.clerk_user_id == clerk_user_id)
+                select(User).where(User.external_user_id == external_user_id)
             )
         ).scalar_one()
         session.add(
@@ -114,7 +114,7 @@ async def seed_phone_number(
 async def seed_subscription(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     status: str = "active",
     plan_tier: str = "starter",
     current_period_start: datetime | None = None,
@@ -125,15 +125,15 @@ async def seed_subscription(
     async with session_factory() as session:
         user = (
             await session.execute(
-                select(User).where(User.clerk_user_id == clerk_user_id)
+                select(User).where(User.external_user_id == external_user_id)
             )
         ).scalar_one()
         now = datetime.now(UTC)
         session.add(
             Subscription(
                 user_id=user.id,
-                stripe_customer_id=f"cus_{clerk_user_id}",
-                stripe_subscription_id=f"sub_{clerk_user_id}",
+                stripe_customer_id=f"cus_{external_user_id}",
+                stripe_subscription_id=f"sub_{external_user_id}",
                 plan_tier=plan_tier,
                 status=status,
                 allocated_minutes=60,
@@ -148,7 +148,7 @@ async def seed_subscription(
 async def seed_usage_balance(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     balance: int,
 ) -> None:
     engine = create_async_engine(database_url, future=True)
@@ -156,14 +156,14 @@ async def seed_usage_balance(
     async with session_factory() as session:
         user = (
             await session.execute(
-                select(User).where(User.clerk_user_id == clerk_user_id)
+                select(User).where(User.external_user_id == external_user_id)
             )
         ).scalar_one()
         session.add(
             UsageLedger(
                 user_id=user.id,
                 event_type="invoice_paid_reset",
-                source_id=f"balance_{clerk_user_id}_{balance}",
+                source_id=f"balance_{external_user_id}_{balance}",
                 minutes_delta=balance,
                 balance_after=balance,
             )
@@ -173,14 +173,14 @@ async def seed_usage_balance(
 
 
 async def seed_provisioning(
-    database_url: str, *, clerk_user_id: str, status: str, can_retry: bool = False
+    database_url: str, *, external_user_id: str, status: str, can_retry: bool = False
 ) -> None:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         user = (
             await session.execute(
-                select(User).where(User.clerk_user_id == clerk_user_id)
+                select(User).where(User.external_user_id == external_user_id)
             )
         ).scalar_one()
         phone_number = (
@@ -202,14 +202,14 @@ async def seed_provisioning(
     await engine.dispose()
 
 
-async def fetch_agent_config(database_url: str, *, clerk_user_id: str) -> AgentConfig:
+async def fetch_agent_config(database_url: str, *, external_user_id: str) -> AgentConfig:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         result = await session.execute(
             select(AgentConfig)
             .join(User, AgentConfig.user_id == User.id)
-            .where(User.clerk_user_id == clerk_user_id)
+            .where(User.external_user_id == external_user_id)
         )
         config = result.scalar_one()
     await engine.dispose()
@@ -217,7 +217,7 @@ async def fetch_agent_config(database_url: str, *, clerk_user_id: str) -> AgentC
 
 
 async def fetch_business_profile(
-    database_url: str, *, clerk_user_id: str
+    database_url: str, *, external_user_id: str
 ) -> BusinessProfile:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -225,7 +225,7 @@ async def fetch_business_profile(
         result = await session.execute(
             select(BusinessProfile)
             .join(User, BusinessProfile.user_id == User.id)
-            .where(User.clerk_user_id == clerk_user_id)
+            .where(User.external_user_id == external_user_id)
         )
         profile = result.scalar_one()
     await engine.dispose()
@@ -233,7 +233,7 @@ async def fetch_business_profile(
 
 
 async def fetch_customer_activation(
-    database_url: str, *, clerk_user_id: str
+    database_url: str, *, external_user_id: str
 ) -> CustomerActivation:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -241,21 +241,21 @@ async def fetch_customer_activation(
         result = await session.execute(
             select(CustomerActivation)
             .join(User, CustomerActivation.user_id == User.id)
-            .where(User.clerk_user_id == clerk_user_id)
+            .where(User.external_user_id == external_user_id)
         )
         activation = result.scalar_one()
     await engine.dispose()
     return activation
 
 
-async def fetch_phone_number(database_url: str, *, clerk_user_id: str) -> PhoneNumber:
+async def fetch_phone_number(database_url: str, *, external_user_id: str) -> PhoneNumber:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         result = await session.execute(
             select(PhoneNumber)
             .join(User, PhoneNumber.user_id == User.id)
-            .where(User.clerk_user_id == clerk_user_id)
+            .where(User.external_user_id == external_user_id)
         )
         phone_number = result.scalar_one()
     await engine.dispose()
@@ -286,7 +286,7 @@ async def test_get_agent_config_returns_full_config(
 ) -> None:
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name="Ava",
         owner_context="Muhammad Abulmagd",
@@ -315,7 +315,7 @@ async def test_get_agent_config_returns_bootstrapped_default_config(
     engine = create_async_engine(client_database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id="user_bootstrap_cfg", email="boot@example.com"))
+        session.add(User(external_user_id="user_bootstrap_cfg", email="boot@example.com"))
         await session.commit()
     await engine.dispose()
 
@@ -338,7 +338,7 @@ async def test_patch_agent_config_updates_prompt_fields_without_toggle(
 ) -> None:
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name="Ava",
         pipeline_mode="stt_llm_tts",
@@ -380,10 +380,10 @@ async def test_activation_flow_persists_profile_owned_assistant_content_patch(
     field_name: str,
     value: str,
 ) -> None:
-    clerk_user_id = f"user_managed_{field_name}"
+    external_user_id = f"user_managed_{field_name}"
     await seed_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email=f"managed-{field_name}@example.com",
         agent_name="Ava",
         owner_context="Original owner context",
@@ -394,17 +394,17 @@ async def test_activation_flow_persists_profile_owned_assistant_content_patch(
     # The controlled environment remains disabled; request composition is enabled.
     response = await async_client.patch(
         "/api/agent/config",
-        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"},
         json={field_name: value},
     )
 
     config = await fetch_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
     )
     profile = await fetch_business_profile(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
     )
 
     assert response.status_code == 200
@@ -425,7 +425,7 @@ async def test_activation_flow_accepts_idempotent_enabled_value_with_content_pat
 ) -> None:
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_active_content",
+        external_user_id="user_active_content",
         email="active-content@example.com",
         agent_name="Léa",
         is_enabled=True,
@@ -435,7 +435,7 @@ async def test_activation_flow_accepts_idempotent_enabled_value_with_content_pat
     async with session_factory() as session:
         user = (
             await session.execute(
-                select(User).where(User.clerk_user_id == "user_active_content")
+                select(User).where(User.external_user_id == "user_active_content")
             )
         ).scalar_one()
         session.add(
@@ -476,11 +476,11 @@ async def test_activation_flow_accepts_idempotent_enabled_value_with_content_pat
     assert await fetch_outbox_event_count(client_database_url) == 0
     profile = await fetch_business_profile(
         client_database_url,
-        clerk_user_id="user_active_content",
+        external_user_id="user_active_content",
     )
     activation = await fetch_customer_activation(
         client_database_url,
-        clerk_user_id="user_active_content",
+        external_user_id="user_active_content",
     )
     assert activation.profile_confirmed_revision == profile.content_revision
 
@@ -492,10 +492,10 @@ async def test_activation_flow_allows_non_projected_patch_fields(
     rs256_clerk_token_for,
     activation_runtime_enabled,
 ) -> None:
-    clerk_user_id = "user_managed_non_projected"
+    external_user_id = "user_managed_non_projected"
     await seed_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="managed-non-projected@example.com",
         agent_name="Ava",
         pipeline_mode="stt_llm_tts",
@@ -504,7 +504,7 @@ async def test_activation_flow_allows_non_projected_patch_fields(
     # The controlled environment remains disabled; request composition is enabled.
     response = await async_client.patch(
         "/api/agent/config",
-        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"},
         json={"pipeline_mode": "sts"},
     )
 
@@ -519,10 +519,10 @@ async def test_activation_flow_rejects_direct_enable_without_mutation_or_outbox(
     rs256_clerk_token_for,
     activation_runtime_enabled,
 ) -> None:
-    clerk_user_id = "user_activation_managed_enable"
+    external_user_id = "user_activation_managed_enable"
     await seed_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="activation-managed-enable@example.com",
         agent_name="Léa",
         owner_context="Atelier Martin reception",
@@ -533,13 +533,13 @@ async def test_activation_flow_rejects_direct_enable_without_mutation_or_outbox(
     # The controlled environment remains disabled; request composition is enabled.
     response = await async_client.patch(
         "/api/agent/config",
-        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"},
         json={"is_enabled": True},
     )
 
     stored = await fetch_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
     )
     assert response.status_code == 409
     assert response.json() == {"detail": {"code": "agent_enable_managed_by_go_live"}}
@@ -554,10 +554,10 @@ async def test_activation_flow_still_allows_customer_to_disable_routing(
     rs256_clerk_token_for,
     activation_runtime_enabled,
 ) -> None:
-    clerk_user_id = "user_activation_disable"
+    external_user_id = "user_activation_disable"
     await seed_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="activation-disable@example.com",
         agent_name="Léa",
         owner_context="Atelier Martin reception",
@@ -568,13 +568,13 @@ async def test_activation_flow_still_allows_customer_to_disable_routing(
     # The controlled environment remains disabled; request composition is enabled.
     response = await async_client.patch(
         "/api/agent/config",
-        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"},
         json={"is_enabled": False},
     )
 
     stored = await fetch_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
     )
     assert response.status_code == 200
     assert response.json()["is_enabled"] is False
@@ -600,10 +600,10 @@ async def test_patch_agent_config_accepts_normalized_content_at_limit(
     field_name: str,
     maximum: int,
 ) -> None:
-    clerk_user_id = f"user_agent_limit_{field_name}"
+    external_user_id = f"user_agent_limit_{field_name}"
     await seed_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email=f"{field_name}@example.com",
         agent_name="Ava",
         is_enabled=False,
@@ -612,13 +612,13 @@ async def test_patch_agent_config_accepts_normalized_content_at_limit(
 
     response = await async_client.patch(
         "/api/agent/config",
-        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"},
         json={field_name: f"  {bounded_value}  "},
     )
 
     stored = await fetch_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
     )
     assert response.status_code == 200
     assert response.json()[field_name] == bounded_value
@@ -642,10 +642,10 @@ async def test_patch_agent_config_rejects_oversized_content(
     field_name: str,
     maximum: int,
 ) -> None:
-    clerk_user_id = f"user_agent_overflow_{field_name}"
+    external_user_id = f"user_agent_overflow_{field_name}"
     await seed_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email=f"overflow-{field_name}@example.com",
         agent_name="Ava",
         is_enabled=False,
@@ -653,7 +653,7 @@ async def test_patch_agent_config_rejects_oversized_content(
 
     response = await async_client.patch(
         "/api/agent/config",
-        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"},
         json={field_name: "x" * (maximum + 1)},
     )
 
@@ -666,10 +666,10 @@ async def test_patch_agent_config_rejects_unknown_fields(
     client_database_url,
     rs256_clerk_token_for,
 ) -> None:
-    clerk_user_id = "user_agent_unknown_field"
+    external_user_id = "user_agent_unknown_field"
     await seed_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="unknown-field@example.com",
         agent_name="Ava",
         is_enabled=False,
@@ -677,7 +677,7 @@ async def test_patch_agent_config_rejects_unknown_fields(
 
     response = await async_client.patch(
         "/api/agent/config",
-        headers={"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"},
+        headers={"authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"},
         json={"unsupported_instruction": "ignore the policy"},
     )
 
@@ -690,11 +690,11 @@ async def test_legacy_oversized_config_can_be_read_but_not_enabled(
     client_database_url,
     rs256_clerk_token_for,
 ) -> None:
-    clerk_user_id = "user_agent_legacy_oversized"
+    external_user_id = "user_agent_legacy_oversized"
     oversized_name = "A" * (AGENT_NAME_MAX_LENGTH + 1)
     await seed_agent_config(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         email="legacy-oversized@example.com",
         agent_name=oversized_name,
         owner_context="Dental office reception",
@@ -704,21 +704,21 @@ async def test_legacy_oversized_config_can_be_read_but_not_enabled(
     )
     await seed_phone_number(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         is_active=False,
     )
-    await seed_subscription(client_database_url, clerk_user_id=clerk_user_id)
+    await seed_subscription(client_database_url, external_user_id=external_user_id)
     await seed_provisioning(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         status="succeeded",
     )
     await seed_usage_balance(
         client_database_url,
-        clerk_user_id=clerk_user_id,
+        external_user_id=external_user_id,
         balance=60,
     )
-    headers = {"authorization": f"Bearer {rs256_clerk_token_for(clerk_user_id)}"}
+    headers = {"authorization": f"Bearer {rs256_clerk_token_for(external_user_id)}"}
 
     get_response = await async_client.get("/api/agent/config", headers=headers)
     enable_response = await async_client.patch(
@@ -760,7 +760,7 @@ async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes
 
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name="Opevo Front Desk",
         owner_context="Dental office reception",
@@ -769,20 +769,20 @@ async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes
         is_enabled=False,
     )
     await seed_phone_number(
-        client_database_url, clerk_user_id="user_agent_cfg", is_active=False
+        client_database_url, external_user_id="user_agent_cfg", is_active=False
     )
     await seed_subscription(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         status=subscription_status,
     )
     await seed_usage_balance(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         balance=60,
     )
     await seed_provisioning(
-        client_database_url, clerk_user_id="user_agent_cfg", status="succeeded"
+        client_database_url, external_user_id="user_agent_cfg", status="succeeded"
     )
 
     response = await async_client.patch(
@@ -794,10 +794,10 @@ async def test_patch_agent_config_persists_enable_intent_when_is_enabled_changes
     )
 
     config = await fetch_agent_config(
-        client_database_url, clerk_user_id="user_agent_cfg"
+        client_database_url, external_user_id="user_agent_cfg"
     )
     phone_number = await fetch_phone_number(
-        client_database_url, clerk_user_id="user_agent_cfg"
+        client_database_url, external_user_id="user_agent_cfg"
     )
 
     assert response.status_code == 200
@@ -821,7 +821,7 @@ async def test_patch_agent_config_toggle_without_phone_number_returns_409(
 ) -> None:
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name="Opevo Front Desk",
         owner_context="Dental office reception",
@@ -829,10 +829,10 @@ async def test_patch_agent_config_toggle_without_phone_number_returns_409(
         knowledge_base="Open weekdays",
         is_enabled=False,
     )
-    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_subscription(client_database_url, external_user_id="user_agent_cfg")
     await seed_usage_balance(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         balance=60,
     )
 
@@ -856,7 +856,7 @@ async def test_patch_agent_config_enable_without_active_subscription_returns_409
 ) -> None:
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name="Opevo Front Desk",
         owner_context="Dental office reception",
@@ -865,15 +865,15 @@ async def test_patch_agent_config_enable_without_active_subscription_returns_409
         is_enabled=False,
     )
     await seed_phone_number(
-        client_database_url, clerk_user_id="user_agent_cfg", is_active=False
+        client_database_url, external_user_id="user_agent_cfg", is_active=False
     )
     await seed_usage_balance(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         balance=60,
     )
     await seed_provisioning(
-        client_database_url, clerk_user_id="user_agent_cfg", status="succeeded"
+        client_database_url, external_user_id="user_agent_cfg", status="succeeded"
     )
 
     response = await async_client.patch(
@@ -898,7 +898,7 @@ async def test_patch_agent_config_enable_with_zero_balance_returns_blocker_and_r
 ) -> None:
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name="Opevo Front Desk",
         owner_context="Dental office reception",
@@ -908,18 +908,18 @@ async def test_patch_agent_config_enable_with_zero_balance_returns_blocker_and_r
     )
     await seed_phone_number(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         is_active=False,
     )
-    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_subscription(client_database_url, external_user_id="user_agent_cfg")
     await seed_provisioning(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         status="succeeded",
     )
     await seed_usage_balance(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         balance=0,
     )
 
@@ -931,7 +931,7 @@ async def test_patch_agent_config_enable_with_zero_balance_returns_blocker_and_r
 
     config = await fetch_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
     )
     assert response.status_code == 409
     assert response.json()["detail"] == {
@@ -951,7 +951,7 @@ async def test_patch_agent_config_enable_with_expired_period_returns_blocker_and
     now = datetime.now(UTC)
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name="Opevo Front Desk",
         owner_context="Dental office reception",
@@ -961,23 +961,23 @@ async def test_patch_agent_config_enable_with_expired_period_returns_blocker_and
     )
     await seed_phone_number(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         is_active=False,
     )
     await seed_subscription(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         current_period_start=now - timedelta(days=2),
         current_period_end=now - timedelta(days=1),
     )
     await seed_provisioning(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         status="succeeded",
     )
     await seed_usage_balance(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         balance=60,
     )
 
@@ -989,7 +989,7 @@ async def test_patch_agent_config_enable_with_expired_period_returns_blocker_and
 
     config = await fetch_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
     )
     assert response.status_code == 409
     assert response.json()["detail"] == {
@@ -1008,7 +1008,7 @@ async def test_patch_agent_config_enable_with_default_name_is_case_insensitive(
 ) -> None:
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name=" assistant ",
         owner_context="Dental office reception",
@@ -1018,18 +1018,18 @@ async def test_patch_agent_config_enable_with_default_name_is_case_insensitive(
     )
     await seed_phone_number(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         is_active=False,
     )
-    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_subscription(client_database_url, external_user_id="user_agent_cfg")
     await seed_provisioning(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         status="succeeded",
     )
     await seed_usage_balance(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         balance=60,
     )
 
@@ -1053,7 +1053,7 @@ async def test_patch_agent_config_enable_without_provider_number_id_returns_409(
 ) -> None:
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name="Opevo Front Desk",
         owner_context="Dental office reception",
@@ -1063,20 +1063,20 @@ async def test_patch_agent_config_enable_without_provider_number_id_returns_409(
     )
     await seed_phone_number(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         is_active=False,
         provider_number_id=None,
     )
-    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_subscription(client_database_url, external_user_id="user_agent_cfg")
     await seed_provisioning(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         status="failed",
         can_retry=True,
     )
     await seed_usage_balance(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         balance=60,
     )
 
@@ -1100,7 +1100,7 @@ async def test_patch_agent_config_enable_with_incomplete_setup_returns_409(
 ) -> None:
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name="Assistant",
         owner_context="",
@@ -1109,15 +1109,15 @@ async def test_patch_agent_config_enable_with_incomplete_setup_returns_409(
         is_enabled=False,
     )
     await seed_phone_number(
-        client_database_url, clerk_user_id="user_agent_cfg", is_active=False
+        client_database_url, external_user_id="user_agent_cfg", is_active=False
     )
-    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_subscription(client_database_url, external_user_id="user_agent_cfg")
     await seed_provisioning(
-        client_database_url, clerk_user_id="user_agent_cfg", status="succeeded"
+        client_database_url, external_user_id="user_agent_cfg", status="succeeded"
     )
     await seed_usage_balance(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         balance=60,
     )
 
@@ -1145,7 +1145,7 @@ async def test_patch_agent_config_commit_survives_redis_wakeup_failure(
 
     await seed_agent_config(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         email="agent@example.com",
         agent_name="Opevo Front Desk",
         owner_context="Dental office reception",
@@ -1154,15 +1154,15 @@ async def test_patch_agent_config_commit_survives_redis_wakeup_failure(
         is_enabled=False,
     )
     await seed_phone_number(
-        client_database_url, clerk_user_id="user_agent_cfg", is_active=False
+        client_database_url, external_user_id="user_agent_cfg", is_active=False
     )
-    await seed_subscription(client_database_url, clerk_user_id="user_agent_cfg")
+    await seed_subscription(client_database_url, external_user_id="user_agent_cfg")
     await seed_provisioning(
-        client_database_url, clerk_user_id="user_agent_cfg", status="succeeded"
+        client_database_url, external_user_id="user_agent_cfg", status="succeeded"
     )
     await seed_usage_balance(
         client_database_url,
-        clerk_user_id="user_agent_cfg",
+        external_user_id="user_agent_cfg",
         balance=60,
     )
 
@@ -1182,10 +1182,10 @@ async def test_patch_agent_config_commit_survives_redis_wakeup_failure(
         app.state.runtime.arq_pool = original_pool
 
     config = await fetch_agent_config(
-        client_database_url, clerk_user_id="user_agent_cfg"
+        client_database_url, external_user_id="user_agent_cfg"
     )
     phone_number = await fetch_phone_number(
-        client_database_url, clerk_user_id="user_agent_cfg"
+        client_database_url, external_user_id="user_agent_cfg"
     )
 
     event = await fetch_outbox_event(client_database_url)

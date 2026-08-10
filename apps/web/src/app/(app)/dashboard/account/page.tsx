@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { AccountProfileForm } from "@/components/account/account-profile-form";
+import { AccountSecurityControl } from "@/components/account/account-security-control";
 import { AccountSettingsPreview } from "@/components/account/account-settings-preview";
 import { CompactAccountStatusCard } from "@/components/account/account-status-card";
 import { AssignedNumberCard } from "@/components/account/assigned-number-card";
@@ -86,7 +87,7 @@ export default async function AccountPage() {
         </aside>
       </div>
 
-      <AccountSettingsPreview securityMode={identity.securityMode} />
+      <AccountSettingsPreview securityControl={<AccountSecurityControl />} securityMode={identity.securityMode} />
 
       {account.status === "active" ? (
         <ProductSurface

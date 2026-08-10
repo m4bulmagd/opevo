@@ -232,7 +232,7 @@ async def _seed_eligible_user(
     from app.models.user import User
 
     now = datetime.now(UTC)
-    user = User(clerk_user_id="dispatch-user", email="dispatch@example.com")
+    user = User(external_user_id="dispatch-user", email="dispatch@example.com")
     db_session.add(user)
     await db_session.flush()
     phone = PhoneNumber(

@@ -23,8 +23,8 @@ from app.models.user import User
 # ---------------------------------------------------------------------------
 
 
-async def _create_user(session, *, clerk_user_id: str, email: str) -> User:
-    user = User(clerk_user_id=clerk_user_id, email=email)
+async def _create_user(session, *, external_user_id: str, email: str) -> User:
+    user = User(external_user_id=external_user_id, email=email)
     session.add(user)
     await session.flush()
     return user
@@ -33,14 +33,14 @@ async def _create_user(session, *, clerk_user_id: str, email: str) -> User:
 async def seed_call_for_user(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     email: str,
 ) -> UUID:
     """Create a user with one completed call; return the call id."""
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = await _create_user(session, clerk_user_id=clerk_user_id, email=email)
+        user = await _create_user(session, external_user_id=external_user_id, email=email)
         call = Call(
             user_id=user.id,
             caller_number="+33100000001",
@@ -61,14 +61,14 @@ async def seed_call_for_user(
 async def seed_subscription_for_user(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     email: str,
 ) -> None:
     """Create a user with an active subscription."""
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = await _create_user(session, clerk_user_id=clerk_user_id, email=email)
+        user = await _create_user(session, external_user_id=external_user_id, email=email)
         subscription = Subscription(
             user_id=user.id,
             plan_tier="starter",
@@ -87,7 +87,7 @@ async def seed_subscription_for_user(
 async def seed_agent_config_for_user(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     email: str,
     agent_name: str = "Assistant",
 ) -> None:
@@ -95,7 +95,7 @@ async def seed_agent_config_for_user(
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        user = await _create_user(session, clerk_user_id=clerk_user_id, email=email)
+        user = await _create_user(session, external_user_id=external_user_id, email=email)
         session.add(
             AgentConfig(
                 user_id=user.id,
@@ -113,14 +113,14 @@ async def seed_agent_config_for_user(
 async def seed_bare_user(
     database_url: str,
     *,
-    clerk_user_id: str,
+    external_user_id: str,
     email: str,
 ) -> None:
     """Create a user with no associated data (user A in cross-tenant tests)."""
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
-        session.add(User(clerk_user_id=clerk_user_id, email=email))
+        session.add(User(external_user_id=external_user_id, email=email))
         await session.commit()
     await engine.dispose()
 
@@ -139,12 +139,12 @@ async def test_get_call_detail_returns_404_for_other_users_call(
     # Seed user A (no calls) and user B with a call.
     await seed_bare_user(
         client_database_url,
-        clerk_user_id="cross_tenant_user_a",
+        external_user_id="cross_tenant_user_a",
         email="user_a@example.com",
     )
     user_b_call_id = await seed_call_for_user(
         client_database_url,
-        clerk_user_id="cross_tenant_user_b",
+        external_user_id="cross_tenant_user_b",
         email="user_b@example.com",
     )
 
@@ -166,12 +166,12 @@ async def test_get_subscription_returns_null_not_other_users_subscription(
     # Seed user A (no subscription) and user B with an active subscription.
     await seed_bare_user(
         client_database_url,
-        clerk_user_id="cross_tenant_user_a",
+        external_user_id="cross_tenant_user_a",
         email="user_a@example.com",
     )
     await seed_subscription_for_user(
         client_database_url,
-        clerk_user_id="cross_tenant_user_b",
+        external_user_id="cross_tenant_user_b",
         email="user_b@example.com",
     )
 
@@ -194,13 +194,13 @@ async def test_patch_agent_config_does_not_affect_other_users_config(
     # Seed user A with their own config and user B with a distinct config.
     await seed_agent_config_for_user(
         client_database_url,
-        clerk_user_id="cross_tenant_user_a",
+        external_user_id="cross_tenant_user_a",
         email="user_a@example.com",
         agent_name="AgentA",
     )
     await seed_agent_config_for_user(
         client_database_url,
-        clerk_user_id="cross_tenant_user_b",
+        external_user_id="cross_tenant_user_b",
         email="user_b@example.com",
         agent_name="AgentB",
     )

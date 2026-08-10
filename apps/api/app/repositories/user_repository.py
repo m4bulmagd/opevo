@@ -43,8 +43,8 @@ class UserRepository:
         await self.session.flush()
         return True
 
-    async def create(self, clerk_user_id: str, email: str) -> User:
-        user = User(clerk_user_id=clerk_user_id, email=email)
+    async def create(self, external_user_id: str, email: str) -> User:
+        user = User(external_user_id=external_user_id, email=email)
         self.session.add(user)
         await self.session.flush()
         return user
@@ -57,8 +57,8 @@ class UserRepository:
             {"lock_key": f"user.bootstrap:{external_user_id}"},
         )
 
-    async def get_by_clerk_user_id(self, clerk_user_id: str) -> User | None:
+    async def get_by_external_user_id(self, external_user_id: str) -> User | None:
         result = await self.session.execute(
-            select(User).where(User.clerk_user_id == clerk_user_id)
+            select(User).where(User.external_user_id == external_user_id)
         )
         return result.scalar_one_or_none()

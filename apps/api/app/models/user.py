@@ -14,7 +14,12 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
     )
 
-    clerk_user_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    external_user_id: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     country_code: Mapped[str | None] = mapped_column(String(2), nullable=True)

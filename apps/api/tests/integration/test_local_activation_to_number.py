@@ -179,7 +179,7 @@ async def local_client(
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
         activation_flow_enabled=True,
-        auth_mode="local",
+        auth_provider="local",
         local_auth_token=LOCAL_TOKEN,
         billing_mode="fake",
         carrier_lookup_mode="fake",
@@ -260,7 +260,7 @@ async def test_provider_free_journey_reaches_forwarding_required(
 
     async with session_factory() as session:
         local_user = await session.scalar(
-            select(User).where(User.clerk_user_id == "local_opevo_user")
+            select(User).where(User.external_user_id == "local_opevo_user")
         )
         pre_consent_events = await session.scalar(
             select(func.count(OutboxEvent.id)).where(
@@ -430,7 +430,7 @@ async def test_call_drain_fixture_uses_real_owner_scoped_call_lifecycle(
 
     async with session_factory() as session:
         local_user = await session.scalar(
-            select(User).where(User.clerk_user_id == "local_opevo_user")
+            select(User).where(User.external_user_id == "local_opevo_user")
         )
         assert local_user is not None
         session.add(
@@ -544,26 +544,28 @@ async def test_call_drain_fixture_rejects_clerk_auth_before_mutation(
         FastAPI,
     ],
 ) -> None:
-    from app.core.auth import AuthProvider, UserIdentity, get_auth_provider
+    from app.auth.domain import ExternalIdentity
+    from app.auth.providers.base import AuthProvider
+    from app.core.auth import get_auth_provider
 
     client, session_factory, application = local_client
     async with session_factory() as session:
         clerk_user = User(
-            clerk_user_id="clerk_fixture_owner",
+            external_user_id="clerk_fixture_owner",
             email="clerk-fixture-owner@example.invalid",
         )
         session.add(clerk_user)
         await session.commit()
 
     class AuthenticatedClerkProvider(AuthProvider):
-        async def verify_token(self, token: str) -> UserIdentity:
+        async def verify_token(self, token: str) -> ExternalIdentity:
             assert token == "authenticated-clerk-fixture-test-token"
-            return UserIdentity(clerk_user_id=clerk_user.clerk_user_id)
+            return ExternalIdentity(external_user_id=clerk_user.external_user_id)
 
     def clerk_auth_provider() -> AuthProvider:
         return AuthenticatedClerkProvider()
 
-    application.state.runtime.settings.auth_mode = "clerk"
+    application.state.runtime.settings.auth_provider = "clerk"
     application.dependency_overrides[get_auth_provider] = clerk_auth_provider
     clerk_headers = {
         "Authorization": "Bearer authenticated-clerk-fixture-test-token"
@@ -592,7 +594,7 @@ async def test_call_drain_fixture_rejects_clerk_auth_before_mutation(
         )
     finally:
         application.dependency_overrides.pop(get_auth_provider, None)
-        application.state.runtime.settings.auth_mode = "local"
+        application.state.runtime.settings.auth_provider = "local"
 
     unavailable = {"detail": {"code": "local_telephony_disabled"}}
     assert started.status_code == 409
@@ -629,7 +631,7 @@ async def test_call_drain_fixture_hides_foreign_calls(
 
     async with session_factory() as session:
         foreign_user = User(
-            clerk_user_id="foreign_call_drain_owner",
+            external_user_id="foreign_call_drain_owner",
             email="foreign-call-drain-owner@example.invalid",
         )
         session.add(foreign_user)
@@ -667,7 +669,7 @@ async def test_call_drain_fixture_routes_are_absent_outside_development(
             f"sqlite+aiosqlite:///{tmp_path / 'non-development.db'}"
         ),
         redis_url="redis://localhost:6379/0",
-        auth_mode="clerk",
+        auth_provider="clerk",
         agent_dispatch_jwt_secret="a" * 32,
     )
     application = create_app(settings)

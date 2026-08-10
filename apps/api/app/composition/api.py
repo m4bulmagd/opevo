@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.composition.lifecycle import RuntimeCleanup
 from app.composition.runtime import ApiRuntime
-from app.core.auth import AuthProvider, build_auth_provider
+from app.auth.factory import build_auth_provider
+from app.auth.providers.base import AuthProvider
 from app.core.config import Settings
 from app.core.database import create_database_engine, create_session_factory
 from app.core.logging import report_safe_exception, setup_logging
@@ -25,6 +26,7 @@ from app.providers.storage.s3 import S3Storage
 from app.routers.readiness import ReadinessChecks
 from app.services.livekit_recording_service import LiveKitRecordingService
 from app.services.realtime_service import RealtimeService
+from app.services.session_authenticator import SessionAuthenticator
 from app.websockets.manager import manager as websocket_manager
 from app.workers.call_finalization_queue import CallFinalizationQueue
 
@@ -231,7 +233,10 @@ async def build_api_runtime(
         realtime_service: RealtimeService | None = None
         if settings.realtime_enabled:
             realtime_service = realtime_service_factory(
-                auth_provider,
+                authenticator=SessionAuthenticator(
+                    session_factory=session_factory,
+                    auth_provider=auth_provider,
+                ),
                 event_bus=RedisEventBus(redis_client),
                 websocket_manager=websocket_manager,
                 observability=observability,

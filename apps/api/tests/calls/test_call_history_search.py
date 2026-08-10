@@ -47,7 +47,7 @@ async def test_list_calls_returns_deterministic_page_and_matching_total(
     active_user,
 ) -> None:
     other_user = User(
-        clerk_user_id="call_search_other",
+        external_user_id="call_search_other",
         email="call-search-other@example.invalid",
     )
     db_session.add(other_user)
@@ -188,7 +188,7 @@ async def test_status_and_date_filters_compose_with_search_and_scope(
     active_user,
 ) -> None:
     other_user = User(
-        clerk_user_id="call_filter_other",
+        external_user_id="call_filter_other",
         email="call-filter-other@example.invalid",
     )
     db_session.add(other_user)

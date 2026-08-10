@@ -85,7 +85,7 @@ describe("development capabilities", () => {
   it("exposes only booleans for guarded local fake providers", async () => {
     vi.resetModules();
     vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("AUTH_MODE", "local");
+    vi.stubEnv("AUTH_PROVIDER", "local");
     vi.stubEnv("BILLING_MODE", "fake");
     vi.stubEnv("TELEPHONY_MODE", "fake");
     vi.stubEnv("LOCAL_AUTH_TOKEN", "must-not-be-returned");
@@ -104,7 +104,7 @@ describe("development capabilities", () => {
   ])("fails closed for node=%s auth=%s billing=%s telephony=%s", async (nodeEnv, auth, billing, telephony) => {
     vi.resetModules();
     vi.stubEnv("NODE_ENV", nodeEnv);
-    vi.stubEnv("AUTH_MODE", auth);
+    vi.stubEnv("AUTH_PROVIDER", auth);
     vi.stubEnv("BILLING_MODE", billing);
     vi.stubEnv("TELEPHONY_MODE", telephony);
 

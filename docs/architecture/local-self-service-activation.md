@@ -72,11 +72,11 @@ it performs no external purchase.
 
 ## Local runtime modes and credential scope
 
-Normal `compose.dev.yaml` development uses Clerk authentication. Configure web
-publishable and secret keys in `apps/web/.env`, and configure the API issuer,
-authorized parties, JWKS URL, and webhook secret in `apps/api/.env`. Compose
-defaults `AUTH_MODE` to Clerk, but each application validates its own required
-credentials.
+Normal `compose.dev.yaml` development defaults to Clerk authentication. It can
+instead select Supabase with one deployment-level `AUTH_PROVIDER` Compose
+variable, which the file applies to both the API and web services. Configure
+only the selected provider's values from the checked-in examples; each
+application validates its own required credentials.
 
 Provider fakes are independent of identity: fake billing or telephony does not
 provide a synthetic authenticated user. `scripts/run-local-e2e.sh` is the
@@ -87,7 +87,7 @@ Manual provider-free testing requires both opt-in variables on the same
 command, and the token is development-only:
 
 ```bash
-AUTH_MODE=local \
+AUTH_PROVIDER=local \
 LOCAL_AUTH_TOKEN=replace-with-a-development-only-token \
 docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
@@ -97,9 +97,9 @@ values:
 
 | Service | Explicit local values | Deliberately absent |
 |---|---|---|
-| API | `AUTH_MODE=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `CARRIER_LOOKUP_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Clerk credentials are not used for this explicit test mode |
+| API | `AUTH_PROVIDER=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `CARRIER_LOOKUP_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Clerk credentials are not used for this explicit test mode |
 | `worker-lifecycle` and `worker-background` | `BILLING_MODE=fake`, `TELEPHONY_MODE=fake`, activation enabled | Local token and carrier lookup |
-| Web server | `AUTH_MODE=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `TELEPHONY_MODE=fake` | Carrier credentials and public local token |
+| Web server | `AUTH_PROVIDER=local`, server-only `LOCAL_AUTH_TOKEN`, `BILLING_MODE=fake`, `TELEPHONY_MODE=fake` | Carrier credentials and public local token |
 
 The local token is never a `NEXT_PUBLIC_*` value or a Docker build argument.
 The web server uses it only for server-to-server API requests. Fake provider
@@ -118,17 +118,18 @@ The call-drain acceptance uses two API fixtures:
   exercises the real end/finalization path, and returns only `call_id`.
 
 The router exists only for `APP_ENV=development`. Both routes also require
-`AUTH_MODE=local`, `TELEPHONY_MODE=fake`, and the authenticated local identity.
-Clerk-authenticated development deployments and non-fake telephony receive the
+`AUTH_PROVIDER=local`, `TELEPHONY_MODE=fake`, and the authenticated local identity.
+Hosted-provider development deployments and non-fake telephony receive the
 same bounded conflict. These fixtures are not available in staging or
 production.
 
 ## Start and exercise the local journey
 
-Prerequisites are Docker with Compose, Node.js 22, and Clerk credentials for
-the standard interactive stack. Fake providers remain separate from identity.
+Prerequisites are Docker with Compose, Node.js 22, and credentials for the
+selected hosted authentication provider. Fake providers remain separate from
+identity.
 
-Start the standard Clerk-authenticated application services:
+Start the default Clerk-authenticated application services:
 
 ```bash
 docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
@@ -139,9 +140,10 @@ the two default local Clerk authorized parties together. Set
 `CLERK_AUTHORIZED_PARTIES` explicitly only when the token's exact authorized
 party is intentionally different from those standard loopback origins.
 
-Open `http://127.0.0.1:3000/activate`, sign in with Clerk, and complete the
-five milestones above. Compose defaults remain available for normal
-development, while every exposed host port is parameterized for isolated runs.
+Open `http://127.0.0.1:3000/activate`, sign in through the selected provider,
+and complete the five milestones above. Compose defaults remain available for
+normal development, while every exposed host port is parameterized for
+isolated runs.
 
 To run the same disposable provider-free proof as CI:
 
@@ -177,11 +179,11 @@ simulation, explicit go-live, and the active dashboard handoff.
 
 ## Real-provider and production boundary
 
-The production Compose file explicitly selects Clerk authentication, Stripe
-billing, Telnyx carrier lookup/telephony, and requires
-`ACTIVATION_FLOW_ENABLED`. It contains no local token. Required credentials use
-fail-fast Compose interpolation, and application configuration rejects local or
-fake modes in production.
+The production Compose file selects one hosted authentication provider through
+`AUTH_PROVIDER`, Stripe billing, Telnyx carrier lookup/telephony, and requires
+`ACTIVATION_FLOW_ENABLED`. It contains no local token. Application startup
+validates the selected identity credentials, and rejects local or fake modes in
+production.
 
 Production requires `BILLING_MODE=stripe`. `STRIPE_SECRET_KEY` is required by
 the API and by both Stripe-mode worker services.
