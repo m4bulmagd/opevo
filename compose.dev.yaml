@@ -6,7 +6,7 @@ x-worker-environment: &worker-environment
   APP_ENV: development
   DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_call
   REDIS_URL: redis://redis:6379/0
-  AUTH_PROVIDER: clerk
+  AUTH_PROVIDER: supabase
   LOCAL_AUTH_TOKEN: ""
   BILLING_MODE: fake
   CARRIER_LOOKUP_MODE: fake
