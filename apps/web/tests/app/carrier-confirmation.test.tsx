@@ -52,6 +52,41 @@ describe("carrier confirmation", () => {
     await waitFor(() => expect(lookupCarrierMock).toHaveBeenCalledTimes(1));
   });
 
+  it("offers all manual carriers after a successful suggestion", async () => {
+    const onConfirm = vi.fn();
+    lookupCarrierMock.mockResolvedValue({
+      status: "success",
+      data: {
+        normalized_number: "+33612345678",
+        country_code: "FR",
+        carrier_name: "Orange France",
+        normalized_carrier: "orange",
+        number_type: "mobile",
+        looked_up_at: "2026-07-17T10:00:00Z",
+      },
+      message: "Carrier check complete.",
+    });
+    render(
+      <CarrierConfirmation
+        confirmedCarrier={null}
+        onConfirm={onConfirm}
+        onPhoneChange={vi.fn()}
+        onSaveBeforeLookup={vi.fn().mockResolvedValue(true)}
+        phoneNumber="06 12 34 56 78"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Check carrier/i }));
+    expect(await screen.findByText(/Orange France/i)).toBeInTheDocument();
+    const carrier = screen.getByLabelText(/Choose carrier manually/i);
+    for (const label of ["Orange", "SFR", "Bouygues Telecom", "Free", "Other"]) {
+      expect(carrier).toContainHTML(label);
+    }
+
+    fireEvent.change(carrier, { target: { value: "other" } });
+    expect(onConfirm).toHaveBeenCalledWith("other");
+  });
+
   it("formats French numbers as the customer types", () => {
     const onPhoneChange = vi.fn();
     const view = render(

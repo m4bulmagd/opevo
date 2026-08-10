@@ -155,31 +155,32 @@ export function CarrierConfirmation({
       ) : null}
 
       {lookupError ? (
-        <div className="flex flex-col gap-3">
-          <Button className="self-start" type="button" variant="outline" onClick={() => void checkCarrier()}>
-            Retry carrier check
-          </Button>
-          <Field>
-            <FieldLabel htmlFor="manual-carrier">Choose carrier manually</FieldLabel>
-            <NativeSelect
-              className="w-full"
-              id="manual-carrier"
-              name="confirmed_carrier"
-              value={confirmedCarrier ?? ""}
-              onChange={(event) => {
-                const value = event.target.value as CarrierCode;
-                if (value) onConfirm(value);
-              }}
-            >
-              <NativeSelectOption value="">Select your carrier</NativeSelectOption>
-              {CARRIERS.map((carrier) => (
-                <NativeSelectOption key={carrier.value} value={carrier.value}>
-                  {carrier.label}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </Field>
-        </div>
+        <Button className="self-start" type="button" variant="outline" onClick={() => void checkCarrier()}>
+          Retry carrier check
+        </Button>
+      ) : null}
+
+      {detectedCode || lookupError ? (
+        <Field>
+          <FieldLabel htmlFor="manual-carrier">Choose carrier manually</FieldLabel>
+          <NativeSelect
+            className="w-full"
+            id="manual-carrier"
+            name="confirmed_carrier"
+            value={confirmedCarrier ?? ""}
+            onChange={(event) => {
+              const value = event.target.value as CarrierCode;
+              if (value) onConfirm(value);
+            }}
+          >
+            <NativeSelectOption value="">Select your carrier</NativeSelectOption>
+            {CARRIERS.map((carrier) => (
+              <NativeSelectOption key={carrier.value} value={carrier.value}>
+                {carrier.label}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </Field>
       ) : null}
     </div>
   );

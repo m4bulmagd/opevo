@@ -78,6 +78,7 @@ CLERK_SESSION_VERIFIER_SETTINGS = (
 )
 LOCAL_COMPOSE_AUTH_DEFAULTS = {
     "AUTH_PROVIDER": "",
+    "CARRIER_LOOKUP_MODE": "",
     "LOCAL_AUTH_TOKEN": "",
     "CLERK_AUTHORIZED_PARTIES": "",
     "COMPOSE_PROFILES": "voice",
@@ -417,6 +418,39 @@ def test_api_runtime_allows_fully_disabled_livekit_locally(
     validate_api_runtime(
         base_settings.model_copy(update={"app_env": app_env, **LIVEKIT_DISABLED})
     )
+
+
+def test_development_telnyx_carrier_lookup_requires_api_key(
+    base_settings: Settings,
+) -> None:
+    settings = base_settings.model_copy(
+        update={
+            "app_env": "development",
+            "carrier_lookup_mode": "telnyx",
+            "telnyx_api_key": "",
+        }
+    )
+
+    with pytest.raises(RuntimeError) as error:
+        validate_api_runtime(settings)
+
+    assert str(error.value) == (
+        "Missing or invalid required runtime settings: TELNYX_API_KEY"
+    )
+
+
+def test_development_fake_carrier_lookup_does_not_require_api_key(
+    base_settings: Settings,
+) -> None:
+    settings = base_settings.model_copy(
+        update={
+            "app_env": "development",
+            "carrier_lookup_mode": "fake",
+            "telnyx_api_key": "",
+        }
+    )
+
+    validate_api_runtime(settings)
 
 
 @pytest.mark.parametrize(
@@ -1802,7 +1836,7 @@ def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
 
     assert api_environment["AUTH_PROVIDER"] == "clerk"
     assert api_environment["BILLING_MODE"] == "fake"
-    assert api_environment["CARRIER_LOOKUP_MODE"] == "fake"
+    assert api_environment["CARRIER_LOOKUP_MODE"] == "telnyx"
     assert api_environment["TELEPHONY_MODE"] == "fake"
     assert api_environment["ACTIVATION_FLOW_ENABLED"] == "true"
 
@@ -1816,10 +1850,12 @@ def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
         for setting in CLERK_SESSION_VERIFIER_SETTINGS:
             assert worker_environment.get(setting) in (None, "")
         assert worker_environment["BILLING_MODE"] == "fake"
+        assert worker_environment.get("TELNYX_API_KEY") in (None, "")
     assert web_environment["AUTH_PROVIDER"] == "clerk"
     assert web_environment["BILLING_MODE"] == "fake"
     assert web_environment["TELEPHONY_MODE"] == "fake"
     assert "CARRIER_LOOKUP_MODE" not in web_environment
+    assert web_environment.get("TELNYX_API_KEY") in (None, "")
     assert "NEXT_PUBLIC_LOCAL_AUTH_TOKEN" not in web_environment
 
     local_examples = (
@@ -1837,6 +1873,30 @@ def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
     for example in local_examples:
         assert f"# {example}" in api_env_example
         assert example not in active_example_lines
+
+
+def test_development_compose_allows_explicit_fake_carrier_lookup() -> None:
+    document = load_local_compose_yaml({"CARRIER_LOOKUP_MODE": "fake"})
+
+    assert resolved_service_environment(document, "api")[
+        "CARRIER_LOOKUP_MODE"
+    ] == "fake"
+    for worker in WORKER_SERVICES:
+        assert resolved_service_environment(document, worker)[
+            "CARRIER_LOOKUP_MODE"
+        ] == "fake"
+
+
+def test_development_compose_defaults_real_lookup_only_for_api() -> None:
+    document = load_local_compose_yaml()
+
+    assert resolved_service_environment(document, "api")[
+        "CARRIER_LOOKUP_MODE"
+    ] == "telnyx"
+    for service in (*WORKER_SERVICES, "web"):
+        assert resolved_service_environment(document, service).get(
+            "CARRIER_LOOKUP_MODE"
+        ) in (None, "fake")
 
 
 def test_development_compose_parameterizes_disposable_host_ports() -> None:
@@ -2016,7 +2076,12 @@ if [ -n "${LOCAL_AUTH_TOKEN:-}" ]; then
 else
   local_token_state=missing
 fi
-printf '%s|%s|%s\\n' "$auth_provider_state" "$local_token_state" "$*" >> "$PROBE_LOG"
+if [ "${CARRIER_LOOKUP_MODE:-}" = "fake" ]; then
+  carrier_lookup_state=fake
+else
+  carrier_lookup_state=unexpected
+fi
+printf '%s|%s|%s|%s\\n' "$auth_provider_state" "$local_token_state" "$carrier_lookup_state" "$*" >> "$PROBE_LOG"
 if [ ! -e "$PROBE_SIGNAL_MARKER" ]; then
   : > "$PROBE_SIGNAL_MARKER"
   kill -"$PROBE_SIGNAL" "$PPID"
@@ -2045,7 +2110,7 @@ exit 0
     assert result.returncode == expected_exit_code
     docker_calls = probe_log.read_text().splitlines()
     assert docker_calls
-    assert all(call.startswith("local|configured|") for call in docker_calls)
+    assert all(call.startswith("local|configured|fake|") for call in docker_calls)
     docker_calls = "\n".join(docker_calls)
     assert " ps" in docker_calls
     assert " logs api worker-lifecycle worker-background web" in docker_calls

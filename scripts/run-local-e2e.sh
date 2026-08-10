@@ -14,6 +14,7 @@ export MINIO_CONSOLE_PORT=59001
 export DASHBOARD_METRICS_REFERENCE_TIME=2026-07-29T12:00:00Z
 export AUTH_PROVIDER=local
 export LOCAL_AUTH_TOKEN=opevo-local-development-token
+export CARRIER_LOOKUP_MODE=fake
 
 compose() {
   docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"

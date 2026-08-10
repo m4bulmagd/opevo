@@ -323,7 +323,7 @@ describe("profile form", () => {
     );
 
     expect(screen.getByText("Suggested carrier")).toBeInTheDocument();
-    expect(screen.getByText(/^Other$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^other$/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Confirm carrier/i })).toBeInTheDocument();
   });
 

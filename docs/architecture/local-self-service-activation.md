@@ -79,16 +79,20 @@ only the selected provider's values from the checked-in examples; each
 application validates its own required credentials.
 
 Provider fakes are independent of identity: fake billing or telephony does not
-provide a synthetic authenticated user. `scripts/run-local-e2e.sh` is the
-disposable CI-equivalent path; it explicitly opts into local auth and owns its
-isolation, credentials, ports, and cleanup.
+provide a synthetic authenticated user. Normal development uses Telnyx Number
+Lookup for the owner's existing number and loads `TELNYX_API_KEY` only into the
+API from `apps/api/.env`; the web and worker services do not receive that
+credential. `scripts/run-local-e2e.sh` is the disposable CI-equivalent path; it
+explicitly opts into local auth and fake carrier lookup, and owns its isolation,
+credentials, ports, and cleanup.
 
-Manual provider-free testing requires both opt-in variables on the same
-command, and the token is development-only:
+Manual provider-free testing requires explicit local identity values and fake
+carrier lookup on the same command, and the token is development-only:
 
 ```bash
 AUTH_PROVIDER=local \
 LOCAL_AUTH_TOKEN=replace-with-a-development-only-token \
+CARRIER_LOOKUP_MODE=fake \
 docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
 
@@ -130,6 +134,11 @@ selected hosted authentication provider. Fake providers remain separate from
 identity.
 
 Start the default Clerk-authenticated application services:
+
+Normal development requires a real server-only `TELNYX_API_KEY` in
+`apps/api/.env` and uses it only to look up the carrier of the owner's existing
+French number. Billing and telephony remain fake unless a separate deployment
+selects their real provider modes.
 
 ```bash
 docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web

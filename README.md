@@ -151,6 +151,7 @@ production certification.
 
 - Docker with Docker Compose
 - Node.js 22 only when running browser tests from the host
+- A Telnyx API key in `apps/api/.env` for normal carrier lookup
 
 Choose `AUTH_PROVIDER=clerk` or `AUTH_PROVIDER=supabase` as a deployment-level
 Compose variable, then configure only that provider's web and API values in the
@@ -166,9 +167,10 @@ AUTH_PROVIDER=supabase docker compose -f compose.dev.yaml up --build postgres re
 This example selects Supabase. Omit the prefix to use the default Clerk adapter.
 
 Open [http://127.0.0.1:3000/activate](http://127.0.0.1:3000/activate).
-The fake billing, carrier, telephony, and verification providers are separate
-from authentication; they do not create a synthetic user. This command does not
-start the LiveKit voice agent.
+Normal development uses Telnyx Number Lookup for the owner's existing French
+number. Billing, telephony, and forwarding verification remain fake and are
+separate from authentication; they do not create a synthetic user. This command
+does not start the LiveKit voice agent.
 
 For a manual, provider-free local-auth test only, explicitly opt in to the
 development token:
@@ -176,12 +178,13 @@ development token:
 ```bash
 AUTH_PROVIDER=local \
 LOCAL_AUTH_TOKEN=replace-with-a-development-only-token \
+CARRIER_LOOKUP_MODE=fake \
 docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
 
 For disposable CI-equivalent proof, run the isolated provider-free browser
-suite. The script explicitly selects local authentication and owns isolation,
-credentials, ports, and cleanup:
+suite. The script explicitly selects local authentication and fake carrier
+lookup, and owns isolation, credentials, ports, and cleanup:
 
 ```bash
 npm exec --prefix apps/web -- playwright install chromium

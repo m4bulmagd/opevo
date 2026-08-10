@@ -128,6 +128,12 @@ def validate_api_runtime(settings: Settings) -> None:
                 "Missing or invalid required runtime settings: "
                 + ", ".join(invalid_supabase)
             )
+    if settings.carrier_lookup_mode == "telnyx" and _is_missing(
+        settings.telnyx_api_key
+    ):
+        raise RuntimeError(
+            "Missing or invalid required runtime settings: TELNYX_API_KEY"
+        )
     if environment == "development":
         _validate_livekit_configuration(settings, environment)
         return
