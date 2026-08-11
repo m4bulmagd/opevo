@@ -359,10 +359,26 @@ describe("authoritative stage refresh", () => {
     vi.useRealTimers();
   });
 
-  it.each(["provisioning", "activating"] as const)("refreshes while %s is visible", (stage) => {
+  it.each([
+    "provisioning",
+    "verification_window_open",
+    "activating",
+  ] as const)("refreshes while %s is visible", (stage) => {
     render(<StageRefresh stage={stage} />);
 
     vi.advanceTimersByTime(3_000);
+
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops verification polling after the canonical stage advances", () => {
+    const view = render(<StageRefresh stage="verification_window_open" />);
+
+    vi.advanceTimersByTime(3_000);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+
+    view.rerender(<StageRefresh stage="ready_to_activate" />);
+    vi.advanceTimersByTime(6_000);
 
     expect(refreshMock).toHaveBeenCalledTimes(1);
   });
@@ -391,12 +407,14 @@ describe("authoritative stage refresh", () => {
       value: "visible",
     });
     fireEvent(document, new Event("visibilitychange"));
-    vi.advanceTimersByTime(3_000);
     expect(refreshMock).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(3_000);
+    expect(refreshMock).toHaveBeenCalledTimes(2);
 
     view.unmount();
     vi.advanceTimersByTime(6_000);
-    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshMock).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -35,6 +35,15 @@ export function VerificationCountdown({ evaluatedAt, expiresAt }: VerificationCo
   useEffect(() => {
     if (!validTimes) return;
 
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    const stop = () => {
+      if (timer !== undefined) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    };
+
     const update = (): boolean => {
       const nextRemaining = calculateRemaining(expiryMs, serverOffsetMs);
       setRemainingMs(nextRemaining);
@@ -45,11 +54,28 @@ export function VerificationCountdown({ evaluatedAt, expiresAt }: VerificationCo
       return nextRemaining === 0;
     };
 
-    if (update()) return;
-    const timer = setInterval(() => {
-      if (update()) clearInterval(timer);
-    }, 1_000);
-    return () => clearInterval(timer);
+    const start = () => {
+      stop();
+      if (document.visibilityState !== "visible" || update()) return;
+      timer = setInterval(() => {
+        if (update()) stop();
+      }, 1_000);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    start();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [expiryMs, refresh, serverOffsetMs, validTimes]);
 
   return (
