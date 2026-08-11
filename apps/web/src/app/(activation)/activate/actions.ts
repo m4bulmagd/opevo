@@ -96,6 +96,7 @@ const SAFE_BACKEND_MESSAGES = {
   user_unavailable: "The local account is unavailable.",
   local_subscription_unavailable: "The local starter plan could not be activated.",
   real_subscription_present: "Local billing cannot replace an existing subscription.",
+  checkout_confirmation_pending: "Checkout is complete. We're confirming your subscription. Refresh in a moment.",
 } as const;
 
 type SafeBackendCode = keyof typeof SAFE_BACKEND_MESSAGES;

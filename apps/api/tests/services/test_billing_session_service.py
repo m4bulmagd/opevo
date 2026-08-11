@@ -10,6 +10,7 @@ import stripe
 from app.core.config import Settings
 from app.core.provider_failures import ProviderFailure
 from app.services.billing_session_service import (
+    BillingSessionStateError,
     BillingSessionService as _BillingSessionService,
 )
 
@@ -73,6 +74,25 @@ class FakeCheckoutSessionAPI:
         )()
 
 
+class CompletedCheckoutSessionAPI(FakeCheckoutSessionAPI):
+    def __init__(self) -> None:
+        super().__init__()
+        self.retrieve_calls: list[str] = []
+
+    def retrieve(self, session_id: str):
+        self.retrieve_calls.append(session_id)
+        return type(
+            "CheckoutSession",
+            (),
+            {
+                "id": session_id,
+                "url": None,
+                "status": "complete",
+                "payment_status": "paid",
+            },
+        )()
+
+
 class FakePortalSessionAPI:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -91,6 +111,16 @@ class FakeStripeClient:
         )()
         self.billing_portal = type(
             "BillingPortalNamespace", (), {"Session": FakePortalSessionAPI()}
+        )()
+
+
+class CompletedCheckoutStripeClient(FakeStripeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.checkout = type(
+            "CheckoutNamespace",
+            (),
+            {"Session": CompletedCheckoutSessionAPI()},
         )()
 
 
@@ -212,6 +242,31 @@ async def test_create_checkout_session_uses_price_mapping() -> None:
         == expected_metadata
     )
     assert telemetry.calls == [("stripe", "create_checkout_session", "success")]
+
+
+@pytest.mark.anyio
+async def test_completed_checkout_session_is_awaiting_confirmation() -> None:
+    client = CompletedCheckoutStripeClient()
+    service = BillingSessionService(
+        stripe_client=client,
+        price_starter="price_starter_123",
+        checkout_success_url="https://app.example.com/success",
+        checkout_cancel_url="https://app.example.com/cancel",
+    )
+
+    with pytest.raises(
+        BillingSessionStateError,
+        match="Checkout is complete and awaiting subscription confirmation",
+    ):
+        await service.create_checkout_session(
+            user_id="user_123",
+            customer_email="billing@example.com",
+            plan_tier="starter",
+            lifecycle_generation=7,
+            existing_session_id="cs_checkout_complete",
+        )
+
+    assert client.checkout.Session.retrieve_calls == ["cs_checkout_complete"]
 
 
 @pytest.mark.anyio

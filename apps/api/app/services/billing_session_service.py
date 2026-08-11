@@ -22,6 +22,10 @@ class BillingPortalReturnUrlError(BillingSessionStateError):
     pass
 
 
+class CheckoutSessionAwaitingConfirmationError(BillingSessionStateError):
+    pass
+
+
 @dataclass(frozen=True)
 class HostedSession:
     url: str
@@ -111,6 +115,15 @@ class BillingSessionService:
             field="id",
             operation="create_checkout_session",
         )
+        checkout_status = (
+            session.get("status")
+            if isinstance(session, dict)
+            else getattr(session, "status", None)
+        )
+        if existing_session_id is not None and checkout_status == "complete":
+            raise CheckoutSessionAwaitingConfirmationError(
+                "Checkout is complete and awaiting subscription confirmation"
+            )
         url = self._required_response_string(
             session,
             field="url",

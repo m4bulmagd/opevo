@@ -26,6 +26,7 @@ from app.services.billing_session_service import (
     BillingPortalReturnUrlError,
     BillingSessionService,
     BillingSessionStateError,
+    CheckoutSessionAwaitingConfirmationError,
 )
 
 
@@ -121,6 +122,11 @@ async def create_checkout_session(
             idempotency_key=preparation.idempotency_key,
             existing_session_id=preparation.existing_session_id,
         )
+    except CheckoutSessionAwaitingConfirmationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "checkout_confirmation_pending"},
+        ) from exc
     except BillingSessionStateError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

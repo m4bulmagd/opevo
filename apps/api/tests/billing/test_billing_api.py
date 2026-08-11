@@ -276,6 +276,17 @@ class FakeProviderFailingBillingSessionService(FakeBillingSessionService):
         raise failure from RuntimeError("RAW_STRIPE_BODY_AND_TOKEN_SENTINEL")
 
 
+class FakeAwaitingCheckoutConfirmationService(FakeBillingSessionService):
+    async def create_checkout_session(self, **_kwargs):
+        from app.services.billing_session_service import (
+            CheckoutSessionAwaitingConfirmationError,
+        )
+
+        raise CheckoutSessionAwaitingConfirmationError(
+            "Checkout is complete and awaiting subscription confirmation"
+        )
+
+
 class FakeEmptySubscriptionQueryService(FakeBillingQueryService):
     async def get_subscription(self, user_id):
         return None
@@ -350,6 +361,29 @@ async def test_checkout_provider_failure_keeps_the_http_response_safe() -> None:
         "Failed to create Stripe checkout session",
     )
     assert "RAW_STRIPE_BODY_AND_TOKEN_SENTINEL" not in str(exc_info.value.detail)
+
+
+@pytest.mark.anyio
+async def test_completed_checkout_returns_safe_confirmation_pending_code() -> None:
+    from app.routers.billing import create_checkout_session
+    from app.schemas.billing_api import CheckoutSessionRequest
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_checkout_session(
+            request=_fake_request(),
+            payload=CheckoutSessionRequest(plan_tier="starter"),
+            identity=AuthenticatedUser(
+                internal_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            ),
+            service=FakeAwaitingCheckoutConfirmationService(),
+            query_service=FakeEmptySubscriptionQueryService(),
+            user=type("User", (), {"email": "billing@example.com"})(),
+        )
+
+    assert (exc_info.value.status_code, exc_info.value.detail) == (
+        409,
+        {"code": "checkout_confirmation_pending"},
+    )
 
 
 @pytest.mark.anyio

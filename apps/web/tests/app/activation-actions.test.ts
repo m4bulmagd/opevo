@@ -150,6 +150,21 @@ describe("activation Server Actions", () => {
     expect(revalidatePathMock).not.toHaveBeenCalled();
   });
 
+  it("explains when completed checkout is awaiting subscription confirmation", async () => {
+    createCheckoutSessionMock.mockRejectedValueOnce(
+      new BackendApiError({ code: "checkout_confirmation_pending" }, 409),
+    );
+
+    const result = await createActivationCheckoutAction({});
+
+    expect(result).toEqual({
+      status: "error",
+      code: "checkout_confirmation_pending",
+      message: "Checkout is complete. We're confirming your subscription. Refresh in a moment.",
+    });
+    expect(revalidatePathMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["lookup", () => lookupCarrierAction(), lookupCarrierMock],
     ["confirm profile", () => confirmProfileAction(), confirmProfileMock],
