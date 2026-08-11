@@ -153,18 +153,19 @@ production certification.
 - Node.js 22 only when running browser tests from the host
 - A Telnyx API key in `apps/api/.env` for normal carrier lookup
 
-Choose `AUTH_PROVIDER=clerk` or `AUTH_PROVIDER=supabase` as a deployment-level
-Compose variable, then configure only that provider's web and API values in the
-corresponding ignored `.env` files. See the
+Supabase is the default authentication provider. Configure its web and API
+values in the corresponding ignored `.env` files, or select Clerk explicitly
+with the deployment-level Compose variable `AUTH_PROVIDER=clerk`. See the
 [authentication architecture](docs/architecture/authentication.md) and
 [staging smoke runbook](docs/runbooks/staging-smoke.md). Start the development
 stack from the repository root:
 
 ```bash
-AUTH_PROVIDER=supabase docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
+docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
 
-This example selects Supabase. Omit the prefix to use the default Clerk adapter.
+This command selects the default Supabase adapter. Prefix it with
+`AUTH_PROVIDER=clerk` to use Clerk instead.
 
 Open [http://127.0.0.1:3000/activate](http://127.0.0.1:3000/activate).
 Normal development uses Telnyx Number Lookup for the owner's existing French

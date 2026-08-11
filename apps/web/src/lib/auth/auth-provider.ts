@@ -24,7 +24,7 @@ function isBlank(value: string | undefined): boolean {
 }
 
 export function resolveWebAuthProvider(input: WebAuthProviderInput): WebAuthProvider {
-  const provider = input.authProvider?.trim() || "clerk";
+  const provider = input.authProvider?.trim() || "supabase";
 
   if (provider !== "clerk" && provider !== "local" && provider !== "supabase") {
     throw new Error("Unsupported AUTH_PROVIDER; expected 'clerk', 'supabase', or 'local'");

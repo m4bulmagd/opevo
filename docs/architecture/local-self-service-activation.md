@@ -72,11 +72,11 @@ it performs no external purchase.
 
 ## Local runtime modes and credential scope
 
-Normal `compose.dev.yaml` development defaults to Clerk authentication. It can
-instead select Supabase with one deployment-level `AUTH_PROVIDER` Compose
-variable, which the file applies to both the API and web services. Configure
-only the selected provider's values from the checked-in examples; each
-application validates its own required credentials.
+Normal `compose.dev.yaml` development defaults to Supabase authentication. It
+can instead select Clerk with the deployment-level
+`AUTH_PROVIDER=clerk` Compose variable, which the file applies to both the API
+and web services. Configure only the selected provider's values from the
+checked-in examples; each application validates its own required credentials.
 
 Provider fakes are independent of identity: fake billing or telephony does not
 provide a synthetic authenticated user. Normal development uses Telnyx Number
@@ -133,7 +133,7 @@ Prerequisites are Docker with Compose, Node.js 22, and credentials for the
 selected hosted authentication provider. Fake providers remain separate from
 identity.
 
-Start the default Clerk-authenticated application services:
+Start the default Supabase-authenticated application services:
 
 Normal development requires a real server-only `TELNYX_API_KEY` in
 `apps/api/.env` and uses it only to look up the carrier of the owner's existing
@@ -144,10 +144,11 @@ selects their real provider modes.
 docker compose -f compose.dev.yaml up --build postgres redis minio minio-init migrate api worker-lifecycle worker-background web
 ```
 
-`WEB_PORT` changes the published web port, application URL, CORS origins, and
-the two default local Clerk authorized parties together. Set
-`CLERK_AUTHORIZED_PARTIES` explicitly only when the token's exact authorized
-party is intentionally different from those standard loopback origins.
+`WEB_PORT` changes the published web port, application URL, and CORS origins.
+When Clerk is selected explicitly, it also changes the two default local Clerk
+authorized parties. Set `CLERK_AUTHORIZED_PARTIES` explicitly only when the
+token's exact authorized party is intentionally different from those standard
+loopback origins.
 
 Open `http://127.0.0.1:3000/activate`, sign in through the selected provider,
 and complete the five milestones above. Compose defaults remain available for

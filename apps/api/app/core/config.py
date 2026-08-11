@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     realtime_enabled: bool = False
     activation_flow_enabled: bool = False
     cors_allowed_origins: str | None = None
-    auth_provider: Literal["clerk", "local", "supabase"] = "clerk"
+    auth_provider: Literal["clerk", "local", "supabase"] = "supabase"
     local_auth_token: str = ""
     supabase_url: str = ""
     supabase_jwt_audience: str = "authenticated"
@@ -132,6 +132,13 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_app_env(cls, value: object) -> object:
         return _normalize_runtime_environment(value)
+
+    @field_validator("auth_provider", mode="before")
+    @classmethod
+    def default_blank_auth_provider_to_supabase(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return "supabase"
+        return value
 
     @model_validator(mode="after")
     def validate_connected_reconciliation_timeout(self) -> Self:

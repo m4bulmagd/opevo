@@ -27,6 +27,7 @@ PRODUCTION_COMPOSE_ENVIRONMENT = {
     "AGENT_IMAGE": "opevo-agent:verification",
     "API_BASE_URL": "https://api.example.invalid",
     "API_IMAGE": "opevo-api:verification",
+    "AUTH_PROVIDER": "",
     "CLERK_AUTHORIZED_PARTIES": "https://app.example.com",
     "CLERK_ISSUER": "https://clerk.example.com",
     "CLERK_JWT_KEY": "",
@@ -43,6 +44,8 @@ PRODUCTION_COMPOSE_ENVIRONMENT = {
     "NEXT_PUBLIC_APP_URL": "https://app.example.com",
     "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_disposable",
     "NEXT_PUBLIC_REALTIME_ENABLED": "false",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+    "NEXT_PUBLIC_SUPABASE_URL": "https://project.supabase.co",
     "REDIS_URL": "redis://redis:6379/0",
     "S3_ACCESS_KEY": "test-only-s3-key",
     "S3_ENDPOINT_URL": "https://s3.example.invalid",
@@ -59,6 +62,7 @@ PRODUCTION_COMPOSE_ENVIRONMENT = {
     "STRIPE_WEBHOOK_SECRET": "whsec_disposable",
     "SUMMARY_MODEL": "gemini-2.5-flash",
     "SUMMARY_PROVIDER": "gemini",
+    "SUPABASE_URL": "https://project.supabase.co",
     "TELNYX_ACTIVE_CONNECTION_ID": "disposable-active-connection",
     "TELNYX_API_KEY": "disposable-telnyx-key",
     "TELNYX_DISABLED_CONNECTION_ID": "disposable-disabled-connection",
@@ -380,6 +384,7 @@ def base_settings() -> Settings:
         clerk_jwt_key=None,
         clerk_jwks_url="https://clerk.example.com/.well-known/jwks.json",
         clerk_webhook_secret="clerk-webhook-secret",
+        supabase_url="https://project.supabase.co",
         stripe_secret_key="stripe-secret-key",
         stripe_webhook_secret="stripe-webhook-secret",
         stripe_price_starter="stripe-starter-price",
@@ -408,6 +413,28 @@ def base_settings() -> Settings:
         summary_model="gemini-2.5-flash",
         gemini_api_key="gemini-api-key",
     )
+
+
+@pytest.mark.parametrize(
+    "configured_value",
+    [None, "", "   "],
+    ids=("missing", "empty", "whitespace"),
+)
+def test_auth_provider_defaults_to_supabase_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+    configured_value: str | None,
+) -> None:
+    if configured_value is None:
+        monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("AUTH_PROVIDER", configured_value)
+    settings = Settings(
+        _env_file=None,
+        database_url="sqlite+aiosqlite://",
+        redis_url="redis://localhost:6379/0",
+    )
+
+    assert settings.auth_provider == "supabase"
 
 
 @pytest.mark.parametrize("app_env", ["development", "test"])
@@ -1019,6 +1046,15 @@ def test_runtime_images_are_pinned_minimal_non_root_and_health_checked() -> None
         assert 'CMD ["uv"' not in dockerfile
 
     assert "node:22-alpine@sha256:" in dockerfiles["web"]
+    assert "ARG AUTH_PROVIDER=supabase" in dockerfiles["web"]
+    assert (
+        "ARG NEXT_PUBLIC_SUPABASE_URL=https://project.supabase.co"
+        in dockerfiles["web"]
+    )
+    assert (
+        "ARG NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_placeholder"
+        in dockerfiles["web"]
+    )
     assert "COPY --from=builder /app/.next/standalone ./" in dockerfiles["web"]
     assert "COPY --from=builder /app/.next/static ./.next/static" in dockerfiles["web"]
     assert 'CMD ["node", "server.js"]' in dockerfiles["web"]
@@ -1179,8 +1215,15 @@ def test_production_compose_render_ignores_external_realtime_enablement(
 
 
 def test_production_compose_renders_exactly_one_nonempty_clerk_key_source() -> None:
-    api_environment = resolved_service_environment(load_compose_yaml(), "api")
+    document = render_compose(
+        "compose.yaml",
+        PRODUCTION_COMPOSE_ENVIRONMENT | {"AUTH_PROVIDER": "clerk"},
+    )
+    api_environment = resolved_service_environment(document, "api")
+    web_environment = resolved_service_environment(document, "web")
 
+    assert api_environment["AUTH_PROVIDER"] == "clerk"
+    assert web_environment["AUTH_PROVIDER"] == "clerk"
     assert api_environment["CLERK_JWT_KEY"] == ""
     assert api_environment["CLERK_JWKS_URL"] == (
         "https://clerk.example.com/.well-known/jwks.json"
@@ -1239,13 +1282,13 @@ def test_production_compose_can_select_supabase_without_clerk_credentials(
     )
 
 
-def test_local_compose_defaults_interactive_services_to_clerk() -> None:
+def test_local_compose_defaults_interactive_services_to_supabase() -> None:
     document = load_local_compose_yaml()
     api_environment = resolved_service_environment(document, "api")
     web_environment = resolved_service_environment(document, "web")
 
-    assert api_environment["AUTH_PROVIDER"] == "clerk"
-    assert web_environment["AUTH_PROVIDER"] == "clerk"
+    assert api_environment["AUTH_PROVIDER"] == "supabase"
+    assert web_environment["AUTH_PROVIDER"] == "supabase"
     assert api_environment["LOCAL_AUTH_TOKEN"] == ""
     assert web_environment["LOCAL_AUTH_TOKEN"] == ""
     assert api_environment["CLERK_AUTHORIZED_PARTIES"] == (
@@ -1258,7 +1301,7 @@ def test_local_compose_defaults_interactive_services_to_clerk() -> None:
             setting: worker_environment[setting]
             for setting in ("AUTH_PROVIDER", "LOCAL_AUTH_TOKEN", "CLERK_AUTHORIZED_PARTIES")
         } == {
-            "AUTH_PROVIDER": "clerk",
+            "AUTH_PROVIDER": "supabase",
             "LOCAL_AUTH_TOKEN": "",
             "CLERK_AUTHORIZED_PARTIES": "",
         }
@@ -1373,6 +1416,31 @@ def test_api_ci_supplies_network_free_clerk_construction_values() -> None:
     assert "CLERK_JWT_KEY:" not in api_job
 
 
+def test_web_verification_builds_default_supabase_and_explicit_clerk() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    web_job = workflow.split("\n  web:", 1)[1].split("\n  e2e:", 1)[0]
+    container_scan = workflow.split("\n  container-scan:", 1)[1]
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text()
+    web_guidance = contributing.split("### Web", 1)[1].split(
+        "## Change expectations", 1
+    )[0]
+
+    assert "AUTH_PROVIDER: supabase" in web_job
+    assert "NEXT_PUBLIC_SUPABASE_URL: https://project.supabase.co" in web_job
+    assert (
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_placeholder"
+        in web_job
+    )
+    assert "Build Clerk web image" in container_scan
+    assert "--build-arg AUTH_PROVIDER=clerk" in container_scan
+    assert "AUTH_PROVIDER=supabase" in web_guidance
+    assert "NEXT_PUBLIC_SUPABASE_URL=https://project.supabase.co" in web_guidance
+    assert (
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_placeholder"
+        in web_guidance
+    )
+
+
 def test_compose_requires_explicit_telnyx_ordering_for_worker_and_api() -> None:
     document = load_compose_yaml()
 
@@ -1390,6 +1458,7 @@ def test_production_compose_scopes_modes_and_passes_runtime_validation(
 ) -> None:
     document = load_compose_yaml()
     api_environment = resolved_service_environment(document, "api")
+    web_environment = resolved_service_environment(document, "web")
     lifecycle_environment = resolved_service_environment(
         document, "worker-lifecycle"
     )
@@ -1398,7 +1467,7 @@ def test_production_compose_scopes_modes_and_passes_runtime_validation(
     )
     assert lifecycle_environment == background_environment
     api_only_modes = {
-        "AUTH_PROVIDER": ("auth_provider", "clerk"),
+        "AUTH_PROVIDER": ("auth_provider", "supabase"),
         "BILLING_MODE": ("billing_mode", "stripe"),
         "CARRIER_LOOKUP_MODE": ("carrier_lookup_mode", "telnyx"),
     }
@@ -1410,6 +1479,26 @@ def test_production_compose_scopes_modes_and_passes_runtime_validation(
             assert environment_name in lifecycle_environment
         else:
             assert environment_name not in lifecycle_environment
+
+    assert web_environment["AUTH_PROVIDER"] == "supabase"
+    assert web_environment["NEXT_PUBLIC_SUPABASE_URL"] == (
+        PRODUCTION_COMPOSE_ENVIRONMENT["NEXT_PUBLIC_SUPABASE_URL"]
+    )
+    assert web_environment["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"] == (
+        PRODUCTION_COMPOSE_ENVIRONMENT["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"]
+    )
+    resolved_modes["supabase_url"] = api_environment["SUPABASE_URL"]
+    resolved_modes["supabase_jwt_audience"] = api_environment[
+        "SUPABASE_JWT_AUDIENCE"
+    ]
+
+    for worker_environment in (lifecycle_environment, background_environment):
+        for provider_setting in (
+            "AUTH_PROVIDER",
+            "SUPABASE_URL",
+            "SUPABASE_JWT_AUDIENCE",
+        ):
+            assert provider_setting not in worker_environment
 
     assert lifecycle_environment["TELEPHONY_MODE"] == "telnyx"
     resolved_modes["telephony_mode"] = lifecycle_environment["TELEPHONY_MODE"]
@@ -1729,7 +1818,7 @@ def test_development_workers_filter_resolved_api_env_by_process_ownership(
             | FAKE_WORKER_PROVIDER_SENSITIVE_SETTINGS
         ):
             assert worker_environment.get(setting) in (None, "")
-        assert worker_environment["AUTH_PROVIDER"] == "clerk"
+        assert worker_environment["AUTH_PROVIDER"] == "supabase"
         assert worker_environment["BILLING_MODE"] == "fake"
         assert worker_environment["CARRIER_LOOKUP_MODE"] == "fake"
         assert worker_environment["TELEPHONY_MODE"] == "fake"
@@ -1828,13 +1917,13 @@ def test_development_background_provider_contract_is_strict_with_explicit_settin
         validate_background_worker_runtime(missing_settings)
 
 
-def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
+def test_development_compose_scopes_supabase_identity_and_provider_modes() -> None:
     document = load_local_compose_yaml()
     api_env_example = (REPO_ROOT / "apps" / "api" / ".env.example").read_text()
     api_environment = resolved_service_environment(document, "api")
     web_environment = resolved_service_environment(document, "web")
 
-    assert api_environment["AUTH_PROVIDER"] == "clerk"
+    assert api_environment["AUTH_PROVIDER"] == "supabase"
     assert api_environment["BILLING_MODE"] == "fake"
     assert api_environment["CARRIER_LOOKUP_MODE"] == "telnyx"
     assert api_environment["TELEPHONY_MODE"] == "fake"
@@ -1844,19 +1933,24 @@ def test_development_compose_scopes_clerk_identity_and_provider_modes() -> None:
         worker_environment = resolved_service_environment(document, worker)
         assert worker_environment["TELEPHONY_MODE"] == "fake"
         assert worker_environment["ACTIVATION_FLOW_ENABLED"] == "true"
-        assert worker_environment["AUTH_PROVIDER"] == "clerk"
+        assert worker_environment["AUTH_PROVIDER"] == "supabase"
         assert worker_environment["CARRIER_LOOKUP_MODE"] == "fake"
         assert worker_environment["LOCAL_AUTH_TOKEN"] == ""
         for setting in CLERK_SESSION_VERIFIER_SETTINGS:
             assert worker_environment.get(setting) in (None, "")
         assert worker_environment["BILLING_MODE"] == "fake"
         assert worker_environment.get("TELNYX_API_KEY") in (None, "")
-    assert web_environment["AUTH_PROVIDER"] == "clerk"
+    assert web_environment["AUTH_PROVIDER"] == "supabase"
     assert web_environment["BILLING_MODE"] == "fake"
     assert web_environment["TELEPHONY_MODE"] == "fake"
     assert "CARRIER_LOOKUP_MODE" not in web_environment
     assert web_environment.get("TELNYX_API_KEY") in (None, "")
     assert "NEXT_PUBLIC_LOCAL_AUTH_TOKEN" not in web_environment
+    assert (
+        "CORS_ALLOWED_ORIGINS=http://127.0.0.1:3000,http://localhost:3000,"
+        "http://127.0.0.1:3001,http://localhost:3001"
+        in api_env_example
+    )
 
     local_examples = (
         "AUTH_PROVIDER=local",

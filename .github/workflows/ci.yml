@@ -167,7 +167,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
+      AUTH_PROVIDER: supabase
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_YWEuYWEk
+      NEXT_PUBLIC_SUPABASE_URL: https://project.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_placeholder
       CLERK_SECRET_KEY: ci-build-only-placeholder
       API_BASE_URL: http://127.0.0.1:8000
       NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
@@ -402,15 +405,13 @@ jobs:
           --file "${{ matrix.dockerfile }}"
           --tag "opevo-${{ matrix.application }}:${{ github.sha }}"
           "${{ matrix.context }}"
-      - name: Build Supabase web image
+      - name: Build Clerk web image
         if: matrix.application == 'web'
         run: >-
           docker build
           --file "${{ matrix.dockerfile }}"
-          --build-arg AUTH_PROVIDER=supabase
-          --build-arg NEXT_PUBLIC_SUPABASE_URL=https://project.supabase.co
-          --build-arg NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_placeholder
-          --tag "opevo-web-supabase:${{ github.sha }}"
+          --build-arg AUTH_PROVIDER=clerk
+          --tag "opevo-web-clerk:${{ github.sha }}"
           "${{ matrix.context }}"
       - name: Verify shared package in Python runtime images
         if: matrix.application != 'web'

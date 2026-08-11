@@ -37,11 +37,11 @@ docker compose -f compose.dev.yaml up --build
 
 This starts PostgreSQL, Redis, MinIO, migrations, the API, `worker-lifecycle`,
 `worker-background`, and the web application. The standard stack defaults to
-Clerk but can select Supabase with `AUTH_PROVIDER`; each application fails
-closed when the selected provider's server configuration is missing. It never
-substitutes an authenticated local identity. Synthetic local authentication
-must be enabled explicitly and is limited to disposable development and E2E
-workflows.
+Supabase but can select Clerk with `AUTH_PROVIDER=clerk`; each application
+fails closed when the selected provider's server configuration is missing. It
+never substitutes an authenticated local identity. Synthetic local
+authentication must be enabled explicitly and is limited to disposable
+development and E2E workflows.
 
 The core `worker-background` service also needs the API-side dispatch secret,
 LiveKit credentials and agent name, and the selected summary provider's model and
@@ -217,8 +217,9 @@ npm ci
 npm run check
 npm run typecheck
 npm run test:ci
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_YWEuYWEk \
-CLERK_SECRET_KEY=ci-build-only-placeholder \
+AUTH_PROVIDER=supabase \
+NEXT_PUBLIC_SUPABASE_URL=https://project.supabase.co \
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_placeholder \
 API_BASE_URL=http://127.0.0.1:8000 \
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 \
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3000 \
@@ -226,9 +227,11 @@ NEXT_PUBLIC_REALTIME_ENABLED=false \
   npm run build
 ```
 
-These build-only values exercise the Clerk adapter like CI and are not provider
-credentials. Real Clerk, Supabase, or other provider secrets are not required
-for repository verification.
+These build-only values exercise the default Supabase adapter and are not
+provider credentials. CI also builds the web image with
+`AUTH_PROVIDER=clerk` to preserve the explicit Clerk path. Real Clerk,
+Supabase, or other provider secrets are not required for repository
+verification.
 
 The complete workflow, blank-database migration check, and exact required
 GitHub ruleset checks are documented in

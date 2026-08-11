@@ -23,9 +23,9 @@ function readSourceTree(directory: string): string {
 }
 
 describe("resolveWebAuthProvider", () => {
-  it("defaults a blank provider to Clerk", () => {
-    expect(resolveWebAuthProvider({ nodeEnv: "development" })).toBe("clerk");
-    expect(resolveWebAuthProvider({ nodeEnv: "development", authProvider: "  " })).toBe("clerk");
+  it("defaults a blank provider to Supabase", () => {
+    expect(resolveWebAuthProvider({ nodeEnv: "development" })).toBe("supabase");
+    expect(resolveWebAuthProvider({ nodeEnv: "development", authProvider: "  " })).toBe("supabase");
   });
 
   it("rejects unknown auth modes", () => {
