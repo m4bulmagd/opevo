@@ -24,7 +24,7 @@ dependencies = [
   "sqlalchemy>=2.0,<3.0",
   "stripe>=15.0.0",
   "svix>=1.80,<2.0",
-  "telnyx>=2.0,<3.0",
+  "telnyx>=4.170.0,<5.0",
   "uvicorn>=0.34,<1.0",
 ]
 
